@@ -7,5 +7,5 @@ export const logger = pino({
     config.app.environment === "local"
       ? "debug"
       : "info",
-  transport,
+  ...(transport ? { transport } : {}),
 });
