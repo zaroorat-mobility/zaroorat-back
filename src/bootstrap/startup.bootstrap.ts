@@ -1,10 +1,9 @@
 import { config } from '@config';
-import { bootstrapLogger } from './logger.bootstrap.js';
 import { bootstrapDatabase } from './database.bootstrap.js';
 import { bootstrapRedis } from './redis.bootstrap.js';
 import { bootstrapQueue } from './queue.bootstrap.js';
 import { bootstrapStorage } from './storage.bootstrap.js';
-import { bootstrapApplication } from './application.bootstrap.js';
+import { createApp } from '../app/index.js';
 import { bootstrapPlugins } from './plugins.bootstrap.js';
 import { bootstrapRoutes } from './routes.bootstrap.js';
 import { bootstrapShutdown } from './shutdown.bootstrap.js';
@@ -13,17 +12,14 @@ export async function startup() {
   try {
     // 1. Environment is already loaded at import time via @config
     
-    // 2. Initialize Logger
-    const loggerOptions = await bootstrapLogger();
-    
-    // 3. Connect Infrastructure (Milestone 2)
+    // 2. Connect Infrastructure (Milestone 2)
     await bootstrapDatabase();
     await bootstrapRedis();
     await bootstrapQueue();
     await bootstrapStorage();
     
-    // 4. Initialize Fastify Application
-    const app = await bootstrapApplication(loggerOptions);
+    // 3. Initialize Fastify Application with Pino Logger
+    const app = await createApp();
     
     // 5. Register Plugins
     await bootstrapPlugins(app);
