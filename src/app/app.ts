@@ -3,6 +3,9 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { config } from "@config";
 import { logger } from "@shared/logger/index.js";
 import { registerPlugins } from "../plugins/register.js";
+import { registerHooks } from "../hooks/register.js";
+import { registerRoutes } from "../routes/register.js";
+import { errorHandler, notFoundHandler } from "../core/errors/index.js";
 
 export async function createApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -20,6 +23,11 @@ export async function createApp(): Promise<FastifyInstance> {
   });
 
   await registerPlugins(app);
+  await registerHooks(app);
+  await registerRoutes(app);
+
+  app.setErrorHandler(errorHandler);
+  app.setNotFoundHandler(notFoundHandler);
 
   return app;
 }
