@@ -1,7 +1,7 @@
-import { ConfigService } from '@config';
+import { env } from '@config';
 
 export async function bootstrapLogger() {
-  const isDev = ConfigService.app.env === 'local';
+  const isDev = env.app.environment === 'local';
   
   // Return the configuration object for Fastify's logger
   // Fastify automatically creates a Pino instance with this config

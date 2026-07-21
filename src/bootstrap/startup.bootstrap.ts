@@ -1,4 +1,4 @@
-import { ConfigService } from '@config';
+import { env } from '@config';
 import { bootstrapLogger } from './logger.bootstrap.js';
 import { bootstrapDatabase } from './database.bootstrap.js';
 import { bootstrapRedis } from './redis.bootstrap.js';
@@ -36,12 +36,12 @@ export async function startup() {
     
     // 8. Start Listening
     await app.listen({
-      port: ConfigService.app.port,
-      host: ConfigService.app.host,
+      port: env.server.port,
+      host: env.server.host,
     });
     
-    app.log.info(`Server listening on http://${ConfigService.app.host}:${ConfigService.app.port}`);
-    app.log.info(`Environment: ${ConfigService.app.env}`);
+    app.log.info(`Server listening on http://${env.server.host}:${env.server.port}`);
+    app.log.info(`Environment: ${env.app.environment}`);
     
     return app;
   } catch (err) {
