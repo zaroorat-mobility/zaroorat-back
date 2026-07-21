@@ -1,0 +1,481 @@
+// Zaroorat — Prisma schema
+// Source of truth for the database (ADR-0003). All changes go through reviewed migrations.
+// Derived from docs/01_ARCHITECTURE/ER_DIAGRAM.md. Keep this file and the ER doc in sync.
+//
+// Conventions (see docs/01_ARCHITECTURE/DATABASE_GUIDE.md §4):
+//  - Primary keys: UUID everywhere — String @id @default(uuid()) @db.Uuid (FK scalars @db.Uuid too).
+//  - Timestamps: createdAt + updatedAt on every model, UTC.
+//  - Soft delete (deletedAt) on mutable master data ONLY. Repositories filter deletedAt: null.
+//    NEVER soft-delete append-only/money tables (TripEvent, LedgerEntry, SosEvent, Payment),
+//    the Trip (closed by status), or ephemeral rows (OtpChallenge, IdempotencyRecord — TTL swept).
+//  - Money is Decimal (never Float) + ISO-4217 currency. Geo as lat/lng Decimals (PostGIS later).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  RIDER
+  DRIVER
+  ADMIN
+  SUPPORT
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum OnboardingStatus {
+  STARTED
+  DOCS_SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum DocumentType {
+  DRIVING_LICENSE
+  NATIONAL_ID // CNIC
+  INSURANCE
+  VEHICLE_REGISTRATION
+  PROFILE_PHOTO
+}
+
+enum DocumentStatus {
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum VehicleCategory {
+  BIKE
+  RICKSHAW
+  MINI
+  SEDAN
+  XL
+}
+
+enum VehicleStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Trip lifecycle — see ER_DIAGRAM §4 (authoritative state machine). Owned by `rides`.
+enum TripStatus {
+  REQUESTED
+  MATCHING
+  DRIVER_ASSIGNED
+  ARRIVING
+  ARRIVED
+  IN_PROGRESS
+  COMPLETED
+  PAID
+  CANCELLED
+  NO_DRIVERS
+}
+
+enum CancelledBy {
+  RIDER
+  DRIVER
+  SYSTEM
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  WALLET
+}
+
+enum PaymentStatus {
+  PENDING
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum LedgerEntryType {
+  CREDIT
+  DEBIT
+}
+
+enum SosStatus {
+  TRIGGERED
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+// ─────────────────────────────────────────────────────────────
+// Identity  (soft-deletable master data → deletedAt)
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id        String     @id @default(uuid()) @db.Uuid
+  phone     String     @unique
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  deletedAt DateTime?
+
+  roles         UserRole[]
+  riderProfile  RiderProfile?
+  driverProfile DriverProfile?
+  ledgerEntries LedgerEntry[]
+
+  @@index([status])
+  @@index([deletedAt])
+}
+
+model UserRole {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  role   Role
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@index([role])
+}
+
+model RiderProfile {
+  userId               String        @id @db.Uuid
+  name                 String?
+  defaultPaymentMethod PaymentMethod @default(CASH)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  deletedAt            DateTime?
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trips Trip[] @relation("RiderTrips")
+}
+
+model DriverProfile {
+  userId           String           @id @db.Uuid
+  name             String?
+  onboardingStatus OnboardingStatus @default(STARTED)
+  isOnline         Boolean          @default(false)
+  // Derived: true only when all required docs APPROVED & non-expired AND >=1 vehicle APPROVED.
+  isOperable       Boolean          @default(false)
+  ratingAvg        Decimal          @default(0) @db.Decimal(3, 2)
+  ratingCount      Int              @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  deletedAt        DateTime?
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents Document[]
+  vehicles  Vehicle[]
+  trips     Trip[]     @relation("DriverTrips")
+
+  @@index([isOnline, isOperable])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Supply & compliance  (soft-deletable)
+// ─────────────────────────────────────────────────────────────
+
+model Document {
+  id         String         @id @default(uuid()) @db.Uuid
+  driverId   String         @db.Uuid
+  type       DocumentType
+  fileRef    String // object-storage key (ADR-0007); never the blob itself
+  status     DocumentStatus @default(UNDER_REVIEW)
+  expiresAt  DateTime?
+  reviewedBy String?        @db.Uuid // admin User.id
+  reason     String? // rejection reason surfaced to the driver
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  deletedAt  DateTime?
+
+  driver DriverProfile @relation(fields: [driverId], references: [userId], onDelete: Cascade)
+
+  @@index([driverId, type])
+  @@index([status, expiresAt])
+}
+
+model Vehicle {
+  id        String          @id @default(uuid()) @db.Uuid
+  driverId  String          @db.Uuid
+  category  VehicleCategory
+  plate     String
+  status    VehicleStatus   @default(PENDING)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  deletedAt DateTime?
+
+  driver DriverProfile @relation(fields: [driverId], references: [userId], onDelete: Cascade)
+
+  @@index([driverId])
+  @@index([status, category])
+}
+
+// ─────────────────────────────────────────────────────────────
+// The trip (core loop) — closed by status, NOT soft-deleted
+// ─────────────────────────────────────────────────────────────
+
+model Trip {
+  id       String     @id @default(uuid()) @db.Uuid
+  riderId  String     @db.Uuid
+  driverId String?    @db.Uuid // set only on/after DRIVER_ASSIGNED
+  status   TripStatus @default(REQUESTED)
+  category VehicleCategory
+
+  pickupLat  Decimal @db.Decimal(9, 6)
+  pickupLng  Decimal @db.Decimal(9, 6)
+  dropoffLat Decimal @db.Decimal(9, 6)
+  dropoffLng Decimal @db.Decimal(9, 6)
+
+  // State timestamps (append-only history lives in TripEvent).
+  requestedAt DateTime  @default(now())
+  assignedAt  DateTime?
+  arrivedAt   DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  paidAt      DateTime?
+
+  cancelledAt  DateTime?
+  cancelledBy  CancelledBy?
+  cancelReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rider  RiderProfile   @relation("RiderTrips", fields: [riderId], references: [userId])
+  driver DriverProfile? @relation("DriverTrips", fields: [driverId], references: [userId])
+
+  fare       Fare?
+  payment    Payment?
+  events     TripEvent[]
+  messages   Message[]
+  ratings    Rating[]
+  sosEvents  SosEvent[]
+  redemption PromoRedemption?
+
+  @@index([riderId, status])
+  @@index([driverId, status])
+  @@index([status, requestedAt])
+  // NOTE: "a driver has at most one ACTIVE trip" is a partial-unique constraint
+  // (WHERE status IN active states). Prisma can't express partial uniques, so it is
+  // added by hand in a migration and also guarded in rides.service (ER_DIAGRAM §3).
+}
+
+model Fare {
+  tripId          String   @id @db.Uuid
+  currency        String // ISO-4217, e.g. "PKR"
+  estimateAmount  Decimal  @db.Decimal(10, 2)
+  finalAmount     Decimal? @db.Decimal(10, 2)
+  surgeMultiplier Decimal  @default(1.0) @db.Decimal(4, 2)
+  breakdown       Json? // itemized: base, distance, time, waiting, tolls, discount
+  quoteInputs     Json // distance/duration/category/surge/promo — reproduces the number
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+}
+
+// Append-only transition log — the trip's audit trail. Never updated/deleted/soft-deleted.
+model TripEvent {
+  id        String      @id @default(uuid()) @db.Uuid
+  tripId    String      @db.Uuid
+  fromState TripStatus?
+  toState   TripStatus
+  actor     String // userId or "system"
+  meta      Json?
+  at        DateTime    @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, at])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Money — immutable financial record, NEVER deleted/soft-deleted
+// ─────────────────────────────────────────────────────────────
+
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  tripId         String        @unique @db.Uuid
+  method         PaymentMethod
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String
+  status         PaymentStatus @default(PENDING)
+  idempotencyKey String        @unique // DB backstop against double-charge (ADR-0008)
+  gatewayRef     String? // external transaction id
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  trip          Trip          @relation(fields: [tripId], references: [id])
+  ledgerEntries LedgerEntry[]
+
+  @@index([status])
+}
+
+// Append-only ledger — auditable balances. Balance is derived, never overwritten/deleted.
+model LedgerEntry {
+  id           String          @id @default(uuid()) @db.Uuid
+  userId       String          @db.Uuid
+  paymentId    String?         @db.Uuid
+  type         LedgerEntryType
+  amount       Decimal         @db.Decimal(10, 2)
+  currency     String
+  balanceAfter Decimal         @db.Decimal(12, 2)
+  reason       String
+  at           DateTime        @default(now())
+
+  user    User     @relation(fields: [userId], references: [id])
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@index([userId, at])
+}
+
+model Promo {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  rules     Json // eligibility, usage cap, min fare, expiry, market
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  redemptions PromoRedemption[]
+}
+
+model PromoRedemption {
+  id      String   @id @default(uuid()) @db.Uuid
+  promoId String   @db.Uuid
+  userId  String   @db.Uuid
+  tripId  String?  @unique @db.Uuid
+  amount  Decimal  @db.Decimal(10, 2)
+  at      DateTime @default(now())
+
+  promo Promo @relation(fields: [promoId], references: [id])
+  trip  Trip? @relation(fields: [tripId], references: [id])
+
+  @@unique([promoId, userId]) // one redemption per user per promo (abuse guard)
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Engagement & safety
+// ─────────────────────────────────────────────────────────────
+
+model Message {
+  id       String   @id @default(uuid()) @db.Uuid
+  tripId   String   @db.Uuid
+  senderId String   @db.Uuid
+  body     String
+  at       DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, at])
+}
+
+model Rating {
+  id      String   @id @default(uuid()) @db.Uuid
+  tripId  String   @db.Uuid
+  raterId String   @db.Uuid
+  rateeId String   @db.Uuid
+  score   Int // 1..5
+  comment String?
+  at      DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, raterId]) // one rating per party per trip
+  @@index([rateeId])
+}
+
+// Append-only safety record. SOS is always available (PRD FR-SOS). Never deleted.
+model SosEvent {
+  id               String    @id @default(uuid()) @db.Uuid
+  tripId           String    @db.Uuid
+  triggeredBy      String    @db.Uuid // userId
+  locationSnapshot Json
+  status           SosStatus @default(TRIGGERED)
+  at               DateTime  @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id])
+
+  @@index([tripId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Platform & ops
+// ─────────────────────────────────────────────────────────────
+
+model SupportTicket {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @db.Uuid
+  tripId     String?      @db.Uuid
+  paymentId  String?      @db.Uuid
+  subject    String
+  body       String
+  status     TicketStatus @default(OPEN)
+  assignedTo String?      @db.Uuid // support agent User.id
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  deletedAt  DateTime?
+
+  @@index([status])
+  @@index([userId])
+}
+
+// Runtime business config: fares, surge, flags, service areas. Versioned & audited.
+model Setting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String
+  marketId  String   @default("default")
+  value     Json
+  version   Int      @default(1)
+  updatedBy String?  @db.Uuid // admin User.id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  @@unique([key, marketId])
+}
+
+// OTP challenges for phone login (FR-AUTH). Rate-limited; TTL-swept by cleanup.worker (no soft delete).
+model OtpChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  phone      String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([phone, createdAt])
+}
+
+// Idempotency store for money/critical POSTs (ADR-0008), keyed by client header. TTL-swept.
+model IdempotencyRecord {
+  key          String   @id
+  requestHash  String
+  responseBody Json
+  statusCode   Int
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt]) // TTL sweep by cleanup.worker
+}
