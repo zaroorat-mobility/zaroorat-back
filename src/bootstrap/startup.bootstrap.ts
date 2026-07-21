@@ -4,7 +4,6 @@ import { bootstrapRedis } from './redis.bootstrap.js';
 import { bootstrapQueue } from './queue.bootstrap.js';
 import { bootstrapStorage } from './storage.bootstrap.js';
 import { createApp } from '../app/index.js';
-import { bootstrapPlugins } from './plugins.bootstrap.js';
 import { bootstrapRoutes } from './routes.bootstrap.js';
 import { bootstrapShutdown } from './shutdown.bootstrap.js';
 
@@ -18,11 +17,8 @@ export async function startup() {
     await bootstrapQueue();
     await bootstrapStorage();
     
-    // 3. Initialize Fastify Application with Pino Logger
+    // 3. Initialize Fastify Application with Pino Logger (including core plugins)
     const app = await createApp();
-    
-    // 5. Register Plugins
-    await bootstrapPlugins(app);
     
     // 6. Register Routes
     await bootstrapRoutes(app);

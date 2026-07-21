@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import { config } from "@config";
 import { logger } from "@shared/logger/index.js";
+import { registerPlugins } from "../plugins/register.js";
 
 export async function createApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -17,6 +18,8 @@ export async function createApp(): Promise<FastifyInstance> {
 
     bodyLimit: 10 * 1024 * 1024,
   });
+
+  await registerPlugins(app);
 
   return app;
 }
