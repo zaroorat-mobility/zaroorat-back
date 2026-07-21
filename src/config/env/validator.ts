@@ -1,21 +1,25 @@
-import { EnvironmentSchema, Environment } from './schema.js';
+import { Environment, EnvironmentSchema } from "./schema.js";
 
 export function validateEnvironment(): Environment {
-  const parsed = EnvironmentSchema.safeParse(process.env);
+  const result = EnvironmentSchema.safeParse(process.env);
 
-  if (!parsed.success) {
-    console.error('❌ Environment validation failed. Missing or invalid variables:');
-    
-    // Log the formatted errors nicely
-    const errors = parsed.error.format();
-    for (const [key, value] of Object.entries(errors)) {
-      if (key !== '_errors' && (value as any)._errors) {
-        console.error(`- ${key}: ${(value as any)._errors.join(', ')}`);
+  if (!result.success) {
+    console.error("\n❌ Environment validation failed.\n");
+
+    const formattedErrors = result.error.format();
+
+    for (const [key, value] of Object.entries(formattedErrors)) {
+      if (key === "_errors") continue;
+
+      if ("_errors" in value && (value as any)._errors.length > 0) {
+        console.error(`- ${key}: ${(value as any)._errors.join(", ")}`);
       }
     }
-    
+
+    console.error("\nFix the above environment variables and restart the application.\n");
+
     process.exit(1);
   }
 
-  return parsed.data;
+  return result.data;
 }
