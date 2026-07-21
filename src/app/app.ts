@@ -1,4 +1,8 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyBaseLogger,
+  LogController,
+} from "fastify";
 
 import { config } from "@config";
 import { logger } from "@shared/logger/index.js";
@@ -9,13 +13,14 @@ import { errorHandler, notFoundHandler } from "../core/errors/index.js";
 
 export async function createApp(): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: logger as any,
+    loggerInstance: logger as FastifyBaseLogger,
 
-    disableRequestLogging: false,
+    logController: new LogController({
+      disableRequestLogging: false,
+      requestIdLogLabel: "requestId",
+    }),
 
     requestIdHeader: "x-request-id",
-
-    requestIdLogLabel: "requestId",
 
     trustProxy: true,
 
