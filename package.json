@@ -12,7 +12,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --project tsconfig.json --noEmit",
-    "prepare": "is-ci || husky"
+    "prepare": "is-ci || husky",
+    "preinstall": "npx only-allow npm"
   },
   "keywords": [],
   "author": "",

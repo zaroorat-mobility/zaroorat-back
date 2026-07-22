@@ -1,9 +1,14 @@
 #!/usr/bin/env sh
+. "$(dirname "$0")/common.sh"
 
-echo "🔍 Running pre-commit checks..."
+printf "\033[36m🔍 Running pre-commit checks...\033[0m\n"
 
 npx lint-staged
 
 npm run typecheck
 
-echo "✅ Pre-commit checks passed."
+# Secret Scan (later)
+# TODO: Add gitleaks to detect AWS Keys, JWT Secrets, API Keys before commit
+# gitleaks protect -v --staged
+
+printf "\033[32m✅ Pre-commit checks passed.\033[0m\n"

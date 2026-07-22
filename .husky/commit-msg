@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+. "$(dirname "$0")/common.sh"
 
-echo "📝 Validating commit message..."
+printf "\033[36m📝 Validating commit message...\033[0m\n"
 npx --no-install commitlint --edit "$1"

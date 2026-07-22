@@ -1,8 +1,14 @@
 #!/usr/bin/env sh
+. "$(dirname "$0")/common.sh"
 
-echo "🚀 Running pre-push checks..."
+printf "\033[36m🚀 Running pre-push checks...\033[0m\n"
 
 npm run typecheck
-# npm run test # Uncomment this when tests are available
 
-echo "✅ Pre-push checks passed."
+# Unit Tests (later)
+# npm run test
+
+# Build (later)
+# npm run build
+
+printf "\033[32m✅ Pre-push checks passed.\033[0m\n"
