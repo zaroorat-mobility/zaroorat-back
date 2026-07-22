@@ -1,0 +1,158 @@
+name: CI
+
+# Mirrors the local hooks so `--no-verify` cannot land unchecked code.
+# Pipeline order matches docs/03_OPERATIONS/DEPLOYMENT.md §3.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to the same PR cancels the previous run; main is never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  HUSKY: '0'
+
+jobs:
+  quality:
+    name: Lint, format & types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zaroorat_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d zaroorat_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # .env.test is committed (dummy values only) and already points at
+      # localhost:5432 / localhost:6379, which is where the service containers
+      # above are published. No environment setup step is needed.
+      - name: Run tests
+        run: npm test
+        env:
+          APP_ENV: test
+
+  build:
+    name: Build & container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # tsc emits happily while leaving "@config" imports unresolved, so a green
+      # build is not proof the artifact runs. Load the entrypoint's module graph
+      # to catch alias-resolution regressions that only bite in production.
+      - name: Verify build artifact resolves
+        run: |
+          test -f dist/server.js || { echo "dist/server.js missing"; exit 1; }
+          if grep -rqE "require\(\"@(config|shared|core|modules)" dist; then
+            echo "Unresolved tsconfig path aliases in dist — tsc-alias did not run."
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build only — publishing happens in the staging/production workflows.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: zaroorat-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        run: |
+          docker run -d --name api -p 3000:3000 \
+            -e APP_ENV=production \
+            -e NODE_ENV=production \
+            -e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/placeholder \
+            -e REDIS_URL=redis://localhost:6379 \
+            -e JWT_ACCESS_SECRET=ci_access_secret_padded_to_min_32_chars \
+            -e JWT_REFRESH_SECRET=ci_refresh_secret_padded_to_min_32_chars \
+            zaroorat-backend:ci
+          # The container has no real database, so it may exit during bootstrap.
+          # What we assert here is that it got far enough to validate config —
+          # a missing module or bad CMD fails much earlier and louder.
+          sleep 10
+          docker logs api
+          if docker logs api 2>&1 | grep -q "Cannot find module"; then
+            echo "Image cannot resolve its own modules."
+            exit 1
+          fi
+          if docker logs api 2>&1 | grep -q "Environment validation failed"; then
+            echo "Image rejected its configuration."
+            exit 1
+          fi

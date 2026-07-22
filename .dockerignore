@@ -1,0 +1,31 @@
+# Never ship the build context we don't need — smaller context, faster builds,
+# and no chance of baking secrets or host node_modules into an image.
+node_modules
+dist
+coverage
+tsconfig.tsbuildinfo
+
+.git
+.github
+.husky
+.vscode
+.idea
+
+# Secrets — only .env.example is safe, and even that isn't needed at build time.
+.env
+.env.*
+
+docs
+tests
+observability
+infrastructure
+scripts
+
+*.log
+.DS_Store
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md
+CONTRIBUTING.md
+LICENSE

@@ -1,0 +1,76 @@
+# Local development stack: API + Postgres + Redis.
+# The worker service is intentionally absent until src/jobs/workers is implemented
+# and Dockerfile.worker exists (see docs/03_OPERATIONS/DEPLOYMENT.md §1).
+#
+#   make up      start everything
+#   make logs    tail the api
+#   make down    stop and remove volumes
+
+name: zaroorat-backend
+
+services:
+  api:
+    build:
+      context: .
+      target: runner
+    # Override the production default so local runs get readable logs.
+    environment:
+      APP_NAME: zaroorat-backend
+      APP_ENV: local
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: local_dev_access_secret_do_not_use_in_prod
+      JWT_REFRESH_SECRET: local_dev_refresh_secret_do_not_use_in_prod
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 30d
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-trixie
+    environment:
+      POSTGRES_USER: zaroorat
+      POSTGRES_PASSWORD: zaroorat
+      POSTGRES_DB: zaroorat
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Anything dropped in docker/postgres/ runs once on first boot.
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -U/-d must be set or pg_isready checks the wrong role and passes early.
+      test: ['CMD-SHELL', 'pg_isready -U zaroorat -d zaroorat']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-trixie
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,164 @@
+name: Deploy production
+
+# Production ships from a published GitHub Release only — never straight from a
+# branch push. Pair this with a protected `production` environment requiring
+# manual approval (Settings > Environments).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to deploy (e.g. v1.2.3)'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  HUSKY: '0'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  verify:
+    name: Re-verify release commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # CI already ran on main, but a tag can point anywhere. Prove the exact
+      # commit being shipped is green rather than trusting a branch result.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+  build:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [verify]
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.tag || github.event.release.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.event.release.tag_name }}
+            type=raw,value=production
+            type=sha,format=long
+
+      - name: Build & push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+  deploy:
+    name: Migrate & deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build]
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+
+      - name: Check Helm chart is populated
+        run: |
+          if [ ! -s infrastructure/helm/Chart.yaml ]; then
+            echo "::error::infrastructure/helm/Chart.yaml is empty."
+            echo "The image was built and pushed, but there is no chart to deploy."
+            echo "Populate infrastructure/helm/ and set the KUBE_CONFIG secret"
+            echo "for the production environment before enabling this workflow."
+            exit 1
+          fi
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Run database migrations
+        run: |
+          kubectl run prisma-migrate-${{ github.run_id }} \
+            --namespace production \
+            --image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" \
+            --restart=Never \
+            --rm -i \
+            --env="DATABASE_URL=${{ secrets.DATABASE_URL }}" \
+            --command -- npx prisma migrate deploy
+
+      # Rolling update; readiness gates each pod (docs/03_OPERATIONS/DEPLOYMENT.md §4).
+      - name: Deploy
+        run: |
+          helm upgrade --install zaroorat-backend infrastructure/helm \
+            --namespace production \
+            --create-namespace \
+            --values infrastructure/helm/values.yaml \
+            --values infrastructure/helm/values-production.yaml \
+            --set image.repository="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" \
+            --set image.digest="${{ needs.build.outputs.digest }}" \
+            --atomic \
+            --wait \
+            --timeout 15m
+
+      # --atomic already reverts a failed release; this covers a deploy that
+      # succeeded but failed the post-deploy smoke check below.
+      - name: Smoke-check the core loop
+        run: |
+          for _ in $(seq 1 10); do
+            if curl -fsS "${{ vars.PRODUCTION_URL }}/health" > /dev/null; then
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::Health check never passed after deploy."
+          exit 1
+
+      - name: Roll back on failure
+        if: failure()
+        run: helm rollback zaroorat-backend --namespace production || true
