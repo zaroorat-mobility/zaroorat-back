@@ -1,0 +1,7 @@
+# Revisions listed here are skipped by `git blame`.
+# Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub honours this file automatically.
+
+# style(tooling): apply prettier formatting to existing files
+b6f1512d9dfa51fc2ecbd9dbeb1a59695a5995e7
