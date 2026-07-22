@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "zaroorat-backend.fullname" . }}-config
+  labels:
+    {{- include "zaroorat-backend.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.env }}
+  # quote matters: an unquoted `PORT: 3000` renders an int and ConfigMap data
+  # must be strings, which would fail admission.
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

@@ -1,0 +1,14 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "zaroorat-backend.fullname" . }}
+  labels:
+    {{- include "zaroorat-backend.labels" . | nindent 4 }}
+spec:
+  # Keeps node drains and cluster upgrades from evicting every replica at once.
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "zaroorat-backend.selectorLabels" . | nindent 6 }}
+{{- end }}

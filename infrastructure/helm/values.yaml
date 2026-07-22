@@ -1,0 +1,134 @@
+# Defaults shared by every environment.
+# Overlay with values-staging.yaml or values-production.yaml; the deploy
+# workflows additionally --set image.repository and image.digest.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/zaroorat/backend_zaroorat
+  # Deploys pin by digest (immutable). `tag` is only the fallback for a manual
+  # `helm install` — a moving tag makes rollbacks ambiguous.
+  digest: ''
+  tag: ''
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ''
+fullnameOverride: ''
+
+serviceAccount:
+  create: true
+  name: ''
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 80
+  # Must match containerPort / the PORT env var below.
+  targetPort: 3000
+
+containerPort: 3000
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts: []
+  #  - host: api.example.com
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    # No CPU limit on purpose: CFS throttling adds tail latency to a latency-
+    # sensitive API. The request still guarantees a floor and the HPA scales out.
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Non-secret configuration. Anything sensitive belongs in existingSecret.
+env:
+  APP_NAME: zaroorat-backend
+  APP_ENV: staging
+  NODE_ENV: production
+  HOST: 0.0.0.0
+  LOG_LEVEL: info
+
+# DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are read
+# from this pre-existing Secret. It is created by the platform secret store,
+# never by this chart and never committed (DEPLOYMENT.md §4).
+existingSecret: zaroorat-backend-secrets
+
+# Extra env vars sourced from other ConfigMaps/Secrets.
+envFrom: []
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    # Backed by src/routes/health/ready.route.ts. Returns 503 when a registered
+    # dependency check fails, which pulls the pod from the Service endpoints.
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    enabled: true
+    path: /health
+    periodSeconds: 5
+    # 30 x 5s = 150s of grace before the liveness probe can kill a slow boot.
+    failureThreshold: 30
+
+# The app traps SIGTERM and drains via bootstrap/shutdown.bootstrap.ts.
+terminationGracePeriodSeconds: 30
+
+# Endpoint removal is asynchronous, so a pod can still receive traffic for a
+# moment after SIGTERM. Sleep first, then let the app drain.
+preStopSleepSeconds: 5
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# readOnlyRootFilesystem requires a writable /tmp for anything that spools.
+tmpDirSizeLimit: 64Mi
+
+# Spread replicas across nodes so one node loss cannot take the service down.
+topologySpreadEnabled: true
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

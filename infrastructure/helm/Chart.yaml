@@ -1,0 +1,15 @@
+apiVersion: v2
+name: zaroorat-backend
+description: Zaroorat backend API — Fastify + Postgres + Redis (modular monolith, ADR-0001)
+type: application
+
+# version  = chart version, bumped when the templates change.
+# appVersion = default application version; the deploy workflows override the
+# running image with --set image.digest, so this is a label, not a source of truth.
+version: 0.1.0
+appVersion: '1.0.0'
+
+kubeVersion: '>=1.27.0-0'
+
+maintainers:
+  - name: Zaroorat Engineering

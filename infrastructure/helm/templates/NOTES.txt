@@ -1,0 +1,25 @@
+{{ .Chart.Name }} {{ .Chart.Version }} deployed to namespace {{ .Release.Namespace }}.
+
+Image:    {{ include "zaroorat-backend.image" . }}
+Replicas: {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }} (HPA){{ else }}{{ .Values.replicaCount }} (fixed){{ end }}
+
+Check the rollout:
+
+  kubectl rollout status deployment/{{ include "zaroorat-backend.fullname" . }} -n {{ .Release.Namespace }}
+
+Probe it locally:
+
+  kubectl port-forward svc/{{ include "zaroorat-backend.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+  curl localhost:8080{{ .Values.probes.readiness.path }}
+
+{{- if not .Values.ingress.enabled }}
+
+Ingress is disabled; the service is reachable in-cluster only.
+{{- end }}
+
+Secrets come from the Secret "{{ .Values.existingSecret }}", which this chart does
+not create. It must exist in {{ .Release.Namespace }} before the pods start, and
+must define: DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET.
+Both JWT secrets must be at least 32 characters or the app exits at boot.
+
+  kubectl get secret {{ .Values.existingSecret }} -n {{ .Release.Namespace }}

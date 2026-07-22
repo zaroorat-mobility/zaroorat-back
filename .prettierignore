@@ -1,0 +1,16 @@
+# Build output and dependencies
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Lockfile — npm owns its formatting.
+package-lock.json
+
+# Helm templates are Go templates, not YAML. Prettier's YAML parser rejects
+# `{{- if ... }}` at the top level, so it cannot format these files at all.
+# Chart.yaml and the values-*.yaml files are plain YAML and stay formatted.
+infrastructure/helm/templates/
+
+# Generated
+prisma/migrations/

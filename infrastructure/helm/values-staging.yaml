@@ -1,0 +1,47 @@
+# Staging overlay. Applied after values.yaml by .github/workflows/staging.yml.
+# Mirrors production topology at lower scale (DEPLOYMENT.md §8).
+
+replicaCount: 2
+
+env:
+  APP_NAME: zaroorat-backend
+  APP_ENV: staging
+  NODE_ENV: production
+  HOST: 0.0.0.0
+  # Verbose logging is affordable here and makes pre-release debugging possible.
+  LOG_LEVEL: debug
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  hosts:
+    - host: api.staging.zaroorat.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: zaroorat-backend-tls-staging
+      hosts:
+        - api.staging.zaroorat.com
+
+existingSecret: zaroorat-backend-secrets
