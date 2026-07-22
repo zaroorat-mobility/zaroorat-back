@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+echo "📝 Validating commit message..."
+npx --no-install commitlint --edit "$1"
