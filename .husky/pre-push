@@ -3,7 +3,10 @@
 
 printf "\033[36m🚀 Running pre-push checks...\033[0m\n"
 
+# Whole-project gates live here, not in pre-commit.
 npm run typecheck
+
+npm run lint
 
 # Unit Tests (later)
 # npm run test

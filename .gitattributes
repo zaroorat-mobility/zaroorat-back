@@ -1,0 +1,26 @@
+# Normalize all text files to LF in the repository.
+# Without this, core.autocrlf=true on Windows checkouts fights Prettier's
+# endOfLine:"lf" and produces perpetual whitespace-only diffs.
+* text=auto eol=lf
+
+# Shell scripts and git hooks MUST be LF — CRLF breaks them on Linux/Docker
+# with "bad interpreter: /usr/bin/env sh^M".
+*.sh text eol=lf
+.husky/* text eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files: never convert, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Generated — collapse in PR diffs.
+package-lock.json linguist-generated=true -diff

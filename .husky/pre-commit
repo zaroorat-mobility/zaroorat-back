@@ -3,9 +3,8 @@
 
 printf "\033[36m🔍 Running pre-commit checks...\033[0m\n"
 
-npx lint-staged
-
-npm run typecheck
+# Staged files only — keep this fast. Full typecheck runs on pre-push.
+npx --no-install lint-staged
 
 # Secret Scan (later)
 # TODO: Add gitleaks to detect AWS Keys, JWT Secrets, API Keys before commit

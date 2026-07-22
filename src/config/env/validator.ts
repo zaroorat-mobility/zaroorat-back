@@ -1,22 +1,17 @@
-import { Environment, EnvironmentSchema } from "./schema.js";
+import { Environment, EnvironmentSchema } from './schema.js';
 
 export function validateEnvironment(): Environment {
   const result = EnvironmentSchema.safeParse(process.env);
 
   if (!result.success) {
-    console.error("\n❌ Environment validation failed.\n");
+    console.error('\n❌ Environment validation failed.\n');
 
-    const formattedErrors = result.error.format();
-
-    for (const [key, value] of Object.entries(formattedErrors)) {
-      if (key === "_errors") continue;
-
-      if ("_errors" in value && (value as any)._errors.length > 0) {
-        console.error(`- ${key}: ${(value as any)._errors.join(", ")}`);
-      }
+    for (const issue of result.error.issues) {
+      const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+      console.error(`- ${path}: ${issue.message}`);
     }
 
-    console.error("\nFix the above environment variables and restart the application.\n");
+    console.error('\nFix the above environment variables and restart the application.\n');
 
     process.exit(1);
   }

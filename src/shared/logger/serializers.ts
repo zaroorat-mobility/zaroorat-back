@@ -1,5 +1,7 @@
+import type { FastifyReply, FastifyRequest } from 'fastify';
+
 export const serializers = {
-  req(request: any) {
+  req(request: FastifyRequest) {
     return {
       id: request.id,
       method: request.method,
@@ -8,7 +10,7 @@ export const serializers = {
     };
   },
 
-  res(reply: any) {
+  res(reply: FastifyReply) {
     return {
       statusCode: reply.statusCode,
     };

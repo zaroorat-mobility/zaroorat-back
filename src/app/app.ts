@@ -1,15 +1,10 @@
-import Fastify, {
-  type FastifyInstance,
-  type FastifyBaseLogger,
-  LogController,
-} from "fastify";
+import Fastify, { type FastifyInstance, type FastifyBaseLogger, LogController } from 'fastify';
 
-import { config } from "@config";
-import { logger } from "@shared/logger/index.js";
-import { registerPlugins } from "../plugins/register.js";
-import { registerHooks } from "../hooks/register.js";
-import { registerRoutes } from "../routes/register.js";
-import { errorHandler, notFoundHandler } from "../core/errors/index.js";
+import { logger } from '@shared/logger/index.js';
+import { registerPlugins } from '../plugins/register.js';
+import { registerHooks } from '../hooks/register.js';
+import { registerRoutes } from '../routes/register.js';
+import { errorHandler, notFoundHandler } from '../core/errors/index.js';
 
 export async function createApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -17,10 +12,10 @@ export async function createApp(): Promise<FastifyInstance> {
 
     logController: new LogController({
       disableRequestLogging: false,
-      requestIdLogLabel: "requestId",
+      requestIdLogLabel: 'requestId',
     }),
 
-    requestIdHeader: "x-request-id",
+    requestIdHeader: 'x-request-id',
 
     trustProxy: true,
 
