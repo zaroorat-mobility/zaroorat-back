@@ -1,6 +1,6 @@
-import "fastify";
+import 'fastify';
 
-declare module "fastify" {
+declare module 'fastify' {
   interface FastifyRequest {
     startTime: bigint;
     user?: {

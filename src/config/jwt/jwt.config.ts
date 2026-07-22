@@ -1,4 +1,4 @@
-import { validatedEnv } from "../env/validated-env.js";
+import { validatedEnv } from '../env/validated-env.js';
 
 export const jwtConfig = Object.freeze({
   accessSecret: validatedEnv.JWT_ACCESS_SECRET,

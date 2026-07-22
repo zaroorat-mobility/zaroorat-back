@@ -1,5 +1,5 @@
-import { loadEnvironment } from "./loader.js";
-import { validateEnvironment } from "./validator.js";
+import { loadEnvironment } from './loader.js';
+import { validateEnvironment } from './validator.js';
 
 loadEnvironment();
 

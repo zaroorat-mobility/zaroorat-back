@@ -1,14 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
-import dotenv from "dotenv";
+import fs from 'node:fs';
+import path from 'node:path';
+import dotenv from 'dotenv';
 
 const ENV_FILES: Record<string, string> = {
-  local: ".env.local",
-  test: ".env.test",
+  local: '.env.local',
+  test: '.env.test',
 };
 
 export function loadEnvironment(): void {
-  const appEnv = process.env.APP_ENV ?? "local";
+  const appEnv = process.env.APP_ENV ?? 'local';
 
   const envFile = ENV_FILES[appEnv];
 

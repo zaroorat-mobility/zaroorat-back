@@ -1,6 +1,6 @@
-import fp from "fastify-plugin";
-import helmet from "@fastify/helmet";
-import { FastifyInstance } from "fastify";
+import fp from 'fastify-plugin';
+import helmet from '@fastify/helmet';
+import { FastifyInstance } from 'fastify';
 
 async function helmetPlugin(app: FastifyInstance) {
   await app.register(helmet, {
@@ -10,5 +10,5 @@ async function helmetPlugin(app: FastifyInstance) {
 }
 
 export default fp(helmetPlugin, {
-  name: "helmet",
+  name: 'helmet',
 });

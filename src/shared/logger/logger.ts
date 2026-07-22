@@ -1,14 +1,11 @@
-import pino from "pino";
-import { config } from "@config";
-import { transport } from "./transport.js";
-import { REDACT_PATHS } from "./redact.js";
-import { serializers } from "./serializers.js";
+import pino from 'pino';
+import { config } from '@config';
+import { transport } from './transport.js';
+import { REDACT_PATHS } from './redact.js';
+import { serializers } from './serializers.js';
 
 export const logger = pino({
-  level:
-    config.app.environment === "local"
-      ? "debug"
-      : "info",
+  level: config.app.environment === 'local' ? 'debug' : 'info',
   ...(transport ? { transport } : {}),
   serializers,
   redact: REDACT_PATHS,

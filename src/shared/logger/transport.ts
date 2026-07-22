@@ -1,13 +1,13 @@
-import { config } from "@config";
+import { config } from '@config';
 
 export const transport =
-  config.app.environment === "local"
+  config.app.environment === 'local'
     ? {
-        target: "pino-pretty",
+        target: 'pino-pretty',
         options: {
           colorize: true,
-          translateTime: "SYS:standard",
-          ignore: "pid,hostname",
+          translateTime: 'SYS:standard',
+          ignore: 'pid,hostname',
         },
       }
     : undefined;

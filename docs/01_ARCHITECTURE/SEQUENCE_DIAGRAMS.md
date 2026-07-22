@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Status:** 🟡 Draft · **Owner:** Engineering · **Last updated:** 2026-07-20
-> **Answers:** *How do the key journeys actually run, step by step?*
+> **Answers:** _How do the key journeys actually run, step by step?_
 > **Traces from:** [LLD](./ER_DIAGRAM.md), [HLD](./SYSTEM_ARCHITECTURE.md)
 
 These sequence diagrams show the runtime behavior of the critical journeys. Participants map to modules/processes in the codebase.
@@ -30,6 +30,7 @@ sequenceDiagram
     Auth-->>API: issue accessToken + refreshToken
     API-->>App: 200 { tokens, user, roles }
 ```
+
 **Failure paths:** too many requests → `429`; wrong/expired code → `401` + attempt counter; exhausted attempts → challenge locked.
 
 ---
@@ -61,6 +62,7 @@ sequenceDiagram
     OB->>DB: driver.isOperable = (all docs APPROVED & valid && vehicle APPROVED)
     OB-->>D: notify status change
 ```
+
 **Invariant:** driver cannot go online until `isOperable` is true (LLD §2.2).
 
 ---
@@ -115,6 +117,7 @@ sequenceDiagram
 ```
 
 **Key guarantees shown:**
+
 - The **worker owns the dispatch timeout** — the flow never depends on a client timer.
 - **Idempotency-Key** on `POST /rides`, accept, and charge — retries on flaky mobile networks are safe.
 - **State machine** advances only forward; a late accept after re-assignment is rejected.
@@ -144,6 +147,7 @@ sequenceDiagram
     Rides->>Disp: free the driver (unlock, available for matching)
     Rides-->>P: { status: CANCELLED, fee }
 ```
+
 Policy (grace window, fee amount) comes from `settings` per market — open question in PRD §5.
 
 ---
@@ -167,6 +171,7 @@ sequenceDiagram
     WS->>R: trip:state { status }
     WS->>D: trip:state { status }
 ```
+
 On reconnect, clients call `GET /rides/:id` to reconcile with server-authoritative state (HLD §6).
 
 ---
@@ -193,6 +198,7 @@ sequenceDiagram
     PW->>Gate: payout(driver, net) [retryable]
     Fin->>DB: reconcile cash balances / disputes
 ```
+
 Retries use the same idempotency key; a transient gateway failure never double-charges (LLD §4.4, §7).
 
 ---
@@ -215,6 +221,7 @@ sequenceDiagram
     SOS->>Notif: notify emergency contacts / trip-share recipients
     SOS-->>U: acknowledged
 ```
+
 **Invariant:** SOS works in every active-trip state and cannot be blocked by flags/limits (PRD FR-SOS).
 
 ---
@@ -235,6 +242,7 @@ sequenceDiagram
     NW->>Push: send (push → SMS fallback)
     Note over NW: retry w/ backoff; duplicate events deduped
 ```
+
 A notification failure never blocks the trip flow (HLD §7).
 
 ---

@@ -1,4 +1,4 @@
-import { validatedEnv } from "../env/validated-env.js";
+import { validatedEnv } from '../env/validated-env.js';
 
 export const appConfig = Object.freeze({
   name: validatedEnv.APP_NAME,

@@ -1,7 +1,7 @@
 # ER Diagram & Data Model
 
 > **Status:** 🟡 Draft · **Owner:** Engineering · **Last updated:** 2026-07-20
-> **Answers:** *What are the entities, relationships, and the trip state model?*
+> **Answers:** _What are the entities, relationships, and the trip state model?_
 > **Canonical schema:** [`prisma/schema.prisma`](../../prisma/schema.prisma) · **See also:** [Database Guide](./DATABASE_GUIDE.md)
 
 This document is the human-readable view of the data model. The machine source of truth is `prisma/schema.prisma` (ADR-0003) — if the two disagree, the schema wins and this doc is updated.
@@ -33,26 +33,26 @@ erDiagram
 
 ## 2. Core tables (key fields)
 
-| Entity | Key fields | Notes |
-|---|---|---|
-| **User** | id, phone (unique), status, createdAt | Shared account; roles via UserRole. |
-| **UserRole** | userId, role (`RIDER`/`DRIVER`/`ADMIN`/`SUPPORT`) | A user may hold several. |
-| **RiderProfile** | userId, name, defaultPaymentMethod | Rider-specific. |
-| **DriverProfile** | userId, onboardingStatus, isOnline, isOperable, rating | `isOperable` is derived (docs+vehicle valid). |
-| **Document** | id, driverId, type, fileRef, status, expiresAt, reviewedBy, reason | Verification unit. |
-| **Vehicle** | id, driverId, category, plate, status | Category drives matching. |
-| **Trip** | id, riderId, driverId?, status, category, pickup(geo), dropoff(geo), requestedAt, per-state timestamps | Aggregate root of the core loop. |
-| **Fare** | tripId, estimateAmount, finalAmount, currency, breakdown(json), surgeMultiplier, quoteInputs(json) | Auditable; reproducible from inputs. |
-| **TripEvent** | id, tripId, fromState, toState, actor, at, meta | Append-only transition log. |
-| **Payment** | id, tripId, method, amount, status, idempotencyKey (unique), gatewayRef | One settlement per trip. |
-| **LedgerEntry** | id, userId, paymentId?, type, amount, balanceAfter, reason, at | Append-only, auditable balances. |
-| **Promo / PromoRedemption** | code, rules(json), redemptions, tripId, userId | Redemption enforces caps/eligibility. |
-| **Message** | id, tripId, senderId, body, at | In-trip chat, private to trip. |
-| **Rating** | id, tripId, raterId, rateeId, score, comment | One per party per trip. |
-| **SosEvent** | id, tripId, triggeredBy, at, locationSnapshot, status | Always-available safety record. |
-| **Setting** | key, marketId, value(json), version, updatedBy | Fares, surge, flags, service areas. |
-| **OtpChallenge** | phone, codeHash, expiresAt, attempts, consumedAt | Rate-limited auth. |
-| **IdempotencyRecord** | key, requestHash, responseBody, statusCode | Money/critical-POST dedup store. |
+| Entity                      | Key fields                                                                                             | Notes                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| **User**                    | id, phone (unique), status, createdAt                                                                  | Shared account; roles via UserRole.           |
+| **UserRole**                | userId, role (`RIDER`/`DRIVER`/`ADMIN`/`SUPPORT`)                                                      | A user may hold several.                      |
+| **RiderProfile**            | userId, name, defaultPaymentMethod                                                                     | Rider-specific.                               |
+| **DriverProfile**           | userId, onboardingStatus, isOnline, isOperable, rating                                                 | `isOperable` is derived (docs+vehicle valid). |
+| **Document**                | id, driverId, type, fileRef, status, expiresAt, reviewedBy, reason                                     | Verification unit.                            |
+| **Vehicle**                 | id, driverId, category, plate, status                                                                  | Category drives matching.                     |
+| **Trip**                    | id, riderId, driverId?, status, category, pickup(geo), dropoff(geo), requestedAt, per-state timestamps | Aggregate root of the core loop.              |
+| **Fare**                    | tripId, estimateAmount, finalAmount, currency, breakdown(json), surgeMultiplier, quoteInputs(json)     | Auditable; reproducible from inputs.          |
+| **TripEvent**               | id, tripId, fromState, toState, actor, at, meta                                                        | Append-only transition log.                   |
+| **Payment**                 | id, tripId, method, amount, status, idempotencyKey (unique), gatewayRef                                | One settlement per trip.                      |
+| **LedgerEntry**             | id, userId, paymentId?, type, amount, balanceAfter, reason, at                                         | Append-only, auditable balances.              |
+| **Promo / PromoRedemption** | code, rules(json), redemptions, tripId, userId                                                         | Redemption enforces caps/eligibility.         |
+| **Message**                 | id, tripId, senderId, body, at                                                                         | In-trip chat, private to trip.                |
+| **Rating**                  | id, tripId, raterId, rateeId, score, comment                                                           | One per party per trip.                       |
+| **SosEvent**                | id, tripId, triggeredBy, at, locationSnapshot, status                                                  | Always-available safety record.               |
+| **Setting**                 | key, marketId, value(json), version, updatedBy                                                         | Fares, surge, flags, service areas.           |
+| **OtpChallenge**            | phone, codeHash, expiresAt, attempts, consumedAt                                                       | Rate-limited auth.                            |
+| **IdempotencyRecord**       | key, requestHash, responseBody, statusCode                                                             | Money/critical-POST dedup store.              |
 
 ## 3. Data-model invariants (enforced in services + DB constraints)
 
@@ -92,15 +92,15 @@ stateDiagram-v2
 
 **Transition table (validated):**
 
-| From | Allowed → | Trigger | Side effects |
-|---|---|---|---|
-| REQUESTED | MATCHING, CANCELLED | rider confirm / cancel | on MATCHING: build candidates (matching) |
-| MATCHING | DRIVER_ASSIGNED, NO_DRIVERS, CANCELLED | dispatch accept / exhausted / cancel | assign driver, lock driver, start ARRIVING notif |
-| DRIVER_ASSIGNED | ARRIVING, CANCELLED | driver moves / cancel | notify rider; cancellation frees driver + policy fee |
-| ARRIVING | ARRIVED, CANCELLED | geofence/driver mark / cancel | notify rider "driver arrived" |
-| ARRIVED | IN_PROGRESS, CANCELLED | start trip / cancel | begin fare metering |
-| IN_PROGRESS | COMPLETED | end trip | finalize fare |
-| COMPLETED | PAID | payment captured | post ledger entries, enable ratings |
+| From            | Allowed →                              | Trigger                              | Side effects                                         |
+| --------------- | -------------------------------------- | ------------------------------------ | ---------------------------------------------------- |
+| REQUESTED       | MATCHING, CANCELLED                    | rider confirm / cancel               | on MATCHING: build candidates (matching)             |
+| MATCHING        | DRIVER_ASSIGNED, NO_DRIVERS, CANCELLED | dispatch accept / exhausted / cancel | assign driver, lock driver, start ARRIVING notif     |
+| DRIVER_ASSIGNED | ARRIVING, CANCELLED                    | driver moves / cancel                | notify rider; cancellation frees driver + policy fee |
+| ARRIVING        | ARRIVED, CANCELLED                     | geofence/driver mark / cancel        | notify rider "driver arrived"                        |
+| ARRIVED         | IN_PROGRESS, CANCELLED                 | start trip / cancel                  | begin fare metering                                  |
+| IN_PROGRESS     | COMPLETED                              | end trip                             | finalize fare                                        |
+| COMPLETED       | PAID                                   | payment captured                     | post ledger entries, enable ratings                  |
 
 Any transition not in the table → **rejected** with `INVALID_TRIP_TRANSITION`.
 

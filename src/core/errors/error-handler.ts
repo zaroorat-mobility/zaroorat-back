@@ -1,4 +1,4 @@
-import { FastifyError, FastifyReply, FastifyRequest } from "fastify";
+import { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 
 export async function errorHandler(
   error: FastifyError,
@@ -8,7 +8,7 @@ export async function errorHandler(
   if (error.validation) {
     return reply.status(400).send({
       success: false,
-      message: "Validation failed",
+      message: 'Validation failed',
       errors: error.validation,
     });
   }
@@ -20,10 +20,10 @@ export async function errorHandler(
     });
   }
 
-  request.log.error({ err: error }, "Unhandled server error");
+  request.log.error({ err: error }, 'Unhandled server error');
 
   return reply.status(500).send({
     success: false,
-    message: "Internal Server Error",
+    message: 'Internal Server Error',
   });
 }

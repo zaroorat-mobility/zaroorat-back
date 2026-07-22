@@ -1,22 +1,13 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 export const EnvironmentSchema = z.object({
-  APP_ENV: z.enum([
-    "local",
-    "test",
-    "staging",
-    "production",
-  ]).default("local"),
+  APP_ENV: z.enum(['local', 'test', 'staging', 'production']).default('local'),
 
-  NODE_ENV: z.enum([
-    "development",
-    "test",
-    "production",
-  ]).default("development"),
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
-  APP_NAME: z.string().default("zaroorat-backend"),
+  APP_NAME: z.string().default('zaroorat-backend'),
 
-  HOST: z.string().default("0.0.0.0"),
+  HOST: z.string().default('0.0.0.0'),
 
   PORT: z.coerce.number().default(3000),
 

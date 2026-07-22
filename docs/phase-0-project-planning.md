@@ -12,7 +12,7 @@ The goal of Phase 0 is a single one: **everyone understands what we are building
 
 **Zaroorat is a ride-hailing and mobility platform** connecting riders who need a trip with drivers who can provide it, in real time.
 
-The name *Zaroorat* ("necessity") is the product thesis: transport is not a luxury, it is a daily need. We win by being **reliable, safe, and fairly priced** in markets where existing options are expensive, unsafe, or unavailable.
+The name _Zaroorat_ ("necessity") is the product thesis: transport is not a luxury, it is a daily need. We win by being **reliable, safe, and fairly priced** in markets where existing options are expensive, unsafe, or unavailable.
 
 **What the backend must be:**
 
@@ -35,13 +35,13 @@ The name *Zaroorat* ("necessity") is the product thesis: transport is not a luxu
 
 ### 2.1 Actors
 
-| Actor | Description |
-|---|---|
-| **Rider** | Requests, takes, pays for, and rates trips. |
-| **Driver** | Onboards, gets verified, goes online, accepts trips, drives, gets paid. |
-| **Admin / Ops** | Verifies documents, manages fares/promos, resolves disputes, monitors the fleet. |
-| **Support agent** | Handles tickets, trip issues, and SOS follow-up. |
-| **System (workers)** | Async actors: dispatch timeouts, payment capture, notifications, cleanup. |
+| Actor                | Description                                                                      |
+| -------------------- | -------------------------------------------------------------------------------- |
+| **Rider**            | Requests, takes, pays for, and rates trips.                                      |
+| **Driver**           | Onboards, gets verified, goes online, accepts trips, drives, gets paid.          |
+| **Admin / Ops**      | Verifies documents, manages fares/promos, resolves disputes, monitors the fleet. |
+| **Support agent**    | Handles tickets, trip issues, and SOS follow-up.                                 |
+| **System (workers)** | Async actors: dispatch timeouts, payment capture, notifications, cleanup.        |
 
 ### 2.2 Core business rules (non-negotiable invariants)
 
@@ -77,17 +77,20 @@ These are the rules the code must enforce everywhere, not just in the happy path
 The domain is already decomposed into 23 modules under `src/modules`. Each is an owned bounded context. This is the authoritative feature list.
 
 ### Identity & accounts
+
 - **`auth`** — phone/OTP login, sessions, JWT issuance & refresh, role assignment.
 - **`users`** — the shared account record; profile, status, role membership.
 - **`riders`** — rider profile, saved places, payment preferences, trip history view.
 - **`drivers`** — driver profile, online/offline state, earnings summary, availability.
 
 ### Driver supply & compliance
+
 - **`onboarding`** — the driver signup funnel and verification state machine.
 - **`documents`** — upload, review, expiry tracking of licenses, CNIC, insurance, etc.
 - **`vehicles`** — vehicle registration, category (bike/car/etc.), approval status.
 
 ### The trip (the core loop)
+
 - **`rides`** — the trip aggregate and its lifecycle state machine (the heart of the system).
 - **`dispatch`** — offering a request to drivers, accept/decline, timeouts, re-offer.
 - **`matching`** — selecting candidate drivers for a request (proximity, category, ETA, fairness).
@@ -95,10 +98,12 @@ The domain is already decomposed into 23 modules under `src/modules`. Each is an
 - **`pricing`** — fare estimation and finalization, surge, per-category rates, tolls/waiting.
 
 ### Money
+
 - **`payments`** — charges, cash reconciliation, driver payouts, refunds, wallet/ledger.
 - **`promotions`** — promo codes, discounts, referral credits, campaign rules.
 
 ### Engagement & safety
+
 - **`notifications`** — push / SMS / in-app, templated and async.
 - **`chat`** — rider↔driver in-trip messaging.
 - **`sos`** — emergency trigger, trip sharing, alert escalation.
@@ -106,6 +111,7 @@ The domain is already decomposed into 23 modules under `src/modules`. Each is an
 - **`support`** — tickets, trip disputes, agent workflows.
 
 ### Platform & operations
+
 - **`admin`** — ops/back-office operations across all domains.
 - **`analytics`** — metrics, reporting, and event aggregation.
 - **`settings`** — platform configuration, feature flags, service areas, fare config.
@@ -125,7 +131,7 @@ Modules may exist as empty scaffolds before their phase; that is intentional and
 
 ### 4.1 Shape
 
-A **modular monolith with detachable async workers**, not microservices. One deployable API process plus separate worker process(es) that share the same codebase and database. This gives us clean module boundaries *and* independent scaling of async work, without the operational cost of a service mesh on day one.
+A **modular monolith with detachable async workers**, not microservices. One deployable API process plus separate worker process(es) that share the same codebase and database. This gives us clean module boundaries _and_ independent scaling of async work, without the operational cost of a service mesh on day one.
 
 ```
                      ┌─────────────────────────────────────┐
@@ -188,21 +194,21 @@ REQUESTED → MATCHING → DRIVER_ASSIGNED → ARRIVING → ARRIVED
 
 Inferred from the scaffold and committed to here.
 
-| Layer | Choice | Why |
-|---|---|---|
-| Language | **TypeScript** (strict) | Type safety across a large domain; shared types between API and workers. |
-| Runtime | **Node.js** | Ecosystem fit for Fastify/Prisma/BullMQ/Socket.io. |
-| HTTP framework | **Fastify** | Schema-first, fast, plugin encapsulation, native Swagger. |
-| Real-time | **Socket.io** (+ Redis adapter) | Rooms, reconnection, horizontal scale. |
-| ORM / DB | **Prisma + PostgreSQL** | Type-safe queries, migrations, geospatial, transactional integrity. |
-| Cache / queues / pubsub | **Redis** | Cache, BullMQ backing, socket adapter, rate limiting, geo/presence. |
-| Background jobs | **BullMQ** | Reliable, retryable, scheduled async work on Redis. |
-| Auth | **JWT** | Stateless auth for mobile clients; refresh flow in `auth`. |
-| API docs | **Swagger / OpenAPI** | Generated from route schemas; contract for the mobile team. |
-| Integrations | SMS, payments, maps, storage | Abstracted behind `config/*` + `integrations/` so providers are swappable. |
-| Containerization | **Docker + docker-compose** | Reproducible local + prod parity; separate API and worker images. |
-| Quality gates | **ESLint + Prettier + Husky** | Enforced style and pre-commit checks. |
-| Infra / observability | `infrastructure/`, `observability/` | IaC and metrics/logs/traces as first-class. |
+| Layer                   | Choice                              | Why                                                                        |
+| ----------------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| Language                | **TypeScript** (strict)             | Type safety across a large domain; shared types between API and workers.   |
+| Runtime                 | **Node.js**                         | Ecosystem fit for Fastify/Prisma/BullMQ/Socket.io.                         |
+| HTTP framework          | **Fastify**                         | Schema-first, fast, plugin encapsulation, native Swagger.                  |
+| Real-time               | **Socket.io** (+ Redis adapter)     | Rooms, reconnection, horizontal scale.                                     |
+| ORM / DB                | **Prisma + PostgreSQL**             | Type-safe queries, migrations, geospatial, transactional integrity.        |
+| Cache / queues / pubsub | **Redis**                           | Cache, BullMQ backing, socket adapter, rate limiting, geo/presence.        |
+| Background jobs         | **BullMQ**                          | Reliable, retryable, scheduled async work on Redis.                        |
+| Auth                    | **JWT**                             | Stateless auth for mobile clients; refresh flow in `auth`.                 |
+| API docs                | **Swagger / OpenAPI**               | Generated from route schemas; contract for the mobile team.                |
+| Integrations            | SMS, payments, maps, storage        | Abstracted behind `config/*` + `integrations/` so providers are swappable. |
+| Containerization        | **Docker + docker-compose**         | Reproducible local + prod parity; separate API and worker images.          |
+| Quality gates           | **ESLint + Prettier + Husky**       | Enforced style and pre-commit checks.                                      |
+| Infra / observability   | `infrastructure/`, `observability/` | IaC and metrics/logs/traces as first-class.                                |
 
 **Provider abstraction rule:** SMS, payment gateway, maps, and object storage are **behind interfaces** (`config/sms.ts`, `config/payment.ts`, `config/maps.ts`, `config/storage.ts` + `integrations/`). No module imports a vendor SDK directly. Swapping a provider must be a one-file change.
 
@@ -275,16 +281,19 @@ modules/rides/
 These are enforced, not aspirational. CI and pre-commit hooks back them up.
 
 ### 7.1 Module boundaries
+
 1. **A module is only reachable through its `index.ts`.** No deep-importing another module's internal files.
 2. **No cross-module DB writes.** `payments` does not write a `rides` row — it asks `rides` (via its public API or a domain event). One writer per table.
 3. **Shared logic goes in `core`/`shared`**, never copied between modules. `shared` holds no domain rules.
 
 ### 7.2 Data & migrations
+
 4. **`prisma/schema.prisma` is the single DB source of truth.** All changes go through committed migrations. Never hand-edit a generated migration or the DB directly.
 5. **Repositories are the only DB-access layer.** Services never call Prisma directly.
 6. **Every migration is reviewed** for indexes, nullability, and backfill impact before merge.
 
 ### 7.3 Correctness & safety
+
 7. **Money and trip-state operations run in transactions and are idempotent.** No exceptions.
 8. **Validate at the boundary.** Every route has request & response schemas; nothing untrusted reaches a service.
 9. **Deny by default.** Every endpoint declares its required auth and role explicitly.
@@ -292,11 +301,13 @@ These are enforced, not aspirational. CI and pre-commit hooks back them up.
 11. **State machines are explicit.** Trip/onboarding/document/payment transitions are validated in one place; no ad-hoc status flipping.
 
 ### 7.4 Async & real-time
+
 12. **Anything slow, external, or must-survive-a-crash goes to a worker**, not into the request path.
 13. **Assume duplicate delivery.** Socket messages and queue jobs must be safe to process more than once.
 14. **Emit domain events for side effects.** `notifications`, `analytics`, and `payments` react to events; they are not called inline from unrelated services.
 
 ### 7.5 Quality
+
 15. **Every module change ships with tests.** Services (business rules) require unit tests; critical flows require integration tests.
 16. **Lint & format are non-negotiable.** ESLint + Prettier pass via Husky pre-commit; CI re-checks.
 17. **TypeScript strict mode; no `any`** without a written reason.
@@ -304,8 +315,9 @@ These are enforced, not aspirational. CI and pre-commit hooks back them up.
 19. **Log with structure and a request ID.** No `console.log`; correlate API ↔ worker via request/trace IDs.
 
 ### 7.6 Process
+
 20. **Branch → PR → review → CI green → merge.** No direct pushes to the main branch.
-21. **Keep this document current.** If an architectural decision changes, the change lands *with* the doc update, not after.
+21. **Keep this document current.** If an architectural decision changes, the change lands _with_ the doc update, not after.
 
 ---
 

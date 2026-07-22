@@ -1,23 +1,23 @@
 # Queues & Workers
 
 > **Status:** 🟡 Draft · **Owner:** Engineering · **Last updated:** 2026-07-20
-> **Answers:** *What runs asynchronously, why, and with what reliability guarantees?*
+> **Answers:** _What runs asynchronously, why, and with what reliability guarantees?_
 > **Decision:** [ADR-0005 — Workers own timing](./ADR/0005-bullmq-workers-own-timing.md) · **See also:** [Events](./EVENT_CATALOG.md)
 
 Anything **slow, external, time-driven, or must-survive-a-crash** runs in a BullMQ worker, never in the request path. Workers are a separate process (`Dockerfile.worker`, entry `src/workers/*`) sharing the codebase and database. The request path stays fast; the async path stays durable.
 
-**Golden rule:** *workers own time.* Every deadline, timeout, and retry is a queued job — never a client timer or an in-process `setTimeout` (lost on restart).
+**Golden rule:** _workers own time._ Every deadline, timeout, and retry is a queued job — never a client timer or an in-process `setTimeout` (lost on restart).
 
 ---
 
 ## 1. Worker map
 
-| Worker | Queues / jobs | Trigger | Owns |
-|---|---|---|---|
-| `rides.worker` | `dispatch-timeout`, `arrival-check`, `stale-trip` | delayed job on offer; scheduled | dispatch offer timeouts, re-offer to next candidate, no-driver resolution, arrival/stale-trip checks |
-| `payments.worker` | `charge`, `payout`, `refund`, `reconcile` | on `trip.completed`; scheduled | charge capture, driver payout batching, refunds, cash reconciliation |
-| `notifications.worker` | `send` (push / sms / inapp) | domain events | templated notification fan-out with retry + channel fallback |
-| `cleanup.worker` | `expire-otp`, `stale-locations`, `doc-expiry`, `orphan-uploads` | cron / scheduled | TTL sweeps, document-expiry, orphaned-upload GC, idempotency-record GC |
+| Worker                 | Queues / jobs                                                   | Trigger                         | Owns                                                                                                 |
+| ---------------------- | --------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `rides.worker`         | `dispatch-timeout`, `arrival-check`, `stale-trip`               | delayed job on offer; scheduled | dispatch offer timeouts, re-offer to next candidate, no-driver resolution, arrival/stale-trip checks |
+| `payments.worker`      | `charge`, `payout`, `refund`, `reconcile`                       | on `trip.completed`; scheduled  | charge capture, driver payout batching, refunds, cash reconciliation                                 |
+| `notifications.worker` | `send` (push / sms / inapp)                                     | domain events                   | templated notification fan-out with retry + channel fallback                                         |
+| `cleanup.worker`       | `expire-otp`, `stale-locations`, `doc-expiry`, `orphan-uploads` | cron / scheduled                | TTL sweeps, document-expiry, orphaned-upload GC, idempotency-record GC                               |
 
 ---
 
@@ -57,6 +57,7 @@ The offer deadline is a **delayed job**, not a timer in the API or the client. I
 ---
 
 ## 4. Scaling & operations
+
 - Workers **scale horizontally** by queue depth, independently of the API.
 - Monitor: queue depth, job latency, failure rate, dead-letter growth (see [Monitoring](../03_OPERATIONS/MONITORING.md)).
 - Alert on: rising dead-letter count (especially `payments`), stuck/queued jobs, worker crash-loops.
@@ -65,6 +66,7 @@ The offer deadline is a **delayed job**, not a timer in the API or the client. I
 ---
 
 ## 5. Adding a new job
+
 1. Define the queue/job name and payload (IDs only).
 2. Make the handler idempotent and pick its idempotency key.
 3. Set retry/backoff and dead-letter policy.

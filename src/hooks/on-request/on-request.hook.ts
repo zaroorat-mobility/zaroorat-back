@@ -1,15 +1,15 @@
-import fp from "fastify-plugin";
-import { FastifyInstance } from "fastify";
+import fp from 'fastify-plugin';
+import { FastifyInstance } from 'fastify';
 
 async function onRequestHook(app: FastifyInstance) {
-  app.addHook("onRequest", async (request) => {
+  app.addHook('onRequest', async (request) => {
     request.log.info(
       {
         method: request.method,
         url: request.url,
         requestId: request.id,
       },
-      "Incoming request",
+      'Incoming request',
     );
 
     request.startTime = process.hrtime.bigint();
@@ -17,5 +17,5 @@ async function onRequestHook(app: FastifyInstance) {
 }
 
 export default fp(onRequestHook, {
-  name: "on-request-hook",
+  name: 'on-request-hook',
 });

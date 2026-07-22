@@ -1,3 +1,3 @@
-import { startup } from "./bootstrap/startup.bootstrap.js";
+import { startup } from './bootstrap/startup.bootstrap.js';
 
 void startup();

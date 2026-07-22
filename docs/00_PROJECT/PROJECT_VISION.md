@@ -7,11 +7,11 @@
 
 **Zaroorat is a ride-hailing platform that connects riders who need a trip with drivers who can provide it, in real time — reliably, safely, and at a fair price.**
 
-*Zaroorat* means "necessity." That is the thesis: transport is a daily need, not a luxury. We win in markets where the alternatives are too expensive, unsafe, or simply unavailable.
+_Zaroorat_ means "necessity." That is the thesis: transport is a daily need, not a luxury. We win in markets where the alternatives are too expensive, unsafe, or simply unavailable.
 
 ## What the backend must be
 
-- **Real-time first.** A ride request, a driver moving on the map, a trip's state, a chat message — all live. Latency and correctness of state *are* the product.
+- **Real-time first.** A ride request, a driver moving on the map, a trip's state, a chat message — all live. Latency and correctness of state _are_ the product.
 - **Trustworthy with money.** Fares, payouts, promos, and refunds must be exactly right, auditable, and idempotent. A double charge is worse than a slow response.
 - **Safe by design.** SOS, trip sharing, document verification, and ride history are core features, not add-ons.
 - **Operable at 3 a.m.** The team can observe, debug, and recover the system under load without heroics.
@@ -22,10 +22,10 @@ A rider opens the app, is matched to a nearby **verified** driver in seconds, wa
 
 ## Who we serve
 
-| | Need |
-|---|---|
-| **Riders** | A safe, affordable ride, now — with a price they can trust. |
-| **Drivers** | Reliable earnings with low friction and fair pay. |
+|                | Need                                                        |
+| -------------- | ----------------------------------------------------------- |
+| **Riders**     | A safe, affordable ride, now — with a price they can trust. |
+| **Drivers**    | Reliable earnings with low friction and fair pay.           |
 | **Operations** | Tools to verify supply, manage pricing, and resolve issues. |
 
 ## What success looks like (headline metrics)
