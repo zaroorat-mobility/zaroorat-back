@@ -5,7 +5,16 @@ const prettier = require('eslint-config-prettier');
 const globals = require('globals');
 
 module.exports = defineConfig([
-  globalIgnores(['dist/', 'coverage/', 'node_modules/', '.husky/_/', '**/*.tsbuildinfo']),
+  globalIgnores([
+    'dist/',
+    'coverage/',
+    'node_modules/',
+    '.husky/_/',
+    '**/*.tsbuildinfo',
+    // Generated Prisma client — machine-written, lives under src/ so it would
+    // otherwise be linted. Produced ~6900 no-undef errors before being ignored.
+    'src/generated/',
+  ]),
 
   js.configs.recommended,
   tseslint.configs.recommended,
@@ -36,6 +45,17 @@ module.exports = defineConfig([
     files: ['*.config.js'],
     rules: {
       '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+
+  // Maintenance CLIs (schema merge/validate, db reset) and seed scripts.
+  // These are CommonJS Node scripts whose entire purpose is printing progress
+  // to a terminal, so require() and console are correct here — not lapses.
+  {
+    files: ['scripts/**/*.js', 'prisma/seed/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+      'no-console': 'off',
     },
   },
 

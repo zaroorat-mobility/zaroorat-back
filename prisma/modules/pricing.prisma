@@ -1,0 +1,256 @@
+// ============================ PRICING ============================
+
+model PricingRule {
+  id              String    @id @default(uuid()) @db.Uuid
+  vehicleTypeId   String    @map("vehicle_type_id") @db.Uuid
+  cityCode        String    @map("city_code")
+  currency        String    @default("INR") @db.Char(3)
+  baseFare        Decimal   @map("base_fare") @db.Decimal(10, 2)
+  minimumFare     Decimal   @map("minimum_fare") @db.Decimal(10, 2)
+  perKmRate       Decimal   @map("per_km_rate") @db.Decimal(10, 2)
+  perMinuteRate   Decimal   @map("per_minute_rate") @db.Decimal(10, 2)
+  freeWaitingMin  Int       @default(3) @map("free_waiting_min") @db.SmallInt
+  waitingPerMin   Decimal   @default(0) @map("waiting_per_min") @db.Decimal(10, 2)
+  includedKm      Decimal   @default(0) @map("included_km") @db.Decimal(6, 2)
+  bookingFee      Decimal   @default(0) @map("booking_fee") @db.Decimal(10, 2)
+  platformFeePct  Decimal   @default(0) @map("platform_fee_pct") @db.Decimal(5, 2)
+  nightMultiplier Decimal   @default(1.0) @map("night_multiplier") @db.Decimal(4, 2)
+  version         Int       @default(1)
+  isActive        Boolean   @default(true) @map("is_active")
+  effectiveFrom   DateTime  @default(now()) @map("effective_from")
+  effectiveTo     DateTime? @map("effective_to")
+  createdBy       String?   @map("created_by") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  vehicleType     VehicleType @relation(fields: [vehicleTypeId], references: [id])
+  @@index([cityCode, vehicleTypeId])
+  @@map("pricing_rules")
+}
+
+model SurgeZone {
+  id        String   @id @default(uuid()) @db.Uuid
+  cityCode  String   @map("city_code")
+  name      String
+  boundary  Unsupported("geography(Polygon,4326)")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  windows   SurgeWindow[]
+  @@index([cityCode])
+  @@map("surge_zones")
+}
+
+model SurgeWindow {
+  id            String    @id @default(uuid()) @db.Uuid
+  zoneId        String    @map("zone_id") @db.Uuid
+  vehicleTypeId String?   @map("vehicle_type_id") @db.Uuid
+  multiplier    Decimal   @db.Decimal(4, 2)
+  source        String    @default("DYNAMIC")
+  reason        String?
+  startsAt      DateTime  @map("starts_at")
+  endsAt        DateTime? @map("ends_at")
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  zone          SurgeZone    @relation(fields: [zoneId], references: [id])
+  vehicleType   VehicleType? @relation(fields: [vehicleTypeId], references: [id])
+  @@index([zoneId, startsAt])
+  @@map("surge_windows")
+}
+
+model TollZone {
+  id        String   @id @default(uuid()) @db.Uuid
+  cityCode  String?  @map("city_code")
+  name      String
+  boundary  Unsupported("geography(Polygon,4326)")?
+  charge    Decimal  @db.Decimal(10, 2)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@map("toll_zones")
+}
+
+model CancellationPolicy {
+  id                  String   @id @default(uuid()) @db.Uuid
+  vehicleTypeId       String?  @map("vehicle_type_id") @db.Uuid
+  cityCode            String?  @map("city_code")
+  cancelledBy         String   @map("cancelled_by")
+  freeCancelWindowSec Int      @default(120) @map("free_cancel_window_sec")
+  minStatus           String?  @map("min_status")
+  feeAmount           Decimal  @default(0) @map("fee_amount") @db.Decimal(10, 2)
+  feeType             String   @default("FLAT") @map("fee_type")
+  isActive            Boolean  @default(true) @map("is_active")
+  createdAt           DateTime @default(now()) @map("created_at")
+  @@map("cancellation_policies")
+}
+
+model Promotion {
+  id                    String    @id @default(uuid()) @db.Uuid
+  code                  String    @unique
+  title                 String?
+  description           String?
+  discountType          String    @map("discount_type")
+  discountValue         Decimal   @map("discount_value") @db.Decimal(10, 2)
+  maxDiscount           Decimal?  @map("max_discount") @db.Decimal(10, 2)
+  minFare               Decimal   @default(0) @map("min_fare") @db.Decimal(10, 2)
+  applicableCity        String?   @map("applicable_city")
+  applicableVehicleType String?   @map("applicable_vehicle_type") @db.Uuid
+  firstRideOnly         Boolean   @default(false) @map("first_ride_only")
+  usageLimitTotal       Int?      @map("usage_limit_total")
+  usageLimitPerUser     Int       @default(1) @map("usage_limit_per_user")
+  usedCount             Int       @default(0) @map("used_count")
+  validFrom             DateTime  @map("valid_from")
+  validTo               DateTime  @map("valid_to")
+  isActive              Boolean   @default(true) @map("is_active")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  vehicleType           VehicleType? @relation(fields: [applicableVehicleType], references: [id])
+  redemptions           PromotionRedemption[]
+  campaignTargets       CampaignTarget[]
+  couponBatches         CouponBatch[]
+  @@index([isActive, validFrom, validTo])
+  @@map("promotions")
+}
+
+model PromotionRedemption {
+  id             String   @id @default(uuid()) @db.Uuid
+  promotionId    String   @map("promotion_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  rideId         String?  @map("ride_id") @db.Uuid
+  discountAmount Decimal  @map("discount_amount") @db.Decimal(10, 2)
+  redeemedAt     DateTime @default(now()) @map("redeemed_at")
+
+  promotion      Promotion @relation(fields: [promotionId], references: [id])
+  user           User      @relation(fields: [userId], references: [id])
+  ride           Ride?     @relation(fields: [rideId], references: [id])
+  @@index([promotionId])
+  @@index([userId])
+  @@map("promotion_redemptions")
+}
+
+model TaxConfig {
+  id            String    @id @default(uuid()) @db.Uuid
+  cityCode      String?   @map("city_code")
+  taxName       String    @map("tax_name")
+  ratePct       Decimal   @map("rate_pct") @db.Decimal(5, 2)
+  appliesTo     String    @default("SUBTOTAL") @map("applies_to")
+  isActive      Boolean   @default(true) @map("is_active")
+  effectiveFrom DateTime  @default(now()) @map("effective_from")
+  effectiveTo   DateTime? @map("effective_to")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  @@index([cityCode, isActive])
+  @@map("tax_configs")
+}
+
+
+// ============================ PROMOTIONS ============================
+
+model PromoCampaign {
+  id        String            @id @default(uuid()) @db.Uuid
+  code      String            @unique
+  name      String
+  objective CampaignObjective @default(ACQUISITION)
+  status    CampaignStatus    @default(DRAFT)
+  budget    Decimal?          @db.Decimal(14, 2)
+  spent     Decimal           @default(0) @db.Decimal(14, 2)
+  startsAt  DateTime?         @map("starts_at")
+  endsAt    DateTime?         @map("ends_at")
+  createdBy String?           @map("created_by") @db.Uuid
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  targets   CampaignTarget[]
+  batches   CouponBatch[]
+  banners   PromoBanner[]
+  @@index([status, startsAt])
+  @@map("promo_campaigns")
+}
+
+model AudienceSegment {
+  id            String   @id @default(uuid()) @db.Uuid
+  code          String   @unique
+  name          String
+  description   String?
+  rules         Json?
+  estimatedSize Int?     @map("estimated_size")
+  isDynamic     Boolean  @default(true) @map("is_dynamic")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  targets       CampaignTarget[]
+  @@map("audience_segments")
+}
+
+model CampaignTarget {
+  id          String   @id @default(uuid()) @db.Uuid
+  campaignId  String   @map("campaign_id") @db.Uuid
+  segmentId   String   @map("segment_id") @db.Uuid
+  promotionId String?  @map("promotion_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  campaign    PromoCampaign   @relation(fields: [campaignId], references: [id])
+  segment     AudienceSegment @relation(fields: [segmentId], references: [id])
+  promotion   Promotion?      @relation(fields: [promotionId], references: [id])
+  @@unique([campaignId, segmentId])
+  @@index([segmentId])
+  @@map("campaign_targets")
+}
+
+model CouponBatch {
+  id             String    @id @default(uuid()) @db.Uuid
+  campaignId     String?   @map("campaign_id") @db.Uuid
+  promotionId    String    @map("promotion_id") @db.Uuid
+  name           String?
+  prefix         String?
+  totalCount     Int       @default(0) @map("total_count")
+  generatedCount Int       @default(0) @map("generated_count")
+  perUserLimit   Int       @default(1) @map("per_user_limit") @db.SmallInt
+  expiresAt      DateTime? @map("expires_at")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  campaign       PromoCampaign? @relation(fields: [campaignId], references: [id])
+  promotion      Promotion      @relation(fields: [promotionId], references: [id])
+  coupons        Coupon[]
+  @@index([campaignId])
+  @@map("coupon_batches")
+}
+
+model Coupon {
+  id             String       @id @default(uuid()) @db.Uuid
+  batchId        String       @map("batch_id") @db.Uuid
+  code           String       @unique
+  userId         String?      @map("user_id") @db.Uuid
+  status         CouponStatus @default(ACTIVE)
+  redeemedRideId String?      @map("redeemed_ride_id") @db.Uuid
+  assignedAt     DateTime?    @map("assigned_at")
+  redeemedAt     DateTime?    @map("redeemed_at")
+  expiresAt      DateTime?    @map("expires_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  batch          CouponBatch  @relation(fields: [batchId], references: [id])
+  user           User?        @relation(fields: [userId], references: [id])
+  redeemedRide   Ride?        @relation(fields: [redeemedRideId], references: [id])
+  @@index([batchId])
+  @@index([userId])
+  @@index([status])
+  @@map("coupons")
+}
+
+model PromoBanner {
+  id         String          @id @default(uuid()) @db.Uuid
+  campaignId String?         @map("campaign_id") @db.Uuid
+  title      String?
+  imageUrl   String          @map("image_url")
+  placement  BannerPlacement @default(HOME)
+  actionUrl  String?         @map("action_url")
+  priority   Int             @default(0) @db.SmallInt
+  startsAt   DateTime?       @map("starts_at")
+  endsAt     DateTime?       @map("ends_at")
+  isActive   Boolean         @default(true) @map("is_active")
+  createdAt  DateTime        @default(now()) @map("created_at")
+
+  campaign   PromoCampaign?  @relation(fields: [campaignId], references: [id])
+  @@map("promo_banners")
+}
+
+

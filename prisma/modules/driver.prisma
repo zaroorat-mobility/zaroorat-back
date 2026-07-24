@@ -1,0 +1,215 @@
+// ============================ DRIVER ============================
+
+model Driver {
+  id                 String   @id @default(uuid()) @db.Uuid
+  userId             String   @unique @map("user_id") @db.Uuid
+  driverCode         String   @unique @map("driver_code")
+  onboardingStatus   DriverOnboardingStatus   @default(PENDING) @map("onboarding_status")
+  verificationStatus DriverVerificationStatus @default(PENDING) @map("verification_status")
+  currentVehicleId   String?  @map("current_vehicle_id") @db.Uuid
+  rating             Decimal  @default(5.0) @db.Decimal(3, 2)
+  totalRides         Int      @default(0) @map("total_rides")
+  totalDistanceKm    Decimal  @default(0) @map("total_distance_km") @db.Decimal(10, 2)
+  totalEarnings      Decimal  @default(0) @map("total_earnings") @db.Decimal(12, 2)
+  isAvailable        Boolean  @default(false) @map("is_available")
+  isSuspended        Boolean  @default(false) @map("is_suspended")
+  approvedAt         DateTime? @map("approved_at")
+  approvedBy         String?  @map("approved_by") @db.Uuid
+  rejectionReason    String?  @map("rejection_reason")
+  lastRideAt         DateTime? @map("last_ride_at")
+  acceptanceRate     Decimal? @map("acceptance_rate") @db.Decimal(5, 2)
+  completionRate     Decimal? @map("completion_rate") @db.Decimal(5, 2)
+  cancellationRate   Decimal? @map("cancellation_rate") @db.Decimal(5, 2)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  deletedAt          DateTime? @map("deleted_at")
+
+  user               User     @relation(fields: [userId], references: [id])
+  profile            DriverProfile?
+  documents          DriverDocument[]
+  bankAccounts       DriverBankAccount[]
+  wallet             DriverWallet?
+  onlineStatus       DriverOnlineStatus?
+  location           DriverLocation?
+  shiftLogs          DriverShiftLog[]
+  assignments        VehicleAssignment[]
+  dispatches         RideDispatch[]
+  rides              Ride[]
+  settlements        DriverSettlement[]
+  payouts            DriverPayout[]
+  withdrawalRequests WithdrawalRequest[]
+  ratingAggregate    DriverRatingAggregate?
+
+  @@index([verificationStatus])
+  @@index([isAvailable])
+  @@map("drivers")
+}
+
+model DriverProfile {
+  id                String    @id @default(uuid()) @db.Uuid
+  driverId          String    @unique @map("driver_id") @db.Uuid
+  fullLegalName     String?   @map("full_legal_name")
+  dateOfBirth       DateTime? @map("date_of_birth") @db.Date
+  gender            String?
+  addressLine       String?   @map("address_line")
+  city              String?
+  state             String?
+  country           String?   @default("India")
+  postalCode        String?   @map("postal_code")
+  preferredLanguage String?   @default("en") @map("preferred_language")
+  bloodGroup        String?   @map("blood_group")
+  profilePhoto      String?   @map("profile_photo")
+  alternatePhone    String?   @map("alternate_phone")
+  drivingExperienceYears Int? @map("driving_experience_years") @db.SmallInt
+  spokenLanguages   String[]  @map("spoken_languages")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  driver            Driver    @relation(fields: [driverId], references: [id])
+  @@map("driver_profiles")
+}
+
+model DriverDocument {
+  id                 String    @id @default(uuid()) @db.Uuid
+  driverId           String    @map("driver_id") @db.Uuid
+  documentType       DriverDocumentType @map("document_type")
+  documentNumber     String?   @map("document_number")
+  fileUrl            String    @map("file_url")
+  issuedAt           DateTime? @map("issued_at") @db.Date
+  expiresAt          DateTime? @map("expires_at") @db.Date
+  verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
+  verifiedBy         String?   @map("verified_by") @db.Uuid
+  verifiedAt         DateTime? @map("verified_at")
+  verificationNotes  String?   @map("verification_notes")
+  ocrData            Json?     @map("ocr_data")
+  documentChecksum   String?   @map("document_checksum")
+  rejectionReason    String?   @map("rejection_reason")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  driver             Driver    @relation(fields: [driverId], references: [id])
+
+  @@index([driverId])
+  @@index([documentType])
+  @@index([expiresAt])
+  @@map("driver_documents")
+}
+
+model DriverBankAccount {
+  id                 String   @id @default(uuid()) @db.Uuid
+  driverId           String   @map("driver_id") @db.Uuid
+  accountHolderName  String?  @map("account_holder_name")
+  bankName           String?  @map("bank_name")
+  ifscCode           String?  @map("ifsc_code")
+  accountNumberEnc   String?  @map("account_number_enc")
+  upiId              String?  @map("upi_id")
+  verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
+  verifiedAt         DateTime? @map("verified_at")
+  verifiedBy         String?  @map("verified_by") @db.Uuid
+  payoutEnabled      Boolean  @default(false) @map("payout_enabled")
+  providerFundAccountId String? @map("provider_fund_account_id")
+  beneficiaryId      String?  @map("beneficiary_id")
+  isDefault          Boolean  @default(false) @map("is_default")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  driver             Driver   @relation(fields: [driverId], references: [id])
+  payouts            DriverPayout[]
+  withdrawalRequests WithdrawalRequest[]
+  @@index([driverId])
+  @@map("driver_bank_accounts")
+}
+
+model DriverWallet {
+  id                String    @id @default(uuid()) @db.Uuid
+  driverId          String    @unique @map("driver_id") @db.Uuid
+  balance           Decimal   @default(0) @db.Decimal(12, 2)
+  lockedBalance     Decimal   @default(0) @map("locked_balance") @db.Decimal(12, 2)
+  currency          String    @default("INR") @db.Char(3)
+  lastTransactionAt DateTime? @map("last_transaction_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  driver            Driver    @relation(fields: [driverId], references: [id])
+  transactions      DriverWalletTransaction[]
+  withdrawals       WithdrawalRequest[]
+  @@map("driver_wallets")
+}
+
+model DriverWalletTransaction {
+  id            String   @id @default(uuid()) @db.Uuid
+  walletId      String   @map("wallet_id") @db.Uuid
+  driverId      String   @map("driver_id") @db.Uuid
+  txnType       DriverWalletTxnType @map("txn_type")
+  amount        Decimal  @db.Decimal(12, 2)
+  balanceAfter  Decimal  @map("balance_after") @db.Decimal(12, 2)
+  referenceType String?  @map("reference_type")
+  referenceId   String?  @map("reference_id") @db.Uuid
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  wallet        DriverWallet @relation(fields: [walletId], references: [id])
+  @@index([walletId])
+  @@index([driverId, createdAt])
+  @@map("driver_wallet_transactions")
+}
+
+model DriverOnlineStatus {
+  driverId       String        @id @map("driver_id") @db.Uuid
+  status         DriverStatus  @default(OFFLINE)
+  lastOnlineAt   DateTime?     @map("last_online_at")
+  lastOfflineAt  DateTime?     @map("last_offline_at")
+  currentShiftId String?       @map("current_shift_id") @db.Uuid
+  heartbeatAt    DateTime?     @map("heartbeat_at")
+  batteryLevel   Int?          @map("battery_level") @db.SmallInt
+  networkType    String?       @map("network_type")
+  appVersion     String?       @map("app_version")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  driver         Driver        @relation(fields: [driverId], references: [id])
+  @@map("driver_online_status")
+}
+
+model DriverLocation {
+  driverId       String   @id @map("driver_id") @db.Uuid
+  latitude       Decimal? @db.Decimal(10, 7)
+  longitude      Decimal? @db.Decimal(10, 7)
+  location       Unsupported("geography(Point,4326)")
+  heading        Decimal? @db.Decimal(5, 2)
+  bearing        Decimal? @db.Decimal(5, 2)
+  speedKmh       Decimal? @map("speed_kmh") @db.Decimal(6, 2)
+  accuracyMeters Decimal? @map("accuracy_meters") @db.Decimal(6, 2)
+  altitude       Decimal? @db.Decimal(8, 2)
+  provider       String?
+  gpsSource      String?  @map("gps_source")
+  isMockLocation Boolean  @default(false) @map("is_mock_location")
+  rideId         String?  @map("ride_id") @db.Uuid
+  recordedAt     DateTime @map("recorded_at")
+
+  driver         Driver   @relation(fields: [driverId], references: [id])
+  @@map("driver_locations")
+}
+
+model DriverShiftLog {
+  id                 String    @id @default(uuid()) @db.Uuid
+  driverId           String    @map("driver_id") @db.Uuid
+  shiftStart         DateTime  @map("shift_start")
+  shiftEnd           DateTime? @map("shift_end")
+  totalOnlineMinutes Int       @default(0) @map("total_online_minutes")
+  totalTripMinutes   Int       @default(0) @map("total_trip_minutes")
+  idleMinutes        Int       @default(0) @map("idle_minutes")
+  completedRides     Int       @default(0) @map("completed_rides")
+  acceptedTrips      Int       @default(0) @map("accepted_trips")
+  rejectedTrips      Int       @default(0) @map("rejected_trips")
+  cancelledTrips     Int       @default(0) @map("cancelled_trips")
+  distanceDrivenKm   Decimal   @default(0) @map("distance_driven_km") @db.Decimal(10, 2)
+  earnings           Decimal   @default(0) @db.Decimal(12, 2)
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  driver             Driver    @relation(fields: [driverId], references: [id])
+  @@index([driverId, shiftStart])
+  @@map("driver_shift_logs")
+}
+
+// NOTE: driver_location_history is RANGE-partitioned — manage via raw SQL, not Prisma.
+
+

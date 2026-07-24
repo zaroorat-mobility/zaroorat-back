@@ -14,3 +14,4 @@ infrastructure/helm/templates/
 
 # Generated
 prisma/migrations/
+src/generated/

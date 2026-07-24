@@ -1,0 +1,11 @@
+// Zaroorat Ride Platform — Prisma schema
+// PostgreSQL 17 + PostGIS. Modules: Identity, Driver, Vehicle, Ride, Pricing.
+//
+// NOTE: PostGIS GEOGRAPHY columns are declared as Unsupported(...) — Prisma
+// cannot introspect/typecheck them, but they round-trip fine. Partial unique
+// indexes and RANGE partitions (see sql/) MUST be added via raw-SQL migrations.
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [postgis, pgcrypto]
+}
