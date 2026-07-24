@@ -1,7 +1,7 @@
 name: CI
 
 # Mirrors the local hooks so `--no-verify` cannot land unchecked code.
-# Pipeline order matches docs/03_OPERATIONS/DEPLOYMENT.md §3.
+# Pipeline order matches docs/14_Operations/03_release-process.md.
 on:
   push:
     branches: [main]

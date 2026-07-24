@@ -71,7 +71,7 @@ env:
 
 # DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are read
 # from this pre-existing Secret. It is created by the platform secret store,
-# never by this chart and never committed (DEPLOYMENT.md §4).
+# never by this chart and never committed (docs/04_Architecture/05_deployment-architecture.md "Network & security zones").
 existingSecret: zaroorat-backend-secrets
 
 # Extra env vars sourced from other ConfigMaps/Secrets.

@@ -35,7 +35,7 @@ ingress:
   className: nginx
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
-    # Socket.io connections are long-lived (ADR-0006); the default 60s
+    # Socket.io connections are long-lived; the default 60s
     # proxy read timeout would sever them mid-ride.
     nginx.ingress.kubernetes.io/proxy-read-timeout: '3600'
     nginx.ingress.kubernetes.io/proxy-send-timeout: '3600'

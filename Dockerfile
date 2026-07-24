@@ -82,7 +82,7 @@ USER node
 EXPOSE 3000
 
 # Liveness only. Readiness (DB/Redis reachable) is the orchestrator's job via
-# /ready — see docs/03_OPERATIONS/DEPLOYMENT.md §6.
+# /ready — see docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys".
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

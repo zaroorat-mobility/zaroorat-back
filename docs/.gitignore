@@ -1,0 +1,35 @@
+# ─── Secrets / env ───────────────────────────
+# Real env files are ignored; only *.example templates are committed.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# ─── Python ──────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# ─── Node / JS ───────────────────────────────
+node_modules/
+dist/
+.expo/
+*.tsbuildinfo
+
+# ─── Editors / OS ────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# ─── Build / infra ───────────────────────────
+*.log
+.terraform/
+*.tfstate*

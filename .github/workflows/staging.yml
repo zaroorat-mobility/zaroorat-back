@@ -91,7 +91,7 @@ jobs:
 
       # Gated step, run before the new pods start. Migrations are expand-only and
       # backward-compatible so old and new instances coexist during the rollout
-      # (docs/03_OPERATIONS/DEPLOYMENT.md §5).
+      # (docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys").
       - name: Run database migrations
         run: |
           kubectl run prisma-migrate-${{ github.run_id }} \

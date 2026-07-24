@@ -131,7 +131,7 @@ jobs:
             --env="DATABASE_URL=${{ secrets.DATABASE_URL }}" \
             --command -- npx prisma migrate deploy
 
-      # Rolling update; readiness gates each pod (docs/03_OPERATIONS/DEPLOYMENT.md §4).
+      # Rolling update; readiness gates each pod (docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys").
       - name: Deploy
         run: |
           helm upgrade --install zaroorat-backend infrastructure/helm \

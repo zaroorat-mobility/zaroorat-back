@@ -1,6 +1,6 @@
 # Local development stack: API + Postgres + Redis.
 # The worker service is intentionally absent until src/jobs/workers is implemented
-# and Dockerfile.worker exists (see docs/03_OPERATIONS/DEPLOYMENT.md §1).
+# and Dockerfile.worker exists (see docs/04_Architecture/05_deployment-architecture.md "Production topology").
 #
 #   make up      start everything
 #   make logs    tail the api

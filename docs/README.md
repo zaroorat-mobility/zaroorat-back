@@ -1,137 +1,75 @@
-# Zaroorat — Engineering Documentation
+# Zaroorat Ride — Engineering Handbook
 
-Documentation home for the **Zaroorat** ride-hailing platform backend. It exists so any engineer, PM, ops person — or AI coding agent — can understand _what_ we build, _why_, and _how_, and then produce code that matches the project instead of inventing its own patterns.
+> The single source of truth for how Zaroorat Ride is designed, built, run, and evolved.
+> If a new engineer reads this handbook top to bottom, they should be able to ship
+> production code with confidence and without tapping anyone on the shoulder.
 
-Docs flow **project → architecture (contracts) → engineering (rules) → operations**. The architecture-level contracts come _before_ the engineering rules on purpose: an agent should read the system shape, the module recipe, and the data/API/security contracts before writing a line.
-
-```
-docs/
-├── phase-0-project-planning.md   ← start here: the foundation
-├── 00_PROJECT/                   ← why & what
-├── 01_ARCHITECTURE/              ← how the system works + the contracts to build against
-├── 02_ENGINEERING/               ← how we write code
-├── 03_OPERATIONS/                ← how we run it
-└── handbook/                     ← Engineering Handbook (VOLUME_*, in progress) — see below
-```
-
-> **Two doc sets, one source of truth.** The numbered guides above (`00_PROJECT` … `03_OPERATIONS`) are the **canonical, build-against contracts**. The `VOLUME_*` [Engineering Handbook](#engineering-handbook-volume_-in-progress) is a separate, in-progress long-form deliverable that expands on the same decisions. Where the two disagree, the numbered guides win until a volume is marked stable.
+**Status:** Living document · **Owner:** Engineering · **Last reviewed:** 2026-07-06
 
 ---
 
-## 00_PROJECT — why & what
+## What Zaroorat Ride is
 
-| Doc                                                            | Answers                                                      |
-| -------------------------------------------------------------- | ------------------------------------------------------------ |
-| [PROJECT_VISION](./00_PROJECT/PROJECT_VISION.md)               | Mission, north-star, principles, non-goals                   |
-| [BUSINESS_REQUIREMENTS](./00_PROJECT/BUSINESS_REQUIREMENTS.md) | Objectives, business reqs, stakeholders, KPIs, risks         |
-| [FEATURE_CATALOG](./00_PROJECT/FEATURE_CATALOG.md)             | Features per module, user stories, acceptance criteria, NFRs |
+Zaroorat Ride is a ride-hailing platform (riders ↔ drivers) built as a set of services:
 
-## 01_ARCHITECTURE — how it works + build-against contracts
-
-| Doc                                                                          | Answers                                                       |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [SYSTEM_ARCHITECTURE](./01_ARCHITECTURE/SYSTEM_ARCHITECTURE.md)              | Components, data flow, deployment, algorithms, traceability   |
-| ⭐ [MODULE_DEVELOPMENT_GUIDE](./01_ARCHITECTURE/MODULE_DEVELOPMENT_GUIDE.md) | **The 12-step recipe every module follows**                   |
-| [DATABASE_GUIDE](./01_ARCHITECTURE/DATABASE_GUIDE.md)                        | UUID, soft-delete, timestamps, migrations, repository pattern |
-| [API_STANDARDS](./01_ARCHITECTURE/API_STANDARDS.md)                          | Response envelope, status codes, idempotency                  |
-| [SECURITY_GUIDE](./01_ARCHITECTURE/SECURITY_GUIDE.md)                        | Auth, RBAC, secrets, PII, per-endpoint checklist              |
-| [EVENT_CATALOG](./01_ARCHITECTURE/EVENT_CATALOG.md)                          | Domain events + realtime socket events                        |
-| [QUEUE_GUIDE](./01_ARCHITECTURE/QUEUE_GUIDE.md)                              | Workers, jobs, reliability contract                           |
-| [SOCKET_GUIDE](./01_ARCHITECTURE/SOCKET_GUIDE.md)                            | Realtime rooms, events, server-authoritative rules            |
-| [ER_DIAGRAM](./01_ARCHITECTURE/ER_DIAGRAM.md)                                | Entities, relationships, trip state machine                   |
-| [SEQUENCE_DIAGRAMS](./01_ARCHITECTURE/SEQUENCE_DIAGRAMS.md)                  | End-to-end runtime flows                                      |
-| [ADR/](./01_ARCHITECTURE/ADR/)                                               | Architecture Decision Records                                 |
-
-## 02_ENGINEERING — how we write code
-
-| Doc                                                              | Answers                                          |
-| ---------------------------------------------------------------- | ------------------------------------------------ |
-| [CODING_STANDARDS](./02_ENGINEERING/CODING_STANDARDS.md)         | Language, module layering, boundaries, naming    |
-| [ERROR_HANDLING](./02_ENGINEERING/ERROR_HANDLING.md)             | Typed errors → one central mapper → the envelope |
-| [TESTING_GUIDE](./02_ENGINEERING/TESTING_GUIDE.md)               | The pyramid, must-test cases, conventions        |
-| [GIT_WORKFLOW](./02_ENGINEERING/GIT_WORKFLOW.md)                 | Branching, commits, PRs, merging                 |
-| [LOGGING_GUIDE](./02_ENGINEERING/LOGGING_GUIDE.md)               | Structured logs, levels, correlation, redaction  |
-| [PERFORMANCE_GUIDE](./02_ENGINEERING/PERFORMANCE_GUIDE.md)       | Targets, principles, scaling, measuring          |
-| [ENVIRONMENT_GUIDE](./02_ENGINEERING/ENVIRONMENT_GUIDE.md)       | Config validation, variables, per-env            |
-| [CODE_REVIEW](./02_ENGINEERING/CODE_REVIEW.md)                   | What reviewers check, severity language          |
-| [DEVELOPER_ONBOARDING](./02_ENGINEERING/DEVELOPER_ONBOARDING.md) | Zero → first merged PR                           |
-
-## 03_OPERATIONS — how we run it
-
-| Doc                                                       | Answers                                              |
-| --------------------------------------------------------- | ---------------------------------------------------- |
-| [DEPLOYMENT](./03_OPERATIONS/DEPLOYMENT.md)               | Images, pipeline, zero-downtime migrations, rollback |
-| [MONITORING](./03_OPERATIONS/MONITORING.md)               | KPIs, RED/USE, queues, alerting                      |
-| [RUNBOOK](./03_OPERATIONS/RUNBOOK.md)                     | Symptom → checks → actions                           |
-| [INCIDENT_RESPONSE](./03_OPERATIONS/INCIDENT_RESPONSE.md) | Severity, roles, lifecycle, postmortems              |
-| [RELEASE_CHECKLIST](./03_OPERATIONS/RELEASE_CHECKLIST.md) | Pre-release → deploy → verify → rollback             |
-
-## Engineering Handbook (VOLUME_*, in progress)
-
-A parallel, long-form **Zaroorat Engineering Handbook**, grouped under [`handbook/`](./handbook/) and planned as 20 volumes (00–19). It restates and deepens the decisions in the numbered guides above; it does **not** replace them yet. It lives in its own folder so its volume numbering doesn't collide with the canonical guides. Volumes 00–07 are written (04, 06, and 07 are in progress, delivered in parts; 05 is complete); 08–19 are reserved scaffolds (`.gitkeep` placeholders) to be filled in later.
-
-| Volume | Doc                                                                                               | Covers                                                                                                                                                                              |
-| ------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 00     | [Project Foundation](./handbook/00_PROJECT_FOUNDATION/VOLUME_00_PROJECT_FOUNDATION.md)            | Vision, requirements, business rules, tech selection, roadmap                                                                                                                       |
-| 01     | [Engineering Standards](./handbook/01_ENGINEERING_STANDARDS/VOLUME_01_ENGINEERING_STANDARDS.md)   | Layering, boundaries, naming, errors, DTOs, response envelope                                                                                                                       |
-| 02     | [Backend Architecture](./handbook/02_ARCHITECTURE/VOLUME_02_BACKEND_ARCHITECTURE.md)              | Functional/non-functional architecture, module design, controllers                                                                                                                  |
-| 03     | [Database Engineering](./handbook/03_DATABASE/VOLUME_03_DATABASE_ENGINEERING.md)                  | Prisma, schema conventions, constraints, soft-delete, migrations                                                                                                                    |
-| 04     | [API Engineering](./handbook/04_API/VOLUME_04_API_ENGINEERING.md) _(in progress)_                 | API contract design: shape, naming, versioning, request/response standards                                                                                                          |
-| 05     | [Authentication & Security](./handbook/05_AUTH_SECURITY/VOLUME_05_AUTH_SECURITY_ENGINEERING.md)   | Security philosophy, identity, authentication, authorization, API/infra security, data protection, fraud, compliance, monitoring, production readiness                              |
-| 06     | [Modules Engineering](./handbook/06_MODULES/VOLUME_06_MODULES_ENGINEERING.md) _(in progress)_     | Module philosophy, structure, layer responsibilities, communication, CRUD, docs, events/queues/sockets, testing, lifecycle, review, per-module guides, AI rules                     |
-| 07     | [Real-Time Engineering](./handbook/07_REALTIME/VOLUME_07_REALTIME_ENGINEERING.md) _(in progress)_ | WebSocket/Socket.IO, gateway, connection lifecycle, auth, driver/passenger tracking, ride sync, rooms, presence, Redis scaling, reliability, monitoring                             |
-| 08–19  | _reserved_                                                                                        | `08_BACKGROUND_JOBS`, `09_TESTING`, `10_DEVOPS`, `11_MONITORING`, `12_PRODUCTION`, `13_AI`, `14_PROMPTS`, `15_TEMPLATES`, `16_ADR`, `17_PLAYBOOKS`, `18_CHECKLISTS`, `19_REFERENCE` |
-
-> The handbook uses aspirational filenames in its cross-references (`CODING_STANDARDS.md`, `DATABASE_CONVENTIONS.md`, module `SPEC.md`) that map to the numbered guides here. Until the volumes are marked 🟢 stable, treat the numbered guides as authoritative.
+| Layer            | Technology                                                     |
+| ---------------- | -------------------------------------------------------------- |
+| Backend API      | Python 3.12 · **FastAPI** · SQLAlchemy 2.x · Pydantic v2       |
+| Realtime         | WebSockets · Redis Pub/Sub                                     |
+| Datastore        | **PostgreSQL 16 + PostGIS** (geo) · **Redis 7** (cache/queues) |
+| Rider/Driver app | **Expo · React Native** (TypeScript)                           |
+| Admin dashboard  | **React + Vite + Tailwind** (TypeScript)                       |
+| Infra            | Docker · Nginx · GitHub Actions · Kubernetes                   |
 
 ---
 
-## The AI-assisted engineering playbook
+## How this handbook is organized
 
-If Claude (or any agent) reads these first, it generates consistent, project-matching code. Priority order:
+Documentation is split into **volumes**. Each volume is a folder, each folder has its
+own `README.md` that acts as its table of contents. Read the volume you need; you do not
+need to read them in order after Volume 1.
 
-1. ⭐ [MODULE_DEVELOPMENT_GUIDE](./01_ARCHITECTURE/MODULE_DEVELOPMENT_GUIDE.md) — the recipe every feature follows
-2. [CODING_STANDARDS](./02_ENGINEERING/CODING_STANDARDS.md) — the layering & boundary rules
-3. [DATABASE_GUIDE](./01_ARCHITECTURE/DATABASE_GUIDE.md) — UUID, soft-delete, repository pattern
-4. [API_STANDARDS](./01_ARCHITECTURE/API_STANDARDS.md) — one response envelope
-5. [SECURITY_GUIDE](./01_ARCHITECTURE/SECURITY_GUIDE.md) — auth, RBAC, validation
-6. [ERROR_HANDLING](./02_ENGINEERING/ERROR_HANDLING.md) — typed errors, one shape
-7. [TESTING_GUIDE](./02_ENGINEERING/TESTING_GUIDE.md) — what tests to generate
-8. [EVENT_CATALOG](./01_ARCHITECTURE/EVENT_CATALOG.md) — event names & flows
-9. [QUEUE_GUIDE](./01_ARCHITECTURE/QUEUE_GUIDE.md) — where background jobs go
-10. [SYSTEM_ARCHITECTURE](./01_ARCHITECTURE/SYSTEM_ARCHITECTURE.md) — the whole-system model
+| #   | Volume                  | Folder               | Answers the question…                          | Status     |
+| --- | ----------------------- | -------------------- | ---------------------------------------------- | ---------- |
+| 1   | Project Foundation      | `00_Project/`        | How do we set up, structure, and work in code? | ✅ Done    |
+| 2   | Business Documentation  | `01_Business/`       | Why does this product exist? Who is it for?    | ⬜ Planned |
+| 3   | Product & Requirements  | `02_Product/`        | What exactly are we building? (PRD/SRS)        | ⬜ Planned |
+| 4   | High-Level Architecture | `04_Architecture/`   | How do the pieces fit together?                | ⬜ Planned |
+| 5   | Low-Level Design        | `05_Design/`         | How does each module work internally?          | ⬜ Planned |
+| 6   | Database Design         | `06_Database/`       | How is data modeled, stored, indexed?          | ⬜ Planned |
+| 7   | API Design              | `07_API/`            | What are the contracts? REST + WebSocket.      | ⬜ Planned |
+| 8   | Mobile Architecture     | `08_Mobile/`         | How is the Expo app structured?                | ⬜ Planned |
+| 9   | Admin Dashboard         | `09_Admin/`          | How is the React admin built?                  | ⬜ Planned |
+| 10  | Backend Architecture    | `10_Backend/`        | How is the FastAPI service structured?         | ⬜ Planned |
+| 11  | Infrastructure & DevOps | `11_Infrastructure/` | How do we containerize, deploy, scale?         | ⬜ Planned |
+| 12  | Testing Strategy        | `13_Testing/`        | How do we prove it works?                      | ⬜ Planned |
+| 13  | Production Operations   | `14_Operations/`     | How do we run it at 3am when it breaks?        | ⬜ Planned |
+| 14  | Security                | `15_Security/`       | How do we keep it safe?                        | ⬜ Planned |
 
-## How the layers connect (traceability)
+> Folder numbering leaves gaps (03, 12, 16–20) on purpose — reserved for volumes we will
+> add (AI/matching, data/analytics, sharing/referrals, internal tooling) without renumbering.
 
-```mermaid
-flowchart LR
-    BR["BUSINESS_REQUIREMENTS\nbusiness goal"] --> FR["FEATURE_CATALOG\nfeature + story"]
-    FR --> SA["SYSTEM_ARCHITECTURE\ncomponent"]
-    SA --> MOD["MODULE_DEVELOPMENT_GUIDE\nthe recipe"]
-    MOD --> CODE["code\nsrc/modules/*"]
-    SA --> ER["ER / EVENTS / QUEUES\nmodel · events · jobs"]
-    SA --> SEQ["SEQUENCE_DIAGRAMS\nend-to-end flows"]
-```
+---
 
-Stable IDs cross-reference across docs: `BO-` (objective), `BR-` (business req), `FR-` (feature), `NFR-` (non-functional), `US-` (user story), `ADR-` (decision).
+## Conventions used in every document
 
-## Reading paths
+- **Decisions** that shape the system are captured as ADRs — see `00_Project/adr/`.
+- **Diagrams** are written as [Mermaid](https://mermaid.js.org) inside Markdown so they
+  live in version control and diff cleanly. No binary `.png` boxes-and-arrows in git.
+- **"MUST / SHOULD / MAY"** are used in the [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119)
+  sense when stating rules.
+- Every doc has an **owner** and a **last-reviewed date** in its header. A doc older than
+  6 months without review is considered stale and flagged in review.
 
-- **AI agent / new engineer building a feature:** MODULE_DEVELOPMENT_GUIDE → CODING_STANDARDS → DATABASE_GUIDE → API_STANDARDS → ERROR_HANDLING → TESTING_GUIDE.
-- **PM / stakeholder:** PROJECT_VISION → BUSINESS_REQUIREMENTS → FEATURE_CATALOG.
-- **On-call:** MONITORING → RUNBOOK → INCIDENT_RESPONSE.
-- **Reviewer:** CODING_STANDARDS → API_STANDARDS → DATABASE_GUIDE → CODE_REVIEW.
+---
 
-## Document lifecycle rules
+## Start here
 
-1. **Docs live with the code** — versioned here, reviewed in the same PRs.
-2. **A behavior change updates its doc in the same PR** — never "later."
-3. **Architectural decisions get an [ADR](./01_ARCHITECTURE/ADR/)** (context → decision → consequences).
-4. **Every doc has an owner and a last-updated date** in its header.
-5. If a doc and the code disagree, that's a **bug** — raise it.
+New to the codebase? Read these four, in order:
 
-## Status legend
+1. [`00_Project/01_repository-structure.md`](00_Project/01_repository-structure.md)
+2. [`00_Project/05_development-environment.md`](00_Project/05_development-environment.md)
+3. [`00_Project/02_coding-standards.md`](00_Project/02_coding-standards.md)
+4. [`00_Project/04_git-workflow.md`](00_Project/04_git-workflow.md)
 
-🟢 Stable · 🟡 Draft (under review) · 🔴 Open question (decide before building the module).
-
-Most docs are 🟡 Draft pending an engineering + product review; [Phase 0 Planning](./phase-0-project-planning.md) is 🟢. Open decisions are tracked in [FEATURE_CATALOG §5](./00_PROJECT/FEATURE_CATALOG.md) and the [ADR index](./01_ARCHITECTURE/ADR/).
+You should have the stack running locally within ~30 minutes of finishing #2.

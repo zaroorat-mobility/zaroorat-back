@@ -1,6 +1,6 @@
 apiVersion: v2
 name: zaroorat-backend
-description: Zaroorat backend API — Fastify + Postgres + Redis (modular monolith, ADR-0001)
+description: Zaroorat backend API — Fastify + Postgres + Redis (modular monolith, ADR-0004)
 type: application
 
 # version  = chart version, bumped when the templates change.

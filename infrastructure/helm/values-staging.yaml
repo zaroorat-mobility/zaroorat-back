@@ -1,5 +1,5 @@
 # Staging overlay. Applied after values.yaml by .github/workflows/staging.yml.
-# Mirrors production topology at lower scale (DEPLOYMENT.md §8).
+# Mirrors production topology at lower scale (docs/04_Architecture/05_deployment-architecture.md "Environments").
 
 replicaCount: 2
 

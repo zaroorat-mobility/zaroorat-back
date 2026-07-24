@@ -3,7 +3,7 @@
  *
  * Liveness (`/health`) answers "is the process alive". Readiness (`/ready`)
  * answers "can this instance serve traffic right now" — see
- * docs/03_OPERATIONS/DEPLOYMENT.md §6.
+ * docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys".
  *
  * Dependencies register themselves here as they are implemented, so the
  * orchestrator's probe URL never has to change. With no checks registered the

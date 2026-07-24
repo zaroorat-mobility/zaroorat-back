@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { createApp } from '../../src/app/app.js';
 
 // Smoke test: boots the real Fastify app in-process (no socket, no DB) and
-// exercises the load-balancer health contract from docs/03_OPERATIONS/DEPLOYMENT.md §6.
+// exercises the load-balancer health contract from docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys".
 describe('GET /health', () => {
   let app: FastifyInstance;
 
