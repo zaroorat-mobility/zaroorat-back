@@ -16,11 +16,11 @@ services:
     # Override the production default so local runs get readable logs.
     environment:
       APP_NAME: zaroorat-backend
-      APP_ENV: local
+      APP_ENV: development
       NODE_ENV: development
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat
+      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_dev
       REDIS_URL: redis://redis:6379
       JWT_ACCESS_SECRET: local_dev_access_secret_do_not_use_in_prod
       JWT_REFRESH_SECRET: local_dev_refresh_secret_do_not_use_in_prod
@@ -36,7 +36,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:17-trixie
+    image: postgis/postgis:17-3.5
     environment:
       POSTGRES_USER: zaroorat
       POSTGRES_PASSWORD: zaroorat
@@ -45,11 +45,11 @@ services:
       - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Anything dropped in docker/postgres/ runs once on first boot.
-      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+      # Anything dropped in docker/postgres/init/ runs once on first boot.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # -U/-d must be set or pg_isready checks the wrong role and passes early.
-      test: ['CMD-SHELL', 'pg_isready -U zaroorat -d zaroorat']
+      test: ['CMD-SHELL', 'pg_isready -U zaroorat -d zaroorat_dev']
       interval: 5s
       timeout: 5s
       retries: 10

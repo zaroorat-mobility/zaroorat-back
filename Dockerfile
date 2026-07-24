@@ -26,12 +26,19 @@ WORKDIR /app
 ENV HUSKY=0
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json package-lock.json tsconfig.json ./
+COPY package.json package-lock.json tsconfig.json prisma.config.ts ./
+COPY prisma ./prisma
+COPY scripts ./scripts
 COPY src ./src
 
-# `npm run build` = clean && tsc && tsc-alias. The tsc-alias step is required:
-# tsc leaves "@config" / "@shared/*" imports untouched and the output would
-# crash at startup with "Cannot find module '@config'".
+# The generated client is excluded from the build context (.dockerignore) and
+# is platform-specific, so it must be produced here rather than copied in.
+RUN npx prisma generate
+
+# `npm run build` = clean && tsc && tsc-alias && copy-generated. Each step past
+# tsc exists because tsc alone produces output that cannot run:
+#   - tsc-alias rewrites "@config" / "@shared/*" imports
+#   - copy-generated brings src/generated (plain .js, which tsc ignores) into dist
 RUN npm run build
 
 # ──────────────────────────────────────────────────────────────
@@ -62,7 +69,12 @@ RUN apt-get update \
 
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build     --chown=node:node /app/dist         ./dist
-COPY --chown=node:node package.json ./
+COPY --chown=node:node package.json prisma.config.ts ./
+
+# The schema and migrations ship with the image so the deploy pipeline can run
+# `prisma migrate deploy` from this exact revision, in-cluster, with no network
+# fetch. This is also why the prisma CLI is a runtime dependency, not a dev one.
+COPY --chown=node:node prisma ./prisma
 
 # The node image ships an unprivileged `node` user (uid 1000). Never run as root.
 USER node

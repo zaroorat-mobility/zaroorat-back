@@ -1,7 +1,7 @@
 import { config } from '@config';
 
 export const transport =
-  config.app.environment === 'local'
+  config.app.environment === 'development'
     ? {
         target: 'pino-pretty',
         options: {

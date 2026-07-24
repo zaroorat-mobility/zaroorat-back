@@ -19,7 +19,12 @@ docs
 tests
 observability
 infrastructure
-scripts
+
+# scripts/ is NOT excluded: `npm run build` runs scripts/copy-generated.js.
+
+# The Prisma client is generated inside the image (22MB of engines otherwise
+# shipped through the build context on every build).
+src/generated
 
 *.log
 .DS_Store

@@ -7,7 +7,7 @@ import { config } from '@config';
 async function corsPlugin(app: FastifyInstance) {
   await app.register(cors, {
     origin:
-      config.app.environment === 'local'
+      config.app.environment === 'development'
         ? true
         : ['https://zaroorat.com', 'https://admin.zaroorat.com'],
     credentials: true,
