@@ -1,0 +1,15 @@
+{
+  // The main tsconfig only includes src/, because rootDir has to stay src/ for
+  // dist/ to have the right shape. That left prisma.config.ts, the seeds and
+  // the whole test suite unchecked — a bad config key in prisma.config.ts sat
+  // there silently because tsc was never pointed at it.
+  //
+  // This config type-checks those files without emitting anything.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "incremental": false
+  },
+  "include": ["src", "tests", "prisma/seed", "prisma.config.ts", "scripts/**/*.ts"]
+}

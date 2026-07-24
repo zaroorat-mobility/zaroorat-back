@@ -1,4 +1,4 @@
-import { PrismaClient, UserRole } from '@prisma/client';
+import { PrismaClient, UserRole } from '../../../src/generated/prisma';
 
 export async function seedDevelopment(prisma: PrismaClient) {
   console.log('  -> Seeding dev-only mock data...');

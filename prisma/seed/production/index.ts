@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../../../src/generated/prisma';
 
 // Prefixed with _ until the body is implemented; the eslint config treats a
 // leading underscore as "intentionally unused".
