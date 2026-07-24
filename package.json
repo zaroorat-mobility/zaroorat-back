@@ -23,6 +23,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project tsconfig.tools.json",
     "prepare": "is-ci || husky",
     "preinstall": "npx -y only-allow npm",
+    "postinstall": "prisma generate",
     "prisma:merge": "node scripts/merge-prisma.js",
     "prisma:validate": "node scripts/validate-prisma.js",
     "prisma:format": "node scripts/format-prisma.js",
