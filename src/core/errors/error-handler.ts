@@ -13,7 +13,10 @@ export async function errorHandler(
     });
   }
 
-  if (error.statusCode) {
+  // Only 4xx messages are safe to echo back. A 5xx that happens to carry a
+  // statusCode is still an internal fault, and its message can contain a
+  // connection string, query text, or file path — log it, do not return it.
+  if (error.statusCode && error.statusCode < 500) {
     return reply.status(error.statusCode).send({
       success: false,
       message: error.message,
