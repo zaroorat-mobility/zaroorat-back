@@ -32,10 +32,10 @@ jobs:
           fetch-depth: 0
 
       - name: Install Gitleaks
-        run: curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sudo sh -s -- -b /usr/local/bin
+        run: curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b .
 
       - name: Run Gitleaks
-        run: gitleaks detect --source . -v
+        run: ./gitleaks detect --source . -v
 
   dependencies:
     name: Dependency audit
