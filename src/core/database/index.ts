@@ -1,11 +1,23 @@
-// Export the core singleton instance
-export { default as db } from './client';
+export { DatabaseService } from './DatabaseService';
 
-// Export services and helpers
-export { DatabaseService } from './service';
-export { withTransaction } from './transactions';
-export { checkDatabaseHealth } from './health';
-export { extendedPrisma } from './extensions';
+export {
+  PrismaClientProvider,
+  ProviderClient,
+  DatabaseHealth,
+} from './client/PrismaClientProvider';
+export { PrismaClientFactory } from './client/PrismaClientFactory';
 
-// Export shared types
-export * from './types';
+export { TransactionManager, TransactionOptions } from './TransactionManager';
+
+export { BaseRepository } from './repositories/BaseRepository';
+
+export { registerDatabaseModule } from './DatabaseModule';
+
+export * from './errors/DatabaseError';
+export { PrismaErrorMapper } from './errors/PrismaErrorMapper';
+
+export {
+  DatabaseConfiguration,
+  getDatabaseConfiguration,
+} from './configuration/DatabaseConfiguration';
+export { PoolConfiguration, getPoolConfiguration } from './configuration/PoolConfiguration';

@@ -1,12 +1,11 @@
 import { FastifyInstance } from 'fastify';
 
 import { redis } from '@core/cache/client.js';
-import { DatabaseService } from '@core/database/index.js';
+import { container } from '../core/di.js';
+import { PrismaClientProvider } from '@core/database/client/PrismaClientProvider.js';
 
 export async function bootstrapShutdown(app: FastifyInstance): Promise<void> {
-  // SIGTERM can arrive twice (kubelet, then the container runtime). Without
-  // this guard the second signal re-enters shutdown while the first is still
-  // draining and kills in-flight requests.
+  // Guard against double-SIGTERM races (e.g., kubelet followed by container runtime)
   let shuttingDown = false;
 
   const shutdown = async (signal: string) => {
@@ -16,13 +15,11 @@ export async function bootstrapShutdown(app: FastifyInstance): Promise<void> {
     app.log.info(`Received ${signal}. Gracefully shutting down...`);
 
     try {
-      // 1. Stop accepting new requests and drain what is in flight.
       await app.close();
       app.log.info('Fastify server closed.');
 
-      // 2. Only then release the backing connections — closing them first
-      //    would fail the requests still being drained above.
-      await DatabaseService.disconnect();
+      const provider = container.resolve<PrismaClientProvider>('provider');
+      await provider.disconnect();
 
       await redis.quit();
       app.log.info('Redis connection closed.');

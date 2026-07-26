@@ -1,6 +1,7 @@
-import { PrismaClient, UserRole } from '../../../src/generated/prisma';
+import { UserRole } from '../../../src/generated/prisma';
+import { ProviderClient } from '../../../src/core/database';
 
-export async function seedDevelopment(prisma: PrismaClient) {
+export async function seedDevelopment(prisma: ProviderClient) {
   console.log('  -> Seeding dev-only mock data...');
 
   // Create an Admin

@@ -15,3 +15,17 @@ In environments like CI/CD pipelines or Docker builds, you often do not need to 
 ```bash
 HUSKY=0 npm install
 ```
+
+## Local Development Database
+
+To start the database (PostgreSQL with PostGIS) via Docker, run the following command:
+
+```bash
+docker compose up -d postgres
+```
+
+Alternatively, to start the entire stack (API, Database, and Redis), you can run:
+
+```bash
+make up
+```

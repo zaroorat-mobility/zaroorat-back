@@ -2,7 +2,13 @@
 // Prisma 7 requires a driver adapter, and that wiring should live in one place.
 // Importing '@prisma/client' resolves to the stub package, not the client
 // generated into src/generated/prisma, so every model would be missing.
-import prisma from '../../src/core/database/client';
+import { container } from '../../src/core/di';
+import { DatabaseService } from '../../src/core/database';
+import { PrismaClientProvider } from '../../src/core/database/client/PrismaClientProvider';
+
+const provider = container.resolve<PrismaClientProvider>('provider');
+const dbService = container.resolve<DatabaseService>('databaseService');
+const prisma = dbService.client;
 import { seedDevelopment } from './development';
 import { seedTesting } from './testing';
 import { seedProduction } from './production';
@@ -38,5 +44,5 @@ main()
     process.exit(1);
   })
   .finally(async () => {
-    await prisma.$disconnect();
+    await provider.disconnect();
   });

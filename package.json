@@ -35,11 +35,13 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@fastify/awilix": "^8.2.0",
     "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.1.0",
     "@fastify/sensible": "^6.0.4",
     "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
+    "awilix": "^13.0.5",
     "dotenv": "^17.4.2",
     "fastify": "^5.10.0",
     "fastify-plugin": "^6.0.0",

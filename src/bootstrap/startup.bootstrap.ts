@@ -8,21 +8,15 @@ import { bootstrapShutdown } from './shutdown.bootstrap.js';
 
 export async function startup() {
   try {
-    // 1. Environment is already loaded at import time via @config
-
-    // 2. Connect Infrastructure (Milestone 2)
     await bootstrapDatabase();
     await bootstrapRedis();
     await bootstrapQueue();
     await bootstrapStorage();
 
-    // 3. Initialize Fastify Application with Pino Logger, Core Plugins, Hooks, Routes, and Error Handlers
     const app = await createApp();
 
-    // 4. Register Graceful Shutdown
     await bootstrapShutdown(app);
 
-    // 5. Start Listening
     await app.listen({
       port: config.server.port,
       host: config.server.host,
