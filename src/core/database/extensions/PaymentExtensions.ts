@@ -1,13 +1,14 @@
-import { PrismaClient } from '../../../generated/prisma';
+import { Prisma } from '../../../generated/prisma';
 
-export function createPaymentExtensions(prisma: PrismaClient) {
-  return prisma.$extends({
-    model: {
-      paymentTransaction: {
-        async findPendingPayments() {
-          return prisma.paymentTransaction.findMany({ where: { status: 'PENDING' } });
-        },
+export const paymentExtension = Prisma.defineExtension({
+  name: 'PaymentExtension',
+  model: {
+    paymentTransaction: {
+      async findPendingPayments() {
+        const ctx = Prisma.getExtensionContext(this);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (ctx as any).findMany({ where: { status: 'PENDING' } });
       },
     },
-  });
-}
+  },
+});

@@ -1,9 +1,16 @@
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient, Prisma } from '../../../generated/prisma';
+import { PrismaClient } from '../../../generated/prisma';
 import { DatabaseConfiguration } from '../configuration/DatabaseConfiguration';
 import { PoolConfiguration } from '../configuration/PoolConfiguration';
 import { DatabaseMetrics } from '../monitoring/DatabaseMetrics';
+import {
+  userExtension,
+  driverExtension,
+  rideExtension,
+  paymentExtension,
+  pricingExtension,
+} from '../extensions';
 
 /**
  * Typed interfaces for Prisma event payloads.
@@ -64,38 +71,12 @@ export class PrismaClientFactory {
 
     this.attachObservability(prisma);
 
-    return prisma.$extends({
-      model: {
-        user: {
-          async findByPhone(phone: string) {
-            const ctx = Prisma.getExtensionContext(this);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            return (ctx as any).findUnique({ where: { phoneNumber: phone } });
-          },
-        },
-        driver: {
-          async findActiveDrivers() {
-            const ctx = Prisma.getExtensionContext(this);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            return (ctx as any).findMany({ where: { verificationStatus: 'VERIFIED' } });
-          },
-        },
-        ride: {
-          async findActiveRides() {
-            const ctx = Prisma.getExtensionContext(this);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            return (ctx as any).findMany({ where: { status: 'IN_PROGRESS' } });
-          },
-        },
-        paymentTransaction: {
-          async findPendingPayments() {
-            const ctx = Prisma.getExtensionContext(this);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            return (ctx as any).findMany({ where: { status: 'PENDING' } });
-          },
-        },
-      },
-    });
+    return prisma
+      .$extends(userExtension)
+      .$extends(driverExtension)
+      .$extends(rideExtension)
+      .$extends(paymentExtension)
+      .$extends(pricingExtension);
   }
 
   private attachObservability(prisma: PrismaClient): void {

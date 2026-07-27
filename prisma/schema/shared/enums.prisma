@@ -14,13 +14,7 @@ enum UserStatus {
   SUSPENDED
 }
 
-enum OtpPurpose {
-  LOGIN
-  REGISTER
-  RESET_PASSWORD
-  CHANGE_PHONE
-  DELETE_ACCOUNT
-}
+
 
 // Shared by document / bank-account / vehicle-document review workflows.
 enum VerificationStatus {

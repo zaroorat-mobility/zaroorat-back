@@ -1,7 +1,5 @@
-import { PrismaClient } from '../../../generated/prisma';
+import { Prisma } from '../../../generated/prisma';
 
-export function createPricingExtensions(prisma: PrismaClient) {
-  return prisma.$extends({
-    // Add custom pricing queries here
-  });
-}
+export const pricingExtension = Prisma.defineExtension({
+  name: 'PricingExtension',
+});

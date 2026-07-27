@@ -108,67 +108,8 @@ model UserDevice {
   @@map("user_devices")
 }
 
-model UserSession {
-  id             String    @id @default(uuid()) @db.Uuid
-  userId         String    @map("user_id") @db.Uuid
-  deviceId       String?   @map("device_id") @db.Uuid
-  accessTokenId  String?   @map("access_token_id") @db.Uuid
-  refreshTokenId String?   @map("refresh_token_id") @db.Uuid
-  ipAddress      String?   @map("ip_address") @db.Inet
-  location       String?
-  loginAt        DateTime  @default(now()) @map("login_at")
-  logoutAt       DateTime? @map("logout_at")
-  revokedReason  String?   @map("revoked_reason")
-  endedBy        String?   @map("ended_by")
-  expiresAt      DateTime  @map("expires_at")
 
-  user           User        @relation(fields: [userId], references: [id])
-  device         UserDevice? @relation(fields: [deviceId], references: [id])
 
-  @@index([expiresAt])
-  @@map("user_sessions")
-}
-
-model RefreshToken {
-  id         String    @id @default(uuid()) @db.Uuid
-  userId     String    @map("user_id") @db.Uuid
-  deviceId   String?   @map("device_id") @db.Uuid
-  tokenHash  String    @map("token_hash")
-  isRevoked  Boolean   @default(false) @map("is_revoked")
-  revokedAt  DateTime? @map("revoked_at")
-  revokedReason String? @map("revoked_reason")
-  rotatedFrom String?  @map("rotated_from") @db.Uuid
-  rotatedTo   String?  @map("rotated_to") @db.Uuid
-  expiresAt  DateTime  @map("expires_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
-
-  user       User        @relation(fields: [userId], references: [id])
-  device     UserDevice? @relation(fields: [deviceId], references: [id])
-  rotatedFromToken RefreshToken?  @relation("TokenRotation", fields: [rotatedFrom], references: [id])
-  rotatedToTokens  RefreshToken[] @relation("TokenRotation")
-
-  @@index([tokenHash])
-  @@index([expiresAt])
-  @@map("refresh_tokens")
-}
-
-model OtpVerification {
-  id          String    @id @default(uuid()) @db.Uuid
-  userId      String?   @map("user_id") @db.Uuid
-  phoneNumber String    @map("phone_number")
-  otpHash     String    @map("otp_hash")
-  purpose     OtpPurpose
-  attempts    Int       @default(0)
-  maxAttempts Int       @default(5) @map("max_attempts")
-  isVerified  Boolean   @default(false) @map("is_verified")
-  verifiedAt  DateTime? @map("verified_at")
-  expiresAt   DateTime  @map("expires_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-
-  @@index([phoneNumber])
-  @@index([purpose])
-  @@map("otp_verifications")
-}
 
 model EmergencyContact {
   id          String   @id @default(uuid()) @db.Uuid
