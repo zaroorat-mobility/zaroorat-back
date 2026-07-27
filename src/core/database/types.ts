@@ -5,7 +5,7 @@ export type {
   Vehicle,
   Ride,
   PaymentTransaction,
-  UserRole,
+  UserStatus,
   RideStatus,
   Prisma,
 } from '../../generated/prisma';

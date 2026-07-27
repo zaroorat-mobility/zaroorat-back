@@ -1,10 +1,9 @@
 // ============================ DRIVER ============================
 
 model Driver {
-  id                 String   @id @default(uuid()) @db.Uuid
+  id                 String   @id @default(uuid(7)) @db.Uuid
   userId             String   @unique @map("user_id") @db.Uuid
   driverCode         String   @unique @map("driver_code")
-  onboardingStatus   DriverOnboardingStatus   @default(PENDING) @map("onboarding_status")
   verificationStatus DriverVerificationStatus @default(PENDING) @map("verification_status")
   currentVehicleId   String?  @map("current_vehicle_id") @db.Uuid
   rating             Decimal  @default(5.0) @db.Decimal(3, 2)
@@ -46,7 +45,7 @@ model Driver {
 }
 
 model DriverProfile {
-  id                String    @id @default(uuid()) @db.Uuid
+  id                String    @id @default(uuid(7)) @db.Uuid
   driverId          String    @unique @map("driver_id") @db.Uuid
   fullLegalName     String?   @map("full_legal_name")
   dateOfBirth       DateTime? @map("date_of_birth") @db.Date
@@ -70,7 +69,7 @@ model DriverProfile {
 }
 
 model DriverDocument {
-  id                 String    @id @default(uuid()) @db.Uuid
+  id                 String    @id @default(uuid(7)) @db.Uuid
   driverId           String    @map("driver_id") @db.Uuid
   documentType       DriverDocumentType @map("document_type")
   documentNumber     String?   @map("document_number")
@@ -96,7 +95,7 @@ model DriverDocument {
 }
 
 model DriverBankAccount {
-  id                 String   @id @default(uuid()) @db.Uuid
+  id                 String   @id @default(uuid(7)) @db.Uuid
   driverId           String   @map("driver_id") @db.Uuid
   accountHolderName  String?  @map("account_holder_name")
   bankName           String?  @map("bank_name")
@@ -120,7 +119,7 @@ model DriverBankAccount {
 }
 
 model DriverWallet {
-  id                String    @id @default(uuid()) @db.Uuid
+  id                String    @id @default(uuid(7)) @db.Uuid
   driverId          String    @unique @map("driver_id") @db.Uuid
   balance           Decimal   @default(0) @db.Decimal(12, 2)
   lockedBalance     Decimal   @default(0) @map("locked_balance") @db.Decimal(12, 2)
@@ -136,7 +135,7 @@ model DriverWallet {
 }
 
 model DriverWalletTransaction {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   walletId      String   @map("wallet_id") @db.Uuid
   driverId      String   @map("driver_id") @db.Uuid
   txnType       DriverWalletTxnType @map("txn_type")
@@ -190,7 +189,7 @@ model DriverLocation {
 }
 
 model DriverShiftLog {
-  id                 String    @id @default(uuid()) @db.Uuid
+  id                 String    @id @default(uuid(7)) @db.Uuid
   driverId           String    @map("driver_id") @db.Uuid
   shiftStart         DateTime  @map("shift_start")
   shiftEnd           DateTime? @map("shift_end")

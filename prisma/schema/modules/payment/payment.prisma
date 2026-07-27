@@ -1,7 +1,7 @@
 // ============================ PAYMENT ============================
 
 model PaymentInstrument {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid(7)) @db.Uuid
   userId       String   @map("user_id") @db.Uuid
   methodType   String   @map("method_type")
   gateway      String?
@@ -22,7 +22,7 @@ model PaymentInstrument {
 }
 
 model CustomerWallet {
-  id                String    @id @default(uuid()) @db.Uuid
+  id                String    @id @default(uuid(7)) @db.Uuid
   userId            String    @unique @map("user_id") @db.Uuid
   balance           Decimal   @default(0) @db.Decimal(12, 2)
   lockedBalance     Decimal   @default(0) @map("locked_balance") @db.Decimal(12, 2)
@@ -38,7 +38,7 @@ model CustomerWallet {
 }
 
 model CustomerWalletTransaction {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   walletId      String   @map("wallet_id") @db.Uuid
   userId        String   @map("user_id") @db.Uuid
   txnType       String   @map("txn_type")
@@ -55,7 +55,7 @@ model CustomerWalletTransaction {
 }
 
 model PaymentIntent {
-  id              String   @id @default(uuid()) @db.Uuid
+  id              String   @id @default(uuid(7)) @db.Uuid
   rideId          String?  @map("ride_id") @db.Uuid
   userId          String   @map("user_id") @db.Uuid
   amount          Decimal  @db.Decimal(10, 2)
@@ -79,7 +79,7 @@ model PaymentIntent {
 }
 
 model PaymentTransaction {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid(7)) @db.Uuid
   intentId     String   @map("intent_id") @db.Uuid
   rideId       String?  @map("ride_id") @db.Uuid
   userId       String   @map("user_id") @db.Uuid
@@ -105,7 +105,7 @@ model PaymentTransaction {
 }
 
 model GatewayEvent {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   gateway        String
   eventType      String    @map("event_type")
   gatewayEventId String    @map("gateway_event_id")
@@ -120,7 +120,7 @@ model GatewayEvent {
 }
 
 model Refund {
-  id              String    @id @default(uuid()) @db.Uuid
+  id              String    @id @default(uuid(7)) @db.Uuid
   transactionId   String    @map("transaction_id") @db.Uuid
   rideId          String?   @map("ride_id") @db.Uuid
   userId          String    @map("user_id") @db.Uuid
@@ -140,7 +140,7 @@ model Refund {
 }
 
 model PaymentLedgerEntry {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   entryGroup    String   @map("entry_group") @db.Uuid
   account       String
   accountRefId  String?  @map("account_ref_id") @db.Uuid
@@ -158,7 +158,7 @@ model PaymentLedgerEntry {
 }
 
 model DriverSettlement {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   driverId      String   @map("driver_id") @db.Uuid
   periodStart   DateTime @map("period_start") @db.Date
   periodEnd     DateTime @map("period_end") @db.Date
@@ -176,7 +176,7 @@ model DriverSettlement {
 }
 
 model DriverPayout {
-  id              String    @id @default(uuid()) @db.Uuid
+  id              String    @id @default(uuid(7)) @db.Uuid
   driverId        String    @map("driver_id") @db.Uuid
   settlementId    String?   @map("settlement_id") @db.Uuid
   bankAccountId   String?   @map("bank_account_id") @db.Uuid
@@ -198,7 +198,7 @@ model DriverPayout {
 }
 
 model PayoutItem {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   payoutId  String   @map("payout_id") @db.Uuid
   rideId    String?  @map("ride_id") @db.Uuid
   itemType  String   @map("item_type")
@@ -212,7 +212,7 @@ model PayoutItem {
 }
 
 model Chargeback {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   transactionId  String    @map("transaction_id") @db.Uuid
   rideId         String?   @map("ride_id") @db.Uuid
   amount         Decimal   @db.Decimal(10, 2)

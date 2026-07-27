@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` (+ `users`) · **Doc:** 03 of the AUTH chain · **Stack:** Prisma / PostgreSQL (ADR-0006)
-> **Status:** 🟡 Draft · **Owner:** Engineering (Auth) / Data · **Last updated:** 2026-07-26
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / Data · **Last updated:** 2026-07-27
 > **Answers:** _What are the exact tables, columns, relations, constraints, and migrations for AUTH?_
 > **Traces from:** [01_BUSINESS_REQUIREMENTS](01_AUTH_BUSINESS_REQUIREMENTS.md) · [02_SECURITY_SPEC](02_AUTH_SECURITY_SPEC.md)
 > **Traces to:** 04_AUTH_API_SPEC → 05 → 06 → 07
@@ -83,6 +83,7 @@ model User {
   roleAssignments UserRoleAssignment[]
   sessions        UserSession[]
   refreshTokens   RefreshToken[]
+  otpVerifications OtpVerification[]
   devices         UserDevice[]
   // REMOVED: `role UserRole` (OD-2). NOT ADDED: `roles[]` array. NOT ADDED: `epoch` column.
 
@@ -94,7 +95,7 @@ model User {
 
 model Role {
   id          String   @id @default(uuid(7)) @db.Uuid
-  slug        String   @unique                               // 'rider' | 'driver' | 'admin' | 'support'
+  slug        String   @unique                               // 'customer' | 'driver' | 'admin' | 'support'
   name        String
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
@@ -185,6 +186,8 @@ model OtpVerification {
   // REMOVED vs current schema: `otp_hash` (doc 02 §4.5). The hash is Redis-only; this is a
   // purgeable fraud/audit trail (R-AUTH-22/30), NOT a verification store.
 
+  user        User?      @relation(fields: [userId], references: [id])  // optional; null pre-account
+
   @@index([phoneNumber])
   @@index([createdAt])
   @@map("otp_verifications")
@@ -259,8 +262,8 @@ The four roles are reference data, seeded idempotently so every environment is r
 
 ```sql
 INSERT INTO roles (id, slug, name, description) VALUES
-  (uuidv7(), 'rider',   'Rider',   'Requests rides'),
-  (uuidv7(), 'driver',  'Driver',  'Provides rides (operability gated by drivers.state)'),
+  (uuidv7(), 'customer', 'Customer', 'Requests rides'),
+  (uuidv7(), 'driver',  'Driver',  'Provides rides (operability gated by drivers.verification_status)'),
   (uuidv7(), 'admin',   'Admin',   'Operations staff — provisioned out-of-band'),
   (uuidv7(), 'support', 'Support', 'Support staff — provisioned out-of-band')
 ON CONFLICT (slug) DO NOTHING;
@@ -294,7 +297,7 @@ Old and new code run together during rollout, so breaking changes take three ord
 - `email` / `password_hash` are already nullable → no-op.
 - Add the §4 partial indexes with `CREATE INDEX CONCURRENTLY` (no write lock, Vol 6 doc 06).
 - **Seed roles** (§5). **Backfill** `user_roles` from the existing scalar `role`
-  (`CUSTOMER→rider`, `DRIVER→driver`, `ADMIN→admin`, `SUPPORT→support`) in **batches**.
+  (`CUSTOMER→customer`, `DRIVER→driver`, `ADMIN→admin`, `SUPPORT→support`) in **batches**.
 
 **M2 — Migrate (switch reads/writes)**
 
@@ -314,12 +317,17 @@ Every migration has a working `down`; large backfills run off the critical path 
 
 ---
 
-## 8. Terminology note (flag, not a blocker)
+## 8. Terminology decision — **`customer`** (resolved)
 
-Docs 01–03 use **`rider`**; the wider Prisma schema uses **`customer`** (`CUSTOMER`, `CustomerWallet`,
-`customerRides`). I've used `rider` for the role slug to stay consistent with the AUTH chain, but the
-platform should pick **one** term to avoid a `rider`/`customer` split across modules. Cheap to align
-now (role slug + a few relation names), painful later. Your call — I can standardise either way.
+Earlier drafts split on `rider` vs `customer`. **Resolved: the platform term is `customer`.** The
+wider Prisma schema already commits to it everywhere (`CustomerWallet`, `customerRides`,
+`CustomerRatingAggregate`, and the former `UserRole.CUSTOMER`), so aligning the AUTH chain to
+`customer` is far less churn than the reverse. Applied consistently across this chain:
+
+- The `Role.slug` for the ride-requesting role is **`customer`** (seed in §5, backfill in §7).
+- Registration grants the **`customer`** role (doc 01 R-ACCOUNT-7); the JWT `roles` claim and the
+  `account.role.granted` event carry `customer` (docs 02/04).
+- "Rider" survives only as an informal actor noun in prose; every machine identifier is `customer`.
 
 ---
 
@@ -331,7 +339,7 @@ now (role slug + a few relation names), painful later. Your call — I can stand
   `POST /auth/logout` (sets `user_sessions.revoked_at`).
 - **Role reads** come from `user_roles ⋈ roles` (active = `revoked_at IS NULL AND (expires_at IS NULL
 OR expires_at > now())`), cached into the JWT `roles` claim + revalidated by epoch (doc 02).
-- **Driver ride-accept** joins live `drivers.state` — not in this schema, consumed cross-module
+- **Driver ride-accept** joins live `drivers.verification_status` — not in this schema, consumed cross-module
   (R-AUTH-23).
 
 ---

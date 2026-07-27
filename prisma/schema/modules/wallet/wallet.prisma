@@ -3,7 +3,7 @@
 // customer_wallets OR driver_wallets, so no single Prisma relation is modeled.
 
 model WalletTopup {
-  id                   String    @id @default(uuid()) @db.Uuid
+  id                   String    @id @default(uuid(7)) @db.Uuid
   userId               String    @map("user_id") @db.Uuid
   walletId             String    @map("wallet_id") @db.Uuid
   amount               Decimal   @db.Decimal(12, 2)
@@ -24,7 +24,7 @@ model WalletTopup {
 }
 
 model WithdrawalRequest {
-  id              String    @id @default(uuid()) @db.Uuid
+  id              String    @id @default(uuid(7)) @db.Uuid
   driverId        String    @map("driver_id") @db.Uuid
   walletId        String    @map("wallet_id") @db.Uuid
   bankAccountId   String?   @map("bank_account_id") @db.Uuid
@@ -44,7 +44,7 @@ model WithdrawalRequest {
 }
 
 model WalletHold {
-  id            String    @id @default(uuid()) @db.Uuid
+  id            String    @id @default(uuid(7)) @db.Uuid
   walletType    String    @map("wallet_type")
   walletId      String    @map("wallet_id") @db.Uuid
   ownerId       String    @map("owner_id") @db.Uuid
@@ -61,7 +61,7 @@ model WalletHold {
 }
 
 model WalletTransfer {
-  id             String   @id @default(uuid()) @db.Uuid
+  id             String   @id @default(uuid(7)) @db.Uuid
   fromWalletType String   @map("from_wallet_type")
   fromWalletId   String?  @map("from_wallet_id") @db.Uuid
   toWalletType   String   @map("to_wallet_type")
@@ -77,7 +77,7 @@ model WalletTransfer {
 }
 
 model CashbackCampaign {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid(7)) @db.Uuid
   code         String   @unique
   name         String?
   triggerEvent String   @map("trigger_event")
@@ -98,7 +98,7 @@ model CashbackCampaign {
 }
 
 model CashbackGrant {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid(7)) @db.Uuid
   campaignId  String    @map("campaign_id") @db.Uuid
   userId      String    @map("user_id") @db.Uuid
   walletType  String    @default("CUSTOMER") @map("wallet_type")
@@ -119,7 +119,7 @@ model CashbackGrant {
 }
 
 model WalletAdjustment {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid(7)) @db.Uuid
   walletType  String    @map("wallet_type")
   walletId    String    @map("wallet_id") @db.Uuid
   ownerId     String    @map("owner_id") @db.Uuid
@@ -138,7 +138,7 @@ model WalletAdjustment {
 }
 
 model WalletReconciliation {
-  id              String   @id @default(uuid()) @db.Uuid
+  id              String   @id @default(uuid(7)) @db.Uuid
   walletType      String   @map("wallet_type")
   walletId        String   @map("wallet_id") @db.Uuid
   asOf            DateTime @map("as_of")

@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` · **Doc:** 05 of the AUTH chain · **Stack:** Fastify / TypeScript (ADR-0006)
-> **Status:** 🟡 Draft · **Owner:** Engineering (Auth) · **Last updated:** 2026-07-26
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) · **Last updated:** 2026-07-27
 > **Answers:** _What does every auth failure look like on the wire, and how should the client react?_
 > **Traces from:** [04_API_SPEC](04_AUTH_API_SPEC.md) (+ 01/02) · **Traces to:** 06_EVENT_CATALOG · 07_TEST_PLAN
 

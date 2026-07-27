@@ -1,7 +1,7 @@
 // ============================ PRICING ============================
 
 model PricingRule {
-  id              String    @id @default(uuid()) @db.Uuid
+  id              String    @id @default(uuid(7)) @db.Uuid
   vehicleTypeId   String    @map("vehicle_type_id") @db.Uuid
   cityCode        String    @map("city_code")
   currency        String    @default("INR") @db.Char(3)
@@ -28,7 +28,7 @@ model PricingRule {
 }
 
 model SurgeZone {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   cityCode  String   @map("city_code")
   name      String
   boundary  Unsupported("geography(Polygon,4326)")
@@ -41,7 +41,7 @@ model SurgeZone {
 }
 
 model SurgeWindow {
-  id            String    @id @default(uuid()) @db.Uuid
+  id            String    @id @default(uuid(7)) @db.Uuid
   zoneId        String    @map("zone_id") @db.Uuid
   vehicleTypeId String?   @map("vehicle_type_id") @db.Uuid
   multiplier    Decimal   @db.Decimal(4, 2)
@@ -59,7 +59,7 @@ model SurgeWindow {
 }
 
 model TollZone {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   cityCode  String?  @map("city_code")
   name      String
   boundary  Unsupported("geography(Polygon,4326)")?
@@ -70,7 +70,7 @@ model TollZone {
 }
 
 model CancellationPolicy {
-  id                  String   @id @default(uuid()) @db.Uuid
+  id                  String   @id @default(uuid(7)) @db.Uuid
   vehicleTypeId       String?  @map("vehicle_type_id") @db.Uuid
   cityCode            String?  @map("city_code")
   cancelledBy         String   @map("cancelled_by")
@@ -84,7 +84,7 @@ model CancellationPolicy {
 }
 
 model Promotion {
-  id                    String    @id @default(uuid()) @db.Uuid
+  id                    String    @id @default(uuid(7)) @db.Uuid
   code                  String    @unique
   title                 String?
   description           String?
@@ -112,7 +112,7 @@ model Promotion {
 }
 
 model PromotionRedemption {
-  id             String   @id @default(uuid()) @db.Uuid
+  id             String   @id @default(uuid(7)) @db.Uuid
   promotionId    String   @map("promotion_id") @db.Uuid
   userId         String   @map("user_id") @db.Uuid
   rideId         String?  @map("ride_id") @db.Uuid
@@ -128,7 +128,7 @@ model PromotionRedemption {
 }
 
 model TaxConfig {
-  id            String    @id @default(uuid()) @db.Uuid
+  id            String    @id @default(uuid(7)) @db.Uuid
   cityCode      String?   @map("city_code")
   taxName       String    @map("tax_name")
   ratePct       Decimal   @map("rate_pct") @db.Decimal(5, 2)
@@ -145,7 +145,7 @@ model TaxConfig {
 // ============================ PROMOTIONS ============================
 
 model PromoCampaign {
-  id        String            @id @default(uuid()) @db.Uuid
+  id        String            @id @default(uuid(7)) @db.Uuid
   code      String            @unique
   name      String
   objective CampaignObjective @default(ACQUISITION)
@@ -166,7 +166,7 @@ model PromoCampaign {
 }
 
 model AudienceSegment {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   code          String   @unique
   name          String
   description   String?
@@ -181,7 +181,7 @@ model AudienceSegment {
 }
 
 model CampaignTarget {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   campaignId  String   @map("campaign_id") @db.Uuid
   segmentId   String   @map("segment_id") @db.Uuid
   promotionId String?  @map("promotion_id") @db.Uuid
@@ -196,7 +196,7 @@ model CampaignTarget {
 }
 
 model CouponBatch {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   campaignId     String?   @map("campaign_id") @db.Uuid
   promotionId    String    @map("promotion_id") @db.Uuid
   name           String?
@@ -216,7 +216,7 @@ model CouponBatch {
 }
 
 model Coupon {
-  id             String       @id @default(uuid()) @db.Uuid
+  id             String       @id @default(uuid(7)) @db.Uuid
   batchId        String       @map("batch_id") @db.Uuid
   code           String       @unique
   userId         String?      @map("user_id") @db.Uuid
@@ -237,7 +237,7 @@ model Coupon {
 }
 
 model PromoBanner {
-  id         String          @id @default(uuid()) @db.Uuid
+  id         String          @id @default(uuid(7)) @db.Uuid
   campaignId String?         @map("campaign_id") @db.Uuid
   title      String?
   imageUrl   String          @map("image_url")

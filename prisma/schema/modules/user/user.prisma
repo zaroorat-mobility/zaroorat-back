@@ -1,12 +1,11 @@
 // ============================ IDENTITY ============================
 
 model User {
-  id              String    @id @default(uuid()) @db.Uuid
-  phoneNumber     String    @unique @map("phone_number")
-  email           String?   @unique
-  passwordHash    String?   @map("password_hash")
-  role            UserRole
-  status          UserStatus @default(ACTIVE)
+  id              String    @id @default(uuid(7)) @db.Uuid
+  phoneNumber     String    @map("phone_number") // E.164 (+91…); active-uniqueness is PARTIAL (doc 03 §4)
+  email           String?   @unique               // reserved (OD-7), nullable
+  passwordHash    String?   @map("password_hash") // reserved (OD-7), nullable
+  status          UserStatus @default(UNVERIFIED)
   isPhoneVerified Boolean   @default(false) @map("is_phone_verified")
   isEmailVerified Boolean   @default(false) @map("is_email_verified")
   lastLoginAt     DateTime? @map("last_login_at")
@@ -18,6 +17,7 @@ model User {
   devices         UserDevice[]
   sessions        UserSession[]
   refreshTokens   RefreshToken[]
+  otpVerifications OtpVerification[]
   emergencyContacts EmergencyContact[]
   savedPlaces     SavedPlace[]
   driver          Driver?
@@ -59,13 +59,12 @@ model User {
   featureFlagOverrides FeatureFlagOverride[]
   adminSessions        AdminSession[]
 
-  @@index([role])
   @@index([status])
   @@map("users")
 }
 
 model UserProfile {
-  id           String    @id @default(uuid()) @db.Uuid
+  id           String    @id @default(uuid(7)) @db.Uuid
   userId       String    @unique @map("user_id") @db.Uuid
   firstName    String?   @map("first_name")
   lastName     String?   @map("last_name")
@@ -82,29 +81,26 @@ model UserProfile {
 }
 
 model UserDevice {
-  id          String    @id @default(uuid()) @db.Uuid
-  userId      String    @map("user_id") @db.Uuid
-  deviceId    String?   @map("device_id")
-  platform    AppPlatform?
-  deviceName  String?   @map("device_name")
-  appVersion  String?   @map("app_version")
-  fcmToken    String?   @map("fcm_token")
-  ipAddress   String?   @map("ip_address") @db.Inet
-  deviceFingerprint String? @map("device_fingerprint")
-  osVersion   String?   @map("os_version")
-  isRooted    Boolean   @default(false) @map("is_rooted")
-  isJailbroken Boolean  @default(false) @map("is_jailbroken")
-  timezone    String?
-  metadata    Json?
-  lastSeenAt  DateTime? @map("last_seen_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  id           String            @id @default(uuid(7)) @db.Uuid
+  userId       String            @map("user_id") @db.Uuid
+  deviceId     String?           @map("device_id") // client-reported stable id
+  platform     AppPlatform?
+  trustState   DeviceTrustState  @default(REGISTERED) @map("trust_state")
+  fingerprint  String?           @map("device_fingerprint")
+  isRooted     Boolean           @default(false) @map("is_rooted")
+  isJailbroken Boolean           @default(false) @map("is_jailbroken")
+  fcmToken     String?           @map("fcm_token")
+  appVersion   String?           @map("app_version")
+  osVersion    String?           @map("os_version")
+  lastSeenAt   DateTime?         @map("last_seen_at")
+  createdAt    DateTime          @default(now()) @map("created_at")
 
-  user        User      @relation(fields: [userId], references: [id])
-  sessions    UserSession[]
-  refreshTokens RefreshToken[]
-  deliveries  NotificationDelivery[]
+  user       User                   @relation(fields: [userId], references: [id])
+  sessions   UserSession[]
+  deliveries NotificationDelivery[]
 
   @@unique([userId, deviceId])
+  @@index([userId])
   @@map("user_devices")
 }
 
@@ -112,7 +108,7 @@ model UserDevice {
 
 
 model EmergencyContact {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   userId      String   @map("user_id") @db.Uuid
   contactName String   @map("contact_name")
   phoneNumber String   @map("phone_number")
@@ -125,7 +121,7 @@ model EmergencyContact {
 }
 
 model SavedPlace {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   label     String
   address   String?

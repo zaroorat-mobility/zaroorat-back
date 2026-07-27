@@ -2,7 +2,7 @@
 // Note: analytics_events is RANGE-partitioned — managed via raw SQL, not Prisma.
 
 model EventType {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   code        String   @unique
   name        String
   category    String?
@@ -15,7 +15,7 @@ model EventType {
 }
 
 model DailyMetric {
-  id          String            @id @default(uuid()) @db.Uuid
+  id          String            @id @default(uuid(7)) @db.Uuid
   metricDate  DateTime          @map("metric_date") @db.Date
   metricKey   String            @map("metric_key")
   cityCode    String?           @map("city_code")
@@ -30,7 +30,7 @@ model DailyMetric {
 }
 
 model Funnel {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   code        String   @unique
   name        String
   description String?
@@ -42,7 +42,7 @@ model Funnel {
 }
 
 model FunnelStep {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   funnelId      String   @map("funnel_id") @db.Uuid
   stepOrder     Int      @map("step_order") @db.SmallInt
   name          String
@@ -55,7 +55,7 @@ model FunnelStep {
 }
 
 model Cohort {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @id @default(uuid(7)) @db.Uuid
   code       String   @unique
   name       String
   definition Json?
@@ -68,7 +68,7 @@ model Cohort {
 }
 
 model CohortRetention {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   cohortId      String   @map("cohort_id") @db.Uuid
   periodNumber  Int      @map("period_number") @db.SmallInt
   retainedCount Int      @default(0) @map("retained_count")
@@ -81,7 +81,7 @@ model CohortRetention {
 }
 
 model KpiSnapshot {
-  id          String            @id @default(uuid()) @db.Uuid
+  id          String            @id @default(uuid(7)) @db.Uuid
   snapshotAt  DateTime          @map("snapshot_at")
   granularity MetricGranularity @default(DAILY)
   cityCode    String?           @map("city_code")
@@ -93,7 +93,7 @@ model KpiSnapshot {
 }
 
 model DashboardWidget {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid(7)) @db.Uuid
   dashboardKey String   @map("dashboard_key")
   title        String
   widgetType   String   @map("widget_type")
@@ -107,7 +107,7 @@ model DashboardWidget {
 }
 
 model ReportExport {
-  id          String       @id @default(uuid()) @db.Uuid
+  id          String       @id @default(uuid(7)) @db.Uuid
   reportType  String       @map("report_type")
   params      Json?
   format      ReportFormat @default(CSV)

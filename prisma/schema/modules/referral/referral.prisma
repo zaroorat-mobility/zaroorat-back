@@ -1,7 +1,7 @@
 // ============================ REFERRAL ============================
 
 model ReferralProgram {
-  id                  String   @id @default(uuid()) @db.Uuid
+  id                  String   @id @default(uuid(7)) @db.Uuid
   code                String   @unique
   name                String?
   referrerReward      Decimal  @default(0) @map("referrer_reward") @db.Decimal(10, 2)
@@ -24,7 +24,7 @@ model ReferralProgram {
 }
 
 model ReferralCode {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   programId String   @map("program_id") @db.Uuid
   code      String   @unique
@@ -42,7 +42,7 @@ model ReferralCode {
 }
 
 model Referral {
-  id              String         @id @default(uuid()) @db.Uuid
+  id              String         @id @default(uuid(7)) @db.Uuid
   programId       String         @map("program_id") @db.Uuid
   referrerId      String         @map("referrer_id") @db.Uuid
   refereeId       String?        @map("referee_id") @db.Uuid
@@ -68,7 +68,7 @@ model Referral {
 }
 
 model ReferralReward {
-  id                  String                    @id @default(uuid()) @db.Uuid
+  id                  String                    @id @default(uuid(7)) @db.Uuid
   referralId          String                    @map("referral_id") @db.Uuid
   beneficiary         ReferralRewardBeneficiary
   userId              String                    @map("user_id") @db.Uuid
@@ -88,7 +88,7 @@ model ReferralReward {
 }
 
 model ReferralMilestone {
-  id                String   @id @default(uuid()) @db.Uuid
+  id                String   @id @default(uuid(7)) @db.Uuid
   programId         String   @map("program_id") @db.Uuid
   name              String
   requiredReferrals Int      @map("required_referrals")
@@ -103,7 +103,7 @@ model ReferralMilestone {
 }
 
 model ReferralFraudFlag {
-  id         String              @id @default(uuid()) @db.Uuid
+  id         String              @id @default(uuid(7)) @db.Uuid
   referralId String              @map("referral_id") @db.Uuid
   reason     String
   status     ReferralFraudStatus @default(SUSPECTED)

@@ -1,7 +1,7 @@
 // ============================ RIDE ============================
 
 model RideRequest {
-  id                   String    @id @default(uuid()) @db.Uuid
+  id                   String    @id @default(uuid(7)) @db.Uuid
   customerId           String    @map("customer_id") @db.Uuid
   vehicleTypeId        String    @map("vehicle_type_id") @db.Uuid
   pickupLat            Decimal   @map("pickup_lat") @db.Decimal(10, 7)
@@ -35,7 +35,7 @@ model RideRequest {
 }
 
 model RideDispatch {
-  id               String    @id @default(uuid()) @db.Uuid
+  id               String    @id @default(uuid(7)) @db.Uuid
   requestId        String    @map("request_id") @db.Uuid
   driverId         String    @map("driver_id") @db.Uuid
   vehicleId        String?   @map("vehicle_id") @db.Uuid
@@ -59,7 +59,7 @@ model RideDispatch {
 }
 
 model Ride {
-  id                String    @id @default(uuid()) @db.Uuid
+  id                String    @id @default(uuid(7)) @db.Uuid
   rideCode          String    @unique @map("ride_code")
   requestId         String    @map("request_id") @db.Uuid
   customerId        String    @map("customer_id") @db.Uuid
@@ -123,7 +123,7 @@ model Ride {
 }
 
 model RideStop {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid(7)) @db.Uuid
   rideId     String    @map("ride_id") @db.Uuid
   sequence   Int       @db.SmallInt
   stopType   String    @map("stop_type")
@@ -138,7 +138,7 @@ model RideStop {
 }
 
 model RideStatusEvent {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @id @default(uuid(7)) @db.Uuid
   rideId     String   @map("ride_id") @db.Uuid
   fromStatus String?  @map("from_status")
   toStatus   String   @map("to_status")
@@ -156,7 +156,7 @@ model RideStatusEvent {
 // NOTE: ride_track_points is RANGE-partitioned — manage via raw SQL, not Prisma.
 
 model RideFare {
-  id                 String   @id @default(uuid()) @db.Uuid
+  id                 String   @id @default(uuid(7)) @db.Uuid
   rideId             String   @unique @map("ride_id") @db.Uuid
   currency           String   @default("INR") @db.Char(3)
   baseFare           Decimal  @map("base_fare") @db.Decimal(10, 2)
@@ -181,7 +181,7 @@ model RideFare {
 }
 
 model RideFareLine {
-  id       String  @id @default(uuid()) @db.Uuid
+  id       String  @id @default(uuid(7)) @db.Uuid
   rideId   String  @map("ride_id") @db.Uuid
   lineType String  @map("line_type")
   label    String?
@@ -194,7 +194,7 @@ model RideFareLine {
 }
 
 model RideCancellation {
-  id                String   @id @default(uuid()) @db.Uuid
+  id                String   @id @default(uuid(7)) @db.Uuid
   rideId            String   @unique @map("ride_id") @db.Uuid
   cancelledBy       String   @map("cancelled_by")
   actorId           String?  @map("actor_id") @db.Uuid
@@ -210,7 +210,7 @@ model RideCancellation {
 }
 
 model RideOtp {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid(7)) @db.Uuid
   rideId     String    @map("ride_id") @db.Uuid
   otpHash    String    @map("otp_hash")
   purpose    String    @default("START")
@@ -226,7 +226,7 @@ model RideOtp {
 }
 
 model RideReceipt {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   rideId        String   @unique @map("ride_id") @db.Uuid
   receiptNumber String   @unique @map("receipt_number")
   snapshotJson  Json     @map("snapshot_json")
@@ -238,7 +238,7 @@ model RideReceipt {
 }
 
 model RidePayment {
-  id        String    @id @default(uuid()) @db.Uuid
+  id        String    @id @default(uuid(7)) @db.Uuid
   rideId    String    @map("ride_id") @db.Uuid
   paymentId String?   @map("payment_id") @db.Uuid
   amount    Decimal   @db.Decimal(10, 2)
@@ -253,7 +253,7 @@ model RidePayment {
 }
 
 model RideRating {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   rideId    String   @map("ride_id") @db.Uuid
   ratedBy   String   @map("rated_by")
   rating    Int      @db.SmallInt
@@ -270,7 +270,7 @@ model RideRating {
 }
 
 model RidePromoApplied {
-  id             String   @id @default(uuid()) @db.Uuid
+  id             String   @id @default(uuid(7)) @db.Uuid
   rideId         String   @map("ride_id") @db.Uuid
   promoCode      String   @map("promo_code")
   promoId        String?  @map("promo_id") @db.Uuid
@@ -283,7 +283,7 @@ model RidePromoApplied {
 }
 
 model ScheduledRide {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   requestId      String    @map("request_id") @db.Uuid
   customerId     String    @map("customer_id") @db.Uuid
   scheduledFor   DateTime  @map("scheduled_for")
@@ -298,7 +298,7 @@ model ScheduledRide {
 }
 
 model RideRoutePlan {
-  id                 String   @id @default(uuid()) @db.Uuid
+  id                 String   @id @default(uuid(7)) @db.Uuid
   rideId             String   @unique @map("ride_id") @db.Uuid
   encodedPolyline    String?  @map("encoded_polyline")
   plannedDistanceKm  Decimal? @map("planned_distance_km") @db.Decimal(8, 2)
@@ -310,7 +310,7 @@ model RideRoutePlan {
 }
 
 model RideWaitEvent {
-  id            String    @id @default(uuid()) @db.Uuid
+  id            String    @id @default(uuid(7)) @db.Uuid
   rideId        String    @map("ride_id") @db.Uuid
   startedAt     DateTime  @map("started_at")
   endedAt       DateTime? @map("ended_at")
@@ -323,7 +323,7 @@ model RideWaitEvent {
 }
 
 model RideDispute {
-  id           String    @id @default(uuid()) @db.Uuid
+  id           String    @id @default(uuid(7)) @db.Uuid
   rideId       String    @map("ride_id") @db.Uuid
   raisedBy     String    @map("raised_by")
   category     String

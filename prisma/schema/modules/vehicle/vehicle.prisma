@@ -1,7 +1,7 @@
 // ============================ VEHICLE ============================
 
 model VehicleType {
-  id                 String   @id @default(uuid()) @db.Uuid
+  id                 String   @id @default(uuid(7)) @db.Uuid
   code               String   @unique
   name               String
   passengerCapacity  Int?     @map("passenger_capacity") @db.SmallInt
@@ -25,7 +25,7 @@ model VehicleType {
 }
 
 model Vehicle {
-  id                  String   @id @default(uuid()) @db.Uuid
+  id                  String   @id @default(uuid(7)) @db.Uuid
   registrationNumber  String   @unique @map("registration_number")
   registrationState   String?  @map("registration_state")
   vin                 String?  @unique
@@ -61,7 +61,7 @@ model Vehicle {
 }
 
 model VehicleAssignment {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid(7)) @db.Uuid
   driverId   String    @map("driver_id") @db.Uuid
   vehicleId  String    @map("vehicle_id") @db.Uuid
   assignedAt DateTime  @default(now()) @map("assigned_at")
@@ -79,7 +79,7 @@ model VehicleAssignment {
 }
 
 model VehicleDocument {
-  id                 String    @id @default(uuid()) @db.Uuid
+  id                 String    @id @default(uuid(7)) @db.Uuid
   vehicleId          String    @map("vehicle_id") @db.Uuid
   documentType       String    @map("document_type")
   documentNumber     String?   @map("document_number")
@@ -96,7 +96,7 @@ model VehicleDocument {
 }
 
 model VehicleImage {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @id @default(uuid(7)) @db.Uuid
   vehicleId  String   @map("vehicle_id") @db.Uuid
   imageType  String   @map("image_type")
   imageUrl   String   @map("image_url")
@@ -108,7 +108,7 @@ model VehicleImage {
 }
 
 model VehicleInspection {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   vehicleId   String   @map("vehicle_id") @db.Uuid
   inspectedBy String?  @map("inspected_by") @db.Uuid
   inspectedAt DateTime @default(now()) @map("inspected_at")
@@ -122,7 +122,7 @@ model VehicleInspection {
 }
 
 model MaintenanceLog {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid(7)) @db.Uuid
   vehicleId   String    @map("vehicle_id") @db.Uuid
   serviceDate DateTime  @map("service_date") @db.Date
   workshop    String?
@@ -138,7 +138,7 @@ model MaintenanceLog {
 }
 
 model FuelLog {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   vehicleId   String   @map("vehicle_id") @db.Uuid
   fuelAmount  Decimal? @map("fuel_amount") @db.Decimal(8, 2)
   fuelCost    Decimal? @map("fuel_cost") @db.Decimal(10, 2)
@@ -153,7 +153,7 @@ model FuelLog {
 }
 
 model InsuranceClaim {
-  id               String    @id @default(uuid()) @db.Uuid
+  id               String    @id @default(uuid(7)) @db.Uuid
   vehicleId        String    @map("vehicle_id") @db.Uuid
   claimNumber      String?   @map("claim_number")
   insuranceCompany String?   @map("insurance_company")
@@ -170,7 +170,7 @@ model InsuranceClaim {
 
 // NOTE: accident_reports references rides(id) via raw SQL FK; modeled loosely.
 model AccidentReport {
-  id           String    @id @default(uuid()) @db.Uuid
+  id           String    @id @default(uuid(7)) @db.Uuid
   vehicleId    String    @map("vehicle_id") @db.Uuid
   driverId     String?   @map("driver_id") @db.Uuid
   rideId       String?   @map("ride_id") @db.Uuid

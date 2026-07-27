@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` · **Doc:** 02 of the AUTH chain · **Stack:** Node.js / Fastify / Prisma (ADR-0006)
-> **Status:** 🟡 Draft · **Owner:** Engineering (Auth) / Security · **Last updated:** 2026-07-26
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / Security · **Last updated:** 2026-07-27
 > **Answers:** _How do we mechanically satisfy the AUTH security requirements — token model, OTP, revocation, fraud response?_
 > **Traces from:** [01_AUTH_BUSINESS_REQUIREMENTS](01_AUTH_BUSINESS_REQUIREMENTS.md)
 > **Traces to:** 03_AUTH_DATABASE_SPEC → 04_AUTH_API_SPEC → 05_AUTH_ERROR_CATALOG → 06_AUTH_EVENT_CATALOG → 07_AUTH_TEST_PLAN
@@ -59,7 +59,7 @@ Two credential types with deliberately different properties.
 {
   "sub": "<user uuid>",
   "sid": "<session uuid>", // ties the access token to one session (§5)
-  "roles": ["rider", "driver"], // snapshot for fast authz; re-validated via epoch (§3.3)
+  "roles": ["customer", "driver"], // snapshot for fast authz; re-validated via epoch (§3.3)
   "epoch": 7, // user session-epoch at mint time (§3.3)
   "iat": 1750000000,
   "exp": 1750000900,
@@ -214,10 +214,10 @@ A single Fastify **`onRequest`/`preHandler` hook** guards every protected route 
 - **Privileged roles (R-AUTH-17):** `admin`/`support` are **provisioned out-of-band** (seed / ops
   tool), never grantable through the public flow.
 - **Driver ride-accept conjunction (R-AUTH-23, AUTH-INV-7):** the ride-accept guard requires
-  `has_role(driver)` **AND** a **live** `drivers.state = 'approved'` lookup **AND**
-  `account.status = 'active'`. Operability is **not** in the JWT (it changes independently and is
-  owned by `onboarding`), so this one check reads the driver domain live. Role-in-token is only the
-  first of three conditions.
+  `has_role(driver)` **AND** a **live** `drivers.verification_status = 'VERIFIED'` (and not suspended)
+  lookup **AND** `account.status = 'active'`. Operability is **not** in the JWT (it changes
+  independently and is owned by `onboarding`), so this one check reads the driver domain live.
+  Role-in-token is only the first of three conditions.
 
 ---
 

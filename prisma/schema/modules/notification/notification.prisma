@@ -1,7 +1,7 @@
 // ============================ NOTIFICATION ============================
 
 model NotificationTemplate {
-  id            String               @id @default(uuid()) @db.Uuid
+  id            String               @id @default(uuid(7)) @db.Uuid
   code          String
   channel       NotificationChannel
   locale        String               @default("en")
@@ -19,7 +19,7 @@ model NotificationTemplate {
 }
 
 model NotificationPreference {
-  id        String               @id @default(uuid()) @db.Uuid
+  id        String               @id @default(uuid(7)) @db.Uuid
   userId    String               @map("user_id") @db.Uuid
   category  NotificationCategory
   channel   NotificationChannel
@@ -33,7 +33,7 @@ model NotificationPreference {
 }
 
 model Notification {
-  id            String               @id @default(uuid()) @db.Uuid
+  id            String               @id @default(uuid(7)) @db.Uuid
   userId        String               @map("user_id") @db.Uuid
   category      NotificationCategory @default(TRANSACTIONAL)
   priority      NotificationPriority @default(NORMAL)
@@ -60,7 +60,7 @@ model Notification {
 }
 
 model NotificationDelivery {
-  id                String              @id @default(uuid()) @db.Uuid
+  id                String              @id @default(uuid(7)) @db.Uuid
   notificationId    String              @map("notification_id") @db.Uuid
   channel           NotificationChannel
   status            NotificationStatus  @default(PENDING)
@@ -83,7 +83,7 @@ model NotificationDelivery {
 }
 
 model InAppMessage {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   userId         String    @map("user_id") @db.Uuid
   notificationId String?   @map("notification_id") @db.Uuid
   title          String?
@@ -102,7 +102,7 @@ model InAppMessage {
 }
 
 model NotificationCampaign {
-  id              String               @id @default(uuid()) @db.Uuid
+  id              String               @id @default(uuid(7)) @db.Uuid
   name            String
   category        NotificationCategory @default(PROMOTIONAL)
   channel         NotificationChannel
@@ -122,7 +122,7 @@ model NotificationCampaign {
 }
 
 model CampaignRecipient {
-  id             String             @id @default(uuid()) @db.Uuid
+  id             String             @id @default(uuid(7)) @db.Uuid
   campaignId     String             @map("campaign_id") @db.Uuid
   userId         String             @map("user_id") @db.Uuid
   notificationId String?            @map("notification_id") @db.Uuid
@@ -138,7 +138,7 @@ model CampaignRecipient {
 }
 
 model NotificationProviderLog {
-  id                String   @id @default(uuid()) @db.Uuid
+  id                String   @id @default(uuid(7)) @db.Uuid
   provider          String
   eventType         String?  @map("event_type")
   providerMessageId String   @map("provider_message_id")

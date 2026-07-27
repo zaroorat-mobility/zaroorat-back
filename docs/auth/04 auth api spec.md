@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` · **Doc:** 04 of the AUTH chain · **Stack:** Fastify / TypeScript (ADR-0006)
-> **Status:** 🟡 Draft · **Owner:** Engineering (Auth) · **Last updated:** 2026-07-26
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) · **Last updated:** 2026-07-27
 > **Answers:** _What are the exact endpoints, request/response shapes, and route-guard wiring?_
 > **Traces from:** [01_BR](01_AUTH_BUSINESS_REQUIREMENTS.md) · [02_SECURITY](02_AUTH_SECURITY_SPEC.md) · [03_DATABASE](03_AUTH_DATABASE_SPEC.md)
 > **Traces to:** 05_AUTH_ERROR_CATALOG (error bodies) · 06_AUTH_EVENT_CATALOG (event schemas) · 07_AUTH_TEST_PLAN
@@ -67,7 +67,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 
 - **Auth:** public. **`Idempotency-Key` required.**
 - On **first** successful verify: creates the `users` row (status `UNVERIFIED → ACTIVE`), grants the
-  `rider` role, binds the `user_devices` row, opens a `user_sessions` + first `refresh_tokens`.
+  `customer` role, binds the `user_devices` row, opens a `user_sessions` + first `refresh_tokens`.
 - On a **returning** verify: opens a new session (subject to the 5-cap, doc 02 §5.1).
 
 **Request** (`Idempotency-Key` header + body)
@@ -89,7 +89,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
   "accessTokenExpiresInSec": 900,
   "refreshToken": "<opaque>",
   "refreshTokenExpiresInSec": 2592000,
-  "user": { "id": "<uuid>", "status": "ACTIVE", "roles": ["rider"], "isNew": true }
+  "user": { "id": "<uuid>", "status": "ACTIVE", "roles": ["customer"], "isNew": true }
 }
 ```
 
@@ -99,7 +99,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 - **Errors:** `400 VALIDATION`, `401 OTP_INVALID` (wrong code), `410 OTP_EXPIRED`,
   `429 OTP_LOCKED` (5-fail lockout, doc 02 §4.3). Bodies → 05.
 - **Events:** `auth.otp.verified`, `auth.login.succeeded`, `auth.session.created`; on first verify
-  also `account.role.granted` (rider).
+  also `account.role.granted` (customer).
 
 ---
 
@@ -181,7 +181,7 @@ function authorize(req, reply) {
   if (need.length && !need.some((r) => req.auth.roles.includes(r)))
     return reply.code(403).send(err('FORBIDDEN'));
   // requireOperableDriver is checked LIVE against the driver domain, not the token:
-  //   -> rides module resolves drivers.state = 'approved' AND account = active (R-AUTH-23)
+  //   -> rides module resolves drivers.verification_status = 'VERIFIED' (and not suspended) AND account = active (R-AUTH-23)
 }
 ```
 
@@ -200,8 +200,9 @@ fastify.post(
 
 - **Suspension is immediate** (AUTH-INV-3): suspend bumps the epoch → step 2 rejects the next request,
   even mid-token-lifetime.
-- **Operability is never in the token** — `requireOperableDriver` forces a live `drivers.state`
-  read, because a driver's approval can flip independently of their session.
+- **Operability is never in the token** — `requireOperableDriver` forces a live
+  `drivers.verification_status` read, because a driver's approval can flip independently of their
+  session.
 
 ---
 

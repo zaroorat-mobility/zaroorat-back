@@ -1,8 +1,10 @@
 // ============================ ADMIN ============================
 
+// RBAC source of truth for identity roles (auth doc 03, OD-2). `slug` holds the
+// canonical role identifier: 'customer' | 'driver' | 'admin' | 'support'.
 model Role {
-  id          String   @id @default(uuid()) @db.Uuid
-  code        String   @unique
+  id          String   @id @default(uuid(7)) @db.Uuid
+  slug        String   @unique
   name        String
   description String?
   isSystem    Boolean  @default(false) @map("is_system")
@@ -14,7 +16,7 @@ model Role {
 }
 
 model Permission {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   code        String   @unique
   resource    String
   action      String
@@ -26,7 +28,7 @@ model Permission {
 }
 
 model RolePermission {
-  id           String           @id @default(uuid()) @db.Uuid
+  id           String           @id @default(uuid(7)) @db.Uuid
   roleId       String           @map("role_id") @db.Uuid
   permissionId String           @map("permission_id") @db.Uuid
   effect       PermissionEffect @default(ALLOW)
@@ -39,22 +41,24 @@ model RolePermission {
 }
 
 model UserRoleAssignment {
-  id        String    @id @default(uuid()) @db.Uuid
+  id        String    @id @default(uuid(7)) @db.Uuid
   userId    String    @map("user_id") @db.Uuid
   roleId    String    @map("role_id") @db.Uuid
-  grantedBy String?   @map("granted_by") @db.Uuid
+  grantedBy String?   @map("granted_by") @db.Uuid // actor (R-ACCOUNT-7); null = system grant
   grantedAt DateTime  @default(now()) @map("granted_at")
-  expiresAt DateTime? @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")           // revocation is a timestamp, not a row delete
+  expiresAt DateTime? @map("expires_at")           // scoped / temporary roles
 
   user      User @relation(fields: [userId], references: [id])
   role      Role @relation(fields: [roleId], references: [id])
-  @@unique([userId, roleId])
   @@index([userId])
   @@map("user_roles")
+  // Active-uniqueness (one live assignment per user+role, re-grant allowed after
+  // revoke) is a PARTIAL unique index shipped as raw SQL — see doc 03 §4.
 }
 
 model AdminActivityLog {
-  id         String      @id @default(uuid()) @db.Uuid
+  id         String      @id @default(uuid(7)) @db.Uuid
   actorId    String?     @map("actor_id") @db.Uuid
   action     AuditAction
   entityType String?     @map("entity_type")
@@ -73,7 +77,7 @@ model AdminActivityLog {
 }
 
 model AuditFieldChange {
-  id            String  @id @default(uuid()) @db.Uuid
+  id            String  @id @default(uuid(7)) @db.Uuid
   activityLogId String  @map("activity_log_id") @db.Uuid
   fieldName     String  @map("field_name")
   oldValue      String? @map("old_value")
@@ -85,7 +89,7 @@ model AuditFieldChange {
 }
 
 model SystemSetting {
-  id          String      @id @default(uuid()) @db.Uuid
+  id          String      @id @default(uuid(7)) @db.Uuid
   key         String      @unique
   value       String?
   valueType   SettingType @default(STRING) @map("value_type")
@@ -102,7 +106,7 @@ model SystemSetting {
 }
 
 model FeatureFlag {
-  id                String            @id @default(uuid()) @db.Uuid
+  id                String            @id @default(uuid(7)) @db.Uuid
   key               String            @unique
   name              String?
   description       String?
@@ -117,7 +121,7 @@ model FeatureFlag {
 }
 
 model FeatureFlagOverride {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   flagId      String   @map("flag_id") @db.Uuid
   userId      String?  @map("user_id") @db.Uuid
   segmentCode String?  @map("segment_code")
@@ -132,7 +136,7 @@ model FeatureFlagOverride {
 }
 
 model AdminSession {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid(7)) @db.Uuid
   userId      String    @map("user_id") @db.Uuid
   ipAddress   String?   @map("ip_address") @db.Inet
   userAgent   String?   @map("user_agent")
@@ -147,7 +151,7 @@ model AdminSession {
 }
 
 model ApiKey {
-  id         String       @id @default(uuid()) @db.Uuid
+  id         String       @id @default(uuid(7)) @db.Uuid
   name       String
   keyHash    String       @map("key_hash")
   prefix     String?
@@ -163,7 +167,7 @@ model ApiKey {
 }
 
 model IpAllowlistEntry {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   cidr      String   @db.Inet
   label     String?
   isActive  Boolean  @default(true) @map("is_active")
@@ -178,7 +182,7 @@ model IpAllowlistEntry {
 // Note: geography columns are Unsupported(...); managed for indexing via raw SQL.
 
 model City {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid(7)) @db.Uuid
   code       String    @unique
   name       String
   state      String?
@@ -196,7 +200,7 @@ model City {
 }
 
 model ServiceZone {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   cityId    String   @map("city_id") @db.Uuid
   code      String
   name      String
@@ -211,7 +215,7 @@ model ServiceZone {
 }
 
 model AppVersion {
-  id          String      @id @default(uuid()) @db.Uuid
+  id          String      @id @default(uuid(7)) @db.Uuid
   platform    AppPlatform
   version     String
   buildNumber Int?        @map("build_number")
@@ -226,7 +230,7 @@ model AppVersion {
 }
 
 model JobQueue {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid(7)) @db.Uuid
   jobType     String    @map("job_type")
   payload     Json?
   status      JobStatus @default(QUEUED)
@@ -244,7 +248,7 @@ model JobQueue {
 }
 
 model ScheduledJob {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   name           String    @unique
   cronExpression String    @map("cron_expression")
   jobType        String    @map("job_type")
@@ -258,7 +262,7 @@ model ScheduledJob {
 }
 
 model OutboxEvent {
-  id            String       @id @default(uuid()) @db.Uuid
+  id            String       @id @default(uuid(7)) @db.Uuid
   aggregateType String       @map("aggregate_type")
   aggregateId   String       @map("aggregate_id") @db.Uuid
   eventType     String       @map("event_type")
@@ -272,7 +276,7 @@ model OutboxEvent {
 }
 
 model WebhookEndpoint {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @id @default(uuid(7)) @db.Uuid
   name       String
   url        String
   secret     String?
@@ -285,7 +289,7 @@ model WebhookEndpoint {
 }
 
 model WebhookDelivery {
-  id           String                @id @default(uuid()) @db.Uuid
+  id           String                @id @default(uuid(7)) @db.Uuid
   endpointId   String                @map("endpoint_id") @db.Uuid
   eventType    String                @map("event_type")
   payload      Json
@@ -303,7 +307,7 @@ model WebhookDelivery {
 }
 
 model IdempotencyKey {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid(7)) @db.Uuid
   key         String
   scope       String
   requestHash String?   @map("request_hash")
@@ -319,7 +323,7 @@ model IdempotencyKey {
 }
 
 model RateLimitRule {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(uuid(7)) @db.Uuid
   name          String   @unique
   scope         String
   limitCount    Int      @map("limit_count")
@@ -332,7 +336,7 @@ model RateLimitRule {
 }
 
 model MaintenanceWindow {
-  id               String   @id @default(uuid()) @db.Uuid
+  id               String   @id @default(uuid(7)) @db.Uuid
   title            String
   description      String?
   affectedServices String[] @map("affected_services")
@@ -345,7 +349,7 @@ model MaintenanceWindow {
 }
 
 model DataRetentionPolicy {
-  id            String    @id @default(uuid()) @db.Uuid
+  id            String    @id @default(uuid(7)) @db.Uuid
   tableName     String    @unique @map("table_name")
   retentionDays Int       @map("retention_days")
   strategy      String    @default("DELETE")

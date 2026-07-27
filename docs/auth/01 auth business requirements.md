@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` (+ `users`) · **Doc:** 01 of the AUTH chain
-> **Status:** 🟡 Draft · **Revision:** v0.2 (review pass 1) · **Owner:** Product / Engineering (Auth) · **Last updated:** 2026-07-26
+> **Status:** 🟢 Final (v1) · **Revision:** v1.0 · **Owner:** Product / Engineering (Auth) · **Last updated:** 2026-07-27
 > **Answers:** _What must authentication and account access do, and why — independent of how it's built?_
 > **Traces from:** [BRD BR-7](../BUSINESS_REQUIREMENTS.md) · [PRD FR-AUTH](../FEATURE_CATALOG.md)
 > **Traces to:** 02_AUTH_SECURITY_SPEC → 03_AUTH_DATABASE_SPEC → 04_AUTH_API_SPEC → 05_AUTH_ERROR_CATALOG → 06_AUTH_EVENT_CATALOG → 07_AUTH_TEST_PLAN
@@ -81,8 +81,8 @@ the disagreements that are genuinely _business_ decisions and records the rest a
 
 ### 3.1 Role model (business decision — resolves the fork)
 
-An identity may hold **more than one role at once** (a rider who is also a driver is **one account**
-with `{rider, driver}`), per **R-ACCOUNT-3**. The single-role enum in `schema.prisma` (`role
+An identity may hold **more than one role at once** (a customer who is also a driver is **one account**
+with `{customer, driver}`), per **R-ACCOUNT-3**. The single-role enum in `schema.prisma` (`role
 UserRole`) **cannot represent this** and is inconsistent with the requirement; 03 must model roles as
 a **set**, not a scalar (§14, OD-2).
 
@@ -90,26 +90,35 @@ a **set**, not a scalar (§14, OD-2).
 
 Holding the **`driver` role** means only that the identity **participates in the driver domain**. It
 does **not** by itself authorize accepting rides. Rather than invent a parallel "Driver Status"
-enum, we bind to the **canonical driver FSM already defined in Volume 6** (`drivers.state`:
-`registered → docs_submitted → under_review → approved / rejected / docs_required`).
+enum, we bind to the **canonical driver verification state already in the schema** — the `drivers`
+table's `verification_status` (`DriverVerificationStatus`:
+`PENDING → DOCUMENT_REVIEW → VERIFIED / REJECTED / SUSPENDED`) together with the `is_suspended` flag.
+**`VERIFIED` (and not suspended) is the operable state.**
 
 Authorization for **driver-privileged ride operations** is therefore a **conjunction**:
 
 ```
 authorize(ride.accept) := has_role(driver)
-                          AND drivers.state = 'approved'   -- operable (owned by onboarding)
+                          AND drivers.verification_status = 'VERIFIED'   -- operable (owned by onboarding)
+                          AND drivers.is_suspended = false
                           AND account.status = 'active'
 ```
 
 - **`has_role(driver)`** — owned by AUTH.
-- **operable status** — owned by `onboarding` / `drivers`; AUTH consumes it, never sets it.
+- **operable status** (`verification_status = VERIFIED` ∧ ¬`is_suspended`) — owned by `onboarding` /
+  `drivers`; AUTH consumes it, never sets it.
 - A newly-onboarding driver has the role but is **not operable**; ride-accept must be denied until
-  `approved`. This is **R-AUTH-23**, and it is the single most important cross-module authorization
+  `VERIFIED`. This is **R-AUTH-23**, and it is the single most important cross-module authorization
   contract in this doc.
 
 > **Why this framing beats a new status enum:** a second Pending/Verified/Rejected/Suspended enum
-> living in AUTH would duplicate — and inevitably drift from — the `drivers.state` machine that
-> already gates operability. One FSM, consumed by the authz check, cannot drift.
+> living in AUTH would duplicate — and inevitably drift from — the `drivers.verification_status`
+> machine that already gates operability. One source of truth, consumed by the authz check, cannot
+> drift.
+>
+> **Schema note (driver chain):** `drivers` previously carried **both** `verification_status` and an
+> identical `onboarding_status` (same enum values). That redundancy has been collapsed — AUTH binds to
+> the single `verification_status` gate (indexed, code-consumed), backed by `DriverVerificationStatus`.
 
 ---
 
@@ -125,7 +134,7 @@ authorize(ride.accept) := has_role(driver)
 | **R-ACCOUNT-4**  | An account can be **suspended**; a suspended account cannot obtain or use access.                                                                                                                     | BO-3, BR-9        |
 | **R-ACCOUNT-5**  | Account lifecycle is an explicit set of **business states** with defined transitions (§4.1).                                                                                                          | BO-3              |
 | **R-ACCOUNT-6**  | An account's **phone number is verified** (via OTP) before the account is usable.                                                                                                                     | BO-3              |
-| **R-ACCOUNT-7**  | Roles are **granted/revoked** through defined events (registration grants `rider`; starting driver onboarding grants `driver`); revocation is possible and audited.                                   | BR-9              |
+| **R-ACCOUNT-7**  | Roles are **granted/revoked** through defined events (registration grants `customer`; starting driver onboarding grants `driver`); revocation is possible and audited.                                | BR-9              |
 | **R-ACCOUNT-8**  | An account is **bound to its verified phone**; losing access to that number requires **identity re-verification** through a defined recovery path — no reset bypasses verification.                   | BO-3, NFR-7       |
 | **R-ACCOUNT-9**  | A **phone-number change** is an authenticated, re-verified, audited operation that **preserves the identity and all its history** (roles, ledger, trips, ratings). Flow deferred; policy binding now. | BO-2, BO-3        |
 | **R-ACCOUNT-10** | **Support-assisted recovery** requires audited identity verification, is rate-limited, and **never discloses credentials or OTPs** to staff.                                                          | NFR-SEC-03, NFR-7 |
@@ -165,22 +174,22 @@ Business policy that must hold even though the **flows are deferred** (§2.3):
 
 ## 5. Authentication & session requirements
 
-| ID            | Requirement                                                                                                                                                                                         | Traces                    |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| **R-AUTH-1**  | A user registers **and** logs in with **phone + OTP**; first successful verification creates the account.                                                                                           | US-A1, R-ACCOUNT-6        |
-| **R-AUTH-2**  | An OTP is **time-limited, single-use, and rate-limited** per phone and per device.                                                                                                                  | US-A1                     |
-| **R-AUTH-3**  | On successful OTP, the system issues a **short-lived access credential** plus a **longer-lived refresh credential**.                                                                                | US-A2                     |
-| **R-AUTH-4**  | Access refreshes **transparently** via the refresh credential until the session expires or is revoked — no re-login.                                                                                | US-A2                     |
-| **R-AUTH-5**  | Refresh credentials **rotate on use**; reuse of a rotated credential is treated as theft and **invalidates the session family**.                                                                    | US-A2, NFR-7              |
-| **R-AUTH-6**  | A user can **log out**, revoking the current session immediately.                                                                                                                                   | US-A2                     |
-| **R-AUTH-7**  | **Revoked, expired, or blacklisted** credentials are rejected on every request.                                                                                                                     | US-A2, NFR-7              |
-| **R-AUTH-8**  | **Failed OTP attempts are throttled and logged**; exceeding the limit **locks** further attempts for a cooldown.                                                                                    | US-A1                     |
-| **R-AUTH-9**  | Repeated **OTP requests** for the same phone/device are rate-limited independently of verify attempts.                                                                                              | US-A1                     |
-| **R-AUTH-10** | Auth flows are **idempotent under retry** (a dropped-then-retried verify/refresh does not double-issue or corrupt state).                                                                           | NFR-6, NFR-RESIL-02, A6.1 |
-| **R-AUTH-11** | A user may be signed in on **multiple devices**; sessions are independent and individually revocable.                                                                                               | US-A2                     |
-| **R-AUTH-23** | **Driver-privileged ride operations require BOTH the `driver` role AND an operable driver status** (`drivers.state = approved`) AND an active account. Role alone never authorizes ride acceptance. | US-A3, FR-ONBOARD, NFR-7  |
-| **R-AUTH-24** | Concurrent active sessions per account are **capped**; on exceeding the cap the **oldest session is revoked** by default (§5.2).                                                                    | US-A2, NFR-7              |
-| **R-AUTH-25** | Defined abuse signals map to defined **business responses** per the fraud matrix (§8.1).                                                                                                            | NFR-7, BRD-Risk-Fraud     |
+| ID            | Requirement                                                                                                                                                                                                       | Traces                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| **R-AUTH-1**  | A user registers **and** logs in with **phone + OTP**; first successful verification creates the account.                                                                                                         | US-A1, R-ACCOUNT-6        |
+| **R-AUTH-2**  | An OTP is **time-limited, single-use, and rate-limited** per phone and per device.                                                                                                                                | US-A1                     |
+| **R-AUTH-3**  | On successful OTP, the system issues a **short-lived access credential** plus a **longer-lived refresh credential**.                                                                                              | US-A2                     |
+| **R-AUTH-4**  | Access refreshes **transparently** via the refresh credential until the session expires or is revoked — no re-login.                                                                                              | US-A2                     |
+| **R-AUTH-5**  | Refresh credentials **rotate on use**; reuse of a rotated credential is treated as theft and **invalidates the session family**.                                                                                  | US-A2, NFR-7              |
+| **R-AUTH-6**  | A user can **log out**, revoking the current session immediately.                                                                                                                                                 | US-A2                     |
+| **R-AUTH-7**  | **Revoked, expired, or blacklisted** credentials are rejected on every request.                                                                                                                                   | US-A2, NFR-7              |
+| **R-AUTH-8**  | **Failed OTP attempts are throttled and logged**; exceeding the limit **locks** further attempts for a cooldown.                                                                                                  | US-A1                     |
+| **R-AUTH-9**  | Repeated **OTP requests** for the same phone/device are rate-limited independently of verify attempts.                                                                                                            | US-A1                     |
+| **R-AUTH-10** | Auth flows are **idempotent under retry** (a dropped-then-retried verify/refresh does not double-issue or corrupt state).                                                                                         | NFR-6, NFR-RESIL-02, A6.1 |
+| **R-AUTH-11** | A user may be signed in on **multiple devices**; sessions are independent and individually revocable.                                                                                                             | US-A2                     |
+| **R-AUTH-23** | **Driver-privileged ride operations require BOTH the `driver` role AND an operable driver status** (`drivers.verification_status = VERIFIED`) AND an active account. Role alone never authorizes ride acceptance. | US-A3, FR-ONBOARD, NFR-7  |
+| **R-AUTH-24** | Concurrent active sessions per account are **capped**; on exceeding the cap the **oldest session is revoked** by default (§5.2).                                                                                  | US-A2, NFR-7              |
+| **R-AUTH-25** | Defined abuse signals map to defined **business responses** per the fraud matrix (§8.1).                                                                                                                          | NFR-7, BRD-Risk-Fraud     |
 
 ### 5.1 Suspension ⇒ access removal
 
@@ -239,7 +248,7 @@ and what they gate**; the **signals** that move a device between states are owne
 | **R-AUTH-23** | (Restated from §5) Driver ride operations require **role `driver` AND operable status AND active account** — the conjunction in §3.2.                                            | FR-ONBOARD, NFR-7 |
 
 > Authorization is a **composition of three facts** — _roles_ (AUTH), _account state_ (AUTH), and
-> _domain operability_ (e.g. `drivers.state`, owned elsewhere). AUTH provides the primitives and the
+> _domain operability_ (e.g. `drivers.verification_status`, owned elsewhere). AUTH provides the primitives and the
 > composition contract; it does not own every input.
 
 ---
@@ -297,15 +306,15 @@ The **business response** to each abuse signal. **Detection** (thresholds, scori
 
 Non-negotiables 03/04 must make **structurally impossible** to violate (Vol 6 principle #5).
 
-| ID             | Invariant                                                                                                                             | Backed by (target doc)            |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| **AUTH-INV-1** | **At most one active account per phone number.**                                                                                      | Unique constraint (03)            |
-| **AUTH-INV-2** | **An OTP can be consumed at most once**, even under concurrent verify attempts.                                                       | Atomic consume (02/03)            |
-| **AUTH-INV-3** | A request from a **suspended** account is **denied**, regardless of an otherwise-valid credential.                                    | State check on hot path (02/04)   |
-| **AUTH-INV-4** | On suspension or logout, **the affected sessions cannot be used again** (revocation is effective).                                    | Revocation store (02/03)          |
-| **AUTH-INV-5** | A **rotated/consumed refresh credential cannot be reused**; reuse invalidates the session family.                                     | Rotation chain (03)               |
-| **AUTH-INV-6** | A **revoked device's** sessions cannot be used; it must re-register/re-verify.                                                        | Device state + revocation (02/03) |
-| **AUTH-INV-7** | A driver-privileged ride operation is **impossible** unless `role=driver` AND `drivers.state=approved` AND `account=active` all hold. | Composed authz guard (04)         |
+| ID             | Invariant                                                                                                                                           | Backed by (target doc)            |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| **AUTH-INV-1** | **At most one active account per phone number.**                                                                                                    | Unique constraint (03)            |
+| **AUTH-INV-2** | **An OTP can be consumed at most once**, even under concurrent verify attempts.                                                                     | Atomic consume (02/03)            |
+| **AUTH-INV-3** | A request from a **suspended** account is **denied**, regardless of an otherwise-valid credential.                                                  | State check on hot path (02/04)   |
+| **AUTH-INV-4** | On suspension or logout, **the affected sessions cannot be used again** (revocation is effective).                                                  | Revocation store (02/03)          |
+| **AUTH-INV-5** | A **rotated/consumed refresh credential cannot be reused**; reuse invalidates the session family.                                                   | Rotation chain (03)               |
+| **AUTH-INV-6** | A **revoked device's** sessions cannot be used; it must re-register/re-verify.                                                                      | Device state + revocation (02/03) |
+| **AUTH-INV-7** | A driver-privileged ride operation is **impossible** unless `role=driver` AND `drivers.verification_status=VERIFIED` AND `account=active` all hold. | Composed authz guard (04)         |
 
 ---
 
@@ -355,7 +364,7 @@ AUTH v1 is complete when:
    AUTH-INV-3/4).
 5. Every protected endpoint is **deny-by-default** and enforces required roles; a **multi-role** user
    (rider + driver) is authorized correctly for both (R-AUTH-14/15, R-ACCOUNT-3).
-6. A user holding the **`driver` role but not yet `approved`** is **denied ride-accept**, and becomes
+6. A user holding the **`driver` role but not yet `VERIFIED`** is **denied ride-accept**, and becomes
    authorized only once operable (R-AUTH-23, AUTH-INV-7). _(Key regression guard.)_
 7. The **concurrent-session cap** is enforced — a login past the cap **revokes the oldest session**
    and that device is signed out (R-AUTH-24).
@@ -369,7 +378,10 @@ AUTH v1 is complete when:
 
 ---
 
-## 14. Open decisions (resolved downstream)
+## 14. Open decisions — ✅ all closed
+
+**Status: every OD below is resolved.** OD-3/5/6/8/9 closed in **doc 02** (§11); OD-1/2/4/7 closed in
+**doc 03** (§2). The table records the original fork; the "Notes" column points at the resolution.
 
 | ID       | Decision                                                                                                                                         | Owner doc | Notes / lean                                                            |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | ----------------------------------------------------------------------- |
@@ -383,7 +395,7 @@ AUTH v1 is complete when:
 | **OD-8** | **Risk/fraud detection**: the **signals, thresholds, and scoring** behind §8.1 (impossible travel, fingerprint match, device trust transitions). | 02        | Responses fixed here; **detection** deferred.                           |
 | **OD-9** | **Recovery proof**: what identity proof is required to recover an unreachable number / assist via support.                                       | 02        | Policy fixed (§4.2); the **proof mechanism** deferred.                  |
 
-> Each OD must close **before its owning doc leaves Draft**.
+> Each OD closed before its owning doc reached Final — satisfied: docs 02 and 03 are Final (v1).
 
 ---
 
@@ -483,21 +495,21 @@ stateDiagram-v2
 
 ## Appendix B — Glossary
 
-| Term                   | Definition                                                                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Identity**           | The single durable record of a person, keyed by verified phone number. Holds roles, state, and history. One person → one identity (R-ACCOUNT-2).             |
-| **Account**            | The identity plus its lifecycle state (Unverified / Active / Suspended / Deactivated). Used interchangeably with Identity in this doc.                       |
-| **Role**               | A capability class the identity holds (`rider`, `driver`, `admin`, `support`). An identity may hold **several** (R-ACCOUNT-3).                               |
-| **Permission**         | The right to perform a specific action, derived from **role + account state + domain operability** (§3.2). Not stored directly; computed by the authz check. |
-| **Operable driver**    | A `driver`-role identity whose `drivers.state = approved` — the only state permitted to accept rides (R-AUTH-23). Owned by `onboarding`.                     |
-| **Session**            | An authenticated context on one device, alive from login until logout/expiry/revocation. Individually revocable (R-AUTH-11).                                 |
-| **Session family**     | The chain of sessions/refresh tokens descending from one login through rotations. Reuse of a rotated token revokes the **whole family** (AUTH-INV-5).        |
-| **Device**             | A physical client (phone) identified at login, carrying a **trust state** and risk signals (§6).                                                             |
-| **Credential**         | Any secret proving identity/authority (OTP, access credential, refresh credential). Never stored/returned in plaintext (R-AUTH-18).                          |
-| **Access credential**  | Short-lived proof attached to each request; refreshed transparently (R-AUTH-3/4). Format (JWT vs opaque) is OD-6.                                            |
-| **Refresh credential** | Longer-lived, **single-use, rotating** secret used to mint new access credentials (R-AUTH-5).                                                                |
-| **OTP**                | One-time passcode sent to the phone; time-limited, single-use, rate-limited (R-AUTH-2). Stored only hashed.                                                  |
-| **Step-up**            | Requiring additional verification for a sensitive action when device trust is degraded (§6, §8.1).                                                           |
+| Term                   | Definition                                                                                                                                                                 |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Identity**           | The single durable record of a person, keyed by verified phone number. Holds roles, state, and history. One person → one identity (R-ACCOUNT-2).                           |
+| **Account**            | The identity plus its lifecycle state (Unverified / Active / Suspended / Deactivated). Used interchangeably with Identity in this doc.                                     |
+| **Role**               | A capability class the identity holds (`customer`, `driver`, `admin`, `support`). An identity may hold **several** (R-ACCOUNT-3).                                          |
+| **Permission**         | The right to perform a specific action, derived from **role + account state + domain operability** (§3.2). Not stored directly; computed by the authz check.               |
+| **Operable driver**    | A `driver`-role identity whose `drivers.verification_status = VERIFIED` (and not suspended) — the only state permitted to accept rides (R-AUTH-23). Owned by `onboarding`. |
+| **Session**            | An authenticated context on one device, alive from login until logout/expiry/revocation. Individually revocable (R-AUTH-11).                                               |
+| **Session family**     | The chain of sessions/refresh tokens descending from one login through rotations. Reuse of a rotated token revokes the **whole family** (AUTH-INV-5).                      |
+| **Device**             | A physical client (phone) identified at login, carrying a **trust state** and risk signals (§6).                                                                           |
+| **Credential**         | Any secret proving identity/authority (OTP, access credential, refresh credential). Never stored/returned in plaintext (R-AUTH-18).                                        |
+| **Access credential**  | Short-lived proof attached to each request; refreshed transparently (R-AUTH-3/4). Format (JWT vs opaque) is OD-6.                                                          |
+| **Refresh credential** | Longer-lived, **single-use, rotating** secret used to mint new access credentials (R-AUTH-5).                                                                              |
+| **OTP**                | One-time passcode sent to the phone; time-limited, single-use, rate-limited (R-AUTH-2). Stored only hashed.                                                                |
+| **Step-up**            | Requiring additional verification for a sensitive action when device trust is degraded (§6, §8.1).                                                                         |
 
 ---
 

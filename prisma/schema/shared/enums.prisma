@@ -1,17 +1,14 @@
 // ============================ ENUMS ============================
 
-enum UserRole {
-  CUSTOMER
-  DRIVER
-  ADMIN
-  SUPPORT
-}
+// Roles are modelled as data (Role + UserRoleAssignment), not a scalar enum,
+// so an identity can hold several at once and grant/revoke is first-class
+// (auth doc 03, OD-2). The former `UserRole` enum was dropped in that alignment.
 
 enum UserStatus {
+  UNVERIFIED
   ACTIVE
-  INACTIVE
-  BLOCKED
   SUSPENDED
+  DEACTIVATED
 }
 
 
@@ -60,14 +57,9 @@ enum DriverWalletTxnType {
   ADJUSTMENT
 }
 
-enum DriverOnboardingStatus {
-  PENDING
-  DOCUMENT_REVIEW
-  VERIFIED
-  REJECTED
-  SUSPENDED
-}
-
+// Canonical driver verification state — the operability gate AUTH binds to
+// (auth doc 01 §3.2). VERIFIED (and not suspended) means the driver can accept
+// rides. The former identical `DriverOnboardingStatus` was folded into this.
 enum DriverVerificationStatus {
   PENDING
   DOCUMENT_REVIEW
@@ -384,6 +376,15 @@ enum AppPlatform {
   IOS
   ANDROID
   WEB
+}
+
+// Device trust lifecycle (auth doc 01 §6, doc 03). Signals that move a device
+// between states are owned by the security/risk layer (doc 02).
+enum DeviceTrustState {
+  REGISTERED
+  TRUSTED
+  SUSPICIOUS
+  REVOKED
 }
 
 

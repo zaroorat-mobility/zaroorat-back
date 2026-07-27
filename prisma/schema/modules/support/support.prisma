@@ -1,7 +1,7 @@
 // ============================ CHAT ============================
 
 model ChatConversation {
-  id            String                 @id @default(uuid()) @db.Uuid
+  id            String                 @id @default(uuid(7)) @db.Uuid
   type          ChatConversationType   @default(RIDE)
   rideId        String?                @map("ride_id") @db.Uuid
   status        ChatConversationStatus @default(ACTIVE)
@@ -19,7 +19,7 @@ model ChatConversation {
 }
 
 model ChatParticipant {
-  id             String              @id @default(uuid()) @db.Uuid
+  id             String              @id @default(uuid(7)) @db.Uuid
   conversationId String              @map("conversation_id") @db.Uuid
   userId         String              @map("user_id") @db.Uuid
   role           ChatParticipantRole
@@ -36,7 +36,7 @@ model ChatParticipant {
 }
 
 model ChatMessage {
-  id             String            @id @default(uuid()) @db.Uuid
+  id             String            @id @default(uuid(7)) @db.Uuid
   conversationId String            @map("conversation_id") @db.Uuid
   senderId       String?           @map("sender_id") @db.Uuid
   messageType    ChatMessageType   @default(TEXT) @map("message_type")
@@ -61,7 +61,7 @@ model ChatMessage {
 }
 
 model ChatAttachment {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid(7)) @db.Uuid
   messageId    String   @map("message_id") @db.Uuid
   mediaType    String   @map("media_type")
   url          String
@@ -78,7 +78,7 @@ model ChatAttachment {
 }
 
 model ChatReadReceipt {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid(7)) @db.Uuid
   messageId   String    @map("message_id") @db.Uuid
   userId      String    @map("user_id") @db.Uuid
   deliveredAt DateTime? @map("delivered_at")
@@ -92,7 +92,7 @@ model ChatReadReceipt {
 }
 
 model ChatCannedReply {
-  id        String              @id @default(uuid()) @db.Uuid
+  id        String              @id @default(uuid(7)) @db.Uuid
   role      ChatParticipantRole
   category  String?
   text      String
@@ -105,7 +105,7 @@ model ChatCannedReply {
 }
 
 model ChatBlock {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid(7)) @db.Uuid
   blockerId String   @map("blocker_id") @db.Uuid
   blockedId String   @map("blocked_id") @db.Uuid
   reason    String?
@@ -119,7 +119,7 @@ model ChatBlock {
 }
 
 model ChatReport {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   conversationId String?   @map("conversation_id") @db.Uuid
   messageId      String?   @map("message_id") @db.Uuid
   reporterId     String    @map("reporter_id") @db.Uuid
@@ -143,7 +143,7 @@ model ChatReport {
 // ============================ REVIEW ============================
 
 model RatingTag {
-  id         String           @id @default(uuid()) @db.Uuid
+  id         String           @id @default(uuid(7)) @db.Uuid
   code       String           @unique
   label      String
   targetType RatingTargetType @map("target_type")
@@ -159,7 +159,7 @@ model RatingTag {
 }
 
 model ReviewTagAssignment {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid(7)) @db.Uuid
   rideRatingId String   @map("ride_rating_id") @db.Uuid
   tagId        String   @map("tag_id") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at")
@@ -204,7 +204,7 @@ model CustomerRatingAggregate {
 }
 
 model ReviewFlag {
-  id            String           @id @default(uuid()) @db.Uuid
+  id            String           @id @default(uuid(7)) @db.Uuid
   rideRatingId  String           @map("ride_rating_id") @db.Uuid
   flaggedBy     String?          @map("flagged_by") @db.Uuid
   reason        String
@@ -222,7 +222,7 @@ model ReviewFlag {
 }
 
 model ReviewResponse {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid(7)) @db.Uuid
   rideRatingId String   @unique @map("ride_rating_id") @db.Uuid
   responderId  String   @map("responder_id") @db.Uuid
   responseText String   @map("response_text")
@@ -238,7 +238,7 @@ model ReviewResponse {
 // ============================ SUPPORT ============================
 
 model SlaPolicy {
-  id                String         @id @default(uuid()) @db.Uuid
+  id                String         @id @default(uuid(7)) @db.Uuid
   name              String
   priority          TicketPriority
   firstResponseMins Int            @map("first_response_mins")
@@ -252,7 +252,7 @@ model SlaPolicy {
 }
 
 model SupportCategory {
-  id              String         @id @default(uuid()) @db.Uuid
+  id              String         @id @default(uuid(7)) @db.Uuid
   code            String         @unique
   name            String
   parentId        String?        @map("parent_id") @db.Uuid
@@ -272,7 +272,7 @@ model SupportCategory {
 }
 
 model SupportAgent {
-  id            String      @id @default(uuid()) @db.Uuid
+  id            String      @id @default(uuid(7)) @db.Uuid
   userId        String      @unique @map("user_id") @db.Uuid
   displayName   String?     @map("display_name")
   status        AgentStatus @default(OFFLINE)
@@ -291,7 +291,7 @@ model SupportAgent {
 }
 
 model SupportTicket {
-  id              String         @id @default(uuid()) @db.Uuid
+  id              String         @id @default(uuid(7)) @db.Uuid
   ticketNumber    String         @unique @map("ticket_number")
   userId          String         @map("user_id") @db.Uuid
   categoryId      String?        @map("category_id") @db.Uuid
@@ -324,7 +324,7 @@ model SupportTicket {
 }
 
 model SupportTicketMessage {
-  id         String              @id @default(uuid()) @db.Uuid
+  id         String              @id @default(uuid(7)) @db.Uuid
   ticketId   String              @map("ticket_id") @db.Uuid
   authorType TicketMessageAuthor @map("author_type")
   authorId   String?             @map("author_id") @db.Uuid
@@ -340,7 +340,7 @@ model SupportTicketMessage {
 }
 
 model TicketAssignment {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(uuid(7)) @db.Uuid
   ticketId   String    @map("ticket_id") @db.Uuid
   agentId    String    @map("agent_id") @db.Uuid
   assignedBy String?   @map("assigned_by") @db.Uuid
@@ -357,7 +357,7 @@ model TicketAssignment {
 }
 
 model TicketEscalation {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   ticketId    String   @map("ticket_id") @db.Uuid
   fromAgentId String?  @map("from_agent_id") @db.Uuid
   toAgentId   String?  @map("to_agent_id") @db.Uuid
@@ -373,7 +373,7 @@ model TicketEscalation {
 }
 
 model SupportCannedResponse {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @id @default(uuid(7)) @db.Uuid
   categoryId String?  @map("category_id") @db.Uuid
   title      String
   body       String
