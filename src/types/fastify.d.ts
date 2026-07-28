@@ -2,6 +2,11 @@ import 'fastify';
 import type { preHandlerHookHandler } from 'fastify';
 
 declare module 'fastify' {
+  interface FastifyContextConfig {
+    /** Opt a route out of the deny-by-default auth gate (auth doc 02 §6). */
+    public?: boolean;
+  }
+
   interface FastifyRequest {
     startTime: bigint;
     /** Authentication context, populated by the `authenticate` hook. */

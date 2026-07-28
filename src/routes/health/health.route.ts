@@ -2,7 +2,8 @@ import { FastifyInstance } from 'fastify';
 import { config } from '@config';
 
 export async function healthRoute(app: FastifyInstance) {
-  app.get('/health', async (request, reply) => {
+  // Public: load balancers and liveness probes hit this without credentials.
+  app.get('/health', { config: { public: true } }, async (request, reply) => {
     return reply.send({
       status: 'ok',
       uptime: process.uptime(),

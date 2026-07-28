@@ -13,14 +13,16 @@ describe('error handler', () => {
     app = await createApp();
 
     // Routes are added before ready() so they join the same lifecycle as the
-    // real ones and go through the registered error handler.
-    app.get('/test-500', async () => {
+    // real ones and go through the registered error handler. They are marked
+    // public so the deny-by-default auth gate does not turn them into 401s —
+    // these exercise the error handler, not authentication.
+    app.get('/test-500', { config: { public: true } }, async () => {
       const error = new Error(LEAKY_MESSAGE) as Error & { statusCode?: number };
       error.statusCode = 500;
       throw error;
     });
 
-    app.get('/test-404', async () => {
+    app.get('/test-404', { config: { public: true } }, async () => {
       const error = new Error('Rider not found') as Error & { statusCode?: number };
       error.statusCode = 404;
       throw error;
