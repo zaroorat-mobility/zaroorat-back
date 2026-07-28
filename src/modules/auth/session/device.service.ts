@@ -1,4 +1,5 @@
 import { EventPublisher } from '@core/events';
+import { TransactionManager } from '@core/database/TransactionManager';
 import type { UserDevice } from '@core/database/types';
 import { DeviceRepository, type CreateDeviceInput } from '../repositories/device.repository';
 import { authEvent } from '../events';
@@ -19,12 +20,15 @@ export class DeviceService {
    * @param deviceRepository Device persistence.
    * @param sessionService Used to revoke a device's sessions on revocation.
    * @param sessionMetrics Device lifecycle counters.
+   * @param eventPublisher Emits device trust-transition events.
+   * @param transactionManager Commits a trust transition and its audit event atomically.
    */
   constructor(
     private readonly deviceRepository: DeviceRepository,
     private readonly sessionService: SessionService,
     private readonly sessionMetrics: SessionMetrics,
     private readonly eventPublisher: EventPublisher,
+    private readonly transactionManager: TransactionManager,
   ) {}
 
   /**
@@ -78,15 +82,18 @@ export class DeviceService {
    * @returns The updated device.
    */
   async markSuspicious(deviceId: string): Promise<UserDevice> {
-    const device = await this.deviceRepository.updateTrustState(deviceId, 'SUSPICIOUS');
-    await this.eventPublisher.publish(
-      authEvent('auth.device.flagged', {
-        aggregateId: deviceId,
-        subjectUserId: device.userId,
-        data: { userId: device.userId, deviceId, from: 'REGISTERED', to: 'SUSPICIOUS' },
-      }),
-    );
-    return device;
+    return this.transactionManager.execute(async (tx) => {
+      const device = await this.deviceRepository.updateTrustState(deviceId, 'SUSPICIOUS', tx);
+      await this.eventPublisher.publish(
+        authEvent('auth.device.flagged', {
+          aggregateId: deviceId,
+          subjectUserId: device.userId,
+          data: { userId: device.userId, deviceId, from: 'REGISTERED', to: 'SUSPICIOUS' },
+        }),
+        tx,
+      );
+      return device;
+    });
   }
 
   /**
@@ -95,16 +102,23 @@ export class DeviceService {
    * @returns The number of sessions revoked.
    */
   async revoke(deviceId: string): Promise<number> {
-    const device = await this.deviceRepository.updateTrustState(deviceId, 'REVOKED');
+    // Mark the device REVOKED and record the audit event atomically; the device
+    // is the authoritative gate, so it must never be revoked without its trail.
+    await this.transactionManager.execute(async (tx) => {
+      const device = await this.deviceRepository.updateTrustState(deviceId, 'REVOKED', tx);
+      await this.eventPublisher.publish(
+        authEvent('auth.device.revoked', {
+          aggregateId: deviceId,
+          subjectUserId: device.userId,
+          data: { userId: device.userId, deviceId, to: 'REVOKED', actor: 'system' },
+        }),
+        tx,
+      );
+    });
+    // Each session revoke is itself atomic (session + family + event); run them
+    // after the device is durably revoked.
     const revoked = await this.sessionService.revokeDeviceSessions(deviceId);
     this.sessionMetrics.deviceRevoked({ deviceId, sessionsRevoked: revoked });
-    await this.eventPublisher.publish(
-      authEvent('auth.device.revoked', {
-        aggregateId: deviceId,
-        subjectUserId: device.userId,
-        data: { userId: device.userId, deviceId, to: 'REVOKED', actor: 'system' },
-      }),
-    );
     return revoked;
   }
 }

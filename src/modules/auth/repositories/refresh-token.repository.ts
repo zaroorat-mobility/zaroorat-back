@@ -1,4 +1,5 @@
 import { BaseRepository, DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { RefreshToken } from '@core/database/types';
 
 /** Fields needed to persist a refresh token. Only the HASH is ever stored — the
@@ -60,14 +61,17 @@ export class RefreshTokenRepository extends BaseRepository {
    * and reuse detection remain in the service; this is the atomic write.
    * @param oldId The predecessor token's UUID (becomes `rotatedFrom`).
    * @param input Owner, session, successor hash, and expiry.
+   * @param tx Transaction client to join (e.g. to also enqueue an event atomically);
+   *           when omitted the two writes run in their own transaction.
    * @returns The created successor token row.
    */
   async rotate(
     oldId: string,
     input: Omit<CreateRefreshTokenInput, 'rotatedFrom'>,
+    tx?: TransactionClient,
   ): Promise<RefreshToken> {
-    return this.client.$transaction(async (tx) => {
-      const created = await tx.refreshToken.create({
+    const run = async (client: TransactionClient): Promise<RefreshToken> => {
+      const created = await client.refreshToken.create({
         data: {
           userId: input.userId,
           sessionId: input.sessionId,
@@ -76,12 +80,13 @@ export class RefreshTokenRepository extends BaseRepository {
           rotatedFrom: oldId,
         },
       });
-      await tx.refreshToken.update({
+      await client.refreshToken.update({
         where: { id: oldId },
         data: { rotatedTo: created.id, revokedAt: new Date(), revokedReason: 'rotated' },
       });
       return created;
-    });
+    };
+    return tx ? run(tx) : this.client.$transaction(run);
   }
 
   /**
@@ -115,14 +120,17 @@ export class RefreshTokenRepository extends BaseRepository {
    * @param sessionId The session whose token family to revoke.
    * @param reason Revocation reason.
    * @param revokedAt Revocation timestamp (defaults to now).
+   * @param tx Transaction client to join, so the family revoke and its audit event
+   *           commit atomically (omit for a standalone write).
    * @returns Count of tokens revoked.
    */
   async revokeBySession(
     sessionId: string,
     reason: string,
     revokedAt: Date = new Date(),
+    tx?: TransactionClient,
   ): Promise<number> {
-    const { count } = await this.client.refreshToken.updateMany({
+    const { count } = await (tx ?? this.client).refreshToken.updateMany({
       where: { sessionId, revokedAt: null },
       data: { revokedAt, revokedReason: reason },
     });

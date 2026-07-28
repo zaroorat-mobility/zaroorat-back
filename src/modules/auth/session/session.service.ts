@@ -1,5 +1,6 @@
 import { RedisService } from '@core/cache';
 import { EventPublisher } from '@core/events';
+import { TransactionManager } from '@core/database/TransactionManager';
 import type { UserSession } from '@core/database/types';
 import type { SessionConfig } from '@config/session/session.config';
 import { SessionRepository } from '../repositories/session.repository';
@@ -36,6 +37,7 @@ export class SessionService {
    * @param refreshTokenRepository Refresh tokens (revoked alongside sessions).
    * @param redisService Provides the `sid` denylist.
    * @param epochService Epoch authority (bumped on global logout).
+   * @param transactionManager Runs the revoke + family revoke + audit event atomically.
    * @param sessionConfig Caps and denylist TTL.
    */
   constructor(
@@ -45,6 +47,7 @@ export class SessionService {
     private readonly epochService: EpochService,
     private readonly sessionMetrics: SessionMetrics,
     private readonly eventPublisher: EventPublisher,
+    private readonly transactionManager: TransactionManager,
     private readonly sessionConfig: SessionConfig,
   ) {}
 
@@ -138,25 +141,34 @@ export class SessionService {
   }
 
   /**
-   * Revoke one session across all tiers: DB row (atomic), sid denylist, refresh
-   * family. The Redis/refresh side effects run only if this call won the atomic
-   * DB revoke, so concurrent callers never duplicate work.
+   * Revoke one session across all tiers. The DB row revoke (atomic conditional),
+   * the refresh-family revoke, and the `auth.session.revoked` audit event commit
+   * in a **single transaction**, so a crash can never leave the session revoked
+   * without its audit trail (or vice versa). The non-transactional side effects —
+   * the `sid` denylist and metrics — run only after the transaction commits and
+   * only if this call won the race, so concurrent callers never duplicate work.
    * @returns `true` if this call performed the revocation.
    */
   private async revokeSession(sessionId: string, reason: string): Promise<boolean> {
-    const won = await this.sessionRepository.revoke(sessionId, reason);
+    const won = await this.transactionManager.execute(async (tx) => {
+      const acquired = await this.sessionRepository.revoke(sessionId, reason, undefined, tx);
+      if (!acquired) return false;
+      await this.refreshTokenRepository.revokeBySession(sessionId, reason, undefined, tx);
+      await this.eventPublisher.publish(
+        authEvent('auth.session.revoked', {
+          aggregateId: sessionId,
+          sessionId,
+          data: { sessionId, reason },
+        }),
+        tx,
+      );
+      return true;
+    });
     if (!won) return false;
+
     await this.redisService.sidBlacklist.revoke(sessionId, this.sessionConfig.denylistTtlSeconds);
-    await this.refreshTokenRepository.revokeBySession(sessionId, reason);
     if (reason === 'cap_evicted') this.sessionMetrics.capEvicted({ reason });
     this.sessionMetrics.revoked({ reason });
-    await this.eventPublisher.publish(
-      authEvent('auth.session.revoked', {
-        aggregateId: sessionId,
-        sessionId,
-        data: { sessionId, reason },
-      }),
-    );
     return true;
   }
 

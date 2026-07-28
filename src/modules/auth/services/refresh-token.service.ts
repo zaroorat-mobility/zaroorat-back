@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { EventPublisher } from '@core/events';
+import { TransactionManager } from '@core/database/TransactionManager';
 import type { JwtConfig } from '@config/jwt/jwt.config';
 import { RefreshTokenRepository } from '../repositories/refresh-token.repository';
 import { TokenInvalidError, TokenReuseError } from '../errors';
@@ -37,12 +38,15 @@ export class RefreshTokenService {
   /**
    * @param refreshTokenRepository Persistence for refresh tokens (hash only).
    * @param epochService Epoch authority (bumped on reuse).
+   * @param eventPublisher Emits refresh lifecycle events.
+   * @param transactionManager Commits the reuse family-revoke and its audit event atomically.
    * @param jwtConfig Supplies the refresh pepper and TTL.
    */
   constructor(
     private readonly refreshTokenRepository: RefreshTokenRepository,
     private readonly epochService: EpochService,
     private readonly eventPublisher: EventPublisher,
+    private readonly transactionManager: TransactionManager,
     jwtConfig: JwtConfig,
   ) {
     this.pepper = jwtConfig.refreshSecret;
@@ -84,15 +88,28 @@ export class RefreshTokenService {
     if (!existing) throw new TokenInvalidError();
 
     if (existing.revokedAt) {
-      await this.revokeFamily(existing.sessionId, existing.userId, 'reuse_detected');
-      await this.eventPublisher.publish(
-        authEvent('auth.refresh.reuse_detected', {
-          aggregateId: existing.sessionId,
-          subjectUserId: existing.userId,
-          sessionId: existing.sessionId,
-          data: { userId: existing.userId, sessionId: existing.sessionId },
-        }),
-      );
+      // Reuse of a consumed token is treated as theft. Revoke the whole family
+      // and write the audit event in one transaction, so the record of the
+      // detection can never be lost while the tokens are revoked. The epoch bump
+      // is a Redis write, so it runs after the transaction commits.
+      await this.transactionManager.execute(async (tx) => {
+        await this.refreshTokenRepository.revokeBySession(
+          existing.sessionId,
+          'reuse_detected',
+          undefined,
+          tx,
+        );
+        await this.eventPublisher.publish(
+          authEvent('auth.refresh.reuse_detected', {
+            aggregateId: existing.sessionId,
+            subjectUserId: existing.userId,
+            sessionId: existing.sessionId,
+            data: { userId: existing.userId, sessionId: existing.sessionId },
+          }),
+          tx,
+        );
+      });
+      await this.epochService.bump(existing.userId);
       throw new TokenReuseError();
     }
 
@@ -130,8 +147,10 @@ export class RefreshTokenService {
   }
 
   /**
-   * Revoke every active token in a session's family and bump the user epoch.
-   * Used as the reuse/theft response (and available for forced family kills).
+   * Revoke every active token in a session's family and bump the user epoch — a
+   * forced family kill (e.g. an admin-driven theft response). The reuse path in
+   * {@link rotate} inlines an equivalent, transactional revoke so its audit event
+   * commits atomically; this remains as a standalone, non-audited operation.
    * @param sessionId The session whose token family to revoke.
    * @param userId Owner user UUID (whose epoch is bumped).
    * @param reason Revocation reason recorded on the tokens.

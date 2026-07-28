@@ -1,4 +1,5 @@
 import { BaseRepository, DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { UserDevice, DeviceTrustState, AppPlatform } from '@core/database/types';
 
 /** Fields captured when a device is first bound at login. */
@@ -80,9 +81,15 @@ export class DeviceRepository extends BaseRepository {
    * Set a device's trust state.
    * @param id Device UUID.
    * @param trustState New trust state.
+   * @param tx Transaction client to join, so the transition and its audit event
+   *           commit atomically (omit for a standalone write).
    * @returns The updated device.
    */
-  async updateTrustState(id: string, trustState: DeviceTrustState): Promise<UserDevice> {
-    return this.client.userDevice.update({ where: { id }, data: { trustState } });
+  async updateTrustState(
+    id: string,
+    trustState: DeviceTrustState,
+    tx?: TransactionClient,
+  ): Promise<UserDevice> {
+    return (tx ?? this.client).userDevice.update({ where: { id }, data: { trustState } });
   }
 }
