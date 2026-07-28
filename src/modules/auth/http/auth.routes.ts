@@ -6,25 +6,27 @@ import { AuthController } from './auth.controller';
 
 /**
  * Registers the AUTH API routes (auth doc 04) under the caller-provided prefix
- * (mount at `/v1/auth`).
+ * (mount at `/api/v1/auth`).
  *
- * Public: `otp/send`, `otp/verify`, `token/refresh`. Protected (require
- * `authenticate`): `logout` and the `me/sessions` management endpoints. The
- * guard decorators come from the auth plugin registered on the app.
- * @param app The Fastify instance (already decorated with `authenticate`).
+ * Authentication is deny-by-default (auth doc 02 §6): the global gate installed
+ * by the auth plugin protects every route, so only the credential-establishing
+ * endpoints — `otp/send`, `otp/verify`, `token/refresh` — opt out with
+ * `config: { public: true }`. `logout` and the `me/sessions` endpoints need no
+ * explicit guard; the gate authenticates them and populates `request.auth`.
+ * @param app The Fastify instance (already carrying the deny-by-default gate).
  */
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   const controller = new AuthController(container.resolve<AuthService>('authService'));
-  const authenticated = { onRequest: [app.authenticate] };
+  const publicRoute = { config: { public: true } };
 
-  // Public
-  app.post('/otp/send', controller.sendOtp);
-  app.post('/otp/verify', controller.verifyOtp);
-  app.post('/token/refresh', controller.refresh);
+  // Public (credential-establishing) — explicitly opted out of the auth gate.
+  app.post('/otp/send', publicRoute, controller.sendOtp);
+  app.post('/otp/verify', publicRoute, controller.verifyOtp);
+  app.post('/token/refresh', publicRoute, controller.refresh);
 
-  // Protected
-  app.post('/logout', authenticated, controller.logout);
-  app.get('/me/sessions', authenticated, controller.listSessions);
-  app.delete('/me/sessions', authenticated, controller.revokeAllSessions);
-  app.delete('/me/sessions/:id', authenticated, controller.revokeSession);
+  // Protected — the deny-by-default gate authenticates these before the handler.
+  app.post('/logout', controller.logout);
+  app.get('/me/sessions', controller.listSessions);
+  app.delete('/me/sessions', controller.revokeAllSessions);
+  app.delete('/me/sessions/:id', controller.revokeSession);
 }

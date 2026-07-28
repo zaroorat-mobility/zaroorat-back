@@ -1,4 +1,5 @@
 import type { JwtConfig } from '@config/jwt/jwt.config';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import { JwtService } from './jwt.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { EpochService } from './epoch.service';
@@ -52,9 +53,11 @@ export class TokenService {
   /**
    * Mint a fresh access+refresh pair for a session (login / first verify).
    * @param input User, session, and role snapshot.
+   * @param tx Transaction client to join, so the refresh-token row commits with the
+   *           rest of the login (the epoch read and JWT signing carry no DB state).
    * @returns The token pair.
    */
-  async issuePair(input: IssuePairInput): Promise<TokenPair> {
+  async issuePair(input: IssuePairInput, tx?: TransactionClient): Promise<TokenPair> {
     const epoch = await this.epochService.current(input.userId);
     const accessToken = this.jwtService.sign({
       userId: input.userId,
@@ -62,7 +65,7 @@ export class TokenService {
       roles: input.roles,
       epoch,
     });
-    const refresh = await this.refreshTokenService.issue(input.userId, input.sessionId);
+    const refresh = await this.refreshTokenService.issue(input.userId, input.sessionId, tx);
     return this.toPair(accessToken, refresh.token);
   }
 

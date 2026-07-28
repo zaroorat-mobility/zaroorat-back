@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { EventPublisher } from '@core/events';
-import { TransactionManager } from '@core/database/TransactionManager';
+import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager';
 import type { JwtConfig } from '@config/jwt/jwt.config';
 import { RefreshTokenRepository } from '../repositories/refresh-token.repository';
 import { TokenInvalidError, TokenReuseError } from '../errors';
@@ -57,17 +57,26 @@ export class RefreshTokenService {
    * Issue a new refresh token for a session.
    * @param userId Owner user UUID.
    * @param sessionId Session (`sid`) the token belongs to.
+   * @param tx Transaction client to join, so the token row commits atomically with
+   *           the login it belongs to (omit for a standalone write).
    * @returns The issued token (raw value + row id + expiry).
    */
-  async issue(userId: string, sessionId: string): Promise<IssuedRefreshToken> {
+  async issue(
+    userId: string,
+    sessionId: string,
+    tx?: TransactionClient,
+  ): Promise<IssuedRefreshToken> {
     const raw = this.generateRawToken();
     const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000);
-    const row = await this.refreshTokenRepository.create({
-      userId,
-      sessionId,
-      tokenHash: this.hash(raw),
-      expiresAt,
-    });
+    const row = await this.refreshTokenRepository.create(
+      {
+        userId,
+        sessionId,
+        tokenHash: this.hash(raw),
+        expiresAt,
+      },
+      tx,
+    );
     return { token: raw, id: row.id, expiresAt };
   }
 

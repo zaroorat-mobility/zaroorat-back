@@ -2,7 +2,8 @@ import { FastifyInstance } from 'fastify';
 import { runReadinessChecks } from '@core/health/index.js';
 
 export async function readyRoute(app: FastifyInstance) {
-  app.get('/ready', async (request, reply) => {
+  // Public: orchestrator readiness probes hit this without credentials.
+  app.get('/ready', { config: { public: true } }, async (request, reply) => {
     const report = await runReadinessChecks();
 
     // 503 is what makes the orchestrator pull this pod out of the load-balancer

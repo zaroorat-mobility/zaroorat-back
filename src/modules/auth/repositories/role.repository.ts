@@ -1,4 +1,5 @@
 import { BaseRepository, DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { Role, UserRoleAssignment } from '@core/database/types';
 
 /** Fields needed to grant a role. Idempotency (one live grant per user+role) is
@@ -30,8 +31,8 @@ export class RoleRepository extends BaseRepository {
    * @param slug Stable role identifier.
    * @returns The role, or `null` if no such slug exists.
    */
-  async findBySlug(slug: string): Promise<Role | null> {
-    return this.client.role.findUnique({ where: { slug } });
+  async findBySlug(slug: string, tx?: TransactionClient): Promise<Role | null> {
+    return (tx ?? this.client).role.findUnique({ where: { slug } });
   }
 
   /**
@@ -45,8 +46,9 @@ export class RoleRepository extends BaseRepository {
     userId: string,
     roleId: string,
     now: Date = new Date(),
+    tx?: TransactionClient,
   ): Promise<UserRoleAssignment | null> {
-    return this.client.userRoleAssignment.findFirst({
+    return (tx ?? this.client).userRoleAssignment.findFirst({
       where: {
         userId,
         roleId,
@@ -62,8 +64,12 @@ export class RoleRepository extends BaseRepository {
    * @param now Reference instant for the expiry check.
    * @returns Active role slugs.
    */
-  async findActiveRoleSlugs(userId: string, now: Date = new Date()): Promise<string[]> {
-    const assignments = await this.client.userRoleAssignment.findMany({
+  async findActiveRoleSlugs(
+    userId: string,
+    now: Date = new Date(),
+    tx?: TransactionClient,
+  ): Promise<string[]> {
+    const assignments = await (tx ?? this.client).userRoleAssignment.findMany({
       where: {
         userId,
         revokedAt: null,
@@ -83,8 +89,8 @@ export class RoleRepository extends BaseRepository {
    * @throws Propagates a unique-violation if an active grant already exists
    *         (partial index `uq_user_role_active`).
    */
-  async grant(input: GrantRoleInput): Promise<UserRoleAssignment> {
-    return this.client.userRoleAssignment.create({
+  async grant(input: GrantRoleInput, tx?: TransactionClient): Promise<UserRoleAssignment> {
+    return (tx ?? this.client).userRoleAssignment.create({
       data: {
         userId: input.userId,
         roleId: input.roleId,

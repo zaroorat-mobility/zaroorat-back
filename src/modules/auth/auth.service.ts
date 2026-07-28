@@ -1,6 +1,7 @@
 import { RedisService } from '@core/cache';
 import { EventPublisher } from '@core/events';
 import { TransactionManager } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { AppPlatform, User, UserSession } from '@core/database/types';
 import type { JwtConfig } from '@config/jwt/jwt.config';
 import type { SessionConfig } from '@config/session/session.config';
@@ -130,73 +131,105 @@ export class AuthService {
       ...(input.challengeId ? { challengeId: input.challengeId } : {}),
     });
 
-    const { user, isNew } = await this.resolveAccount(input.phoneNumber);
-    if (user.status === 'SUSPENDED') throw new AccountSuspendedError();
+    // Register/login is one unit of work: the account resolution, device binding,
+    // session + refresh-token rows, and the four audit events all commit in a
+    // single transaction (auth doc 06 §2), so a crash can never leave a session
+    // without its audit trail. The OTP consume (Redis, above) is the gate; the
+    // epoch read during token signing and the concurrency-cap eviction (which
+    // revokes *other* sessions in their own transactions) run outside it.
+    const outcome = await this.transactionManager.execute(async (tx) => {
+      const { user, isNew } = await this.resolveAccount(input.phoneNumber, tx);
+      if (user.status === 'SUSPENDED') throw new AccountSuspendedError();
 
-    const device = await this.deviceService.register({ userId: user.id, ...input.device });
-    const roles = await this.roleRepository.findActiveRoleSlugs(user.id);
+      const device = await this.deviceService.register({ userId: user.id, ...input.device }, tx);
+      const roles = await this.roleRepository.findActiveRoleSlugs(user.id, undefined, tx);
 
-    const session = await this.sessionService.create({
-      userId: user.id,
-      deviceId: device.id,
-      loginMethod: 'otp',
-      expiresAt: new Date(Date.now() + this.jwtConfig.refreshTtlSeconds * 1000),
-      maxConcurrentSessions: this.capForRoles(roles),
-      ...(input.ip != null ? { ipAddress: input.ip } : {}),
-      ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
-    });
-
-    await this.userRepository.updateLastLoginAt(user.id, new Date());
-    const pair = await this.tokenService.issuePair({
-      userId: user.id,
-      sessionId: session.id,
-      roles,
-    });
-
-    // Durable events (at-least-once via the outbox).
-    await this.eventPublisher.publish(
-      authEvent('auth.otp.verified', {
-        subjectUserId: user.id,
-        data: {
+      const session = await this.sessionService.createInTransaction(
+        {
           userId: user.id,
-          phoneNumber: input.phoneNumber,
-          purpose: 'LOGIN',
-          isNewAccount: isNew,
-        },
-      }),
-    );
-    await this.eventPublisher.publish(
-      authEvent('auth.login.succeeded', {
-        subjectUserId: user.id,
-        sessionId: session.id,
-        data: { userId: user.id, sessionId: session.id, deviceId: device.id, isNewAccount: isNew },
-      }),
-    );
-    await this.eventPublisher.publish(
-      authEvent('auth.session.created', {
-        aggregateId: session.id,
-        subjectUserId: user.id,
-        sessionId: session.id,
-        data: {
-          userId: user.id,
-          sessionId: session.id,
           deviceId: device.id,
-          expiresAt: session.expiresAt.toISOString(),
+          loginMethod: 'otp',
+          expiresAt: new Date(Date.now() + this.jwtConfig.refreshTtlSeconds * 1000),
+          ...(input.ip != null ? { ipAddress: input.ip } : {}),
+          ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
         },
-      }),
-    );
-    if (isNew) {
-      await this.eventPublisher.publish(
-        authEvent('account.role.granted', {
-          subjectUserId: user.id,
-          data: { userId: user.id, roleSlug: 'customer' },
-        }),
+        tx,
       );
-    }
+
+      await this.userRepository.updateLastLoginAt(user.id, new Date(), tx);
+      const pair = await this.tokenService.issuePair(
+        { userId: user.id, sessionId: session.id, roles },
+        tx,
+      );
+
+      await this.eventPublisher.publish(
+        authEvent('auth.otp.verified', {
+          subjectUserId: user.id,
+          data: {
+            userId: user.id,
+            phoneNumber: input.phoneNumber,
+            purpose: 'LOGIN',
+            isNewAccount: isNew,
+          },
+        }),
+        tx,
+      );
+      await this.eventPublisher.publish(
+        authEvent('auth.login.succeeded', {
+          subjectUserId: user.id,
+          sessionId: session.id,
+          data: {
+            userId: user.id,
+            sessionId: session.id,
+            deviceId: device.id,
+            isNewAccount: isNew,
+          },
+        }),
+        tx,
+      );
+      await this.eventPublisher.publish(
+        authEvent('auth.session.created', {
+          aggregateId: session.id,
+          subjectUserId: user.id,
+          sessionId: session.id,
+          data: {
+            userId: user.id,
+            sessionId: session.id,
+            deviceId: device.id,
+            expiresAt: session.expiresAt.toISOString(),
+          },
+        }),
+        tx,
+      );
+      if (isNew) {
+        await this.eventPublisher.publish(
+          authEvent('account.role.granted', {
+            subjectUserId: user.id,
+            data: { userId: user.id, roleSlug: 'customer' },
+          }),
+          tx,
+        );
+      }
+
+      return { user, isNew, roles, session, pair };
+    });
+
+    // Concurrency-cap eviction runs after the login commits: it revokes other
+    // sessions (each in its own transaction) and must not nest inside the login tx.
+    await this.sessionService.enforceCap(
+      outcome.user.id,
+      this.capForRoles(outcome.roles),
+      outcome.session.id,
+    );
 
     const result: AuthLoginResult = {
-      ...pair,
-      user: { id: user.id, status: user.status, roles, isNew },
+      ...outcome.pair,
+      user: {
+        id: outcome.user.id,
+        status: outcome.user.status,
+        roles: outcome.roles,
+        isNew: outcome.isNew,
+      },
     };
     if (idempotencyKey) {
       await this.redisService.idempotency.put(idempotencyKey, result, IDEMPOTENCY_TTL_SECONDS);
@@ -304,34 +337,37 @@ export class AuthService {
     await this.sessionService.logoutAll(userId, 'suspension');
   }
 
-  /** Find the active account for a phone, creating and role-granting on first verify. */
-  private async resolveAccount(phoneNumber: string): Promise<{ user: User; isNew: boolean }> {
-    const existing = await this.userRepository.findActiveByPhone(phoneNumber);
+  /** Find the active account for a phone, creating and role-granting on first
+   *  verify. Runs inside the login transaction. */
+  private async resolveAccount(
+    phoneNumber: string,
+    tx: TransactionClient,
+  ): Promise<{ user: User; isNew: boolean }> {
+    const existing = await this.userRepository.findActiveByPhone(phoneNumber, tx);
     if (existing) {
       let user = existing;
       if (!user.isPhoneVerified || user.status === 'UNVERIFIED') {
-        await this.userRepository.markPhoneVerified(user.id);
-        user = await this.userRepository.updateStatus(user.id, 'ACTIVE');
+        await this.userRepository.markPhoneVerified(user.id, tx);
+        user = await this.userRepository.updateStatus(user.id, 'ACTIVE', tx);
       }
-      await this.ensureDefaultRole(user.id);
+      await this.ensureDefaultRole(user.id, tx);
       return { user, isNew: false };
     }
 
-    const created = await this.userRepository.create({
-      phoneNumber,
-      status: 'ACTIVE',
-      isPhoneVerified: true,
-    });
-    await this.ensureDefaultRole(created.id);
+    const created = await this.userRepository.create(
+      { phoneNumber, status: 'ACTIVE', isPhoneVerified: true },
+      tx,
+    );
+    await this.ensureDefaultRole(created.id, tx);
     return { user: created, isNew: true };
   }
 
-  /** Idempotently grant the default `customer` role. */
-  private async ensureDefaultRole(userId: string): Promise<void> {
-    const role = await this.roleRepository.findBySlug(DEFAULT_ROLE_SLUG);
+  /** Idempotently grant the default `customer` role within the login transaction. */
+  private async ensureDefaultRole(userId: string, tx: TransactionClient): Promise<void> {
+    const role = await this.roleRepository.findBySlug(DEFAULT_ROLE_SLUG, tx);
     if (!role) throw new Error(`Default role "${DEFAULT_ROLE_SLUG}" is not seeded`);
-    const active = await this.roleRepository.findActiveAssignment(userId, role.id);
-    if (!active) await this.roleRepository.grant({ userId, roleId: role.id });
+    const active = await this.roleRepository.findActiveAssignment(userId, role.id, undefined, tx);
+    if (!active) await this.roleRepository.grant({ userId, roleId: role.id }, tx);
   }
 
   /** Resolve roles for a refresh, rejecting non-active accounts. */

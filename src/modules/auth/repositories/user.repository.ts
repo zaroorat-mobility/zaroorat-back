@@ -39,8 +39,8 @@ export class UserRepository extends BaseRepository {
    * @param phoneNumber E.164 phone number.
    * @returns The live user, or `null` if none is registered/active.
    */
-  async findActiveByPhone(phoneNumber: string): Promise<User | null> {
-    return this.client.user.findFirst({ where: { phoneNumber, deletedAt: null } });
+  async findActiveByPhone(phoneNumber: string, tx?: TransactionClient): Promise<User | null> {
+    return (tx ?? this.client).user.findFirst({ where: { phoneNumber, deletedAt: null } });
   }
 
   /**
@@ -50,8 +50,8 @@ export class UserRepository extends BaseRepository {
    * @throws Propagates a unique-violation if an active account already exists
    *         for the phone number (partial index `uq_users_phone_active`).
    */
-  async create(input: CreateUserInput): Promise<User> {
-    return this.client.user.create({
+  async create(input: CreateUserInput, tx?: TransactionClient): Promise<User> {
+    return (tx ?? this.client).user.create({
       data: {
         phoneNumber: input.phoneNumber,
         isPhoneVerified: input.isPhoneVerified ?? false,
@@ -78,16 +78,16 @@ export class UserRepository extends BaseRepository {
    * @param id User UUID.
    * @param at Timestamp of the login.
    */
-  async updateLastLoginAt(id: string, at: Date): Promise<void> {
-    await this.client.user.update({ where: { id }, data: { lastLoginAt: at } });
+  async updateLastLoginAt(id: string, at: Date, tx?: TransactionClient): Promise<void> {
+    await (tx ?? this.client).user.update({ where: { id }, data: { lastLoginAt: at } });
   }
 
   /**
    * Mark the account's phone number as verified.
    * @param id User UUID.
    */
-  async markPhoneVerified(id: string): Promise<void> {
-    await this.client.user.update({ where: { id }, data: { isPhoneVerified: true } });
+  async markPhoneVerified(id: string, tx?: TransactionClient): Promise<void> {
+    await (tx ?? this.client).user.update({ where: { id }, data: { isPhoneVerified: true } });
   }
 
   /**

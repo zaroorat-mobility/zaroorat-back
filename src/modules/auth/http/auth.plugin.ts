@@ -34,6 +34,12 @@ function extractBearerToken(request: FastifyRequest): string {
  * - `authorize({ roles, requireOperableDriver })` — role check (deny-by-default),
  *   plus the live driver-operability conjunction for ride operations (R-AUTH-23).
  *
+ * It also installs the **deny-by-default** gate: a global `onRequest` hook that
+ * authenticates every matched route unless it explicitly opts out with
+ * `config: { public: true }` (auth doc 02 §6, doc 07 §3 row 5). A new route that
+ * forgets to declare its posture is therefore protected, not open. Unmatched
+ * routes fall through to the 404 handler unchanged.
+ *
  * Services are singletons resolved once at registration.
  */
 async function authPlugin(app: FastifyInstance): Promise<void> {
@@ -106,6 +112,19 @@ async function authPlugin(app: FastifyInstance): Promise<void> {
         }
       }
     };
+  });
+
+  // Deny-by-default: authenticate every matched route unless it opts out with
+  // `config: { public: true }`. Unmatched routes (routeOptions.url == null) are
+  // left to the 404 handler so unknown paths still 404 rather than 401.
+  const runAuthenticate = app.authenticate as (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => Promise<void>;
+  app.addHook('onRequest', async function denyByDefault(request, reply) {
+    if (request.routeOptions.url == null) return;
+    if (request.routeOptions.config?.public === true) return;
+    return runAuthenticate(request, reply);
   });
 }
 

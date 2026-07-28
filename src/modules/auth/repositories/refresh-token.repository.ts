@@ -33,8 +33,8 @@ export class RefreshTokenRepository extends BaseRepository {
    * @param input Owner, session, token hash, expiry, and optional predecessor.
    * @returns The created token row.
    */
-  async create(input: CreateRefreshTokenInput): Promise<RefreshToken> {
-    return this.client.refreshToken.create({
+  async create(input: CreateRefreshTokenInput, tx?: TransactionClient): Promise<RefreshToken> {
+    return (tx ?? this.client).refreshToken.create({
       data: {
         userId: input.userId,
         sessionId: input.sessionId,
@@ -142,14 +142,16 @@ export class RefreshTokenRepository extends BaseRepository {
    * @param userId Owner user UUID.
    * @param reason Revocation reason.
    * @param revokedAt Revocation timestamp (defaults to now).
+   * @param tx Transaction client to join (omit for a standalone write).
    * @returns Count of tokens revoked.
    */
   async revokeAllByUser(
     userId: string,
     reason: string,
     revokedAt: Date = new Date(),
+    tx?: TransactionClient,
   ): Promise<number> {
-    const { count } = await this.client.refreshToken.updateMany({
+    const { count } = await (tx ?? this.client).refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt, revokedReason: reason },
     });
