@@ -159,11 +159,14 @@ already-revoked session is a no-op).
 
 ## 3. The shared auth guard (Fastify wiring — realizes doc 02 §6)
 
-Auth exposes two decorators the whole monolith consumes. Protected is the **default**; a route opts
-out with `config.auth = false`.
+Auth exposes two decorators the whole monolith consumes. Authentication is **deny-by-default**: a
+global `onRequest` gate authenticates every matched route, so a route opts out only by declaring
+`config: { public: true }`. Authorization (roles + the driver conjunction) is applied per route as a
+`fastify.authorize({ ... })` preHandler.
 
 ```ts
-// fastify.authenticate — steps 1–4 of doc 02 §6 (deny-by-default, R-AUTH-14)
+// fastify.authenticate — steps 1–4 of doc 02 §6 (deny-by-default, R-AUTH-14).
+// Installed as a global onRequest gate that skips routes marked config.public.
 async function authenticate(req, reply) {
   const jwt = getBearer(req); // 401 if missing / bad signature
   const claims = verifyHS256(jwt); // stateless
@@ -175,25 +178,25 @@ async function authenticate(req, reply) {
   req.auth = { userId: claims.sub, sid: claims.sid, roles: claims.roles };
 }
 
-// fastify.authorize — role guard + the driver conjunction (R-AUTH-15/23, AUTH-INV-7)
-function authorize(req, reply) {
-  const { roles: need = [], requireOperableDriver } = req.routeConfig.auth ?? {};
-  if (need.length && !need.some((r) => req.auth.roles.includes(r)))
-    return reply.code(403).send(err('FORBIDDEN'));
-  // requireOperableDriver is checked LIVE against the driver domain, not the token:
-  //   -> rides module resolves drivers.verification_status = 'VERIFIED' (and not suspended) AND account = active (R-AUTH-23)
+// fastify.authorize({ roles, requireOperableDriver }) — a preHandler factory:
+// role guard + the driver conjunction (R-AUTH-15/23, AUTH-INV-7).
+function authorize({ roles: need = [], requireOperableDriver }) {
+  return async (req, reply) => {
+    if (need.length && !need.some((r) => req.auth.roles.includes(r)))
+      return reply.code(403).send(err('FORBIDDEN'));
+    // requireOperableDriver is checked LIVE against the driver domain, not the token:
+    //   -> drivers.verification_status = 'VERIFIED' (and not suspended) AND account = active (R-AUTH-23)
+  };
 }
 ```
 
-**Route declaration pattern** (example lives in the `rides` module, guard is auth's):
+**Route declaration pattern** (example lives in the `rides` module, guard is auth's). The global gate
+authenticates it; only `authorize` is wired per route:
 
 ```ts
 fastify.post(
-  '/v1/rides/:id/accept',
-  {
-    config: { auth: { roles: ['driver'], requireOperableDriver: true } },
-    onRequest: [fastify.authenticate, fastify.authorize],
-  },
+  '/api/v1/rides/:id/accept',
+  { preHandler: [fastify.authorize({ roles: ['driver'], requireOperableDriver: true })] },
   acceptRideHandler,
 );
 ```
