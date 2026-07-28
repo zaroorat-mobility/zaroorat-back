@@ -4,6 +4,8 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, resetState, FIXED_OTP } from './helpers/harness.js';
+import { container } from '../../src/core/di.js';
+import type { UserRepository } from '../../src/modules/auth/repositories/user.repository.js';
 
 const BASE = '/api/v1/auth';
 
@@ -113,5 +115,40 @@ describe('auth login flow (integration)', () => {
     assert.equal(res.statusCode, 401, res.payload);
     assert.equal(res.json().error.code, 'OTP_INVALID');
     assert.equal((await db().client.userSession.findMany()).length, 0);
+  });
+
+  it('rolls the whole login back when a write inside the transaction fails (atomicity)', async () => {
+    // Inject a failure late in the login transaction, after the user, session,
+    // refresh token, and outbox events have been written. If the unit of work is
+    // real, the rollback leaves zero rows in every one of those tables.
+    const repo = container.resolve<UserRepository>('userRepository');
+    const original = repo.updateLastLoginAt.bind(repo);
+    repo.updateLastLoginAt = async () => {
+      throw new Error('injected failure mid-transaction');
+    };
+    try {
+      const res = await verify(await send());
+      assert.equal(res.statusCode, 500, res.payload);
+    } finally {
+      repo.updateLastLoginAt = original;
+    }
+
+    assert.equal((await db().client.user.findMany()).length, 0, 'user create rolled back');
+    assert.equal((await db().client.userSession.findMany()).length, 0, 'session rolled back');
+    assert.equal(
+      (await db().client.refreshToken.findMany()).length,
+      0,
+      'refresh token rolled back',
+    );
+    assert.equal(
+      (await db().client.userRoleAssignment.findMany()).length,
+      0,
+      'role grant rolled back',
+    );
+    assert.equal(
+      (await db().client.outboxEvent.findMany()).length,
+      0,
+      'no audit events without their state change',
+    );
   });
 });

@@ -43,8 +43,12 @@ export class DeviceRepository extends BaseRepository {
    * @param deviceId Client-reported stable device id.
    * @returns The matching device, or `null`.
    */
-  async findByUserAndDevice(userId: string, deviceId: string): Promise<UserDevice | null> {
-    return this.client.userDevice.findFirst({ where: { userId, deviceId } });
+  async findByUserAndDevice(
+    userId: string,
+    deviceId: string,
+    tx?: TransactionClient,
+  ): Promise<UserDevice | null> {
+    return (tx ?? this.client).userDevice.findFirst({ where: { userId, deviceId } });
   }
 
   /**
@@ -52,8 +56,8 @@ export class DeviceRepository extends BaseRepository {
    * @param input Owner plus optional client id, platform, and risk signals.
    * @returns The created device.
    */
-  async create(input: CreateDeviceInput): Promise<UserDevice> {
-    return this.client.userDevice.create({
+  async create(input: CreateDeviceInput, tx?: TransactionClient): Promise<UserDevice> {
+    return (tx ?? this.client).userDevice.create({
       data: {
         userId: input.userId,
         ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
@@ -73,8 +77,8 @@ export class DeviceRepository extends BaseRepository {
    * @param id Device UUID.
    * @param at Observation instant.
    */
-  async touchLastSeen(id: string, at: Date = new Date()): Promise<void> {
-    await this.client.userDevice.update({ where: { id }, data: { lastSeenAt: at } });
+  async touchLastSeen(id: string, at: Date = new Date(), tx?: TransactionClient): Promise<void> {
+    await (tx ?? this.client).userDevice.update({ where: { id }, data: { lastSeenAt: at } });
   }
 
   /**

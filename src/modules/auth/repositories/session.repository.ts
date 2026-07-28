@@ -33,8 +33,8 @@ export class SessionRepository extends BaseRepository {
    * @param input Owner user, optional device/ip, and the expiry instant.
    * @returns The created session (its `id` is the `sid`).
    */
-  async create(input: CreateSessionInput): Promise<UserSession> {
-    return this.client.userSession.create({
+  async create(input: CreateSessionInput, tx?: TransactionClient): Promise<UserSession> {
+    return (tx ?? this.client).userSession.create({
       data: {
         userId: input.userId,
         expiresAt: input.expiresAt,

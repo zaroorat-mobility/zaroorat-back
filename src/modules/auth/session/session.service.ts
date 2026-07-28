@@ -1,6 +1,6 @@
 import { RedisService } from '@core/cache';
 import { EventPublisher } from '@core/events';
-import { TransactionManager } from '@core/database/TransactionManager';
+import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager';
 import type { UserSession } from '@core/database/types';
 import type { SessionConfig } from '@config/session/session.config';
 import { SessionRepository } from '../repositories/session.repository';
@@ -58,19 +58,42 @@ export class SessionService {
    * @returns The created session (its `id` is the `sid`).
    */
   async create(input: CreateSessionInput): Promise<UserSession> {
-    const session = await this.sessionRepository.create({
-      userId: input.userId,
-      expiresAt: input.expiresAt,
-      ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
-      ...(input.ipAddress != null ? { ipAddress: input.ipAddress } : {}),
-      ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
-      ...(input.loginMethod != null ? { loginMethod: input.loginMethod } : {}),
-    });
-    this.sessionMetrics.created({ userId: input.userId });
-
-    const cap = input.maxConcurrentSessions ?? this.sessionConfig.maxConcurrentSessions;
-    await this.enforceCap(input.userId, cap, session.id);
+    const session = await this.createInTransaction(input);
+    await this.enforceCap(input.userId, this.capFor(input), session.id);
     return session;
+  }
+
+  /**
+   * Create the session **row only**, optionally within a caller's transaction, so
+   * it commits atomically with the login that opened it. Cap enforcement is left
+   * to the caller (via {@link enforceCap}) because eviction revokes *other*
+   * sessions in their own transactions and must not nest inside the login tx.
+   * @param input Owner, optional device/ip/forensics, and expiry.
+   * @param tx Transaction client to join (omit for a standalone write).
+   * @returns The created session (its `id` is the `sid`).
+   */
+  async createInTransaction(
+    input: CreateSessionInput,
+    tx?: TransactionClient,
+  ): Promise<UserSession> {
+    const session = await this.sessionRepository.create(
+      {
+        userId: input.userId,
+        expiresAt: input.expiresAt,
+        ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
+        ...(input.ipAddress != null ? { ipAddress: input.ipAddress } : {}),
+        ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+        ...(input.loginMethod != null ? { loginMethod: input.loginMethod } : {}),
+      },
+      tx,
+    );
+    this.sessionMetrics.created({ userId: input.userId });
+    return session;
+  }
+
+  /** Resolve the concurrent-session cap for a create request. */
+  private capFor(input: CreateSessionInput): number {
+    return input.maxConcurrentSessions ?? this.sessionConfig.maxConcurrentSessions;
   }
 
   /**
@@ -190,8 +213,15 @@ export class SessionService {
     return true;
   }
 
-  /** Evict the oldest active sessions beyond the cap, keeping the newest. */
-  private async enforceCap(userId: string, cap: number, keepSessionId: string): Promise<void> {
+  /**
+   * Evict the oldest active sessions beyond the cap, keeping `keepSessionId`.
+   * Public so the login flow can run it **after** its transaction commits (each
+   * eviction revokes in its own transaction).
+   * @param userId Owner user UUID.
+   * @param cap Maximum concurrent active sessions to keep.
+   * @param keepSessionId The just-created session to always retain.
+   */
+  async enforceCap(userId: string, cap: number, keepSessionId: string): Promise<void> {
     const active = await this.sessionRepository.findActiveByUser(userId);
     if (active.length <= cap) return;
 

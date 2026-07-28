@@ -33,8 +33,8 @@ export class RefreshTokenRepository extends BaseRepository {
    * @param input Owner, session, token hash, expiry, and optional predecessor.
    * @returns The created token row.
    */
-  async create(input: CreateRefreshTokenInput): Promise<RefreshToken> {
-    return this.client.refreshToken.create({
+  async create(input: CreateRefreshTokenInput, tx?: TransactionClient): Promise<RefreshToken> {
+    return (tx ?? this.client).refreshToken.create({
       data: {
         userId: input.userId,
         sessionId: input.sessionId,

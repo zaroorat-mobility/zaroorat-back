@@ -1,5 +1,5 @@
 import { EventPublisher } from '@core/events';
-import { TransactionManager } from '@core/database/TransactionManager';
+import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager';
 import type { UserDevice } from '@core/database/types';
 import { DeviceRepository, type CreateDeviceInput } from '../repositories/device.repository';
 import { authEvent } from '../events';
@@ -37,23 +37,24 @@ export class DeviceService {
    * @param input Owner plus optional client id, platform, and risk signals.
    * @returns The bound device (its `id` is used as the session's `deviceId`).
    */
-  async register(input: CreateDeviceInput): Promise<UserDevice> {
+  async register(input: CreateDeviceInput, tx?: TransactionClient): Promise<UserDevice> {
     if (input.deviceId) {
       const existing = await this.deviceRepository.findByUserAndDevice(
         input.userId,
         input.deviceId,
+        tx,
       );
       if (existing) {
-        await this.deviceRepository.touchLastSeen(existing.id);
+        await this.deviceRepository.touchLastSeen(existing.id, undefined, tx);
         // A revoked device re-registers on re-verification (AUTH-INV-6): clear
         // the revocation so a fresh session may bind to it.
         if (existing.trustState === 'REVOKED') {
-          return this.deviceRepository.updateTrustState(existing.id, 'REGISTERED');
+          return this.deviceRepository.updateTrustState(existing.id, 'REGISTERED', tx);
         }
         return existing;
       }
     }
-    const device = await this.deviceRepository.create(input);
+    const device = await this.deviceRepository.create(input, tx);
     this.sessionMetrics.deviceRegistered({ userId: input.userId });
     return device;
   }
