@@ -11,8 +11,6 @@ enum UserStatus {
   DEACTIVATED
 }
 
-
-
 // Shared by document / bank-account / vehicle-document review workflows.
 enum VerificationStatus {
   PENDING
@@ -386,5 +384,3 @@ enum DeviceTrustState {
   SUSPICIOUS
   REVOKED
 }
-
-

@@ -12,6 +12,7 @@ model Role {
 
   permissions RolePermission[]
   assignments UserRoleAssignment[]
+
   @@map("roles")
 }
 
@@ -23,7 +24,8 @@ model Permission {
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
 
-  roles       RolePermission[]
+  roles RolePermission[]
+
   @@map("permissions")
 }
 
@@ -33,8 +35,9 @@ model RolePermission {
   permissionId String           @map("permission_id") @db.Uuid
   effect       PermissionEffect @default(ALLOW)
 
-  role         Role       @relation(fields: [roleId], references: [id])
-  permission   Permission @relation(fields: [permissionId], references: [id])
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
   @@unique([roleId, permissionId])
   @@index([permissionId])
   @@map("role_permissions")
@@ -46,15 +49,16 @@ model UserRoleAssignment {
   roleId    String    @map("role_id") @db.Uuid
   grantedBy String?   @map("granted_by") @db.Uuid // actor (R-ACCOUNT-7); null = system grant
   grantedAt DateTime  @default(now()) @map("granted_at")
-  revokedAt DateTime? @map("revoked_at")           // revocation is a timestamp, not a row delete
-  expiresAt DateTime? @map("expires_at")           // scoped / temporary roles
+  revokedAt DateTime? @map("revoked_at") // revocation is a timestamp, not a row delete
+  expiresAt DateTime? @map("expires_at") // scoped / temporary roles
 
-  user      User @relation(fields: [userId], references: [id])
-  role      Role @relation(fields: [roleId], references: [id])
-  @@index([userId])
-  @@map("user_roles")
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
   // Active-uniqueness (one live assignment per user+role, re-grant allowed after
   // revoke) is a PARTIAL unique index shipped as raw SQL — see doc 03 §4.
+
+  @@index([userId])
+  @@map("user_roles")
 }
 
 model AdminActivityLog {
@@ -69,8 +73,9 @@ model AdminActivityLog {
   metadata   Json?
   createdAt  DateTime    @default(now()) @map("created_at")
 
-  actor      User?              @relation(fields: [actorId], references: [id])
+  actor        User?              @relation(fields: [actorId], references: [id])
   fieldChanges AuditFieldChange[]
+
   @@index([actorId, createdAt])
   @@index([entityType, entityId])
   @@map("admin_activity_logs")
@@ -83,7 +88,8 @@ model AuditFieldChange {
   oldValue      String? @map("old_value")
   newValue      String? @map("new_value")
 
-  activityLog   AdminActivityLog @relation(fields: [activityLogId], references: [id])
+  activityLog AdminActivityLog @relation(fields: [activityLogId], references: [id])
+
   @@index([activityLogId])
   @@map("audit_field_changes")
 }
@@ -116,7 +122,8 @@ model FeatureFlag {
   createdAt         DateTime          @default(now()) @map("created_at")
   updatedAt         DateTime          @updatedAt @map("updated_at")
 
-  overrides         FeatureFlagOverride[]
+  overrides FeatureFlagOverride[]
+
   @@map("feature_flags")
 }
 
@@ -128,8 +135,9 @@ model FeatureFlagOverride {
   enabled     Boolean
   createdAt   DateTime @default(now()) @map("created_at")
 
-  flag        FeatureFlag @relation(fields: [flagId], references: [id])
-  user        User?       @relation(fields: [userId], references: [id])
+  flag FeatureFlag @relation(fields: [flagId], references: [id])
+  user User?       @relation(fields: [userId], references: [id])
+
   @@index([flagId])
   @@index([userId])
   @@map("feature_flag_overrides")
@@ -145,7 +153,8 @@ model AdminSession {
   expiresAt   DateTime  @map("expires_at")
   revokedAt   DateTime? @map("revoked_at")
 
-  user        User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
   @@index([userId])
   @@map("admin_sessions")
 }
@@ -177,39 +186,40 @@ model IpAllowlistEntry {
   @@map("ip_allowlist")
 }
 
-
 // ============================ SYSTEM ============================
 // Note: geography columns are Unsupported(...); managed for indexing via raw SQL.
 
 model City {
-  id         String    @id @default(uuid(7)) @db.Uuid
-  code       String    @unique
+  id         String                                  @id @default(uuid(7)) @db.Uuid
+  code       String                                  @unique
   name       String
   state      String?
-  country    String    @default("India")
-  timezone   String    @default("Asia/Kolkata")
-  currency   String    @default("INR") @db.Char(3)
+  country    String                                  @default("India")
+  timezone   String                                  @default("Asia/Kolkata")
+  currency   String                                  @default("INR") @db.Char(3)
   center     Unsupported("geography(Point,4326)")?
   boundary   Unsupported("geography(Polygon,4326)")?
-  isActive   Boolean   @default(true) @map("is_active")
-  launchedAt DateTime? @map("launched_at") @db.Date
-  createdAt  DateTime  @default(now()) @map("created_at")
+  isActive   Boolean                                 @default(true) @map("is_active")
+  launchedAt DateTime?                               @map("launched_at") @db.Date
+  createdAt  DateTime                                @default(now()) @map("created_at")
 
-  zones      ServiceZone[]
+  zones ServiceZone[]
+
   @@map("cities")
 }
 
 model ServiceZone {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  cityId    String   @map("city_id") @db.Uuid
+  id        String                                 @id @default(uuid(7)) @db.Uuid
+  cityId    String                                 @map("city_id") @db.Uuid
   code      String
   name      String
-  zoneType  String   @default("SERVICE") @map("zone_type")
+  zoneType  String                                 @default("SERVICE") @map("zone_type")
   boundary  Unsupported("geography(Polygon,4326)")
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
+  isActive  Boolean                                @default(true) @map("is_active")
+  createdAt DateTime                               @default(now()) @map("created_at")
 
-  city      City     @relation(fields: [cityId], references: [id])
+  city City @relation(fields: [cityId], references: [id])
+
   @@index([cityId])
   @@map("service_zones")
 }
@@ -285,6 +295,7 @@ model WebhookEndpoint {
   createdAt  DateTime @default(now()) @map("created_at")
 
   deliveries WebhookDelivery[]
+
   @@map("webhook_endpoints")
 }
 
@@ -301,7 +312,8 @@ model WebhookDelivery {
   createdAt    DateTime              @default(now()) @map("created_at")
   deliveredAt  DateTime?             @map("delivered_at")
 
-  endpoint     WebhookEndpoint       @relation(fields: [endpointId], references: [id])
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id])
+
   @@index([endpointId])
   @@map("webhook_deliveries")
 }
@@ -359,4 +371,3 @@ model DataRetentionPolicy {
 
   @@map("data_retention_policies")
 }
-

@@ -128,6 +128,8 @@ model UserSession {
   userId        String    @map("user_id") @db.Uuid
   deviceId      String?   @map("device_id") @db.Uuid
   ipAddress     String?   @map("ip_address") @db.Inet
+  userAgent     String?   @map("user_agent")                  // login-instance forensics
+  loginMethod   String?   @map("login_method")                // e.g. otp; device/os/app live on user_devices
   createdAt     DateTime  @default(now()) @map("created_at")
   lastSeenAt    DateTime? @map("last_seen_at")
   expiresAt     DateTime  @map("expires_at")
@@ -180,11 +182,18 @@ model OtpVerification {
   attempts    Int        @default(0)
   ipAddress   String?    @map("ip_address") @db.Inet
   deviceId    String?    @map("device_id") @db.Uuid
+  deviceFingerprint String? @map("device_fingerprint")       // fraud metadata (non-secret)
+  userAgent   String?    @map("user_agent")
+  provider    String?                                        // SMS provider that handled delivery
+  providerRef String?    @map("provider_ref")                // gateway message id
+  latencyMs   Int?       @map("latency_ms")                  // delivery latency
+  failureReason String?  @map("failure_reason")              // delivery/verify failure detail
   createdAt   DateTime   @default(now()) @map("created_at")
   verifiedAt  DateTime?  @map("verified_at")
   expiresAt   DateTime   @map("expires_at")
   // REMOVED vs current schema: `otp_hash` (doc 02 §4.5). The hash is Redis-only; this is a
   // purgeable fraud/audit trail (R-AUTH-22/30), NOT a verification store.
+  // Geo enrichment (country/city) is deferred — needs a geo-IP lookup service.
 
   user        User?      @relation(fields: [userId], references: [id])  // optional; null pre-account
 

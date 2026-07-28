@@ -15,6 +15,7 @@ model NotificationTemplate {
 
   notifications Notification[]
   campaigns     NotificationCampaign[]
+
   @@map("notification_templates")
 }
 
@@ -26,7 +27,8 @@ model NotificationPreference {
   enabled   Boolean              @default(true)
   updatedAt DateTime             @updatedAt @map("updated_at")
 
-  user      User                 @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
   @@unique([userId, category, channel])
   @@index([userId])
   @@map("notification_preferences")
@@ -48,11 +50,12 @@ model Notification {
   createdAt     DateTime             @default(now()) @map("created_at")
   readAt        DateTime?            @map("read_at")
 
-  user          User                   @relation(fields: [userId], references: [id])
-  template      NotificationTemplate?  @relation(fields: [templateId], references: [id])
-  deliveries    NotificationDelivery[]
-  inAppMessages InAppMessage[]
+  user               User                   @relation(fields: [userId], references: [id])
+  template           NotificationTemplate?  @relation(fields: [templateId], references: [id])
+  deliveries         NotificationDelivery[]
+  inAppMessages      InAppMessage[]
   campaignRecipients CampaignRecipient[]
+
   @@index([userId, createdAt])
   @@index([status])
   @@index([referenceType, referenceId])
@@ -75,8 +78,9 @@ model NotificationDelivery {
   deliveredAt       DateTime?           @map("delivered_at")
   createdAt         DateTime            @default(now()) @map("created_at")
 
-  notification      Notification        @relation(fields: [notificationId], references: [id])
-  device            UserDevice?         @relation(fields: [deviceId], references: [id])
+  notification Notification @relation(fields: [notificationId], references: [id])
+  device       UserDevice?  @relation(fields: [deviceId], references: [id])
+
   @@index([notificationId])
   @@index([status])
   @@map("notification_deliveries")
@@ -95,8 +99,9 @@ model InAppMessage {
   createdAt      DateTime  @default(now()) @map("created_at")
   expiresAt      DateTime? @map("expires_at")
 
-  user           User          @relation(fields: [userId], references: [id])
-  notification   Notification? @relation(fields: [notificationId], references: [id])
+  user         User          @relation(fields: [userId], references: [id])
+  notification Notification? @relation(fields: [notificationId], references: [id])
+
   @@index([userId, createdAt])
   @@map("in_app_messages")
 }
@@ -115,8 +120,9 @@ model NotificationCampaign {
   createdBy       String?              @map("created_by") @db.Uuid
   createdAt       DateTime             @default(now()) @map("created_at")
 
-  template        NotificationTemplate? @relation(fields: [templateId], references: [id])
-  recipients      CampaignRecipient[]
+  template   NotificationTemplate? @relation(fields: [templateId], references: [id])
+  recipients CampaignRecipient[]
+
   @@index([status, scheduledAt])
   @@map("notification_campaigns")
 }
@@ -129,9 +135,10 @@ model CampaignRecipient {
   status         NotificationStatus @default(PENDING)
   createdAt      DateTime           @default(now()) @map("created_at")
 
-  campaign       NotificationCampaign @relation(fields: [campaignId], references: [id])
-  user           User                 @relation(fields: [userId], references: [id])
-  notification   Notification?        @relation(fields: [notificationId], references: [id])
+  campaign     NotificationCampaign @relation(fields: [campaignId], references: [id])
+  user         User                 @relation(fields: [userId], references: [id])
+  notification Notification?        @relation(fields: [notificationId], references: [id])
+
   @@unique([campaignId, userId])
   @@index([campaignId])
   @@map("campaign_recipients")
@@ -149,5 +156,3 @@ model NotificationProviderLog {
 
   @@map("notification_provider_logs")
 }
-
-

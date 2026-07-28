@@ -1,63 +1,63 @@
 // ============================ IDENTITY ============================
 
 model User {
-  id              String    @id @default(uuid(7)) @db.Uuid
-  phoneNumber     String    @map("phone_number") // E.164 (+91…); active-uniqueness is PARTIAL (doc 03 §4)
-  email           String?   @unique               // reserved (OD-7), nullable
-  passwordHash    String?   @map("password_hash") // reserved (OD-7), nullable
+  id              String     @id @default(uuid(7)) @db.Uuid
+  phoneNumber     String     @map("phone_number") // E.164 (+91…); active-uniqueness is PARTIAL (doc 03 §4)
+  email           String?    @unique // reserved (OD-7), nullable
+  passwordHash    String?    @map("password_hash") // reserved (OD-7), nullable
   status          UserStatus @default(UNVERIFIED)
-  isPhoneVerified Boolean   @default(false) @map("is_phone_verified")
-  isEmailVerified Boolean   @default(false) @map("is_email_verified")
-  lastLoginAt     DateTime? @map("last_login_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
-  deletedAt       DateTime? @map("deleted_at")
+  isPhoneVerified Boolean    @default(false) @map("is_phone_verified")
+  isEmailVerified Boolean    @default(false) @map("is_email_verified")
+  lastLoginAt     DateTime?  @map("last_login_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+  deletedAt       DateTime?  @map("deleted_at")
 
-  profile         UserProfile?
-  devices         UserDevice[]
-  sessions        UserSession[]
-  refreshTokens   RefreshToken[]
-  otpVerifications OtpVerification[]
-  emergencyContacts EmergencyContact[]
-  savedPlaces     SavedPlace[]
-  driver          Driver?
-  customerRides   Ride[]    @relation("CustomerRides")
-  promoRedemptions PromotionRedemption[]
-  paymentMethods  PaymentInstrument[]
-  customerWallet  CustomerWallet?
-  paymentIntents  PaymentIntent[]
-  paymentTransactions PaymentTransaction[]
-  refunds         Refund[]
-  walletTopups    WalletTopup[]
-  cashbackGrants  CashbackGrant[]
-  notifications   Notification[]
+  profile                 UserProfile?
+  devices                 UserDevice[]
+  sessions                UserSession[]
+  refreshTokens           RefreshToken[]
+  otpVerifications        OtpVerification[]
+  emergencyContacts       EmergencyContact[]
+  savedPlaces             SavedPlace[]
+  driver                  Driver?
+  customerRides           Ride[]                   @relation("CustomerRides")
+  promoRedemptions        PromotionRedemption[]
+  paymentMethods          PaymentInstrument[]
+  customerWallet          CustomerWallet?
+  paymentIntents          PaymentIntent[]
+  paymentTransactions     PaymentTransaction[]
+  refunds                 Refund[]
+  walletTopups            WalletTopup[]
+  cashbackGrants          CashbackGrant[]
+  notifications           Notification[]
   notificationPreferences NotificationPreference[]
-  inAppMessages   InAppMessage[]
-  campaignRecipients CampaignRecipient[]
-  chatParticipants ChatParticipant[]
-  chatMessages    ChatMessage[]
-  chatReadReceipts ChatReadReceipt[]
-  chatBlocksMade  ChatBlock[] @relation("Blocker")
-  chatBlocksReceived ChatBlock[] @relation("Blocked")
-  chatReportsMade ChatReport[] @relation("Reporter")
-  chatReportsReceived ChatReport[] @relation("Reported")
+  inAppMessages           InAppMessage[]
+  campaignRecipients      CampaignRecipient[]
+  chatParticipants        ChatParticipant[]
+  chatMessages            ChatMessage[]
+  chatReadReceipts        ChatReadReceipt[]
+  chatBlocksMade          ChatBlock[]              @relation("Blocker")
+  chatBlocksReceived      ChatBlock[]              @relation("Blocked")
+  chatReportsMade         ChatReport[]             @relation("Reporter")
+  chatReportsReceived     ChatReport[]             @relation("Reported")
   customerRatingAggregate CustomerRatingAggregate?
-  reviewFlagsRaised    ReviewFlag[] @relation("FlaggedBy")
-  reviewFlagsModerated ReviewFlag[] @relation("Moderator")
-  reviewResponses      ReviewResponse[]
-  supportTickets       SupportTicket[]
-  supportAgent         SupportAgent?
-  ticketMessages       SupportTicketMessage[]
-  referralCodes        ReferralCode[]
-  referralsMade        Referral[] @relation("Referrer")
-  referralsReceived    Referral[] @relation("Referee")
-  referralRewards      ReferralReward[]
-  referralFraudReviews ReferralFraudFlag[]
-  assignedCoupons      Coupon[]
-  roleAssignments      UserRoleAssignment[]
-  adminActivityLogs    AdminActivityLog[]
-  featureFlagOverrides FeatureFlagOverride[]
-  adminSessions        AdminSession[]
+  reviewFlagsRaised       ReviewFlag[]             @relation("FlaggedBy")
+  reviewFlagsModerated    ReviewFlag[]             @relation("Moderator")
+  reviewResponses         ReviewResponse[]
+  supportTickets          SupportTicket[]
+  supportAgent            SupportAgent?
+  ticketMessages          SupportTicketMessage[]
+  referralCodes           ReferralCode[]
+  referralsMade           Referral[]               @relation("Referrer")
+  referralsReceived       Referral[]               @relation("Referee")
+  referralRewards         ReferralReward[]
+  referralFraudReviews    ReferralFraudFlag[]
+  assignedCoupons         Coupon[]
+  roleAssignments         UserRoleAssignment[]
+  adminActivityLogs       AdminActivityLog[]
+  featureFlagOverrides    FeatureFlagOverride[]
+  adminSessions           AdminSession[]
 
   @@index([status])
   @@map("users")
@@ -76,24 +76,25 @@ model UserProfile {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  user         User      @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
   @@map("user_profiles")
 }
 
 model UserDevice {
-  id           String            @id @default(uuid(7)) @db.Uuid
-  userId       String            @map("user_id") @db.Uuid
-  deviceId     String?           @map("device_id") // client-reported stable id
+  id           String           @id @default(uuid(7)) @db.Uuid
+  userId       String           @map("user_id") @db.Uuid
+  deviceId     String?          @map("device_id") // client-reported stable id
   platform     AppPlatform?
-  trustState   DeviceTrustState  @default(REGISTERED) @map("trust_state")
-  fingerprint  String?           @map("device_fingerprint")
-  isRooted     Boolean           @default(false) @map("is_rooted")
-  isJailbroken Boolean           @default(false) @map("is_jailbroken")
-  fcmToken     String?           @map("fcm_token")
-  appVersion   String?           @map("app_version")
-  osVersion    String?           @map("os_version")
-  lastSeenAt   DateTime?         @map("last_seen_at")
-  createdAt    DateTime          @default(now()) @map("created_at")
+  trustState   DeviceTrustState @default(REGISTERED) @map("trust_state")
+  fingerprint  String?          @map("device_fingerprint")
+  isRooted     Boolean          @default(false) @map("is_rooted")
+  isJailbroken Boolean          @default(false) @map("is_jailbroken")
+  fcmToken     String?          @map("fcm_token")
+  appVersion   String?          @map("app_version")
+  osVersion    String?          @map("os_version")
+  lastSeenAt   DateTime?        @map("last_seen_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
 
   user       User                   @relation(fields: [userId], references: [id])
   sessions   UserSession[]
@@ -104,38 +105,35 @@ model UserDevice {
   @@map("user_devices")
 }
 
-
-
-
 model EmergencyContact {
-  id          String   @id @default(uuid(7)) @db.Uuid
-  userId      String   @map("user_id") @db.Uuid
-  contactName String   @map("contact_name")
-  phoneNumber String   @map("phone_number")
+  id           String   @id @default(uuid(7)) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  contactName  String   @map("contact_name")
+  phoneNumber  String   @map("phone_number")
   relationship String?
-  priority    Int      @default(1)
-  createdAt   DateTime @default(now()) @map("created_at")
+  priority     Int      @default(1)
+  createdAt    DateTime @default(now()) @map("created_at")
 
-  user        User     @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
   @@map("emergency_contacts")
 }
 
 model SavedPlace {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  label     String
-  address   String?
-  buildingName String? @map("building_name")
-  landmark  String?
-  floor     String?
+  id           String                                @id @default(uuid(7)) @db.Uuid
+  userId       String                                @map("user_id") @db.Uuid
+  label        String
+  address      String?
+  buildingName String?                               @map("building_name")
+  landmark     String?
+  floor        String?
   instructions String?
-  latitude  Decimal? @db.Decimal(10, 7)
-  longitude Decimal? @db.Decimal(10, 7)
-  location  Unsupported("geography(Point,4326)")?
-  createdAt DateTime @default(now()) @map("created_at")
+  latitude     Decimal?                              @db.Decimal(10, 7)
+  longitude    Decimal?                              @db.Decimal(10, 7)
+  location     Unsupported("geography(Point,4326)")?
+  createdAt    DateTime                              @default(now()) @map("created_at")
 
-  user      User     @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
   @@map("saved_places")
 }
-
-

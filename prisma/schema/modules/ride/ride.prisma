@@ -1,33 +1,33 @@
 // ============================ RIDE ============================
 
 model RideRequest {
-  id                   String    @id @default(uuid(7)) @db.Uuid
-  customerId           String    @map("customer_id") @db.Uuid
-  vehicleTypeId        String    @map("vehicle_type_id") @db.Uuid
-  pickupLat            Decimal   @map("pickup_lat") @db.Decimal(10, 7)
-  pickupLng            Decimal   @map("pickup_lng") @db.Decimal(10, 7)
-  pickupLocation       Unsupported("geography(Point,4326)") @map("pickup_location")
-  pickupAddress        String?   @map("pickup_address")
-  dropLat              Decimal?  @map("drop_lat") @db.Decimal(10, 7)
-  dropLng              Decimal?  @map("drop_lng") @db.Decimal(10, 7)
+  id                   String                                @id @default(uuid(7)) @db.Uuid
+  customerId           String                                @map("customer_id") @db.Uuid
+  vehicleTypeId        String                                @map("vehicle_type_id") @db.Uuid
+  pickupLat            Decimal                               @map("pickup_lat") @db.Decimal(10, 7)
+  pickupLng            Decimal                               @map("pickup_lng") @db.Decimal(10, 7)
+  pickupLocation       Unsupported("geography(Point,4326)")  @map("pickup_location")
+  pickupAddress        String?                               @map("pickup_address")
+  dropLat              Decimal?                              @map("drop_lat") @db.Decimal(10, 7)
+  dropLng              Decimal?                              @map("drop_lng") @db.Decimal(10, 7)
   dropLocation         Unsupported("geography(Point,4326)")? @map("drop_location")
-  dropAddress          String?   @map("drop_address")
-  estimatedDistanceKm  Decimal?  @map("estimated_distance_km") @db.Decimal(8, 2)
-  estimatedDurationMin Int?      @map("estimated_duration_min")
-  quotedFare           Decimal?  @map("quoted_fare") @db.Decimal(10, 2)
-  surgeMultiplier      Decimal   @default(1.0) @map("surge_multiplier") @db.Decimal(4, 2)
-  paymentMethod        String?   @map("payment_method")
-  promoCode            String?   @map("promo_code")
-  scheduledFor         DateTime? @map("scheduled_for")
-  status               RideRequestStatus @default(CREATED)
-  rideId               String?   @map("ride_id") @db.Uuid
-  createdAt            DateTime  @default(now()) @map("created_at")
-  expiresAt            DateTime? @map("expires_at")
+  dropAddress          String?                               @map("drop_address")
+  estimatedDistanceKm  Decimal?                              @map("estimated_distance_km") @db.Decimal(8, 2)
+  estimatedDurationMin Int?                                  @map("estimated_duration_min")
+  quotedFare           Decimal?                              @map("quoted_fare") @db.Decimal(10, 2)
+  surgeMultiplier      Decimal                               @default(1.0) @map("surge_multiplier") @db.Decimal(4, 2)
+  paymentMethod        String?                               @map("payment_method")
+  promoCode            String?                               @map("promo_code")
+  scheduledFor         DateTime?                             @map("scheduled_for")
+  status               RideRequestStatus                     @default(CREATED)
+  rideId               String?                               @map("ride_id") @db.Uuid
+  createdAt            DateTime                              @default(now()) @map("created_at")
+  expiresAt            DateTime?                             @map("expires_at")
 
-  vehicleType          VehicleType @relation(fields: [vehicleTypeId], references: [id])
-  dispatches           RideDispatch[]
-  rides                Ride[]
-  scheduledRides       ScheduledRide[]
+  vehicleType    VehicleType     @relation(fields: [vehicleTypeId], references: [id])
+  dispatches     RideDispatch[]
+  rides          Ride[]
+  scheduledRides ScheduledRide[]
 
   @@index([customerId])
   @@index([status])
@@ -35,22 +35,22 @@ model RideRequest {
 }
 
 model RideDispatch {
-  id               String    @id @default(uuid(7)) @db.Uuid
-  requestId        String    @map("request_id") @db.Uuid
-  driverId         String    @map("driver_id") @db.Uuid
-  vehicleId        String?   @map("vehicle_id") @db.Uuid
-  offeredAt        DateTime  @default(now()) @map("offered_at")
-  respondedAt      DateTime? @map("responded_at")
+  id               String           @id @default(uuid(7)) @db.Uuid
+  requestId        String           @map("request_id") @db.Uuid
+  driverId         String           @map("driver_id") @db.Uuid
+  vehicleId        String?          @map("vehicle_id") @db.Uuid
+  offeredAt        DateTime         @default(now()) @map("offered_at")
+  respondedAt      DateTime?        @map("responded_at")
   response         DispatchResponse @default(PENDING)
-  rejectReason     String?   @map("reject_reason")
-  driverDistanceM  Int?      @map("driver_distance_m")
-  driverEtaSeconds Int?      @map("driver_eta_seconds")
-  dispatchRound    Int       @default(1) @map("dispatch_round") @db.SmallInt
-  expiresAt        DateTime? @map("expires_at")
+  rejectReason     String?          @map("reject_reason")
+  driverDistanceM  Int?             @map("driver_distance_m")
+  driverEtaSeconds Int?             @map("driver_eta_seconds")
+  dispatchRound    Int              @default(1) @map("dispatch_round") @db.SmallInt
+  expiresAt        DateTime?        @map("expires_at")
 
-  request          RideRequest @relation(fields: [requestId], references: [id])
-  driver           Driver      @relation(fields: [driverId], references: [id])
-  vehicle          Vehicle?    @relation(fields: [vehicleId], references: [id])
+  request RideRequest @relation(fields: [requestId], references: [id])
+  driver  Driver      @relation(fields: [driverId], references: [id])
+  vehicle Vehicle?    @relation(fields: [vehicleId], references: [id])
 
   @@unique([requestId, driverId])
   @@index([driverId])
@@ -59,61 +59,61 @@ model RideDispatch {
 }
 
 model Ride {
-  id                String    @id @default(uuid(7)) @db.Uuid
-  rideCode          String    @unique @map("ride_code")
-  requestId         String    @map("request_id") @db.Uuid
-  customerId        String    @map("customer_id") @db.Uuid
-  driverId          String    @map("driver_id") @db.Uuid
-  vehicleId         String    @map("vehicle_id") @db.Uuid
-  vehicleTypeId     String    @map("vehicle_type_id") @db.Uuid
-  status            RideStatus    @default(ACCEPTED)
-  paymentMethod     PaymentMethod @map("payment_method")
-  paymentStatus     PaymentStatus @default(PENDING) @map("payment_status")
-  pickupLocation    Unsupported("geography(Point,4326)") @map("pickup_location")
-  pickupAddress     String?   @map("pickup_address")
+  id                String                                @id @default(uuid(7)) @db.Uuid
+  rideCode          String                                @unique @map("ride_code")
+  requestId         String                                @map("request_id") @db.Uuid
+  customerId        String                                @map("customer_id") @db.Uuid
+  driverId          String                                @map("driver_id") @db.Uuid
+  vehicleId         String                                @map("vehicle_id") @db.Uuid
+  vehicleTypeId     String                                @map("vehicle_type_id") @db.Uuid
+  status            RideStatus                            @default(ACCEPTED)
+  paymentMethod     PaymentMethod                         @map("payment_method")
+  paymentStatus     PaymentStatus                         @default(PENDING) @map("payment_status")
+  pickupLocation    Unsupported("geography(Point,4326)")  @map("pickup_location")
+  pickupAddress     String?                               @map("pickup_address")
   dropLocation      Unsupported("geography(Point,4326)")? @map("drop_location")
-  dropAddress       String?   @map("drop_address")
-  acceptedAt        DateTime  @default(now()) @map("accepted_at")
-  arrivedAt         DateTime? @map("arrived_at")
-  startedAt         DateTime? @map("started_at")
-  completedAt       DateTime? @map("completed_at")
-  cancelledAt       DateTime? @map("cancelled_at")
-  actualDistanceKm  Decimal?  @map("actual_distance_km") @db.Decimal(8, 2)
-  actualDurationMin Int?      @map("actual_duration_min")
-  waitTimeMin       Int       @default(0) @map("wait_time_min")
-  isScheduled       Boolean   @default(false) @map("is_scheduled")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  dropAddress       String?                               @map("drop_address")
+  acceptedAt        DateTime                              @default(now()) @map("accepted_at")
+  arrivedAt         DateTime?                             @map("arrived_at")
+  startedAt         DateTime?                             @map("started_at")
+  completedAt       DateTime?                             @map("completed_at")
+  cancelledAt       DateTime?                             @map("cancelled_at")
+  actualDistanceKm  Decimal?                              @map("actual_distance_km") @db.Decimal(8, 2)
+  actualDurationMin Int?                                  @map("actual_duration_min")
+  waitTimeMin       Int                                   @default(0) @map("wait_time_min")
+  isScheduled       Boolean                               @default(false) @map("is_scheduled")
+  createdAt         DateTime                              @default(now()) @map("created_at")
+  updatedAt         DateTime                              @updatedAt @map("updated_at")
 
-  request           RideRequest @relation(fields: [requestId], references: [id])
-  customer          User        @relation("CustomerRides", fields: [customerId], references: [id])
-  driver            Driver      @relation(fields: [driverId], references: [id])
-  vehicle           Vehicle     @relation(fields: [vehicleId], references: [id])
-  vehicleType       VehicleType @relation(fields: [vehicleTypeId], references: [id])
+  request     RideRequest @relation(fields: [requestId], references: [id])
+  customer    User        @relation("CustomerRides", fields: [customerId], references: [id])
+  driver      Driver      @relation(fields: [driverId], references: [id])
+  vehicle     Vehicle     @relation(fields: [vehicleId], references: [id])
+  vehicleType VehicleType @relation(fields: [vehicleTypeId], references: [id])
 
-  stops             RideStop[]
-  statusEvents      RideStatusEvent[]
-  fare              RideFare?
-  fareLines         RideFareLine[]
-  cancellation      RideCancellation?
-  otps              RideOtp[]
-  receipt           RideReceipt?
-  payments          RidePayment[]
-  ratings           RideRating[]
-  promosApplied     RidePromoApplied[]
-  routePlan         RideRoutePlan?
-  waitEvents        RideWaitEvent[]
-  disputes          RideDispute[]
-  promoRedemptions  PromotionRedemption[]
-  paymentIntents    PaymentIntent[]
+  stops               RideStop[]
+  statusEvents        RideStatusEvent[]
+  fare                RideFare?
+  fareLines           RideFareLine[]
+  cancellation        RideCancellation?
+  otps                RideOtp[]
+  receipt             RideReceipt?
+  payments            RidePayment[]
+  ratings             RideRating[]
+  promosApplied       RidePromoApplied[]
+  routePlan           RideRoutePlan?
+  waitEvents          RideWaitEvent[]
+  disputes            RideDispute[]
+  promoRedemptions    PromotionRedemption[]
+  paymentIntents      PaymentIntent[]
   paymentTransactions PaymentTransaction[]
-  refunds           Refund[]
-  chargebacks       Chargeback[]
-  payoutItems       PayoutItem[]
-  cashbackGrants    CashbackGrant[]
-  chatConversations ChatConversation[]
-  supportTickets    SupportTicket[]
-  redeemedCoupons   Coupon[]
+  refunds             Refund[]
+  chargebacks         Chargeback[]
+  payoutItems         PayoutItem[]
+  cashbackGrants      CashbackGrant[]
+  chatConversations   ChatConversation[]
+  supportTickets      SupportTicket[]
+  redeemedCoupons     Coupon[]
 
   @@index([customerId])
   @@index([driverId])
@@ -123,32 +123,34 @@ model Ride {
 }
 
 model RideStop {
-  id         String    @id @default(uuid(7)) @db.Uuid
-  rideId     String    @map("ride_id") @db.Uuid
-  sequence   Int       @db.SmallInt
-  stopType   String    @map("stop_type")
+  id         String                               @id @default(uuid(7)) @db.Uuid
+  rideId     String                               @map("ride_id") @db.Uuid
+  sequence   Int                                  @db.SmallInt
+  stopType   String                               @map("stop_type")
   location   Unsupported("geography(Point,4326)")
   address    String?
-  arrivedAt  DateTime? @map("arrived_at")
-  departedAt DateTime? @map("departed_at")
+  arrivedAt  DateTime?                            @map("arrived_at")
+  departedAt DateTime?                            @map("departed_at")
 
-  ride       Ride      @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@unique([rideId, sequence])
   @@map("ride_stops")
 }
 
 model RideStatusEvent {
-  id         String   @id @default(uuid(7)) @db.Uuid
-  rideId     String   @map("ride_id") @db.Uuid
-  fromStatus String?  @map("from_status")
-  toStatus   String   @map("to_status")
-  actorType  String?  @map("actor_type")
-  actorId    String?  @map("actor_id") @db.Uuid
+  id         String                                @id @default(uuid(7)) @db.Uuid
+  rideId     String                                @map("ride_id") @db.Uuid
+  fromStatus String?                               @map("from_status")
+  toStatus   String                                @map("to_status")
+  actorType  String?                               @map("actor_type")
+  actorId    String?                               @map("actor_id") @db.Uuid
   reason     String?
   location   Unsupported("geography(Point,4326)")?
-  createdAt  DateTime @default(now()) @map("created_at")
+  createdAt  DateTime                              @default(now()) @map("created_at")
 
-  ride       Ride     @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@index([rideId, createdAt])
   @@map("ride_status_events")
 }
@@ -176,7 +178,8 @@ model RideFare {
   platformCommission Decimal  @map("platform_commission") @db.Decimal(10, 2)
   createdAt          DateTime @default(now()) @map("created_at")
 
-  ride               Ride     @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@map("ride_fares")
 }
 
@@ -188,7 +191,8 @@ model RideFareLine {
   amount   Decimal @db.Decimal(10, 2)
   sequence Int?    @db.SmallInt
 
-  ride     Ride    @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@index([rideId])
   @@map("ride_fare_lines")
 }
@@ -205,7 +209,8 @@ model RideCancellation {
   feeCharged        Boolean  @default(false) @map("fee_charged")
   createdAt         DateTime @default(now()) @map("created_at")
 
-  ride              Ride     @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@map("ride_cancellations")
 }
 
@@ -220,7 +225,8 @@ model RideOtp {
   expiresAt  DateTime  @map("expires_at")
   createdAt  DateTime  @default(now()) @map("created_at")
 
-  ride       Ride      @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@index([rideId])
   @@map("ride_otps")
 }
@@ -233,7 +239,8 @@ model RideReceipt {
   pdfUrl        String?  @map("pdf_url")
   issuedAt      DateTime @default(now()) @map("issued_at")
 
-  ride          Ride     @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@map("ride_receipts")
 }
 
@@ -247,7 +254,8 @@ model RidePayment {
   settledAt DateTime? @map("settled_at")
   createdAt DateTime  @default(now()) @map("created_at")
 
-  ride      Ride      @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@index([rideId])
   @@map("ride_payments")
 }
@@ -261,10 +269,11 @@ model RideRating {
   comment   String?
   createdAt DateTime @default(now()) @map("created_at")
 
-  ride      Ride     @relation(fields: [rideId], references: [id])
+  ride           Ride                  @relation(fields: [rideId], references: [id])
   tagAssignments ReviewTagAssignment[]
-  flags     ReviewFlag[]
-  response  ReviewResponse?
+  flags          ReviewFlag[]
+  response       ReviewResponse?
+
   @@unique([rideId, ratedBy])
   @@map("ride_ratings")
 }
@@ -277,7 +286,8 @@ model RidePromoApplied {
   discountAmount Decimal  @map("discount_amount") @db.Decimal(10, 2)
   createdAt      DateTime @default(now()) @map("created_at")
 
-  ride           Ride     @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@index([rideId])
   @@map("ride_promos_applied")
 }
@@ -292,7 +302,8 @@ model ScheduledRide {
   rideId         String?   @map("ride_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at")
 
-  request        RideRequest @relation(fields: [requestId], references: [id])
+  request RideRequest @relation(fields: [requestId], references: [id])
+
   @@index([scheduledFor])
   @@map("scheduled_rides")
 }
@@ -305,7 +316,8 @@ model RideRoutePlan {
   plannedDurationMin Int?     @map("planned_duration_min")
   createdAt          DateTime @default(now()) @map("created_at")
 
-  ride               Ride     @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@map("ride_route_plan")
 }
 
@@ -317,7 +329,8 @@ model RideWaitEvent {
   billedMinutes Int       @default(0) @map("billed_minutes")
   charge        Decimal   @default(0) @db.Decimal(10, 2)
 
-  ride          Ride      @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@index([rideId])
   @@map("ride_wait_events")
 }
@@ -334,10 +347,9 @@ model RideDispute {
   createdAt    DateTime  @default(now()) @map("created_at")
   resolvedAt   DateTime? @map("resolved_at")
 
-  ride         Ride      @relation(fields: [rideId], references: [id])
+  ride Ride @relation(fields: [rideId], references: [id])
+
   @@index([rideId])
   @@index([status])
   @@map("ride_disputes")
 }
-
-

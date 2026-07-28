@@ -15,8 +15,9 @@ model PaymentInstrument {
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  user         User     @relation(fields: [userId], references: [id])
-  intents      PaymentIntent[]
+  user    User            @relation(fields: [userId], references: [id])
+  intents PaymentIntent[]
+
   @@index([userId])
   @@map("payment_methods")
 }
@@ -31,9 +32,10 @@ model CustomerWallet {
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
-  user              User      @relation(fields: [userId], references: [id])
-  transactions      CustomerWalletTransaction[]
-  topups            WalletTopup[]
+  user         User                        @relation(fields: [userId], references: [id])
+  transactions CustomerWalletTransaction[]
+  topups       WalletTopup[]
+
   @@map("customer_wallets")
 }
 
@@ -49,7 +51,8 @@ model CustomerWalletTransaction {
   description   String?
   createdAt     DateTime @default(now()) @map("created_at")
 
-  wallet        CustomerWallet @relation(fields: [walletId], references: [id])
+  wallet CustomerWallet @relation(fields: [walletId], references: [id])
+
   @@index([walletId, createdAt])
   @@map("customer_wallet_transactions")
 }
@@ -69,10 +72,11 @@ model PaymentIntent {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  ride            Ride?          @relation(fields: [rideId], references: [id])
-  user            User           @relation(fields: [userId], references: [id])
-  paymentMethod   PaymentInstrument? @relation(fields: [paymentMethodId], references: [id])
-  transactions    PaymentTransaction[]
+  ride          Ride?                @relation(fields: [rideId], references: [id])
+  user          User                 @relation(fields: [userId], references: [id])
+  paymentMethod PaymentInstrument?   @relation(fields: [paymentMethodId], references: [id])
+  transactions  PaymentTransaction[]
+
   @@index([rideId])
   @@index([userId])
   @@map("payment_intents")
@@ -94,11 +98,12 @@ model PaymentTransaction {
   errorMessage String?  @map("error_message")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  intent       PaymentIntent @relation(fields: [intentId], references: [id])
-  ride         Ride?         @relation(fields: [rideId], references: [id])
-  user         User          @relation(fields: [userId], references: [id])
-  refunds      Refund[]
-  chargebacks  Chargeback[]
+  intent      PaymentIntent @relation(fields: [intentId], references: [id])
+  ride        Ride?         @relation(fields: [rideId], references: [id])
+  user        User          @relation(fields: [userId], references: [id])
+  refunds     Refund[]
+  chargebacks Chargeback[]
+
   @@index([intentId])
   @@index([rideId])
   @@map("payment_transactions")
@@ -132,9 +137,10 @@ model Refund {
   createdAt       DateTime  @default(now()) @map("created_at")
   completedAt     DateTime? @map("completed_at")
 
-  transaction     PaymentTransaction @relation(fields: [transactionId], references: [id])
-  ride            Ride?              @relation(fields: [rideId], references: [id])
-  user            User               @relation(fields: [userId], references: [id])
+  transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
+  ride        Ride?              @relation(fields: [rideId], references: [id])
+  user        User               @relation(fields: [userId], references: [id])
+
   @@index([transactionId])
   @@map("refunds")
 }
@@ -144,7 +150,7 @@ model PaymentLedgerEntry {
   entryGroup    String   @map("entry_group") @db.Uuid
   account       String
   accountRefId  String?  @map("account_ref_id") @db.Uuid
-  direction     String   // DEBIT | CREDIT
+  direction     String // DEBIT | CREDIT
   amount        Decimal  @db.Decimal(12, 2)
   currency      String   @default("INR") @db.Char(3)
   referenceType String?  @map("reference_type")
@@ -169,8 +175,9 @@ model DriverSettlement {
   status        String   @default("PENDING")
   createdAt     DateTime @default(now()) @map("created_at")
 
-  driver        Driver   @relation(fields: [driverId], references: [id])
-  payouts       DriverPayout[]
+  driver  Driver         @relation(fields: [driverId], references: [id])
+  payouts DriverPayout[]
+
   @@unique([driverId, periodStart, periodEnd])
   @@map("driver_settlements")
 }
@@ -189,10 +196,11 @@ model DriverPayout {
   initiatedAt     DateTime  @default(now()) @map("initiated_at")
   completedAt     DateTime? @map("completed_at")
 
-  driver          Driver             @relation(fields: [driverId], references: [id])
-  settlement      DriverSettlement?  @relation(fields: [settlementId], references: [id])
-  bankAccount     DriverBankAccount? @relation(fields: [bankAccountId], references: [id])
-  items           PayoutItem[]
+  driver      Driver             @relation(fields: [driverId], references: [id])
+  settlement  DriverSettlement?  @relation(fields: [settlementId], references: [id])
+  bankAccount DriverBankAccount? @relation(fields: [bankAccountId], references: [id])
+  items       PayoutItem[]
+
   @@index([driverId])
   @@map("driver_payouts")
 }
@@ -205,29 +213,29 @@ model PayoutItem {
   amount    Decimal  @db.Decimal(10, 2)
   createdAt DateTime @default(now()) @map("created_at")
 
-  payout    DriverPayout @relation(fields: [payoutId], references: [id])
-  ride      Ride?        @relation(fields: [rideId], references: [id])
+  payout DriverPayout @relation(fields: [payoutId], references: [id])
+  ride   Ride?        @relation(fields: [rideId], references: [id])
+
   @@index([payoutId])
   @@map("payout_items")
 }
 
 model Chargeback {
-  id             String    @id @default(uuid(7)) @db.Uuid
-  transactionId  String    @map("transaction_id") @db.Uuid
-  rideId         String?   @map("ride_id") @db.Uuid
-  amount         Decimal   @db.Decimal(10, 2)
-  reasonCode     String?   @map("reason_code")
-  status         String    @default("OPEN")
-  gatewayCaseId  String?   @map("gateway_case_id")
-  evidenceDueAt  DateTime? @map("evidence_due_at")
-  resolvedAt     DateTime? @map("resolved_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
+  id            String    @id @default(uuid(7)) @db.Uuid
+  transactionId String    @map("transaction_id") @db.Uuid
+  rideId        String?   @map("ride_id") @db.Uuid
+  amount        Decimal   @db.Decimal(10, 2)
+  reasonCode    String?   @map("reason_code")
+  status        String    @default("OPEN")
+  gatewayCaseId String?   @map("gateway_case_id")
+  evidenceDueAt DateTime? @map("evidence_due_at")
+  resolvedAt    DateTime? @map("resolved_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
-  transaction    PaymentTransaction @relation(fields: [transactionId], references: [id])
-  ride           Ride?              @relation(fields: [rideId], references: [id])
+  transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
+  ride        Ride?              @relation(fields: [rideId], references: [id])
+
   @@index([transactionId])
   @@index([status])
   @@map("chargebacks")
 }
-
-

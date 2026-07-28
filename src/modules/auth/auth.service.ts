@@ -1,0 +1,351 @@
+import { RedisService } from '@core/cache';
+import { EventPublisher } from '@core/events';
+import { TransactionManager } from '@core/database';
+import type { AppPlatform, User, UserSession } from '@core/database/types';
+import type { JwtConfig } from '@config/jwt/jwt.config';
+import type { SessionConfig } from '@config/session/session.config';
+import { UserRepository } from './repositories/user.repository';
+import { RoleRepository } from './repositories/role.repository';
+import { OtpService, type SendOtpResult } from './otp';
+import { TokenService, type TokenPair } from './services';
+import { SessionService } from './session';
+import { DeviceService } from './session/device.service';
+import { AccountSuspendedError } from './errors';
+import { authEvent } from './events';
+
+/** The OTP purpose for the unified phone login-or-register flow. */
+const AUTH_OTP_PURPOSE = 'LOGIN' as const;
+/** Idempotency retention for verify/refresh responses (auth doc 04 §5). */
+const IDEMPOTENCY_TTL_SECONDS = 86_400;
+/** Canonical role granted to every new account. */
+const DEFAULT_ROLE_SLUG = 'customer';
+
+/** Device details captured at login for binding and trust. */
+export interface DeviceContext {
+  deviceId?: string | null;
+  platform?: AppPlatform | null;
+  fingerprint?: string | null;
+  isRooted?: boolean;
+  isJailbroken?: boolean;
+  fcmToken?: string | null;
+  appVersion?: string | null;
+  osVersion?: string | null;
+}
+
+/** Inputs to request an OTP. */
+export interface SendOtpInput {
+  phoneNumber: string;
+  deviceId?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+  deviceFingerprint?: string | null;
+}
+
+/** Inputs to verify an OTP and log in / register. */
+export interface VerifyOtpInput {
+  phoneNumber: string;
+  code: string;
+  challengeId?: string;
+  device?: DeviceContext;
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
+/** Login result: the token pair plus the resolved account snapshot. */
+export interface AuthLoginResult extends TokenPair {
+  user: { id: string; status: string; roles: string[]; isNew: boolean };
+}
+
+/**
+ * Top-level authentication orchestrator (auth doc 04).
+ *
+ * Composes the OTP, token, session, and device modules into the public flows.
+ * It owns no low-level mechanics — it sequences them and enforces the
+ * cross-cutting rules (account lifecycle, role-based session caps, idempotent
+ * verify/refresh). Verification and account creation are self-healing: a retried
+ * verify replays via the idempotency key, and a missing default role is
+ * re-granted on next login.
+ */
+export class AuthService {
+  /**
+   * @param otpService OTP send/verify.
+   * @param userRepository Identity persistence.
+   * @param roleRepository RBAC membership.
+   * @param deviceService Device binding/trust.
+   * @param sessionService Session lifecycle.
+   * @param tokenService Access/refresh issuance and rotation.
+   * @param redisService Idempotency store.
+   * @param jwtConfig Refresh TTL (session lifetime).
+   * @param sessionConfig Concurrency caps.
+   */
+  constructor(
+    private readonly otpService: OtpService,
+    private readonly userRepository: UserRepository,
+    private readonly roleRepository: RoleRepository,
+    private readonly deviceService: DeviceService,
+    private readonly sessionService: SessionService,
+    private readonly tokenService: TokenService,
+    private readonly redisService: RedisService,
+    private readonly eventPublisher: EventPublisher,
+    private readonly transactionManager: TransactionManager,
+    private readonly jwtConfig: JwtConfig,
+    private readonly sessionConfig: SessionConfig,
+  ) {}
+
+  /**
+   * Request an OTP (uniform response — never reveals account existence).
+   * @param input Phone plus optional device/ip forensics.
+   * @returns The challenge response.
+   */
+  async sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
+    return this.otpService.send({
+      phoneNumber: input.phoneNumber,
+      purpose: AUTH_OTP_PURPOSE,
+      ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
+      ...(input.ip != null ? { ip: input.ip } : {}),
+      ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+      ...(input.deviceFingerprint != null ? { deviceFingerprint: input.deviceFingerprint } : {}),
+    });
+  }
+
+  /**
+   * Verify an OTP, then log in (or register on first verify) and issue tokens.
+   * Idempotent under retry via the optional idempotency key.
+   * @param input Phone, code, and optional device/ip/challenge.
+   * @param idempotencyKey Client key that replays the stored result on retry.
+   * @returns The token pair plus the account snapshot.
+   * @throws {OtpInvalidError|OtpExpiredError|OtpLockedError} OTP failures.
+   * @throws {AccountSuspendedError} When the resolved account is suspended.
+   */
+  async verifyOtp(input: VerifyOtpInput, idempotencyKey?: string): Promise<AuthLoginResult> {
+    if (idempotencyKey) {
+      const cached = await this.redisService.idempotency.get<AuthLoginResult>(idempotencyKey);
+      if (cached) return cached;
+    }
+
+    await this.otpService.verify({
+      phoneNumber: input.phoneNumber,
+      purpose: AUTH_OTP_PURPOSE,
+      code: input.code,
+      ...(input.challengeId ? { challengeId: input.challengeId } : {}),
+    });
+
+    const { user, isNew } = await this.resolveAccount(input.phoneNumber);
+    if (user.status === 'SUSPENDED') throw new AccountSuspendedError();
+
+    const device = await this.deviceService.register({ userId: user.id, ...input.device });
+    const roles = await this.roleRepository.findActiveRoleSlugs(user.id);
+
+    const session = await this.sessionService.create({
+      userId: user.id,
+      deviceId: device.id,
+      loginMethod: 'otp',
+      expiresAt: new Date(Date.now() + this.jwtConfig.refreshTtlSeconds * 1000),
+      maxConcurrentSessions: this.capForRoles(roles),
+      ...(input.ip != null ? { ipAddress: input.ip } : {}),
+      ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+    });
+
+    await this.userRepository.updateLastLoginAt(user.id, new Date());
+    const pair = await this.tokenService.issuePair({
+      userId: user.id,
+      sessionId: session.id,
+      roles,
+    });
+
+    // Durable events (at-least-once via the outbox).
+    await this.eventPublisher.publish(
+      authEvent('auth.otp.verified', {
+        subjectUserId: user.id,
+        data: {
+          userId: user.id,
+          phoneNumber: input.phoneNumber,
+          purpose: 'LOGIN',
+          isNewAccount: isNew,
+        },
+      }),
+    );
+    await this.eventPublisher.publish(
+      authEvent('auth.login.succeeded', {
+        subjectUserId: user.id,
+        sessionId: session.id,
+        data: { userId: user.id, sessionId: session.id, deviceId: device.id, isNewAccount: isNew },
+      }),
+    );
+    await this.eventPublisher.publish(
+      authEvent('auth.session.created', {
+        aggregateId: session.id,
+        subjectUserId: user.id,
+        sessionId: session.id,
+        data: {
+          userId: user.id,
+          sessionId: session.id,
+          deviceId: device.id,
+          expiresAt: session.expiresAt.toISOString(),
+        },
+      }),
+    );
+    if (isNew) {
+      await this.eventPublisher.publish(
+        authEvent('account.role.granted', {
+          subjectUserId: user.id,
+          data: { userId: user.id, roleSlug: 'customer' },
+        }),
+      );
+    }
+
+    const result: AuthLoginResult = {
+      ...pair,
+      user: { id: user.id, status: user.status, roles, isNew },
+    };
+    if (idempotencyKey) {
+      await this.redisService.idempotency.put(idempotencyKey, result, IDEMPOTENCY_TTL_SECONDS);
+    }
+    return result;
+  }
+
+  /**
+   * Rotate the session on a presented refresh token. Idempotent under retry (the
+   * key distinguishes a legitimate retry from token theft, doc 04 §2.3).
+   * @param refreshToken The raw refresh token.
+   * @param idempotencyKey Client key that replays the stored result on retry.
+   * @returns The rotated token pair.
+   * @throws {TokenInvalidError|TokenReuseError} Token failures.
+   * @throws {AccountSuspendedError} When the account is no longer active.
+   */
+  async refresh(refreshToken: string, idempotencyKey?: string): Promise<TokenPair> {
+    if (idempotencyKey) {
+      const cached = await this.redisService.idempotency.get<TokenPair>(idempotencyKey);
+      if (cached) return cached;
+    }
+
+    const pair = await this.tokenService.rotate(refreshToken, (userId) =>
+      this.resolveActiveRoles(userId),
+    );
+
+    if (idempotencyKey) {
+      await this.redisService.idempotency.put(idempotencyKey, pair, IDEMPOTENCY_TTL_SECONDS);
+    }
+    return pair;
+  }
+
+  /**
+   * Revoke the current session (single logout).
+   * @param sessionId Session UUID (`sid`).
+   */
+  async logout(sessionId: string): Promise<void> {
+    await this.sessionService.logout(sessionId);
+  }
+
+  /**
+   * Revoke every session for a user (logout everywhere; epoch bump).
+   * @param userId Owner user UUID.
+   */
+  async logoutAll(userId: string): Promise<void> {
+    await this.sessionService.logoutAll(userId);
+  }
+
+  /**
+   * List a user's active sessions (self-service session management).
+   * @param userId Owner user UUID.
+   * @returns Active sessions, oldest first.
+   */
+  async listSessions(userId: string): Promise<UserSession[]> {
+    return this.sessionService.listSessions(userId);
+  }
+
+  /**
+   * Revoke one of the caller's own sessions.
+   * @param userId The caller's user UUID.
+   * @param sessionId The session to revoke.
+   * @returns `true` if owned and revoked; `false` if unknown or not owned.
+   */
+  async revokeSession(userId: string, sessionId: string): Promise<boolean> {
+    return this.sessionService.revokeForUser(userId, sessionId);
+  }
+
+  /**
+   * Reactivate a suspended account. Restores the ability to authenticate but not
+   * old sessions — the user must log in again (R-AUTH-13).
+   * @param userId Account UUID.
+   */
+  async activate(userId: string): Promise<void> {
+    // Status change + audit event commit atomically (transactional outbox).
+    await this.transactionManager.execute(async (tx) => {
+      await this.userRepository.updateStatus(userId, 'ACTIVE', tx);
+      await this.eventPublisher.publish(
+        authEvent('account.reactivated', {
+          subjectUserId: userId,
+          data: { userId, actor: 'system' },
+        }),
+        tx,
+      );
+    });
+  }
+
+  /**
+   * Suspend an account: block access and end all sessions immediately
+   * (R-AUTH-12, AUTH-INV-3/4).
+   * @param userId Account UUID.
+   */
+  async suspend(userId: string): Promise<void> {
+    // Status change + audit event commit atomically (transactional outbox);
+    // session/token revocation + epoch bump follow.
+    await this.transactionManager.execute(async (tx) => {
+      await this.userRepository.updateStatus(userId, 'SUSPENDED', tx);
+      await this.eventPublisher.publish(
+        authEvent('account.suspended', {
+          subjectUserId: userId,
+          data: { userId, actor: 'system' },
+        }),
+        tx,
+      );
+    });
+    await this.sessionService.logoutAll(userId, 'suspension');
+  }
+
+  /** Find the active account for a phone, creating and role-granting on first verify. */
+  private async resolveAccount(phoneNumber: string): Promise<{ user: User; isNew: boolean }> {
+    const existing = await this.userRepository.findActiveByPhone(phoneNumber);
+    if (existing) {
+      let user = existing;
+      if (!user.isPhoneVerified || user.status === 'UNVERIFIED') {
+        await this.userRepository.markPhoneVerified(user.id);
+        user = await this.userRepository.updateStatus(user.id, 'ACTIVE');
+      }
+      await this.ensureDefaultRole(user.id);
+      return { user, isNew: false };
+    }
+
+    const created = await this.userRepository.create({
+      phoneNumber,
+      status: 'ACTIVE',
+      isPhoneVerified: true,
+    });
+    await this.ensureDefaultRole(created.id);
+    return { user: created, isNew: true };
+  }
+
+  /** Idempotently grant the default `customer` role. */
+  private async ensureDefaultRole(userId: string): Promise<void> {
+    const role = await this.roleRepository.findBySlug(DEFAULT_ROLE_SLUG);
+    if (!role) throw new Error(`Default role "${DEFAULT_ROLE_SLUG}" is not seeded`);
+    const active = await this.roleRepository.findActiveAssignment(userId, role.id);
+    if (!active) await this.roleRepository.grant({ userId, roleId: role.id });
+  }
+
+  /** Resolve roles for a refresh, rejecting non-active accounts. */
+  private async resolveActiveRoles(userId: string): Promise<string[]> {
+    const user = await this.userRepository.findById(userId);
+    if (!user || user.status !== 'ACTIVE') throw new AccountSuspendedError();
+    return this.roleRepository.findActiveRoleSlugs(userId);
+  }
+
+  /** Privileged roles get a lower concurrent-session cap. */
+  private capForRoles(roles: string[]): number {
+    const privileged = roles.includes('admin') || roles.includes('support');
+    return privileged
+      ? this.sessionConfig.privilegedMaxConcurrentSessions
+      : this.sessionConfig.maxConcurrentSessions;
+  }
+}

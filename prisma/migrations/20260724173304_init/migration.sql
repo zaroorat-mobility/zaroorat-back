@@ -627,6 +627,8 @@ CREATE TABLE "user_sessions" (
     "user_id" UUID NOT NULL,
     "device_id" UUID,
     "ip_address" INET,
+    "user_agent" TEXT,
+    "login_method" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "last_seen_at" TIMESTAMP(3),
     "expires_at" TIMESTAMP(3) NOT NULL,
@@ -662,6 +664,12 @@ CREATE TABLE "otp_verifications" (
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "ip_address" INET,
     "device_id" UUID,
+    "device_fingerprint" TEXT,
+    "user_agent" TEXT,
+    "provider" TEXT,
+    "provider_ref" TEXT,
+    "latency_ms" INTEGER,
+    "failure_reason" TEXT,
     "verified_at" TIMESTAMP(3),
     "expires_at" TIMESTAMP(3) NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3607,27 +3615,8 @@ ALTER TABLE "cashback_grants" ADD CONSTRAINT "cashback_grants_user_id_fkey" FORE
 ALTER TABLE "cashback_grants" ADD CONSTRAINT "cashback_grants_ride_id_fkey" FOREIGN KEY ("ride_id") REFERENCES "rides"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 
--- ============================================================================
--- Raw-SQL invariants that Prisma cannot express (auth doc 03 §4).
--- Hand-authored and reviewed; enforced at the database level (Vol 6 principle #5).
--- Tables are empty at init, so plain CREATE INDEX is correct here; the
--- expand/contract playbook (doc 03 §7) uses CREATE INDEX CONCURRENTLY on a
--- live database instead.
--- ============================================================================
-
--- AUTH-INV-1: at most one ACTIVE (non-soft-deleted) account per phone number.
--- A plain UNIQUE would block re-registration after a soft-delete, so it is PARTIAL.
-CREATE UNIQUE INDEX "uq_users_phone_active"
-    ON "users" ("phone_number") WHERE "deleted_at" IS NULL;
-
--- OD-2: at most one ACTIVE assignment per (user, role); re-grant allowed after revoke.
-CREATE UNIQUE INDEX "uq_user_role_active"
-    ON "user_roles" ("user_id", "role_id") WHERE "revoked_at" IS NULL;
-
--- Session cap (doc 02 §5.1): fast count of a user's live sessions.
-CREATE INDEX "ix_sessions_user_active"
-    ON "user_sessions" ("user_id") WHERE "revoked_at" IS NULL;
-
--- Housekeeping sweeps (retention doc 03 §6): find purgeable rows cheaply.
-CREATE INDEX "ix_refresh_expired"
-    ON "refresh_tokens" ("expires_at") WHERE "revoked_at" IS NULL;
+-- Raw-SQL invariants (auth doc 03 §4).
+CREATE UNIQUE INDEX "uq_users_phone_active" ON "users" ("phone_number") WHERE "deleted_at" IS NULL;
+CREATE UNIQUE INDEX "uq_user_role_active" ON "user_roles" ("user_id", "role_id") WHERE "revoked_at" IS NULL;
+CREATE INDEX "ix_sessions_user_active" ON "user_sessions" ("user_id") WHERE "revoked_at" IS NULL;
+CREATE INDEX "ix_refresh_expired" ON "refresh_tokens" ("expires_at") WHERE "revoked_at" IS NULL;

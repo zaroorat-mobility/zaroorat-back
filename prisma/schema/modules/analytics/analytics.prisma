@@ -37,7 +37,8 @@ model Funnel {
   isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  steps       FunnelStep[]
+  steps FunnelStep[]
+
   @@map("funnels")
 }
 
@@ -49,7 +50,8 @@ model FunnelStep {
   eventTypeCode String   @map("event_type_code")
   createdAt     DateTime @default(now()) @map("created_at")
 
-  funnel        Funnel   @relation(fields: [funnelId], references: [id])
+  funnel Funnel @relation(fields: [funnelId], references: [id])
+
   @@unique([funnelId, stepOrder])
   @@map("funnel_steps")
 }
@@ -63,7 +65,8 @@ model Cohort {
   size       Int      @default(0)
   createdAt  DateTime @default(now()) @map("created_at")
 
-  retention  CohortRetention[]
+  retention CohortRetention[]
+
   @@map("cohorts")
 }
 
@@ -75,7 +78,8 @@ model CohortRetention {
   retentionRate Decimal  @default(0) @map("retention_rate") @db.Decimal(5, 2)
   createdAt     DateTime @default(now()) @map("created_at")
 
-  cohort        Cohort   @relation(fields: [cohortId], references: [id])
+  cohort Cohort @relation(fields: [cohortId], references: [id])
+
   @@unique([cohortId, periodNumber])
   @@map("cohort_retention")
 }
@@ -121,5 +125,3 @@ model ReportExport {
   @@index([status])
   @@map("report_exports")
 }
-
-

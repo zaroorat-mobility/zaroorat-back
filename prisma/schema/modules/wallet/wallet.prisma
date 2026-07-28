@@ -16,8 +16,9 @@ model WalletTopup {
   createdAt            DateTime  @default(now()) @map("created_at")
   completedAt          DateTime? @map("completed_at")
 
-  user                 User           @relation(fields: [userId], references: [id])
-  wallet               CustomerWallet @relation(fields: [walletId], references: [id])
+  user   User           @relation(fields: [userId], references: [id])
+  wallet CustomerWallet @relation(fields: [walletId], references: [id])
+
   @@index([walletId])
   @@index([userId])
   @@map("wallet_topups")
@@ -35,9 +36,10 @@ model WithdrawalRequest {
   requestedAt     DateTime  @default(now()) @map("requested_at")
   processedAt     DateTime? @map("processed_at")
 
-  driver          Driver             @relation(fields: [driverId], references: [id])
-  wallet          DriverWallet       @relation(fields: [walletId], references: [id])
-  bankAccount     DriverBankAccount? @relation(fields: [bankAccountId], references: [id])
+  driver      Driver             @relation(fields: [driverId], references: [id])
+  wallet      DriverWallet       @relation(fields: [walletId], references: [id])
+  bankAccount DriverBankAccount? @relation(fields: [bankAccountId], references: [id])
+
   @@index([driverId])
   @@index([status])
   @@map("withdrawal_requests")
@@ -92,27 +94,29 @@ model CashbackCampaign {
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  grants       CashbackGrant[]
+  grants CashbackGrant[]
+
   @@index([isActive, validFrom, validTo])
   @@map("cashback_campaigns")
 }
 
 model CashbackGrant {
-  id          String    @id @default(uuid(7)) @db.Uuid
-  campaignId  String    @map("campaign_id") @db.Uuid
-  userId      String    @map("user_id") @db.Uuid
-  walletType  String    @default("CUSTOMER") @map("wallet_type")
-  walletId    String?   @map("wallet_id") @db.Uuid
-  rideId      String?   @map("ride_id") @db.Uuid
-  amount      Decimal   @db.Decimal(10, 2)
-  status      String    @default("PENDING")
-  grantedAt   DateTime  @default(now()) @map("granted_at")
-  creditedAt  DateTime? @map("credited_at")
-  expiresAt   DateTime? @map("expires_at")
+  id         String    @id @default(uuid(7)) @db.Uuid
+  campaignId String    @map("campaign_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  walletType String    @default("CUSTOMER") @map("wallet_type")
+  walletId   String?   @map("wallet_id") @db.Uuid
+  rideId     String?   @map("ride_id") @db.Uuid
+  amount     Decimal   @db.Decimal(10, 2)
+  status     String    @default("PENDING")
+  grantedAt  DateTime  @default(now()) @map("granted_at")
+  creditedAt DateTime? @map("credited_at")
+  expiresAt  DateTime? @map("expires_at")
 
-  campaign    CashbackCampaign @relation(fields: [campaignId], references: [id])
-  user        User             @relation(fields: [userId], references: [id])
-  ride        Ride?            @relation(fields: [rideId], references: [id])
+  campaign CashbackCampaign @relation(fields: [campaignId], references: [id])
+  user     User             @relation(fields: [userId], references: [id])
+  ride     Ride?            @relation(fields: [rideId], references: [id])
+
   @@index([campaignId])
   @@index([userId])
   @@map("cashback_grants")
@@ -123,7 +127,7 @@ model WalletAdjustment {
   walletType  String    @map("wallet_type")
   walletId    String    @map("wallet_id") @db.Uuid
   ownerId     String    @map("owner_id") @db.Uuid
-  direction   String    // CREDIT | DEBIT
+  direction   String // CREDIT | DEBIT
   amount      Decimal   @db.Decimal(12, 2)
   reason      String
   requestedBy String?   @map("requested_by") @db.Uuid
@@ -145,12 +149,10 @@ model WalletReconciliation {
   storedBalance   Decimal  @map("stored_balance") @db.Decimal(14, 2)
   computedBalance Decimal  @map("computed_balance") @db.Decimal(14, 2)
   difference      Decimal  @db.Decimal(14, 2)
-  status          String   // MATCHED | MISMATCH
+  status          String // MATCHED | MISMATCH
   notes           String?
   createdAt       DateTime @default(now()) @map("created_at")
 
   @@index([walletType, walletId, asOf])
   @@map("wallet_reconciliations")
 }
-
-

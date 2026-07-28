@@ -1,0 +1,174 @@
+import { RedisService } from '@core/cache';
+import { EventPublisher } from '@core/events';
+import type { UserSession } from '@core/database/types';
+import type { SessionConfig } from '@config/session/session.config';
+import { SessionRepository } from '../repositories/session.repository';
+import { RefreshTokenRepository } from '../repositories/refresh-token.repository';
+import { EpochService } from '../services/epoch.service';
+import { authEvent } from '../events';
+import { SessionMetrics } from './session.metrics';
+
+/** Inputs to open a session. */
+export interface CreateSessionInput {
+  userId: string;
+  deviceId?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  loginMethod?: string | null;
+  expiresAt: Date;
+  /** Override the concurrent-session cap (e.g. lower for privileged roles). */
+  maxConcurrentSessions?: number;
+}
+
+/**
+ * Session lifecycle: creation with concurrency-cap eviction, single logout,
+ * global logout, device-scoped revocation, and last-seen tracking
+ * (auth doc 02 §5.1, doc 04 §2.4).
+ *
+ * Revoking a specific session is DB-authoritative (row `revoked_at`) plus a
+ * short-TTL `sid` denylist so the affected device is rejected on its next
+ * request. Global logout instead bumps the user epoch, invalidating every
+ * outstanding access token at once.
+ */
+export class SessionService {
+  /**
+   * @param sessionRepository Session persistence.
+   * @param refreshTokenRepository Refresh tokens (revoked alongside sessions).
+   * @param redisService Provides the `sid` denylist.
+   * @param epochService Epoch authority (bumped on global logout).
+   * @param sessionConfig Caps and denylist TTL.
+   */
+  constructor(
+    private readonly sessionRepository: SessionRepository,
+    private readonly refreshTokenRepository: RefreshTokenRepository,
+    private readonly redisService: RedisService,
+    private readonly epochService: EpochService,
+    private readonly sessionMetrics: SessionMetrics,
+    private readonly eventPublisher: EventPublisher,
+    private readonly sessionConfig: SessionConfig,
+  ) {}
+
+  /**
+   * Open a session and enforce the concurrency cap (evicting the oldest active
+   * sessions beyond the cap).
+   * @param input Owner, optional device/ip/forensics, expiry, and cap override.
+   * @returns The created session (its `id` is the `sid`).
+   */
+  async create(input: CreateSessionInput): Promise<UserSession> {
+    const session = await this.sessionRepository.create({
+      userId: input.userId,
+      expiresAt: input.expiresAt,
+      ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
+      ...(input.ipAddress != null ? { ipAddress: input.ipAddress } : {}),
+      ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+      ...(input.loginMethod != null ? { loginMethod: input.loginMethod } : {}),
+    });
+    this.sessionMetrics.created({ userId: input.userId });
+
+    const cap = input.maxConcurrentSessions ?? this.sessionConfig.maxConcurrentSessions;
+    await this.enforceCap(input.userId, cap, session.id);
+    return session;
+  }
+
+  /**
+   * List a user's currently active sessions (for self/admin session management).
+   * @param userId Owner user UUID.
+   * @returns Active sessions, oldest first.
+   */
+  async listSessions(userId: string): Promise<UserSession[]> {
+    return this.sessionRepository.findActiveByUser(userId);
+  }
+
+  /**
+   * Revoke a specific session, but only if it belongs to the caller.
+   * @param userId The caller's user UUID.
+   * @param sessionId The session (`sid`) to revoke.
+   * @returns `true` if the session exists and is owned by the caller (then
+   *          revoked, idempotently); `false` if unknown or not owned.
+   */
+  async revokeForUser(userId: string, sessionId: string): Promise<boolean> {
+    const session = await this.sessionRepository.findById(sessionId);
+    if (!session || session.userId !== userId) return false;
+    await this.revokeSession(sessionId, 'logout');
+    return true;
+  }
+
+  /**
+   * Revoke the current session. Idempotent and race-safe: the revocation is an
+   * atomic conditional update, so concurrent logouts do the side effects once.
+   * @param sessionId Session UUID (`sid`).
+   */
+  async logout(sessionId: string): Promise<void> {
+    await this.revokeSession(sessionId, 'logout');
+  }
+
+  /**
+   * Revoke every session for a user and bump the epoch (sign out all devices).
+   * @param userId Owner user UUID.
+   * @param reason Revocation reason (`logout` for user-initiated, `suspension` for ops).
+   */
+  async logoutAll(userId: string, reason: string = 'logout'): Promise<void> {
+    await this.sessionRepository.revokeAllByUser(userId, reason);
+    await this.refreshTokenRepository.revokeAllByUser(userId, reason);
+    await this.epochService.bump(userId);
+    this.sessionMetrics.logoutAll({ userId, reason });
+  }
+
+  /**
+   * Revoke every active session bound to a device (device revocation, INV-6).
+   * @param deviceId Bound device UUID (`UserDevice.id`).
+   * @returns Count of sessions actually revoked.
+   */
+  async revokeDeviceSessions(deviceId: string): Promise<number> {
+    const active = await this.sessionRepository.findActiveByDevice(deviceId);
+    let revoked = 0;
+    for (const session of active) {
+      if (await this.revokeSession(session.id, 'device_revoked')) revoked += 1;
+    }
+    return revoked;
+  }
+
+  /**
+   * Update a session's last-seen timestamp (called on the request hot path).
+   * @param sessionId Session UUID (`sid`).
+   * @param at Observation instant.
+   */
+  async touchLastSeen(sessionId: string, at: Date = new Date()): Promise<void> {
+    await this.sessionRepository.touchLastSeen(sessionId, at);
+  }
+
+  /**
+   * Revoke one session across all tiers: DB row (atomic), sid denylist, refresh
+   * family. The Redis/refresh side effects run only if this call won the atomic
+   * DB revoke, so concurrent callers never duplicate work.
+   * @returns `true` if this call performed the revocation.
+   */
+  private async revokeSession(sessionId: string, reason: string): Promise<boolean> {
+    const won = await this.sessionRepository.revoke(sessionId, reason);
+    if (!won) return false;
+    await this.redisService.sidBlacklist.revoke(sessionId, this.sessionConfig.denylistTtlSeconds);
+    await this.refreshTokenRepository.revokeBySession(sessionId, reason);
+    if (reason === 'cap_evicted') this.sessionMetrics.capEvicted({ reason });
+    this.sessionMetrics.revoked({ reason });
+    await this.eventPublisher.publish(
+      authEvent('auth.session.revoked', {
+        aggregateId: sessionId,
+        sessionId,
+        data: { sessionId, reason },
+      }),
+    );
+    return true;
+  }
+
+  /** Evict the oldest active sessions beyond the cap, keeping the newest. */
+  private async enforceCap(userId: string, cap: number, keepSessionId: string): Promise<void> {
+    const active = await this.sessionRepository.findActiveByUser(userId);
+    if (active.length <= cap) return;
+
+    const evictCount = active.length - cap;
+    const toEvict = active.filter((s) => s.id !== keepSessionId).slice(0, evictCount);
+    for (const session of toEvict) {
+      await this.revokeSession(session.id, 'cap_evicted');
+    }
+  }
+}

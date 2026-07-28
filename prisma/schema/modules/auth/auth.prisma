@@ -12,6 +12,8 @@ model UserSession {
   userId        String    @map("user_id") @db.Uuid
   deviceId      String?   @map("device_id") @db.Uuid
   ipAddress     String?   @map("ip_address") @db.Inet
+  userAgent     String?   @map("user_agent") // login-instance forensics
+  loginMethod   String?   @map("login_method") // e.g. otp (device/os/app live on user_devices)
   createdAt     DateTime  @default(now()) @map("created_at")
   lastSeenAt    DateTime? @map("last_seen_at")
   expiresAt     DateTime  @map("expires_at")
@@ -21,11 +23,11 @@ model UserSession {
   user          User           @relation(fields: [userId], references: [id])
   device        UserDevice?    @relation(fields: [deviceId], references: [id])
   refreshTokens RefreshToken[]
+  // Live-session count for the concurrency cap is a PARTIAL index — see doc 03 §4.
 
   @@index([userId])
   @@index([expiresAt])
   @@map("user_sessions")
-  // Live-session count for the concurrency cap is a PARTIAL index — see doc 03 §4.
 }
 
 model RefreshToken {
@@ -59,13 +61,21 @@ model OtpVerification {
   attempts    Int        @default(0)
   ipAddress   String?    @map("ip_address") @db.Inet
   deviceId    String?    @map("device_id") @db.Uuid
+  // Fraud / delivery metadata (non-secret) for investigation & observability.
+  deviceFingerprint String? @map("device_fingerprint")
+  userAgent   String?    @map("user_agent")
+  provider    String? // SMS provider that handled delivery
+  providerRef String?    @map("provider_ref") // gateway message id
+  latencyMs   Int?       @map("latency_ms") // delivery latency
+  failureReason String?  @map("failure_reason") // delivery/verify failure detail
   verifiedAt  DateTime?  @map("verified_at")
   expiresAt   DateTime   @map("expires_at")
   createdAt   DateTime   @default(now()) @map("created_at")
   // No otp_hash: the secret is Redis-only. This is a purgeable fraud/audit
   // trail (R-AUTH-22/26/30), never a verification store (doc 02 §4.5).
+  // NOTE: geo enrichment (country/city) is deferred — needs a geo-IP lookup.
 
-  user        User?      @relation(fields: [userId], references: [id]) // null until the account exists
+  user User? @relation(fields: [userId], references: [id]) // null until the account exists
 
   @@index([phoneNumber])
   @@index([createdAt])
