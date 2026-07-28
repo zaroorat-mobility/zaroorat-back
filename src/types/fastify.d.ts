@@ -8,7 +8,9 @@ declare module 'fastify' {
   }
 
   interface FastifyRequest {
-    startTime: bigint;
+    /** High-res request start, set by the on-request hook. Absent when a request
+     *  is rejected earlier in the onRequest phase (e.g. the deny-by-default gate). */
+    startTime?: bigint;
     /** Authentication context, populated by the `authenticate` hook. */
     auth: {
       userId: string;
