@@ -107,12 +107,30 @@ export class SessionService {
 
   /**
    * Revoke every session for a user and bump the epoch (sign out all devices).
+   *
+   * The bulk session/token revoke and one `auth.session.revoked` audit event per
+   * affected `sid` commit in a **single transaction**, so the audit trail can
+   * never diverge from the revocation. The epoch bump (a Redis write, which is
+   * what enforces fast revocation globally) and metrics run after commit.
    * @param userId Owner user UUID.
    * @param reason Revocation reason (`logout` for user-initiated, `suspension` for ops).
    */
   async logoutAll(userId: string, reason: string = 'logout'): Promise<void> {
-    await this.sessionRepository.revokeAllByUser(userId, reason);
-    await this.refreshTokenRepository.revokeAllByUser(userId, reason);
+    const active = await this.sessionRepository.findActiveByUser(userId);
+    await this.transactionManager.execute(async (tx) => {
+      await this.sessionRepository.revokeAllByUser(userId, reason, undefined, tx);
+      await this.refreshTokenRepository.revokeAllByUser(userId, reason, undefined, tx);
+      for (const session of active) {
+        await this.eventPublisher.publish(
+          authEvent('auth.session.revoked', {
+            aggregateId: session.id,
+            sessionId: session.id,
+            data: { sessionId: session.id, reason },
+          }),
+          tx,
+        );
+      }
+    });
     await this.epochService.bump(userId);
     this.sessionMetrics.logoutAll({ userId, reason });
   }

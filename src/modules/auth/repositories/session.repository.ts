@@ -138,14 +138,17 @@ export class SessionRepository extends BaseRepository {
    * @param userId Owner user UUID.
    * @param reason Revocation reason.
    * @param revokedAt Revocation timestamp (defaults to now).
+   * @param tx Transaction client to join, so the bulk revoke and its per-session
+   *           audit events commit atomically (omit for a standalone write).
    * @returns Count of sessions revoked.
    */
   async revokeAllByUser(
     userId: string,
     reason: string,
     revokedAt: Date = new Date(),
+    tx?: TransactionClient,
   ): Promise<number> {
-    const { count } = await this.client.userSession.updateMany({
+    const { count } = await (tx ?? this.client).userSession.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt, revokedReason: reason },
     });
