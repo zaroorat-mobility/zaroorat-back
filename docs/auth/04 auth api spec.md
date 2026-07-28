@@ -16,7 +16,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 
 | Convention      | Rule                                                                                                             |
 | --------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Base path       | `/v1/auth/*` (platform API-versioning convention)                                                                |
+| Base path       | `/api/v1/auth/*` (platform API-versioning convention)                                                            |
 | Transport       | HTTPS only; JSON (`application/json`)                                                                            |
 | Access token    | `Authorization: Bearer <jwt>` (doc 02 §3.1)                                                                      |
 | Refresh token   | in request/response **body**, stored in device secure storage (Keychain/Keystore) — not cookies (mobile clients) |
@@ -29,7 +29,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 
 ## 2. Endpoints
 
-### 2.1 `POST /v1/auth/otp/send` — request an OTP
+### 2.1 `POST /api/v1/auth/otp/send` — request an OTP
 
 - **Auth:** public. **Rate-limited** per phone + device + IP (doc 02 §4.2).
 - **Enumeration-resistant (R-AUTH-19):** the response is **identical** whether or not the phone maps
@@ -63,7 +63,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 
 ---
 
-### 2.2 `POST /v1/auth/otp/verify` — verify OTP, issue session
+### 2.2 `POST /api/v1/auth/otp/verify` — verify OTP, issue session
 
 - **Auth:** public. **`Idempotency-Key` required.**
 - On **first** successful verify: creates the `users` row (status `UNVERIFIED → ACTIVE`), grants the
@@ -103,7 +103,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 
 ---
 
-### 2.3 `POST /v1/auth/token/refresh` — rotate the session
+### 2.3 `POST /api/v1/auth/token/refresh` — rotate the session
 
 - **Auth:** the **refresh token** itself. **`Idempotency-Key` required** — it is what distinguishes a
   legitimate retry from an attack (see the callout).
@@ -144,7 +144,7 @@ fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 
 ---
 
-### 2.4 `POST /v1/auth/logout` — end session(s)
+### 2.4 `POST /api/v1/auth/logout` — end session(s)
 
 - **Auth:** required (`Bearer`).
 - **Default:** revokes the **current** session (`sid` → `revoked_at`, denylisted). **`allDevices: true`**

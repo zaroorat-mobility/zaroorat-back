@@ -19,13 +19,13 @@ const deviceSchema = z
   })
   .optional();
 
-/** `POST /v1/auth/otp/send`. */
+/** `POST /api/v1/auth/otp/send`. */
 export const sendOtpSchema = z.object({
   phoneNumber,
   device: deviceSchema,
 });
 
-/** `POST /v1/auth/otp/verify`. */
+/** `POST /api/v1/auth/otp/verify`. */
 export const verifyOtpSchema = z.object({
   phoneNumber,
   code: z.string().regex(/^\d{6}$/, 'code must be 6 digits'),
@@ -33,12 +33,12 @@ export const verifyOtpSchema = z.object({
   device: deviceSchema,
 });
 
-/** `POST /v1/auth/token/refresh`. */
+/** `POST /api/v1/auth/token/refresh`. */
 export const refreshSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
-/** `POST /v1/auth/logout` (body optional). */
+/** `POST /api/v1/auth/logout` (body optional). */
 export const logoutSchema = z
   .object({
     allDevices: z.boolean().optional(),

@@ -6,7 +6,7 @@ import { AuthController } from './auth.controller';
 
 /**
  * Registers the AUTH API routes (auth doc 04) under the caller-provided prefix
- * (mount at `/v1/auth`).
+ * (mount at `/api/v1/auth`).
  *
  * Authentication is deny-by-default (auth doc 02 §6): the global gate installed
  * by the auth plugin protects every route, so only the credential-establishing

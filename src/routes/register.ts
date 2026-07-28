@@ -10,6 +10,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(readyRoute, { prefix: '/api/v1' });
   await app.register(readyRoute); // Kubernetes probes hit the unprefixed path
 
-  // AUTH API (doc 04) — base path /v1/auth.
-  await app.register(registerAuthRoutes, { prefix: '/v1/auth' });
+  // AUTH API (doc 04) — base path /api/v1/auth (platform convention; nginx
+  // proxies /api/v1/*).
+  await app.register(registerAuthRoutes, { prefix: '/api/v1/auth' });
 }

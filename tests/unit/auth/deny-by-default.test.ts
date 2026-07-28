@@ -39,7 +39,7 @@ describe('deny-by-default auth gate', () => {
   });
 
   it('protects the real logout endpoint without a token', async () => {
-    const res = await app.inject({ method: 'POST', url: '/v1/auth/logout' });
+    const res = await app.inject({ method: 'POST', url: '/api/v1/auth/logout' });
     assert.equal(res.statusCode, 401);
     assert.equal(res.json().error.code, 'TOKEN_INVALID');
   });
