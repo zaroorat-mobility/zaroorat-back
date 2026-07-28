@@ -1,0 +1,158 @@
+// ============================ NOTIFICATION ============================
+
+model NotificationTemplate {
+  id            String               @id @default(uuid(7)) @db.Uuid
+  code          String
+  channel       NotificationChannel
+  locale        String               @default("en")
+  category      NotificationCategory @default(TRANSACTIONAL)
+  titleTemplate String?              @map("title_template")
+  bodyTemplate  String               @map("body_template")
+  isActive      Boolean              @default(true) @map("is_active")
+  version       Int                  @default(1)
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+
+  notifications Notification[]
+  campaigns     NotificationCampaign[]
+
+  @@map("notification_templates")
+}
+
+model NotificationPreference {
+  id        String               @id @default(uuid(7)) @db.Uuid
+  userId    String               @map("user_id") @db.Uuid
+  category  NotificationCategory
+  channel   NotificationChannel
+  enabled   Boolean              @default(true)
+  updatedAt DateTime             @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, category, channel])
+  @@index([userId])
+  @@map("notification_preferences")
+}
+
+model Notification {
+  id            String               @id @default(uuid(7)) @db.Uuid
+  userId        String               @map("user_id") @db.Uuid
+  category      NotificationCategory @default(TRANSACTIONAL)
+  priority      NotificationPriority @default(NORMAL)
+  eventKey      String?              @map("event_key")
+  templateId    String?              @map("template_id") @db.Uuid
+  title         String?
+  body          String?
+  data          Json?
+  status        NotificationStatus   @default(PENDING)
+  referenceType String?              @map("reference_type")
+  referenceId   String?              @map("reference_id") @db.Uuid
+  createdAt     DateTime             @default(now()) @map("created_at")
+  readAt        DateTime?            @map("read_at")
+
+  user               User                   @relation(fields: [userId], references: [id])
+  template           NotificationTemplate?  @relation(fields: [templateId], references: [id])
+  deliveries         NotificationDelivery[]
+  inAppMessages      InAppMessage[]
+  campaignRecipients CampaignRecipient[]
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([referenceType, referenceId])
+  @@map("notifications")
+}
+
+model NotificationDelivery {
+  id                String              @id @default(uuid(7)) @db.Uuid
+  notificationId    String              @map("notification_id") @db.Uuid
+  channel           NotificationChannel
+  status            NotificationStatus  @default(PENDING)
+  provider          String?
+  providerMessageId String?             @map("provider_message_id")
+  target            String?
+  deviceId          String?             @map("device_id") @db.Uuid
+  attempts          Int                 @default(0) @db.SmallInt
+  errorCode         String?             @map("error_code")
+  errorMessage      String?             @map("error_message")
+  sentAt            DateTime?           @map("sent_at")
+  deliveredAt       DateTime?           @map("delivered_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  notification Notification @relation(fields: [notificationId], references: [id])
+  device       UserDevice?  @relation(fields: [deviceId], references: [id])
+
+  @@index([notificationId])
+  @@index([status])
+  @@map("notification_deliveries")
+}
+
+model InAppMessage {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  notificationId String?   @map("notification_id") @db.Uuid
+  title          String?
+  body           String?
+  icon           String?
+  deepLink       String?   @map("deep_link")
+  isRead         Boolean   @default(false) @map("is_read")
+  readAt         DateTime? @map("read_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  expiresAt      DateTime? @map("expires_at")
+
+  user         User          @relation(fields: [userId], references: [id])
+  notification Notification? @relation(fields: [notificationId], references: [id])
+
+  @@index([userId, createdAt])
+  @@map("in_app_messages")
+}
+
+model NotificationCampaign {
+  id              String               @id @default(uuid(7)) @db.Uuid
+  name            String
+  category        NotificationCategory @default(PROMOTIONAL)
+  channel         NotificationChannel
+  templateId      String?              @map("template_id") @db.Uuid
+  segment         Json?
+  status          String               @default("DRAFT")
+  scheduledAt     DateTime?            @map("scheduled_at")
+  totalRecipients Int                  @default(0) @map("total_recipients")
+  sentCount       Int                  @default(0) @map("sent_count")
+  createdBy       String?              @map("created_by") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at")
+
+  template   NotificationTemplate? @relation(fields: [templateId], references: [id])
+  recipients CampaignRecipient[]
+
+  @@index([status, scheduledAt])
+  @@map("notification_campaigns")
+}
+
+model CampaignRecipient {
+  id             String             @id @default(uuid(7)) @db.Uuid
+  campaignId     String             @map("campaign_id") @db.Uuid
+  userId         String             @map("user_id") @db.Uuid
+  notificationId String?            @map("notification_id") @db.Uuid
+  status         NotificationStatus @default(PENDING)
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  campaign     NotificationCampaign @relation(fields: [campaignId], references: [id])
+  user         User                 @relation(fields: [userId], references: [id])
+  notification Notification?        @relation(fields: [notificationId], references: [id])
+
+  @@unique([campaignId, userId])
+  @@index([campaignId])
+  @@map("campaign_recipients")
+}
+
+model NotificationProviderLog {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  provider          String
+  eventType         String?  @map("event_type")
+  providerMessageId String   @map("provider_message_id")
+  payload           Json
+  signature         String?
+  processed         Boolean  @default(false)
+  receivedAt        DateTime @default(now()) @map("received_at")
+
+  @@map("notification_provider_logs")
+}

@@ -1,0 +1,125 @@
+// ============================ REFERRAL ============================
+
+model ReferralProgram {
+  id                  String   @id @default(uuid(7)) @db.Uuid
+  code                String   @unique
+  name                String?
+  referrerReward      Decimal  @default(0) @map("referrer_reward") @db.Decimal(10, 2)
+  refereeReward       Decimal  @default(0) @map("referee_reward") @db.Decimal(10, 2)
+  rewardType          String   @default("WALLET") @map("reward_type")
+  qualifyingEvent     String   @default("FIRST_RIDE") @map("qualifying_event")
+  qualifyingThreshold Int      @default(1) @map("qualifying_threshold") @db.SmallInt
+  maxReferralsPerUser Int?     @map("max_referrals_per_user")
+  rewardExpiryDays    Int?     @map("reward_expiry_days")
+  validFrom           DateTime @map("valid_from")
+  validTo             DateTime @map("valid_to")
+  isActive            Boolean  @default(true) @map("is_active")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  codes      ReferralCode[]
+  referrals  Referral[]
+  milestones ReferralMilestone[]
+
+  @@index([isActive, validFrom, validTo])
+  @@map("referral_programs")
+}
+
+model ReferralCode {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  programId String   @map("program_id") @db.Uuid
+  code      String   @unique
+  usesCount Int      @default(0) @map("uses_count")
+  maxUses   Int?     @map("max_uses")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User            @relation(fields: [userId], references: [id])
+  program   ReferralProgram @relation(fields: [programId], references: [id])
+  referrals Referral[]
+
+  @@unique([userId, programId])
+  @@index([userId])
+  @@map("referral_codes")
+}
+
+model Referral {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  programId       String         @map("program_id") @db.Uuid
+  referrerId      String         @map("referrer_id") @db.Uuid
+  refereeId       String?        @map("referee_id") @db.Uuid
+  referralCodeId  String?        @map("referral_code_id") @db.Uuid
+  status          ReferralStatus @default(PENDING)
+  qualifyingRides Int            @default(0) @map("qualifying_rides")
+  signedUpAt      DateTime?      @map("signed_up_at")
+  qualifiedAt     DateTime?      @map("qualified_at")
+  rewardedAt      DateTime?      @map("rewarded_at")
+  expiresAt       DateTime?      @map("expires_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  program      ReferralProgram     @relation(fields: [programId], references: [id])
+  referrer     User                @relation("Referrer", fields: [referrerId], references: [id])
+  referee      User?               @relation("Referee", fields: [refereeId], references: [id])
+  referralCode ReferralCode?       @relation(fields: [referralCodeId], references: [id])
+  rewards      ReferralReward[]
+  fraudFlags   ReferralFraudFlag[]
+
+  @@unique([programId, refereeId])
+  @@index([referrerId])
+  @@index([status])
+  @@map("referrals")
+}
+
+model ReferralReward {
+  id                  String                    @id @default(uuid(7)) @db.Uuid
+  referralId          String                    @map("referral_id") @db.Uuid
+  beneficiary         ReferralRewardBeneficiary
+  userId              String                    @map("user_id") @db.Uuid
+  amount              Decimal                   @db.Decimal(10, 2)
+  rewardType          String                    @default("WALLET") @map("reward_type")
+  status              ReferralRewardStatus      @default(PENDING)
+  walletTransactionId String?                   @map("wallet_transaction_id") @db.Uuid
+  creditedAt          DateTime?                 @map("credited_at")
+  expiresAt           DateTime?                 @map("expires_at")
+  createdAt           DateTime                  @default(now()) @map("created_at")
+
+  referral Referral @relation(fields: [referralId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([referralId])
+  @@index([userId])
+  @@map("referral_rewards")
+}
+
+model ReferralMilestone {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  programId         String   @map("program_id") @db.Uuid
+  name              String
+  requiredReferrals Int      @map("required_referrals")
+  bonusAmount       Decimal  @map("bonus_amount") @db.Decimal(10, 2)
+  rewardType        String   @default("WALLET") @map("reward_type")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  program ReferralProgram @relation(fields: [programId], references: [id])
+
+  @@index([programId])
+  @@map("referral_milestones")
+}
+
+model ReferralFraudFlag {
+  id         String              @id @default(uuid(7)) @db.Uuid
+  referralId String              @map("referral_id") @db.Uuid
+  reason     String
+  status     ReferralFraudStatus @default(SUSPECTED)
+  details    Json?
+  reviewedBy String?             @map("reviewed_by") @db.Uuid
+  createdAt  DateTime            @default(now()) @map("created_at")
+  resolvedAt DateTime?           @map("resolved_at")
+
+  referral Referral @relation(fields: [referralId], references: [id])
+  reviewer User?    @relation(fields: [reviewedBy], references: [id])
+
+  @@index([referralId])
+  @@map("referral_fraud_flags")
+}

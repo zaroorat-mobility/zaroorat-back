@@ -1,0 +1,5 @@
+enum OtpPurpose {
+  LOGIN
+  REGISTER
+  // RESET_PASSWORD, CHANGE_PHONE, DELETE_ACCOUNT — reserved for P1+, not v1 (auth doc 03, OD-7).
+}

@@ -56,11 +56,11 @@ export class RetryService {
   private isTransientError(error: unknown): boolean {
     const err = error as Record<string, unknown> | undefined;
 
-    if (err?.code && typeof err.code === 'string' && TRANSIENT_ERROR_CODES.has(err.code)) {
+    if (typeof err?.code === 'string' && TRANSIENT_ERROR_CODES.has(err.code)) {
       return true;
     }
 
-    if (err?.errno && typeof err.code === 'string' && TRANSIENT_ERROR_CODES.has(err.code)) {
+    if (typeof err?.errno === 'string' && TRANSIENT_ERROR_CODES.has(err.errno)) {
       return true;
     }
 

@@ -19,7 +19,7 @@ const envFile =
 dotenv.config({ path: path.resolve(process.cwd(), envFile), quiet: true });
 
 export default defineConfig({
-  schema: 'prisma/schema.prisma',
+  schema: 'prisma/schema',
 
   // `datasource`, not `migrate`. schema.prisma declares no url, so migration
   // and introspection commands read the connection string from here.

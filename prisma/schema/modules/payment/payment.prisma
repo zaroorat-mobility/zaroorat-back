@@ -1,0 +1,241 @@
+// ============================ PAYMENT ============================
+
+model PaymentInstrument {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  methodType   String   @map("method_type")
+  gateway      String?
+  gatewayToken String?  @map("gateway_token")
+  brand        String?
+  last4        String?  @db.Char(4)
+  upiVpa       String?  @map("upi_vpa")
+  expiryMonth  Int?     @map("expiry_month") @db.SmallInt
+  expiryYear   Int?     @map("expiry_year") @db.SmallInt
+  isDefault    Boolean  @default(false) @map("is_default")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user    User            @relation(fields: [userId], references: [id])
+  intents PaymentIntent[]
+
+  @@index([userId])
+  @@map("payment_methods")
+}
+
+model CustomerWallet {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  userId            String    @unique @map("user_id") @db.Uuid
+  balance           Decimal   @default(0) @db.Decimal(12, 2)
+  lockedBalance     Decimal   @default(0) @map("locked_balance") @db.Decimal(12, 2)
+  currency          String    @default("INR") @db.Char(3)
+  lastTransactionAt DateTime? @map("last_transaction_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user         User                        @relation(fields: [userId], references: [id])
+  transactions CustomerWalletTransaction[]
+  topups       WalletTopup[]
+
+  @@map("customer_wallets")
+}
+
+model CustomerWalletTransaction {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  walletId      String   @map("wallet_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  txnType       String   @map("txn_type")
+  amount        Decimal  @db.Decimal(12, 2)
+  balanceAfter  Decimal  @map("balance_after") @db.Decimal(12, 2)
+  referenceType String?  @map("reference_type")
+  referenceId   String?  @map("reference_id") @db.Uuid
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  wallet CustomerWallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, createdAt])
+  @@map("customer_wallet_transactions")
+}
+
+model PaymentIntent {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  rideId          String?  @map("ride_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  amount          Decimal  @db.Decimal(10, 2)
+  currency        String   @default("INR") @db.Char(3)
+  methodType      String   @map("method_type")
+  paymentMethodId String?  @map("payment_method_id") @db.Uuid
+  status          String   @default("CREATED")
+  gateway         String?
+  gatewayIntentId String?  @map("gateway_intent_id")
+  idempotencyKey  String   @unique @map("idempotency_key")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  ride          Ride?                @relation(fields: [rideId], references: [id])
+  user          User                 @relation(fields: [userId], references: [id])
+  paymentMethod PaymentInstrument?   @relation(fields: [paymentMethodId], references: [id])
+  transactions  PaymentTransaction[]
+
+  @@index([rideId])
+  @@index([userId])
+  @@map("payment_intents")
+}
+
+model PaymentTransaction {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  intentId     String   @map("intent_id") @db.Uuid
+  rideId       String?  @map("ride_id") @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  txnType      String   @map("txn_type")
+  amount       Decimal  @db.Decimal(10, 2)
+  currency     String   @default("INR") @db.Char(3)
+  status       String
+  gateway      String?
+  gatewayTxnId String?  @map("gateway_txn_id")
+  gatewayFee   Decimal  @default(0) @map("gateway_fee") @db.Decimal(10, 2)
+  errorCode    String?  @map("error_code")
+  errorMessage String?  @map("error_message")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  intent      PaymentIntent @relation(fields: [intentId], references: [id])
+  ride        Ride?         @relation(fields: [rideId], references: [id])
+  user        User          @relation(fields: [userId], references: [id])
+  refunds     Refund[]
+  chargebacks Chargeback[]
+
+  @@index([intentId])
+  @@index([rideId])
+  @@map("payment_transactions")
+}
+
+model GatewayEvent {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  gateway        String
+  eventType      String    @map("event_type")
+  gatewayEventId String    @map("gateway_event_id")
+  payload        Json
+  signature      String?
+  processed      Boolean   @default(false)
+  processedAt    DateTime? @map("processed_at")
+  receivedAt     DateTime  @default(now()) @map("received_at")
+
+  @@unique([gateway, gatewayEventId])
+  @@map("gateway_events")
+}
+
+model Refund {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  transactionId   String    @map("transaction_id") @db.Uuid
+  rideId          String?   @map("ride_id") @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  amount          Decimal   @db.Decimal(10, 2)
+  reason          String?
+  status          String    @default("PENDING")
+  gatewayRefundId String?   @map("gateway_refund_id")
+  idempotencyKey  String    @unique @map("idempotency_key")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  completedAt     DateTime? @map("completed_at")
+
+  transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
+  ride        Ride?              @relation(fields: [rideId], references: [id])
+  user        User               @relation(fields: [userId], references: [id])
+
+  @@index([transactionId])
+  @@map("refunds")
+}
+
+model PaymentLedgerEntry {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  entryGroup    String   @map("entry_group") @db.Uuid
+  account       String
+  accountRefId  String?  @map("account_ref_id") @db.Uuid
+  direction     String // DEBIT | CREDIT
+  amount        Decimal  @db.Decimal(12, 2)
+  currency      String   @default("INR") @db.Char(3)
+  referenceType String?  @map("reference_type")
+  referenceId   String?  @map("reference_id") @db.Uuid
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([entryGroup])
+  @@index([account, accountRefId, createdAt])
+  @@map("payment_ledger_entries")
+}
+
+model DriverSettlement {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  driverId      String   @map("driver_id") @db.Uuid
+  periodStart   DateTime @map("period_start") @db.Date
+  periodEnd     DateTime @map("period_end") @db.Date
+  grossEarnings Decimal  @default(0) @map("gross_earnings") @db.Decimal(12, 2)
+  commission    Decimal  @default(0) @db.Decimal(12, 2)
+  adjustments   Decimal  @default(0) @db.Decimal(12, 2)
+  netPayable    Decimal  @default(0) @map("net_payable") @db.Decimal(12, 2)
+  status        String   @default("PENDING")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  driver  Driver         @relation(fields: [driverId], references: [id])
+  payouts DriverPayout[]
+
+  @@unique([driverId, periodStart, periodEnd])
+  @@map("driver_settlements")
+}
+
+model DriverPayout {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  driverId        String    @map("driver_id") @db.Uuid
+  settlementId    String?   @map("settlement_id") @db.Uuid
+  bankAccountId   String?   @map("bank_account_id") @db.Uuid
+  amount          Decimal   @db.Decimal(12, 2)
+  status          String    @default("INITIATED")
+  gateway         String?
+  gatewayPayoutId String?   @map("gateway_payout_id")
+  idempotencyKey  String    @unique @map("idempotency_key")
+  failureReason   String?   @map("failure_reason")
+  initiatedAt     DateTime  @default(now()) @map("initiated_at")
+  completedAt     DateTime? @map("completed_at")
+
+  driver      Driver             @relation(fields: [driverId], references: [id])
+  settlement  DriverSettlement?  @relation(fields: [settlementId], references: [id])
+  bankAccount DriverBankAccount? @relation(fields: [bankAccountId], references: [id])
+  items       PayoutItem[]
+
+  @@index([driverId])
+  @@map("driver_payouts")
+}
+
+model PayoutItem {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  payoutId  String   @map("payout_id") @db.Uuid
+  rideId    String?  @map("ride_id") @db.Uuid
+  itemType  String   @map("item_type")
+  amount    Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  payout DriverPayout @relation(fields: [payoutId], references: [id])
+  ride   Ride?        @relation(fields: [rideId], references: [id])
+
+  @@index([payoutId])
+  @@map("payout_items")
+}
+
+model Chargeback {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  transactionId String    @map("transaction_id") @db.Uuid
+  rideId        String?   @map("ride_id") @db.Uuid
+  amount        Decimal   @db.Decimal(10, 2)
+  reasonCode    String?   @map("reason_code")
+  status        String    @default("OPEN")
+  gatewayCaseId String?   @map("gateway_case_id")
+  evidenceDueAt DateTime? @map("evidence_due_at")
+  resolvedAt    DateTime? @map("resolved_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
+  ride        Ride?              @relation(fields: [rideId], references: [id])
+
+  @@index([transactionId])
+  @@index([status])
+  @@map("chargebacks")
+}

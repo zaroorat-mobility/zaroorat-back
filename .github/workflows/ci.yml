@@ -4,9 +4,17 @@ name: CI
 # Pipeline order matches docs/14_Operations/03_release-process.md.
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'release/**'
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - develop
 
 # A new push to the same PR cancels the previous run; main is never cancelled.
 concurrency:

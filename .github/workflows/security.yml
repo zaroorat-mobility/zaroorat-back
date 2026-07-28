@@ -2,9 +2,17 @@ name: Security
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'release/**'
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - develop
   schedule:
     # Weekly, Monday 03:00 UTC — catches advisories published against code
     # that hasn't changed. Push-triggered scans alone would never see these.

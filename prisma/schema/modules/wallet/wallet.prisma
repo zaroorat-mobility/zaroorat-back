@@ -1,0 +1,158 @@
+// ============================ WALLET (operations) ============================
+// Polymorphic (walletType, walletId) fields are plain scalars: they can point at
+// customer_wallets OR driver_wallets, so no single Prisma relation is modeled.
+
+model WalletTopup {
+  id                   String    @id @default(uuid(7)) @db.Uuid
+  userId               String    @map("user_id") @db.Uuid
+  walletId             String    @map("wallet_id") @db.Uuid
+  amount               Decimal   @db.Decimal(12, 2)
+  currency             String    @default("INR") @db.Char(3)
+  paymentIntentId      String?   @map("payment_intent_id") @db.Uuid
+  paymentTransactionId String?   @map("payment_transaction_id") @db.Uuid
+  status               String    @default("PENDING")
+  gateway              String?
+  idempotencyKey       String    @unique @map("idempotency_key")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  completedAt          DateTime? @map("completed_at")
+
+  user   User           @relation(fields: [userId], references: [id])
+  wallet CustomerWallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([userId])
+  @@map("wallet_topups")
+}
+
+model WithdrawalRequest {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  driverId        String    @map("driver_id") @db.Uuid
+  walletId        String    @map("wallet_id") @db.Uuid
+  bankAccountId   String?   @map("bank_account_id") @db.Uuid
+  amount          Decimal   @db.Decimal(12, 2)
+  status          String    @default("REQUESTED")
+  payoutId        String?   @map("payout_id") @db.Uuid
+  rejectionReason String?   @map("rejection_reason")
+  requestedAt     DateTime  @default(now()) @map("requested_at")
+  processedAt     DateTime? @map("processed_at")
+
+  driver      Driver             @relation(fields: [driverId], references: [id])
+  wallet      DriverWallet       @relation(fields: [walletId], references: [id])
+  bankAccount DriverBankAccount? @relation(fields: [bankAccountId], references: [id])
+
+  @@index([driverId])
+  @@index([status])
+  @@map("withdrawal_requests")
+}
+
+model WalletHold {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  walletType    String    @map("wallet_type")
+  walletId      String    @map("wallet_id") @db.Uuid
+  ownerId       String    @map("owner_id") @db.Uuid
+  amount        Decimal   @db.Decimal(12, 2)
+  reason        String?
+  status        String    @default("ACTIVE")
+  referenceType String?   @map("reference_type")
+  referenceId   String?   @map("reference_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at")
+  releasedAt    DateTime? @map("released_at")
+
+  @@index([walletType, walletId])
+  @@map("wallet_holds")
+}
+
+model WalletTransfer {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  fromWalletType String   @map("from_wallet_type")
+  fromWalletId   String?  @map("from_wallet_id") @db.Uuid
+  toWalletType   String   @map("to_wallet_type")
+  toWalletId     String?  @map("to_wallet_id") @db.Uuid
+  amount         Decimal  @db.Decimal(12, 2)
+  reason         String?
+  status         String   @default("COMPLETED")
+  ledgerGroup    String?  @map("ledger_group") @db.Uuid
+  idempotencyKey String   @unique @map("idempotency_key")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("wallet_transfers")
+}
+
+model CashbackCampaign {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  code         String   @unique
+  name         String?
+  triggerEvent String   @map("trigger_event")
+  rewardType   String   @map("reward_type")
+  rewardValue  Decimal  @map("reward_value") @db.Decimal(10, 2)
+  maxReward    Decimal? @map("max_reward") @db.Decimal(10, 2)
+  minAmount    Decimal  @default(0) @map("min_amount") @db.Decimal(10, 2)
+  totalBudget  Decimal? @map("total_budget") @db.Decimal(14, 2)
+  usedBudget   Decimal  @default(0) @map("used_budget") @db.Decimal(14, 2)
+  validFrom    DateTime @map("valid_from")
+  validTo      DateTime @map("valid_to")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  grants CashbackGrant[]
+
+  @@index([isActive, validFrom, validTo])
+  @@map("cashback_campaigns")
+}
+
+model CashbackGrant {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  campaignId String    @map("campaign_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  walletType String    @default("CUSTOMER") @map("wallet_type")
+  walletId   String?   @map("wallet_id") @db.Uuid
+  rideId     String?   @map("ride_id") @db.Uuid
+  amount     Decimal   @db.Decimal(10, 2)
+  status     String    @default("PENDING")
+  grantedAt  DateTime  @default(now()) @map("granted_at")
+  creditedAt DateTime? @map("credited_at")
+  expiresAt  DateTime? @map("expires_at")
+
+  campaign CashbackCampaign @relation(fields: [campaignId], references: [id])
+  user     User             @relation(fields: [userId], references: [id])
+  ride     Ride?            @relation(fields: [rideId], references: [id])
+
+  @@index([campaignId])
+  @@index([userId])
+  @@map("cashback_grants")
+}
+
+model WalletAdjustment {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  walletType  String    @map("wallet_type")
+  walletId    String    @map("wallet_id") @db.Uuid
+  ownerId     String    @map("owner_id") @db.Uuid
+  direction   String // CREDIT | DEBIT
+  amount      Decimal   @db.Decimal(12, 2)
+  reason      String
+  requestedBy String?   @map("requested_by") @db.Uuid
+  approvedBy  String?   @map("approved_by") @db.Uuid
+  status      String    @default("PENDING")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  appliedAt   DateTime? @map("applied_at")
+
+  @@index([walletType, walletId])
+  @@index([status])
+  @@map("wallet_adjustments")
+}
+
+model WalletReconciliation {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  walletType      String   @map("wallet_type")
+  walletId        String   @map("wallet_id") @db.Uuid
+  asOf            DateTime @map("as_of")
+  storedBalance   Decimal  @map("stored_balance") @db.Decimal(14, 2)
+  computedBalance Decimal  @map("computed_balance") @db.Decimal(14, 2)
+  difference      Decimal  @db.Decimal(14, 2)
+  status          String // MATCHED | MISMATCH
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([walletType, walletId, asOf])
+  @@map("wallet_reconciliations")
+}

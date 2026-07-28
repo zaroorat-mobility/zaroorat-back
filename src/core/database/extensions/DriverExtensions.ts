@@ -1,13 +1,14 @@
-import { PrismaClient } from '../../../generated/prisma';
+import { Prisma } from '../../../generated/prisma';
 
-export function createDriverExtensions(prisma: PrismaClient) {
-  return prisma.$extends({
-    model: {
-      driver: {
-        async findActiveDrivers() {
-          return prisma.driver.findMany({ where: { verificationStatus: 'VERIFIED' } });
-        },
+export const driverExtension = Prisma.defineExtension({
+  name: 'DriverExtension',
+  model: {
+    driver: {
+      async findActiveDrivers() {
+        const ctx = Prisma.getExtensionContext(this);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (ctx as any).findMany({ where: { verificationStatus: 'VERIFIED' } });
       },
     },
-  });
-}
+  },
+});

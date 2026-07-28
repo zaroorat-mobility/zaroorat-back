@@ -3,6 +3,7 @@ import { bootstrapDatabase } from './database.bootstrap.js';
 import { bootstrapRedis } from './redis.bootstrap.js';
 import { bootstrapQueue } from './queue.bootstrap.js';
 import { bootstrapStorage } from './storage.bootstrap.js';
+import { bootstrapEvents } from './events.bootstrap.js';
 import { createApp } from '../app/index.js';
 import { bootstrapShutdown } from './shutdown.bootstrap.js';
 
@@ -10,6 +11,7 @@ export async function startup() {
   try {
     await bootstrapDatabase();
     await bootstrapRedis();
+    await bootstrapEvents();
     await bootstrapQueue();
     await bootstrapStorage();
 

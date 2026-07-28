@@ -9,6 +9,16 @@ export interface TransactionOptions {
 }
 
 /**
+ * The interactive-transaction client handed to a transaction callback. It is the
+ * full client minus lifecycle/extension methods, so repository writes can join a
+ * caller's transaction (the transactional-outbox pattern).
+ */
+export type TransactionClient = Omit<
+  ProviderClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+>;
+
+/**
  * Executes database transactions.
  * Depends on PrismaClientProvider directly to avoid a cyclic dependency
  * with DatabaseService.

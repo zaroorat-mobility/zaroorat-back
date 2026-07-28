@@ -1,0 +1,405 @@
+// ============================ CHAT ============================
+
+model ChatConversation {
+  id            String                 @id @default(uuid(7)) @db.Uuid
+  type          ChatConversationType   @default(RIDE)
+  rideId        String?                @map("ride_id") @db.Uuid
+  status        ChatConversationStatus @default(ACTIVE)
+  lastMessageAt DateTime?              @map("last_message_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  closedAt      DateTime?              @map("closed_at")
+
+  ride         Ride?             @relation(fields: [rideId], references: [id])
+  participants ChatParticipant[]
+  messages     ChatMessage[]
+  reports      ChatReport[]
+
+  @@index([rideId])
+  @@index([status, lastMessageAt])
+  @@map("chat_conversations")
+}
+
+model ChatParticipant {
+  id             String              @id @default(uuid(7)) @db.Uuid
+  conversationId String              @map("conversation_id") @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  role           ChatParticipantRole
+  joinedAt       DateTime            @default(now()) @map("joined_at")
+  lastReadAt     DateTime?           @map("last_read_at")
+  isMuted        Boolean             @default(false) @map("is_muted")
+  leftAt         DateTime?           @map("left_at")
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id])
+  user         User             @relation(fields: [userId], references: [id])
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("chat_participants")
+}
+
+model ChatMessage {
+  id             String            @id @default(uuid(7)) @db.Uuid
+  conversationId String            @map("conversation_id") @db.Uuid
+  senderId       String?           @map("sender_id") @db.Uuid
+  messageType    ChatMessageType   @default(TEXT) @map("message_type")
+  content        String?
+  status         ChatMessageStatus @default(SENT)
+  replyToId      String?           @map("reply_to_id") @db.Uuid
+  metadata       Json?
+  isDeleted      Boolean           @default(false) @map("is_deleted")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  editedAt       DateTime?         @map("edited_at")
+
+  conversation ChatConversation  @relation(fields: [conversationId], references: [id])
+  sender       User?             @relation(fields: [senderId], references: [id])
+  replyTo      ChatMessage?      @relation("MessageReply", fields: [replyToId], references: [id])
+  replies      ChatMessage[]     @relation("MessageReply")
+  attachments  ChatAttachment[]
+  receipts     ChatReadReceipt[]
+  reports      ChatReport[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("chat_messages")
+}
+
+model ChatAttachment {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  messageId    String   @map("message_id") @db.Uuid
+  mediaType    String   @map("media_type")
+  url          String
+  thumbnailUrl String?  @map("thumbnail_url")
+  sizeBytes    BigInt?  @map("size_bytes")
+  durationSec  Int?     @map("duration_sec")
+  width        Int?
+  height       Int?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  message ChatMessage @relation(fields: [messageId], references: [id])
+
+  @@index([messageId])
+  @@map("chat_attachments")
+}
+
+model ChatReadReceipt {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  messageId   String    @map("message_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+
+  message ChatMessage @relation(fields: [messageId], references: [id])
+  user    User        @relation(fields: [userId], references: [id])
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("chat_read_receipts")
+}
+
+model ChatCannedReply {
+  id        String              @id @default(uuid(7)) @db.Uuid
+  role      ChatParticipantRole
+  category  String?
+  text      String
+  locale    String              @default("en")
+  sortOrder Int                 @default(0) @map("sort_order") @db.SmallInt
+  isActive  Boolean             @default(true) @map("is_active")
+  createdAt DateTime            @default(now()) @map("created_at")
+
+  @@map("chat_canned_replies")
+}
+
+model ChatBlock {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  blockerId String   @map("blocker_id") @db.Uuid
+  blockedId String   @map("blocked_id") @db.Uuid
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id])
+  blocked User @relation("Blocked", fields: [blockedId], references: [id])
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("chat_blocks")
+}
+
+model ChatReport {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  conversationId String?   @map("conversation_id") @db.Uuid
+  messageId      String?   @map("message_id") @db.Uuid
+  reporterId     String    @map("reporter_id") @db.Uuid
+  reportedId     String?   @map("reported_id") @db.Uuid
+  category       String
+  description    String?
+  status         String    @default("OPEN")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  resolvedAt     DateTime? @map("resolved_at")
+
+  conversation ChatConversation? @relation(fields: [conversationId], references: [id])
+  message      ChatMessage?      @relation(fields: [messageId], references: [id])
+  reporter     User              @relation("Reporter", fields: [reporterId], references: [id])
+  reported     User?             @relation("Reported", fields: [reportedId], references: [id])
+
+  @@index([status])
+  @@index([reportedId])
+  @@map("chat_reports")
+}
+
+// ============================ REVIEW ============================
+
+model RatingTag {
+  id         String           @id @default(uuid(7)) @db.Uuid
+  code       String           @unique
+  label      String
+  targetType RatingTargetType @map("target_type")
+  sentiment  RatingSentiment  @default(POSITIVE)
+  minStars   Int?             @default(1) @map("min_stars") @db.SmallInt
+  maxStars   Int?             @default(5) @map("max_stars") @db.SmallInt
+  sortOrder  Int              @default(0) @map("sort_order") @db.SmallInt
+  isActive   Boolean          @default(true) @map("is_active")
+  createdAt  DateTime         @default(now()) @map("created_at")
+
+  assignments ReviewTagAssignment[]
+
+  @@map("rating_tags")
+}
+
+model ReviewTagAssignment {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  rideRatingId String   @map("ride_rating_id") @db.Uuid
+  tagId        String   @map("tag_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  rideRating RideRating @relation(fields: [rideRatingId], references: [id])
+  tag        RatingTag  @relation(fields: [tagId], references: [id])
+
+  @@unique([rideRatingId, tagId])
+  @@index([tagId])
+  @@map("review_tag_assignments")
+}
+
+model DriverRatingAggregate {
+  driverId     String    @id @map("driver_id") @db.Uuid
+  avgRating    Decimal   @default(0) @map("avg_rating") @db.Decimal(3, 2)
+  totalRatings Int       @default(0) @map("total_ratings")
+  star1        Int       @default(0)
+  star2        Int       @default(0)
+  star3        Int       @default(0)
+  star4        Int       @default(0)
+  star5        Int       @default(0)
+  lastRatedAt  DateTime? @map("last_rated_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@map("driver_rating_aggregates")
+}
+
+model CustomerRatingAggregate {
+  userId       String    @id @map("user_id") @db.Uuid
+  avgRating    Decimal   @default(0) @map("avg_rating") @db.Decimal(3, 2)
+  totalRatings Int       @default(0) @map("total_ratings")
+  star1        Int       @default(0)
+  star2        Int       @default(0)
+  star3        Int       @default(0)
+  star4        Int       @default(0)
+  star5        Int       @default(0)
+  lastRatedAt  DateTime? @map("last_rated_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("customer_rating_aggregates")
+}
+
+model ReviewFlag {
+  id            String           @id @default(uuid(7)) @db.Uuid
+  rideRatingId  String           @map("ride_rating_id") @db.Uuid
+  flaggedBy     String?          @map("flagged_by") @db.Uuid
+  reason        String
+  status        ReviewFlagStatus @default(PENDING)
+  moderatorId   String?          @map("moderator_id") @db.Uuid
+  moderatorNote String?          @map("moderator_note")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  resolvedAt    DateTime?        @map("resolved_at")
+
+  rideRating RideRating @relation(fields: [rideRatingId], references: [id])
+  flagger    User?      @relation("FlaggedBy", fields: [flaggedBy], references: [id])
+  moderator  User?      @relation("Moderator", fields: [moderatorId], references: [id])
+
+  @@index([rideRatingId])
+  @@map("review_flags")
+}
+
+model ReviewResponse {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  rideRatingId String   @unique @map("ride_rating_id") @db.Uuid
+  responderId  String   @map("responder_id") @db.Uuid
+  responseText String   @map("response_text")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  rideRating RideRating @relation(fields: [rideRatingId], references: [id])
+  responder  User       @relation(fields: [responderId], references: [id])
+
+  @@map("review_responses")
+}
+
+// ============================ SUPPORT ============================
+
+model SlaPolicy {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  name              String
+  priority          TicketPriority
+  firstResponseMins Int            @map("first_response_mins")
+  resolutionMins    Int            @map("resolution_mins")
+  businessHoursOnly Boolean        @default(false) @map("business_hours_only")
+  isActive          Boolean        @default(true) @map("is_active")
+  createdAt         DateTime       @default(now()) @map("created_at")
+
+  categories SupportCategory[]
+
+  @@map("sla_policies")
+}
+
+model SupportCategory {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  code            String         @unique
+  name            String
+  parentId        String?        @map("parent_id") @db.Uuid
+  defaultPriority TicketPriority @default(NORMAL) @map("default_priority")
+  slaPolicyId     String?        @map("sla_policy_id") @db.Uuid
+  sortOrder       Int            @default(0) @map("sort_order") @db.SmallInt
+  isActive        Boolean        @default(true) @map("is_active")
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  parent          SupportCategory?        @relation("CategoryTree", fields: [parentId], references: [id])
+  children        SupportCategory[]       @relation("CategoryTree")
+  slaPolicy       SlaPolicy?              @relation(fields: [slaPolicyId], references: [id])
+  tickets         SupportTicket[]
+  cannedResponses SupportCannedResponse[]
+
+  @@index([parentId])
+  @@map("support_categories")
+}
+
+model SupportAgent {
+  id            String      @id @default(uuid(7)) @db.Uuid
+  userId        String      @unique @map("user_id") @db.Uuid
+  displayName   String?     @map("display_name")
+  status        AgentStatus @default(OFFLINE)
+  maxConcurrent Int         @default(10) @map("max_concurrent") @db.SmallInt
+  activeTickets Int         @default(0) @map("active_tickets")
+  skills        Json?
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  user            User               @relation(fields: [userId], references: [id])
+  assignedTickets SupportTicket[]
+  assignments     TicketAssignment[]
+  escalationsFrom TicketEscalation[] @relation("EscFrom")
+  escalationsTo   TicketEscalation[] @relation("EscTo")
+
+  @@index([status])
+  @@map("support_agents")
+}
+
+model SupportTicket {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  ticketNumber    String         @unique @map("ticket_number")
+  userId          String         @map("user_id") @db.Uuid
+  categoryId      String?        @map("category_id") @db.Uuid
+  rideId          String?        @map("ride_id") @db.Uuid
+  subject         String
+  description     String?
+  status          TicketStatus   @default(OPEN)
+  priority        TicketPriority @default(NORMAL)
+  channel         TicketChannel  @default(APP)
+  assignedAgentId String?        @map("assigned_agent_id") @db.Uuid
+  firstResponseAt DateTime?      @map("first_response_at")
+  slaDueAt        DateTime?      @map("sla_due_at")
+  resolvedAt      DateTime?      @map("resolved_at")
+  closedAt        DateTime?      @map("closed_at")
+  reopenedCount   Int            @default(0) @map("reopened_count") @db.SmallInt
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  user          User                   @relation(fields: [userId], references: [id])
+  category      SupportCategory?       @relation(fields: [categoryId], references: [id])
+  ride          Ride?                  @relation(fields: [rideId], references: [id])
+  assignedAgent SupportAgent?          @relation(fields: [assignedAgentId], references: [id])
+  messages      SupportTicketMessage[]
+  assignments   TicketAssignment[]
+  escalations   TicketEscalation[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([assignedAgentId])
+  @@map("support_tickets")
+}
+
+model SupportTicketMessage {
+  id          String              @id @default(uuid(7)) @db.Uuid
+  ticketId    String              @map("ticket_id") @db.Uuid
+  authorType  TicketMessageAuthor @map("author_type")
+  authorId    String?             @map("author_id") @db.Uuid
+  body        String
+  isInternal  Boolean             @default(false) @map("is_internal")
+  attachments Json?
+  createdAt   DateTime            @default(now()) @map("created_at")
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id])
+  author User?         @relation(fields: [authorId], references: [id])
+
+  @@index([ticketId, createdAt])
+  @@map("support_ticket_messages")
+}
+
+model TicketAssignment {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  ticketId   String    @map("ticket_id") @db.Uuid
+  agentId    String    @map("agent_id") @db.Uuid
+  assignedBy String?   @map("assigned_by") @db.Uuid
+  reason     String?
+  status     String    @default("ACTIVE")
+  assignedAt DateTime  @default(now()) @map("assigned_at")
+  releasedAt DateTime? @map("released_at")
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id])
+  agent  SupportAgent  @relation(fields: [agentId], references: [id])
+
+  @@index([ticketId])
+  @@index([agentId])
+  @@map("ticket_assignments")
+}
+
+model TicketEscalation {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  ticketId    String   @map("ticket_id") @db.Uuid
+  fromAgentId String?  @map("from_agent_id") @db.Uuid
+  toAgentId   String?  @map("to_agent_id") @db.Uuid
+  level       Int      @default(1) @db.SmallInt
+  reason      String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id])
+  fromAgent SupportAgent? @relation("EscFrom", fields: [fromAgentId], references: [id])
+  toAgent   SupportAgent? @relation("EscTo", fields: [toAgentId], references: [id])
+
+  @@index([ticketId])
+  @@map("ticket_escalations")
+}
+
+model SupportCannedResponse {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  categoryId String?  @map("category_id") @db.Uuid
+  title      String
+  body       String
+  locale     String   @default("en")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  category SupportCategory? @relation(fields: [categoryId], references: [id])
+
+  @@map("support_canned_responses")
+}

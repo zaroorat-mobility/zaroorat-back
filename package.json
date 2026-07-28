@@ -24,11 +24,10 @@
     "prepare": "is-ci || husky",
     "preinstall": "npx -y only-allow npm",
     "postinstall": "prisma generate",
-    "prisma:merge": "node scripts/merge-prisma.js",
     "prisma:validate": "node scripts/validate-prisma.js",
     "prisma:format": "node scripts/format-prisma.js",
     "prisma:reset": "node scripts/reset-db.js",
-    "prisma:generate": "npm run prisma:merge && npx prisma generate"
+    "prisma:generate": "npx prisma generate"
   },
   "keywords": [],
   "author": "",
