@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` · **Doc:** 04 of the AUTH chain · **Stack:** Fastify / TypeScript (ADR-0006)
-> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) · **Last updated:** 2026-07-27
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) · **Last updated:** 2026-08-02
 > **Answers:** _What are the exact endpoints, request/response shapes, and route-guard wiring?_
 > **Traces from:** [01_BR](01_AUTH_BUSINESS_REQUIREMENTS.md) · [02_SECURITY](02_AUTH_SECURITY_SPEC.md) · [03_DATABASE](03_AUTH_DATABASE_SPEC.md)
 > **Traces to:** 05_AUTH_ERROR_CATALOG (error bodies) · 06_AUTH_EVENT_CATALOG (event schemas) · 07_AUTH_TEST_PLAN
@@ -11,8 +11,9 @@
 
 ## 1. Scope & conventions
 
-Four public/near-public endpoints plus the shared auth guard every other module consumes. This doc
-fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
+Nine endpoints — four public/near-public credential flows (§2.1–2.4) and five authenticated
+self-service ones for sessions and devices (§2.5–2.6) — plus the shared auth guard every other module
+consumes. This doc fixes the **contracts**; error _bodies_ are 05, event _schemas_ are 06.
 
 | Convention      | Rule                                                                                                             |
 | --------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -157,6 +158,80 @@ already-revoked session is a no-op).
 
 ---
 
+### 2.5 Session self-service
+
+| Method   | Path                            | Response                    |
+| -------- | ------------------------------- | --------------------------- |
+| `GET`    | `/api/v1/auth/me/sessions`      | `200` — array, oldest first |
+| `DELETE` | `/api/v1/auth/me/sessions/{id}` | `204`                       |
+| `DELETE` | `/api/v1/auth/me/sessions`      | `204` — all, epoch bumped   |
+
+**Response `200`** — each entry:
+
+```json
+{
+  "id": "<sid>",
+  "deviceId": "<uuid|null>",
+  "ipAddress": "203.0.113.4",
+  "userAgent": "Zaroorat/1.4 (Android 14)",
+  "loginMethod": "otp",
+  "createdAt": "…",
+  "lastSeenAt": "…",
+  "expiresAt": "…",
+  "current": true
+}
+```
+
+- **Auth:** required on all three; the subject is always `request.auth.userId` (R-AUTH-11).
+- `current` marks the caller's own `sid`, so a client can warn before signing itself out.
+- Revoking **one** session denylists that `sid` only; revoking **all** bumps the epoch, exactly as
+  `logout { allDevices: true }` does.
+- **Events:** `auth.session.revoked` per affected `sid`.
+
+### 2.6 Device self-service (R-DEVICE-3, AUTH-INV-6)
+
+| Method   | Path                           | Response                          |
+| -------- | ------------------------------ | --------------------------------- |
+| `GET`    | `/api/v1/auth/me/devices`      | `200` — array, most recently seen |
+| `DELETE` | `/api/v1/auth/me/devices/{id}` | `204`                             |
+
+**Response `200`** — each entry:
+
+```json
+{
+  "id": "<uuid>",
+  "deviceId": "<client-reported id|null>",
+  "platform": "ANDROID",
+  "trustState": "REGISTERED",
+  "isRooted": false,
+  "isJailbroken": false,
+  "appVersion": "1.4.0",
+  "osVersion": "14",
+  "lastSeenAt": "…",
+  "createdAt": "…",
+  "current": true
+}
+```
+
+- **`device_fingerprint` is never returned.** It is a signal AUTH matches against, so echoing it
+  makes it readable from one compromised session and replayable from another (R-DEVICE-5).
+- **Revoked devices stay in the list**, carrying `trustState: "REVOKED"`. Hiding a revocation hides
+  the security event the user most needs to see.
+- Revoking a device marks it `REVOKED` **and ends every session bound to it** (AUTH-INV-6). It
+  re-registers on its next verified login (R-DEVICE-3) — it cannot restore itself.
+- Revoking the **calling** device signs the caller out; that is the intended lost-phone flow, and
+  `current` is what lets a client confirm first.
+- **Events:** `auth.device.revoked` (`actor: "self"` here; `"system"` for ops), plus
+  `auth.session.revoked` per session ended.
+
+> **Unknown and not-owned are one answer.** On both `DELETE` paths, an id belonging to another
+> account and an id that never existed return **byte-identical** bodies — confirming that someone
+> else's session or device exists is an enumeration oracle. Note the status is `400 VALIDATION`,
+> **not** the `404 NOT_FOUND` the USER module uses for the same shape (user doc 04 §2.1). Both are
+> enumeration-safe; the divergence is real and worth settling in one direction.
+
+---
+
 ## 3. The shared auth guard (Fastify wiring — realizes doc 02 §6)
 
 Auth exposes two decorators the whole monolith consumes. Authentication is **deny-by-default**: a
@@ -178,12 +253,17 @@ async function authenticate(req, reply) {
   req.auth = { userId: claims.sub, sid: claims.sid, roles: claims.roles };
 }
 
-// fastify.authorize({ roles, requireOperableDriver }) — a preHandler factory:
-// role guard + the driver conjunction (R-AUTH-15/23, AUTH-INV-7).
-function authorize({ roles: need = [], requireOperableDriver }) {
+// fastify.authorize({ roles, requireOperableDriver, requireUntamperedDevice })
+// — a preHandler factory: role guard, the driver conjunction (R-AUTH-15/23,
+// AUTH-INV-7), and the root/jailbreak refusal (doc 02 §5.2, R-DEVICE-5).
+function authorize({ roles: need = [], requireOperableDriver, requireUntamperedDevice }) {
   return async (req, reply) => {
     if (need.length && !need.some((r) => req.auth.roles.includes(r)))
       return reply.code(403).send(err('FORBIDDEN'));
+    // requireUntamperedDevice resolves the device from the calling SESSION, not a
+    // claim: the token carries no device, and a flag minted at login would keep
+    // its access until the token expired. A session with no device binding is
+    // DENIED — "cannot assess" must not resolve to "allowed" here.
     // requireOperableDriver is checked LIVE against the driver domain, not the token:
     //   -> drivers.verification_status = 'VERIFIED' (and not suspended) AND account = active (R-AUTH-23)
   };
@@ -206,6 +286,12 @@ fastify.post(
 - **Operability is never in the token** — `requireOperableDriver` forces a live
   `drivers.verification_status` read, because a driver's approval can flip independently of their
   session.
+- **Device integrity is never in the token either** — `requireUntamperedDevice` reads the device the
+  calling session is bound to, so a handset that becomes rooted loses the sensitive subset on its
+  **next** request rather than at token expiry. Normal authentication is unaffected: doc 02 §5.2's
+  v1 policy is capture, allow ordinary use, deny the sensitive subset. **The list of sensitive
+  actions belongs to each module; AUTH only enforces the flag** — the phone-number change opts in
+  (user doc 02 §2.4), and that is the whole list today.
 
 ---
 
@@ -231,8 +317,10 @@ fastify.post(
   replay it (NFR-RESIL-02). `send` is not keyed (a resend is a resend, rate-limited instead).
 - **No secret in any response or log** (R-AUTH-18): OTP codes and raw refresh tokens appear only where
   spec'd (refresh token in its issuing response body); never echoed in errors.
-- **Audit:** logout-all, and any admin-initiated revoke/suspend routes (owned by `admin`), write
-  `audit_log` (R-AUTH-21).
+- **Audit:** logout-all, device revocation, and any admin-initiated revoke/suspend routes (owned by
+  `admin`) write their audit-class event to `outbox_events` in the same transaction as the change
+  (R-AUTH-21); admin-initiated actions additionally write `admin_activity_logs`. See doc 03 §6 —
+  there is no `audit_log` table.
 
 ---
 
@@ -255,8 +343,11 @@ fastify.post(
 | `/otp/verify`              | R-AUTH-1/3/10, AUTH-INV-2, R-ACCOUNT-6        |
 | `/token/refresh`           | R-AUTH-4/5/10, AUTH-INV-5, doc 02 §3.2        |
 | `/logout` (+ allDevices)   | R-AUTH-6/11, AUTH-INV-4, doc 02 §3.3          |
+| `/me/sessions` (§2.5)      | R-AUTH-11, AUTH-INV-4, doc 02 §5.1            |
+| `/me/devices` (§2.6)       | R-DEVICE-1/3/5, AUTH-INV-6, doc 02 §5.2       |
 | `authenticate` hook        | R-AUTH-7/12/14/16, AUTH-INV-3, doc 02 §3.3/§6 |
 | `authorize` + driver conj. | R-AUTH-15/17/23, AUTH-INV-7                   |
+| `authorize` + device conj. | R-DEVICE-5, doc 02 §5.2                       |
 | idempotency handling       | NFR-6, NFR-RESIL-02                           |
 
 **Next: 05_AUTH_ERROR_CATALOG** — the concrete error bodies, codes, and the enumeration-safe

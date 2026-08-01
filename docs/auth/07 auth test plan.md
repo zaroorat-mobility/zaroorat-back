@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` (+ `users`) · **Doc:** 07 of the AUTH chain · **Stack:** tsx test runner / Fastify inject / Prisma (ADR-0006)
-> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / QA · **Last updated:** 2026-07-27
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / QA · **Last updated:** 2026-08-02
 > **Answers:** _How do we prove AUTH meets its requirements, invariants, and security properties before it ships?_
 > **Traces from:** [01_BR](01%20auth%20business%20requirements.md) §13 · [02_SECURITY](02%20auth%20security%20spec.md) · [03_DB](03%20auth%20database%20spec.md) · [04_API](04%20auth%20api%20spec.md) · [05_ERRORS](05%20auth%20error%20catalog.md) · [06_EVENTS](06%20auth%20event%20catalog.md)
 
@@ -44,20 +44,20 @@ solid band of integration tests against a real Postgres + Redis, a **thin** e2e 
 
 Every row must be green for v1. IDs map 1:1 to the twelve criteria in doc 01 §13.
 
-| #   | Criterion (abbreviated)                                             | Level(s)          | Key assertions                                                                                                                  |
-| --- | ------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Register/login with phone + OTP; returning login identical          | integration, e2e  | first verify creates `users` (status `ACTIVE`) + grants `customer`; second verify opens a session, no dup account               |
-| 2   | OTP time-limited, single-use, rate-limited, lockout after threshold | integration, sec  | expired code → `410`; reused code → fail; 6th send/hr/phone → `429`; 5 fails → `OTP_LOCKED` 15 min                              |
-| 3   | Refresh rotates; replayed refresh kills the family                  | integration, sec  | rotate returns new pair; old token replay → `TOKEN_REUSE`, all family sessions revoked, epoch bumped                            |
-| 4   | Logout & suspension immediately end sessions                        | integration       | post-logout `sid` → `SESSION_REVOKED`; suspend bumps epoch → next request `TOKEN_STALE`                                         |
-| 5   | Deny-by-default; multi-role user authorized for both                | unit, integration | unguarded route protected; `{customer,driver}` user passes both role guards                                                     |
-| 6   | `driver` role but not `VERIFIED` → ride-accept **denied**           | integration       | role-only driver → `FORBIDDEN`; after `drivers.verification_status=VERIFIED` (not suspended) → allowed _(key regression guard)_ |
-| 7   | Concurrent-session cap revokes the oldest                           | integration       | 6th login revokes session #1; its `sid` → `SESSION_REVOKED`; `auth.session.revoked` emitted                                     |
-| 8   | Revoked device cannot use its sessions                              | integration       | device `REVOKED` → its sessions all `SESSION_REVOKED`                                                                           |
-| 9   | verify/refresh/logout idempotent under retry                        | integration, sec  | same `Idempotency-Key` replays stored result; no double session, no OTP re-consume                                              |
-| 10  | Sensitive actions audited; no secret logged/returned                | integration, sec  | suspend/role-change write `audit_log` in-txn; grep responses+logs → no code/token/pepper                                        |
-| 11  | Phone enumeration impossible via auth responses                     | security          | send uniform for known/unknown; `OTP_INVALID` merged + constant-time                                                            |
-| 12  | Fraud matrix + recovery deterministic responses enforced            | integration, sec  | lockout, family-revoke, cap-evict all fire per doc 02 §7                                                                        |
+| #   | Criterion (abbreviated)                                             | Level(s)          | Key assertions                                                                                                                                                |
+| --- | ------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Register/login with phone + OTP; returning login identical          | integration, e2e  | first verify creates `users` (status `ACTIVE`) + grants `customer`; second verify opens a session, no dup account                                             |
+| 2   | OTP time-limited, single-use, rate-limited, lockout after threshold | integration, sec  | expired code → `410`; reused code → fail; 6th send/hr/phone → `429`; 5 fails → `OTP_LOCKED` 15 min                                                            |
+| 3   | Refresh rotates; replayed refresh kills the family                  | integration, sec  | rotate returns new pair; old token replay → `TOKEN_REUSE`, all family sessions revoked, epoch bumped                                                          |
+| 4   | Logout & suspension immediately end sessions                        | integration       | post-logout `sid` → `SESSION_REVOKED`; suspend bumps epoch → next request `TOKEN_STALE`                                                                       |
+| 5   | Deny-by-default; multi-role user authorized for both                | unit, integration | unguarded route protected; `{customer,driver}` user passes both role guards                                                                                   |
+| 6   | `driver` role but not `VERIFIED` → ride-accept **denied**           | integration       | role-only driver → `FORBIDDEN`; after `drivers.verification_status=VERIFIED` (not suspended) → allowed _(key regression guard)_                               |
+| 7   | Concurrent-session cap revokes the oldest                           | integration       | 6th login revokes session #1; its `sid` → `SESSION_REVOKED`; `auth.session.revoked` emitted                                                                   |
+| 8   | Revoked device cannot use its sessions                              | integration       | device `REVOKED` → its sessions all `SESSION_REVOKED`                                                                                                         |
+| 9   | verify/refresh/logout idempotent under retry                        | integration, sec  | same `Idempotency-Key` replays stored result; no double session, no OTP re-consume                                                                            |
+| 10  | Sensitive actions audited; no secret logged/returned                | integration, sec  | suspend/role-change write their audit event to `outbox_events` in-txn (doc 03 §6 — there is no `audit_log` table); grep responses+logs → no code/token/pepper |
+| 11  | Phone enumeration impossible via auth responses                     | security          | send uniform for known/unknown; `OTP_INVALID` merged + constant-time                                                                                          |
+| 12  | Fraud matrix + recovery deterministic responses enforced            | integration, sec  | lockout, family-revoke, cap-evict all fire per doc 02 §7                                                                                                      |
 
 ---
 

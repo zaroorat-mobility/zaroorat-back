@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `users` · **Doc:** 03 of the USER chain · **Stack:** Prisma 7 / PostgreSQL + PostGIS (ADR-0003, ADR-0006)
-> **Status:** 🟡 Specified (v1) · **Owner:** Engineering (Identity) · **Last updated:** 2026-07-29
+> **Status:** 🟡 Specified (v1) · **Owner:** Engineering (Identity) · **Last updated:** 2026-08-02
 > **Answers:** _What tables back this module, what does the database enforce, and how does the schema change safely?_
 > **Traces from:** [01_BR](01_USER_BUSINESS_REQUIREMENTS.md) §10 · [02_API](02_USER_API_SPEC.md) §6
 > **Traces to:** 04_USER_ERROR_CATALOG · 05_USER_EVENT_CATALOG · 06_USER_TEST_PLAN §8
@@ -224,10 +224,10 @@ raw SQL, because Prisma cannot express a functional index or a GiST index on an 
 USER writes no audit table of its own. Audit-class changes land in the shared outbox and, for
 admin-initiated actions, in `admin_activity_logs` (05 §4).
 
-> **There is no `audit_log` table.** AUTH doc 03 §6 and doc 04 §5 refer to one; the schema has
-> `admin_activity_logs` (with `AuditFieldChange` rows) and the transactional outbox instead. This doc
-> records the discrepancy rather than inventing a third audit store. Resolving the AUTH docs' wording
-> is tracked separately.
+> **There is no `audit_log` table.** Earlier drafts of AUTH docs 02, 03, 04, 06, and 07 referred to
+> one; the schema has `admin_activity_logs` (with `AuditFieldChange` rows) and the transactional
+> outbox instead. Rather than invent a third audit store, this doc recorded the discrepancy — and the
+> AUTH chain has since been corrected to name the two stores that exist (AUTH doc 03 §6).
 
 ---
 
