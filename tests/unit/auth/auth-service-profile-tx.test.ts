@@ -89,6 +89,7 @@ function makeService(opts: { existingUser?: boolean; profileCreated?: boolean } 
     deviceService as never,
     sessionService as never,
     tokenService as never,
+    { bump: async () => 2, current: async () => 1 } as never,
     redisService as never,
     eventPublisher as never,
     transactionManager as never,

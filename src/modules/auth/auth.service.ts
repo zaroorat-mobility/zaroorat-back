@@ -10,7 +10,7 @@ import { userEvent } from '@modules/users/events';
 import { UserRepository } from './repositories/user.repository';
 import { RoleRepository } from './repositories/role.repository';
 import { OtpService, type SendOtpResult } from './otp';
-import { TokenService, type TokenPair } from './services';
+import { TokenService, EpochService, type TokenPair } from './services';
 import { SessionService } from './session';
 import { DeviceService } from './session/device.service';
 import { AccountSuspendedError } from './errors';
@@ -78,6 +78,7 @@ export class AuthService {
    * @param deviceService Device binding/trust.
    * @param sessionService Session lifecycle.
    * @param tokenService Access/refresh issuance and rotation.
+   * @param epochService Epoch authority — bumped on a role change (R-ACCOUNT-7).
    * @param redisService Idempotency store.
    * @param jwtConfig Refresh TTL (session lifetime).
    * @param sessionConfig Concurrency caps.
@@ -90,6 +91,7 @@ export class AuthService {
     private readonly deviceService: DeviceService,
     private readonly sessionService: SessionService,
     private readonly tokenService: TokenService,
+    private readonly epochService: EpochService,
     private readonly redisService: RedisService,
     private readonly eventPublisher: EventPublisher,
     private readonly transactionManager: TransactionManager,
@@ -348,6 +350,116 @@ export class AuthService {
    */
   async revokeDevice(userId: string, deviceId: string): Promise<number | null> {
     return this.deviceService.revokeForUser(userId, deviceId);
+  }
+
+  /**
+   * Grant a role to an identity (R-ACCOUNT-7, doc 06 §5.4).
+   *
+   * Provisioned **out of band** — there is no public route and there must not be
+   * one: `admin` and `support` are never self-granted through the public flow
+   * (R-AUTH-17). This is the seam ops tooling calls, alongside
+   * {@link suspend} and {@link activate}.
+   *
+   * Idempotent: an identity that already holds the role live is untouched, and
+   * nothing is announced. The write and its audit event commit together; the
+   * epoch bump follows the commit, because a Redis write inside a transaction can
+   * outlive a rollback.
+   *
+   * @param userId Subject user UUID.
+   * @param roleSlug Canonical slug (`customer` | `driver` | `admin` | `support`).
+   * @param options Actor performing the grant, and an expiry for a scoped role.
+   * @returns `true` if this call granted the role; `false` if it was already held.
+   * @throws If the slug is not seeded — an unknown role is a deployment fault,
+   *         not a runtime condition to absorb.
+   */
+  async grantRole(
+    userId: string,
+    roleSlug: string,
+    options: { grantedBy?: string | null; expiresAt?: Date | null } = {},
+  ): Promise<boolean> {
+    const role = await this.roleRepository.findBySlug(roleSlug);
+    if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
+
+    const granted = await this.transactionManager.execute(async (tx) => {
+      const active = await this.roleRepository.findActiveAssignment(userId, role.id, undefined, tx);
+      if (active) return false;
+
+      await this.roleRepository.grant(
+        {
+          userId,
+          roleId: role.id,
+          ...(options.grantedBy != null ? { grantedBy: options.grantedBy } : {}),
+          ...(options.expiresAt != null ? { expiresAt: options.expiresAt } : {}),
+        },
+        tx,
+      );
+      await this.eventPublisher.publish(
+        authEvent('account.role.granted', {
+          subjectUserId: userId,
+          data: {
+            userId,
+            roleSlug,
+            ...(options.grantedBy != null ? { grantedBy: options.grantedBy } : {}),
+            ...(options.expiresAt != null ? { expiresAt: options.expiresAt.toISOString() } : {}),
+          },
+        }),
+        tx,
+      );
+      return true;
+    });
+
+    // A role change invalidates every outstanding access token, because the token
+    // carries a `roles` snapshot that is now wrong (doc 02 §3.3). The holder
+    // refreshes and gets the new set.
+    if (granted) await this.epochService.bump(userId);
+    return granted;
+  }
+
+  /**
+   * Revoke a role from an identity (R-ACCOUNT-7, doc 06 §5.4).
+   *
+   * Revocation is a timestamp, never a row delete: `uq_user_role_active` is
+   * partial on `revoked_at IS NULL`, so the grant/revoke history is retained and
+   * the same role can be granted again afterwards (doc 03 §4, OD-2).
+   *
+   * @param userId Subject user UUID.
+   * @param roleSlug Canonical slug.
+   * @param options Actor performing the revocation and a coarse reason, both
+   *                recorded on the event only — `user_roles` has no `revoked_by`
+   *                column, and the actor's own record belongs in
+   *                `admin_activity_logs`, which is the admin module's job.
+   * @returns `true` if a live assignment was revoked; `false` if none was held.
+   * @throws If the slug is not seeded.
+   */
+  async revokeRole(
+    userId: string,
+    roleSlug: string,
+    options: { revokedBy?: string | null; reason?: string | null } = {},
+  ): Promise<boolean> {
+    const role = await this.roleRepository.findBySlug(roleSlug);
+    if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
+
+    const revoked = await this.transactionManager.execute(async (tx) => {
+      const count = await this.roleRepository.revoke(userId, role.id, undefined, tx);
+      if (count === 0) return false;
+
+      await this.eventPublisher.publish(
+        authEvent('account.role.revoked', {
+          subjectUserId: userId,
+          data: {
+            userId,
+            roleSlug,
+            ...(options.revokedBy != null ? { revokedBy: options.revokedBy } : {}),
+            ...(options.reason != null ? { reason: options.reason } : {}),
+          },
+        }),
+        tx,
+      );
+      return true;
+    });
+
+    if (revoked) await this.epochService.bump(userId);
+    return revoked;
   }
 
   /**

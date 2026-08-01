@@ -106,10 +106,18 @@ export class RoleRepository extends BaseRepository {
    * @param userId Subject user UUID.
    * @param roleId Role UUID.
    * @param revokedAt Revocation timestamp (defaults to now).
+   * @param tx Transaction client to join, so the revocation and its audit event
+   *           commit together — a role change that lost its trail is exactly what
+   *           the outbox exists to prevent (R-AUTH-21).
    * @returns Count of assignments revoked.
    */
-  async revoke(userId: string, roleId: string, revokedAt: Date = new Date()): Promise<number> {
-    const { count } = await this.client.userRoleAssignment.updateMany({
+  async revoke(
+    userId: string,
+    roleId: string,
+    revokedAt: Date = new Date(),
+    tx?: TransactionClient,
+  ): Promise<number> {
+    const { count } = await (tx ?? this.client).userRoleAssignment.updateMany({
       where: { userId, roleId, revokedAt: null },
       data: { revokedAt },
     });
