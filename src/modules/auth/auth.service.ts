@@ -2,7 +2,7 @@ import { RedisService } from '@core/cache';
 import { EventPublisher } from '@core/events';
 import { TransactionManager } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
-import type { AppPlatform, User, UserSession } from '@core/database/types';
+import type { AppPlatform, User, UserDevice, UserSession } from '@core/database/types';
 import type { JwtConfig } from '@config/jwt/jwt.config';
 import type { SessionConfig } from '@config/session/session.config';
 import { UserProfileRepository } from '@modules/users/repositories';
@@ -313,6 +313,41 @@ export class AuthService {
    */
   async revokeSession(userId: string, sessionId: string): Promise<boolean> {
     return this.sessionService.revokeForUser(userId, sessionId);
+  }
+
+  /**
+   * List the devices bound to the caller's account (self-service management).
+   *
+   * The caller's own device is resolved from the session it is calling with, so
+   * the client can mark it and avoid signing itself out by mistake. It comes from
+   * the session row rather than the token because the access token carries `sid`,
+   * not the device binding.
+   *
+   * @param userId The caller's user UUID.
+   * @param sessionId The caller's current `sid`.
+   * @returns The user's devices, newest activity first, and which one is calling.
+   */
+  async listDevices(
+    userId: string,
+    sessionId: string,
+  ): Promise<{ devices: UserDevice[]; currentDeviceId: string | null }> {
+    const [devices, currentDeviceId] = await Promise.all([
+      this.deviceService.listDevices(userId),
+      this.sessionService.deviceIdFor(sessionId),
+    ]);
+    return { devices, currentDeviceId };
+  }
+
+  /**
+   * Revoke one of the caller's own devices: mark it `REVOKED` and end every
+   * session bound to it (R-DEVICE-3, AUTH-INV-6). The device must re-register on
+   * its next verified login before it can hold a session again.
+   * @param userId The caller's user UUID.
+   * @param deviceId The device to revoke.
+   * @returns Sessions revoked, or `null` if the device is unknown or not owned.
+   */
+  async revokeDevice(userId: string, deviceId: string): Promise<number | null> {
+    return this.deviceService.revokeForUser(userId, deviceId);
   }
 
   /**

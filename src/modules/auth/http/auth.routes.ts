@@ -29,4 +29,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.get('/me/sessions', controller.listSessions);
   app.delete('/me/sessions', controller.revokeAllSessions);
   app.delete('/me/sessions/:id', controller.revokeSession);
+  app.get('/me/devices', controller.listDevices);
+  app.delete('/me/devices/:id', controller.revokeDevice);
 }

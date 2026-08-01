@@ -106,6 +106,17 @@ export class SessionService {
   }
 
   /**
+   * The device a session is bound to.
+   * @param sessionId Session UUID (`sid`).
+   * @returns The bound `UserDevice.id`, or `null` if the session is unknown or
+   *          was opened without a device (an older row, or a non-app client).
+   */
+  async deviceIdFor(sessionId: string): Promise<string | null> {
+    const session = await this.sessionRepository.findById(sessionId);
+    return session?.deviceId ?? null;
+  }
+
+  /**
    * Revoke a specific session, but only if it belongs to the caller.
    * @param userId The caller's user UUID.
    * @param sessionId The session (`sid`) to revoke.
