@@ -4,8 +4,8 @@ import { OutboxRepository } from './OutboxRepository';
 import { EventBus } from './EventBus';
 import type { EventEnvelope, PublishInput } from './types';
 
-/** The producer name stamped on every envelope from this service. */
-const PRODUCER = 'auth';
+/** Producer stamped on an envelope when the caller does not name one. */
+const DEFAULT_PRODUCER = 'auth';
 /** Current envelope schema version (auth doc 06 §3/§7). */
 const ENVELOPE_VERSION = 1;
 
@@ -59,7 +59,7 @@ export class EventPublisher {
       type: input.type,
       version: ENVELOPE_VERSION,
       occurredAt: new Date().toISOString(),
-      producer: PRODUCER,
+      producer: input.producer ?? DEFAULT_PRODUCER,
       subject: { userId: input.subjectUserId ?? null },
       correlation: { requestId: input.requestId ?? null, sessionId: input.sessionId ?? null },
       data: input.data,

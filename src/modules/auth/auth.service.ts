@@ -5,6 +5,8 @@ import type { TransactionClient } from '@core/database/TransactionManager';
 import type { AppPlatform, User, UserSession } from '@core/database/types';
 import type { JwtConfig } from '@config/jwt/jwt.config';
 import type { SessionConfig } from '@config/session/session.config';
+import { UserProfileRepository } from '@modules/users/repositories';
+import { userEvent } from '@modules/users/events';
 import { UserRepository } from './repositories/user.repository';
 import { RoleRepository } from './repositories/role.repository';
 import { OtpService, type SendOtpResult } from './otp';
@@ -64,13 +66,14 @@ export interface AuthLoginResult extends TokenPair {
  * It owns no low-level mechanics — it sequences them and enforces the
  * cross-cutting rules (account lifecycle, role-based session caps, idempotent
  * verify/refresh). Verification and account creation are self-healing: a retried
- * verify replays via the idempotency key, and a missing default role is
- * re-granted on next login.
+ * verify replays via the idempotency key, and a missing default role or profile
+ * is re-created on next login.
  */
 export class AuthService {
   /**
    * @param otpService OTP send/verify.
    * @param userRepository Identity persistence.
+   * @param userProfileRepository USER's profile row, provisioned with the account.
    * @param roleRepository RBAC membership.
    * @param deviceService Device binding/trust.
    * @param sessionService Session lifecycle.
@@ -82,6 +85,7 @@ export class AuthService {
   constructor(
     private readonly otpService: OtpService,
     private readonly userRepository: UserRepository,
+    private readonly userProfileRepository: UserProfileRepository,
     private readonly roleRepository: RoleRepository,
     private readonly deviceService: DeviceService,
     private readonly sessionService: SessionService,
@@ -131,15 +135,29 @@ export class AuthService {
       ...(input.challengeId ? { challengeId: input.challengeId } : {}),
     });
 
-    // Register/login is one unit of work: the account resolution, device binding,
-    // session + refresh-token rows, and the four audit events all commit in a
-    // single transaction (auth doc 06 §2), so a crash can never leave a session
-    // without its audit trail. The OTP consume (Redis, above) is the gate; the
-    // epoch read during token signing and the concurrency-cap eviction (which
-    // revokes *other* sessions in their own transactions) run outside it.
+    // Register/login is one unit of work: the account resolution, the profile
+    // row, device binding, session + refresh-token rows, and the audit events all
+    // commit in a single transaction (auth doc 06 §2), so a crash can never leave
+    // a session without its audit trail. The OTP consume (Redis, above) is the
+    // gate; the epoch read during token signing and the concurrency-cap eviction
+    // (which revokes *other* sessions in their own transactions) run outside it.
     const outcome = await this.transactionManager.execute(async (tx) => {
       const { user, isNew } = await this.resolveAccount(input.phoneNumber, tx);
       if (user.status === 'SUSPENDED') throw new AccountSuspendedError();
+
+      // USER's profile joins this transaction so an account can never exist
+      // without one (user doc 03 §4.1, R-USER-27, USER-INV-1). Idempotent like
+      // the default-role grant, so an account that predates this wiring is
+      // healed on its next login — and only a real insert announces itself.
+      if (await this.userProfileRepository.ensureExists(user.id, tx)) {
+        await this.eventPublisher.publish(
+          userEvent('user.profile.created', {
+            subjectUserId: user.id,
+            data: { userId: user.id },
+          }),
+          tx,
+        );
+      }
 
       const device = await this.deviceService.register({ userId: user.id, ...input.device }, tx);
       const roles = await this.roleRepository.findActiveRoleSlugs(user.id, undefined, tx);
@@ -305,7 +323,7 @@ export class AuthService {
   async activate(userId: string): Promise<void> {
     // Status change + audit event commit atomically (transactional outbox).
     await this.transactionManager.execute(async (tx) => {
-      await this.userRepository.updateStatus(userId, 'ACTIVE', tx);
+      await this.activateInTransaction(userId, tx);
       await this.eventPublisher.publish(
         authEvent('account.reactivated', {
           subjectUserId: userId,
@@ -314,6 +332,65 @@ export class AuthService {
         tx,
       );
     });
+  }
+
+  /**
+   * Return an account to `ACTIVE` **inside a caller's transaction**, without
+   * announcing it.
+   *
+   * The status column is AUTH's, so the write lives here; the event does not,
+   * because which event this is depends on what the account was returning *from*.
+   * A reactivation out of ops **suspension** is AUTH's `account.reactivated`
+   * ({@link activate}); a restore out of self-**deactivation** is USER's
+   * `user.account.restored` — different business events with different
+   * notification copy (user doc 05 §3.3). Each caller publishes its own on this
+   * transaction.
+   *
+   * No epoch bump and no session restored: reactivation returns the ability to
+   * authenticate, not the credentials that were revoked (R-AUTH-13).
+   *
+   * @param userId Account UUID.
+   * @param tx The caller's transaction client.
+   */
+  async activateInTransaction(userId: string, tx: TransactionClient): Promise<void> {
+    await this.userRepository.updateStatus(userId, 'ACTIVE', tx);
+  }
+
+  /**
+   * Deactivate an account **inside a caller's transaction**: set the status and
+   * end every session, without the epoch bump.
+   *
+   * Self-service departure is USER's flow (user doc 02 §2.7), but the `status`
+   * column and the session tables are AUTH's, so the write lives here — USER never
+   * sets `status` with a query of its own (user doc 03 §2). It takes the caller's
+   * transaction because USER's audit event has to commit with the status change
+   * (R-USER-29); the epoch bump is the caller's job, after commit (R-USER-30),
+   * exactly as {@link SessionService.revokeAllInTransaction} splits from `logoutAll`.
+   *
+   * Idempotent: an account that is already `DEACTIVATED` reports
+   * `alreadyDeactivated` and is not written again, so a duplicate request is a
+   * no-op rather than a second revocation storm.
+   *
+   * @param userId Account UUID.
+   * @param tx The caller's transaction client.
+   * @returns Whether the account was already deactivated, and how many sessions
+   *          this call ended.
+   */
+  async deactivateInTransaction(
+    userId: string,
+    tx: TransactionClient,
+  ): Promise<{ alreadyDeactivated: boolean; sessionsRevoked: number }> {
+    const user = await this.userRepository.findById(userId);
+    if (user?.status === 'DEACTIVATED') {
+      return { alreadyDeactivated: true, sessionsRevoked: 0 };
+    }
+    await this.userRepository.updateStatus(userId, 'DEACTIVATED', tx);
+    const sessionsRevoked = await this.sessionService.revokeAllInTransaction(
+      userId,
+      'deactivated',
+      tx,
+    );
+    return { alreadyDeactivated: false, sessionsRevoked };
   }
 
   /**

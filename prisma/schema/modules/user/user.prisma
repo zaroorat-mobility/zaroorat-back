@@ -116,6 +116,10 @@ model EmergencyContact {
 
   user User @relation(fields: [userId], references: [id])
 
+  // Ownership scoping — every query in doc 02 §2.5 filters on user_id (doc 03 §5.1).
+  @@index([userId], map: "ix_emergency_contacts_user")
+  // Notification order — `sos` reads by (user, priority), R-USER-23 (doc 03 §5.4).
+  @@index([userId, priority], map: "ix_emergency_contacts_priority")
   @@map("emergency_contacts")
 }
 
@@ -135,5 +139,9 @@ model SavedPlace {
 
   user User @relation(fields: [userId], references: [id])
 
+  // Ownership scoping (doc 03 §5.1). The per-user case-insensitive label unique
+  // and the GiST index on `location` live in raw SQL in the same migration —
+  // Prisma can express neither a functional index nor an index on `Unsupported`.
+  @@index([userId], map: "ix_saved_places_user")
   @@map("saved_places")
 }
