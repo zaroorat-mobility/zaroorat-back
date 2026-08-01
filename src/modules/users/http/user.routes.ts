@@ -32,8 +32,15 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/me', controller.getMe);
   app.patch('/me/profile', controller.updateProfile);
-  app.post('/me/phone/change', controller.requestPhoneChange);
-  app.post('/me/phone/verify', controller.verifyPhoneChange);
+  // The phone-number change is this module's sensitive subset. AUTH doc 02 §5.2
+  // names "number-change request" as its example of an action a rooted or
+  // jailbroken device must not perform, and leaves the *list* to each module
+  // while AUTH enforces the flag — so the opt-in belongs here and the check
+  // belongs there. Both steps are guarded: refusing only the request would let a
+  // challenge obtained from a clean device be redeemed from a tampered one.
+  const untamperedDevice = { preHandler: [app.authorize({ requireUntamperedDevice: true })] };
+  app.post('/me/phone/change', untamperedDevice, controller.requestPhoneChange);
+  app.post('/me/phone/verify', untamperedDevice, controller.verifyPhoneChange);
 
   app.get('/me/emergency-contacts', controller.listContacts);
   app.post('/me/emergency-contacts', controller.addContact);

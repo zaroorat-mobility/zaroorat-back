@@ -6,6 +6,7 @@ import { container } from '@core/di';
 import { JwtService } from '../services/jwt.service';
 import { EpochService } from '../services/epoch.service';
 import { DriverAccessRepository } from '../repositories/driver-access.repository';
+import { DeviceRepository } from '../repositories/device.repository';
 import { AuthError, TokenInvalidError } from '../errors';
 import { replyAuthError } from './error-response';
 
@@ -13,6 +14,16 @@ import { replyAuthError } from './error-response';
 export interface AuthorizeOptions {
   roles?: string[];
   requireOperableDriver?: boolean;
+  /**
+   * Refuse the action when the calling device reports root or jailbreak
+   * (doc 02 §5.2, R-DEVICE-5).
+   *
+   * Opt-in per route, because **the sensitive-action list is owned by each
+   * module and AUTH only enforces the flag**. Normal authentication is
+   * unaffected — a tampered device may still sign in and use the app; it is the
+   * sensitive subset each module names that closes.
+   */
+  requireUntamperedDevice?: boolean;
 }
 
 /** Extract the bearer token, or throw `TokenInvalidError` if absent/malformed. */
@@ -31,8 +42,10 @@ function extractBearerToken(request: FastifyRequest): string {
  *   in Redis. A bad/expired/tampered token → 401 `TOKEN_INVALID`; a stale epoch →
  *   `TOKEN_STALE`; a revoked sid → `SESSION_REVOKED`. If the revocation store is
  *   unavailable it **fails closed** with 503 (never falls through to success).
- * - `authorize({ roles, requireOperableDriver })` — role check (deny-by-default),
- *   plus the live driver-operability conjunction for ride operations (R-AUTH-23).
+ * - `authorize({ roles, requireOperableDriver, requireUntamperedDevice })` — role
+ *   check (deny-by-default), the live driver-operability conjunction for ride
+ *   operations (R-AUTH-23), and the root/jailbreak refusal for the sensitive
+ *   subset each module names (doc 02 §5.2).
  *
  * It also installs the **deny-by-default** gate: a global `onRequest` hook that
  * authenticates every matched route unless it explicitly opts out with
@@ -47,6 +60,7 @@ async function authPlugin(app: FastifyInstance): Promise<void> {
   const epochService = container.resolve<EpochService>('epochService');
   const redisService = container.resolve<RedisService>('redisService');
   const driverAccess = container.resolve<DriverAccessRepository>('driverAccessRepository');
+  const deviceRepository = container.resolve<DeviceRepository>('deviceRepository');
 
   app.decorateRequest('auth', null);
 
@@ -94,6 +108,32 @@ async function authPlugin(app: FastifyInstance): Promise<void> {
       const required = options.roles ?? [];
       if (required.length > 0 && !required.some((role) => auth.roles.includes(role))) {
         return replyAuthError(request, reply, 'FORBIDDEN', 'Insufficient role');
+      }
+
+      if (options.requireUntamperedDevice) {
+        try {
+          const device = await deviceRepository.findBySession(auth.sid);
+          // An unknown device is a denial, not a pass. Every OTP login binds one,
+          // so the only way to arrive here without a device is a session this
+          // guard cannot assess — and "cannot assess" must not mean "allowed" on
+          // the one subset of actions the flag exists to protect.
+          if (!device || device.isRooted || device.isJailbroken) {
+            return replyAuthError(
+              request,
+              reply,
+              'FORBIDDEN',
+              'This device cannot perform this action',
+            );
+          }
+        } catch (err) {
+          request.log.error({ err }, '[auth] device check failed — failing closed');
+          return replyAuthError(
+            request,
+            reply,
+            'SERVICE_UNAVAILABLE',
+            'Authorization is temporarily unavailable',
+          );
+        }
       }
 
       if (options.requireOperableDriver) {
