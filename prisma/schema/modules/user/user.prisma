@@ -20,6 +20,7 @@ model User {
   otpVerifications        OtpVerification[]
   emergencyContacts       EmergencyContact[]
   savedPlaces             SavedPlace[]
+  files                   File[]
   driver                  Driver?
   customerRides           Ride[]                   @relation("CustomerRides")
   promoRedemptions        PromotionRedemption[]
