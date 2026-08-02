@@ -9,6 +9,7 @@ import { registerOtpServices } from '@modules/auth/otp';
 import { registerSessionServices } from '@modules/auth/session';
 import { registerAuthService } from '@modules/auth';
 import { registerUserRepositories, registerUserService } from '@modules/users';
+import { registerFileModule } from '@modules/files';
 
 export const container = createContainer({ injectionMode: InjectionMode.CLASSIC });
 
@@ -17,6 +18,7 @@ registerDatabaseModule(container);
 registerRedisModule(container);
 registerEventsModule(container);
 registerNotificationModule(container);
+registerFileModule(container); // storage provider — no dependants until phase 2
 registerAuthRepositories(container);
 registerUserRepositories(container);
 registerTokenServices(container);
