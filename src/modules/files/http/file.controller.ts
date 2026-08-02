@@ -6,8 +6,17 @@ import { replyFromAuthError } from '@modules/auth/http';
 import type { FilePurposeName } from '@config/file/file.config.js';
 import { FileService } from '../file.service.js';
 import { FileError, FileValidationError, type FileErrorDetail } from '../errors.js';
+import { StorageError } from '../providers/storage.provider.js';
 import { replyFileError, replyFromFileError } from './error-response.js';
 import { createUploadSchema, fileIdSchema, readUrlQuerySchema } from './file.schemas.js';
+
+/**
+ * How long a client should wait before retrying a storage-backed call.
+ *
+ * Short: a provider blip is usually seconds, and a longer hint would strand a
+ * client that could have succeeded immediately.
+ */
+const STORAGE_RETRY_AFTER_SECONDS = 5;
 
 /**
  * Translate Zod issues into doc 04 §6 details.
@@ -167,6 +176,43 @@ export class FileController {
   private handle(request: FastifyRequest, reply: FastifyReply, err: unknown): FastifyReply {
     if (err instanceof FileError) return replyFromFileError(request, reply, err);
     if (err instanceof AuthError) return replyFromAuthError(request, reply, err);
+    if (err instanceof StorageError) return this.handleStorageFailure(request, reply, err);
     throw err;
+  }
+
+  /**
+   * Render a storage-backend failure as `503`, never anything else (doc 04 §6).
+   *
+   * Fail-closed: a dependency that cannot answer must never be read as
+   * permission, and must never surface as a `200` carrying a null URL. Letting
+   * it reach Fastify's default handler produced a `500` whose body was the
+   * platform envelope in neither shape nor content — and whose message named the
+   * failing internal operation, which doc 04 §5 forbids.
+   *
+   * `retryable` decides the **log level, not the status**: both a timeout and a
+   * missing bucket are `503` to the client, but only one of them is somebody's
+   * pager (doc 09 §2.5).
+   */
+  private handleStorageFailure(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    err: StorageError,
+  ): FastifyReply {
+    const context = { err: err.cause, operation: err.operation, retryable: err.retryable };
+    if (err.retryable) {
+      request.log.warn(context, '[Files] storage backend unavailable');
+    } else {
+      // Bad credentials or a missing bucket: not self-healing, and the alert in
+      // doc 09 §2.5 keys on this.
+      request.log.error(context, '[Files] storage backend misconfigured');
+    }
+
+    return replyFileError(
+      request,
+      reply,
+      'SERVICE_UNAVAILABLE',
+      'File storage is temporarily unavailable',
+      { retryAfterSeconds: STORAGE_RETRY_AFTER_SECONDS },
+    );
   }
 }
