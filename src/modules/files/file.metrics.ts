@@ -52,6 +52,24 @@ export class FileMetrics {
   }
 
   /**
+   * A read URL was minted. `actor` is `owner` or `ops` (doc 09 §2.2).
+   */
+  readSigned(fields?: FileMetricFields): void {
+    this.emit('read.signed', fields);
+  }
+
+  /**
+   * A read was refused.
+   *
+   * The metric exists precisely **because the response reveals nothing** — a
+   * denial is byte-identical to an absent file (doc 04 §4), so the enumeration
+   * signal has to live somewhere, and telemetry is where it is safe (doc 09 §2.2).
+   */
+  readDenied(fields?: FileMetricFields): void {
+    this.emit('read.denied', fields);
+  }
+
+  /**
    * Emit one structured metric line.
    * @param event The metric suffix, appended to `file.`.
    * @param fields Low-cardinality labels.

@@ -27,6 +27,7 @@ export {
   type StorageProviderName,
 } from './storage.config.js';
 export { buildStorageKey, STORAGE_KEY_PATTERN } from './storage-key.js';
+export { decideRead, type ReadGrant } from './read-policy.js';
 export {
   inspect,
   hasEnforceableDimensions,

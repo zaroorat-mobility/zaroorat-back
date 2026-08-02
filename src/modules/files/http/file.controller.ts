@@ -7,7 +7,7 @@ import type { FilePurposeName } from '@config/file/file.config.js';
 import { FileService } from '../file.service.js';
 import { FileError, FileValidationError, type FileErrorDetail } from '../errors.js';
 import { replyFileError, replyFromFileError } from './error-response.js';
-import { createUploadSchema, fileIdSchema } from './file.schemas.js';
+import { createUploadSchema, fileIdSchema, readUrlQuerySchema } from './file.schemas.js';
 
 /**
  * Translate Zod issues into doc 04 §6 details.
@@ -90,6 +90,53 @@ export class FileController {
         auth.userId,
         request.id,
       );
+      return reply.status(200).send(result);
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
+  };
+
+  /**
+   * `GET /files/{id}/url` — mint a short-lived signed read URL.
+   *
+   * A caller the policy denies receives the response an unknown id produces
+   * (doc 04 §4), so nothing here distinguishes the two.
+   */
+  getReadUrl = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyFileError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+
+    const params = this.parse(fileIdSchema, request.params);
+    if (!params.ok) return this.handle(request, reply, params.error);
+    const query = this.parse(readUrlQuerySchema, request.query ?? {});
+    if (!query.ok) return this.handle(request, reply, query.error);
+
+    try {
+      const result = await this.fileService.getReadUrl(
+        params.value.id,
+        { userId: auth.userId, roles: auth.roles },
+        query.value.disposition,
+        request.id,
+      );
+      return reply.status(200).send(result);
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
+  };
+
+  /** `GET /files/{id}` — metadata only; mints nothing and audits nothing. */
+  getMetadata = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyFileError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+
+    const params = this.parse(fileIdSchema, request.params);
+    if (!params.ok) return this.handle(request, reply, params.error);
+
+    try {
+      const result = await this.fileService.getMetadata(params.value.id, {
+        userId: auth.userId,
+        roles: auth.roles,
+      });
       return reply.status(200).send(result);
     } catch (err) {
       return this.handle(request, reply, err);

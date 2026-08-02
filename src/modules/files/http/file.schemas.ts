@@ -37,3 +37,17 @@ export type CreateUploadBody = z.infer<typeof createUploadSchema>;
 export const fileIdSchema = z.object({ id: z.string().uuid() });
 
 export type FileIdParams = z.infer<typeof fileIdSchema>;
+
+/**
+ * `GET /files/{id}/url` query (files doc 02 §2.3).
+ *
+ * `disposition` only decides how a browser renders the object; it changes no
+ * authorization and is safe to default.
+ */
+export const readUrlQuerySchema = z
+  .object({
+    disposition: z.enum(['inline', 'attachment']).default('inline'),
+  })
+  .strict();
+
+export type ReadUrlQuery = z.infer<typeof readUrlQuerySchema>;

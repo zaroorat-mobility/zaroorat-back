@@ -76,6 +76,24 @@ export class FileRepository extends BaseRepository {
   }
 
   /**
+   * Load a file eligible to be read at all, **not** scoped to an owner.
+   *
+   * The only query in this module that is not owner-scoped, and deliberately:
+   * an ops reviewer is a legitimate non-owner, so ownership is a policy decision
+   * made once the row is in hand (doc 02 §4). Everything the policy then denies
+   * returns the same `404` an absent id would (FILE-INV-4).
+   *
+   * **Only `READY` is returned.** A `SUPERSEDED` or `DELETED` file is retained as
+   * evidence (R-FILE-32), not served — reading history is an `admin` capability
+   * that does not exist yet.
+   * @param id The file id.
+   * @returns The row, or `null` when absent or not readable.
+   */
+  async findReadable(id: string): Promise<File | null> {
+    return this.client.file.findFirst({ where: { id, status: 'READY', deletedAt: null } });
+  }
+
+  /**
    * Transition `PENDING → READY`, conditionally.
    *
    * The `status: 'PENDING'` predicate is what makes FILE-INV-6 structural: of

@@ -19,8 +19,8 @@ import { FileController } from './file.controller.js';
  * this module is **relational**, decided from the caller's relationship to a
  * specific file, which a route-level check cannot see.
  *
- * Phase 2 registers the upload pair; read, metadata, and delete arrive in
- * phases 3–4.
+ * Phases 2–3 register the upload pair and the read surface; delete arrives in
+ * phase 4.
  * @param app The Fastify instance (already carrying the deny-by-default gate).
  */
 export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
@@ -28,4 +28,6 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/', controller.createUpload);
   app.post('/:id/complete', controller.completeUpload);
+  app.get('/:id', controller.getMetadata);
+  app.get('/:id/url', controller.getReadUrl);
 }

@@ -8,6 +8,7 @@ import { FileMetrics } from './file.metrics.js';
 import { fileEvent } from './events/catalog.js';
 import { buildStorageKey } from './storage-key.js';
 import { inspect } from './content-inspector.js';
+import { decideRead } from './read-policy.js';
 import {
   assertDeclaredUploadAllowed,
   assertStoredObjectAllowed,
@@ -272,6 +273,134 @@ export class FileService {
       sizeBytes: head.sizeBytes,
       checksumSha256: head.checksumSha256 ?? file.checksumSha256,
     });
+  }
+
+  /**
+   * Mint a short-lived signed read URL (doc 02 §2.3).
+   *
+   * Every call signs a **new** URL. Nothing is cached and no file has a stable
+   * URL, ever (R-FILE-12) — a cached URL would carry somebody else's expiry and
+   * nothing would revoke it when their session ended.
+   *
+   * When the caller is not the owner the audit event is written **before** the
+   * URL is returned, and a failure to audit fails the read (doc 05 §3.2). This
+   * is the one place in the module where an audit sits on the critical path,
+   * and deliberately so: an unauditable privileged read must not happen.
+   *
+   * @param fileId The file to read.
+   * @param caller The requesting user and their roles.
+   * @param disposition How the client intends to render it.
+   * @param requestId Correlation id for the audit envelope.
+   * @returns The URL, its expiry, and the content-type.
+   * @throws {FileNotFoundError} No such file, not readable, or not `READY` —
+   *         all indistinguishable (FILE-INV-4).
+   * @throws {RateLimitedError} The per-minute mint limit was hit.
+   */
+  async getReadUrl(
+    fileId: string,
+    caller: { userId: string; roles: readonly string[] },
+    disposition: 'inline' | 'attachment' = 'inline',
+    requestId: string | null = null,
+  ): Promise<{ url: string; expiresAt: Date; contentType: string }> {
+    const limit = await this.redisService.rateLimit.hit(
+      'file:read',
+      caller.userId,
+      fileConfig.readUrlsPerUserPerMinute,
+      60,
+    );
+    if (!limit.allowed) throw new RateLimitedError(limit.retryAfterSeconds);
+
+    const file = await this.loadReadable(fileId);
+    const purpose = file.purpose as FilePurposeName;
+    const grant = decideRead({ ownerUserId: file.ownerUserId, purpose }, caller);
+
+    // Denial is indistinguishable from absence (doc 04 §4). Given a file id,
+    // telling those apart would confirm a document exists for a specific driver.
+    // The metric is where that signal lives instead (doc 09 §2.2).
+    if (!grant.granted) {
+      this.fileMetrics.readDenied({ purpose });
+      throw new FileNotFoundError();
+    }
+
+    if (grant.actor === 'ops') {
+      await this.transactionManager.execute(async (tx) => {
+        await this.eventPublisher.publish(
+          fileEvent('file.read', {
+            aggregateId: file.id,
+            subjectUserId: file.ownerUserId,
+            requestId,
+            data: {
+              fileId: file.id,
+              ownerUserId: file.ownerUserId,
+              actorUserId: caller.userId,
+              purpose,
+              scope: grant.scope,
+            },
+          }),
+          tx,
+        );
+      });
+    }
+
+    const signed = await this.storageProvider.signDownload({
+      key: file.storageKey,
+      ttlSeconds: policyFor(purpose).readTtlSeconds,
+      contentType: file.contentType,
+      disposition,
+      fileName: file.fileName,
+    });
+
+    this.fileMetrics.readSigned({ purpose, actor: grant.actor });
+    return { url: signed.url, expiresAt: signed.expiresAt, contentType: file.contentType };
+  }
+
+  /**
+   * File metadata, without minting anything (doc 02 §2.4).
+   *
+   * Same visibility rules as {@link getReadUrl}, but nothing is signed and
+   * nothing is audited — metadata is not the sensitive payload. Useful for a
+   * client rendering a review queue that needs names and sizes only.
+   *
+   * @param fileId The file to describe.
+   * @param caller The requesting user and their roles.
+   * @returns The same shape a completion returns.
+   * @throws {FileNotFoundError} Absent, unreadable, or not `READY`.
+   */
+  async getMetadata(
+    fileId: string,
+    caller: { userId: string; roles: readonly string[] },
+  ): Promise<CompleteUploadResult> {
+    const file = await this.loadReadable(fileId);
+    const grant = decideRead(
+      { ownerUserId: file.ownerUserId, purpose: file.purpose as FilePurposeName },
+      caller,
+    );
+    if (!grant.granted) throw new FileNotFoundError();
+    return this.toResult(file);
+  }
+
+  /**
+   * Load a file that is eligible to be read at all.
+   *
+   * Not owner-scoped at the query, unlike every write path — an ops reader is a
+   * legitimate non-owner, so ownership is decided by {@link decideRead} once the
+   * row is in hand. **Only `READY` is readable**: a `SUPERSEDED` or `DELETED`
+   * file is retained as evidence (R-FILE-32), not served.
+   */
+  private async loadReadable(fileId: string): Promise<{
+    id: string;
+    ownerUserId: string;
+    purpose: string;
+    storageKey: string;
+    fileName: string;
+    contentType: string;
+    sizeBytes: number;
+    checksumSha256: string | null;
+    createdAt: Date;
+  }> {
+    const file = await this.fileRepository.findReadable(fileId);
+    if (!file) throw new FileNotFoundError();
+    return file;
   }
 
   /**
