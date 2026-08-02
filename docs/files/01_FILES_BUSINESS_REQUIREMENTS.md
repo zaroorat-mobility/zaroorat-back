@@ -257,15 +257,15 @@ Proven — not asserted — by [06_FILES_TEST_PLAN](06_FILES_TEST_PLAN.md) §4.
 
 Ordered so each phase is shippable and the next builds on it.
 
-| Phase | Delivers                                                                         | Depends on           |
-| ----- | -------------------------------------------------------------------------------- | -------------------- |
-| **1** | `files` table + migration; `StorageProvider` interface; `mock` provider          | nothing              |
-| **2** | `POST /files` + `POST /files/{id}/complete` — the upload pair, validated         | 1                    |
-| **3** | `GET /files/{id}/url` — signed reads, ownership policy, audited privileged reads | 2                    |
-| **4** | `DELETE /files/{id}` — soft delete + reference guard                             | 3                    |
-| **5** | S3 provider behind the same interface; config switch                             | 1                    |
-| **6** | Sweeper (orphans) + retention job                                                | 4, **a job runtime** |
-| **7** | Profile-image cutover: `user_profiles.profile_image` → file id                   | 3, 5                 |
+| Phase | Delivers                                                                           | Depends on           |
+| ----- | ---------------------------------------------------------------------------------- | -------------------- |
+| **1** | `files` table + migration; `StorageProvider` interface; `mock` provider            | nothing              |
+| **2** | `POST /files` + `POST /files/{id}/complete` — the upload pair, validated           | 1                    |
+| **3** | `GET /files/{id}/url` — signed reads, ownership policy, audited privileged reads   | 2                    |
+| **4** | `DELETE /files/{id}` — soft delete, `assertReferenceable`, `supersede` (R-FILE-31) | 3                    |
+| **5** | S3 provider behind the same interface; config switch                               | 1                    |
+| **6** | Sweeper (orphans) + retention job                                                  | 4, **a job runtime** |
+| **7** | Profile-image cutover: `user_profiles.profile_image` → file id                     | 3, 5                 |
 
 **Phase 6 is blocked.** `src/jobs/` is five 2-line stubs and `bootstrapQueue()` is a placeholder;
 there is nowhere for a scheduled job to run. Phases 1–5 and 7 do not depend on it. See §13.4.
@@ -336,7 +336,7 @@ FILES v1 ships when all of these are demonstrable:
 3. No response, event, or log line anywhere contains a signed URL or a storage key.
 4. A file id belonging to another user is indistinguishable from one that never existed.
 5. An ops read of a KYC document writes an audit record naming actor, file, and reason.
-6. A signed read URL stops working after its TTL, and never worked for anyone but its requester's session.
+6. A signed read URL stops working after its TTL. (It is a **bearer** credential and does not bind to a session — see FILES-OD-14; the TTL is the whole bound.)
 7. A domain row can never reference a file that is not `READY`.
 8. Two concurrent completions of the same upload yield one `READY` and one event.
 9. Deleting a file removes it from every read path immediately and erases the object only on the retention schedule.

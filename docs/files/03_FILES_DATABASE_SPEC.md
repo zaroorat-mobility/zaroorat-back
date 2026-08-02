@@ -109,15 +109,15 @@ enum FileStatus {
 
 ### 3.1 Field notes
 
-| Field                     | Why it is the way it is                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                      | `uuid(7)` — matches every other table, and its time-ordering keeps index writes append-mostly.                                                                |
-| `storageKey`              | Never derived from `fileName` or `id`. A key derived from an id is guessable the moment an id leaks; a key derived from a filename invites traversal. See §5. |
-| `storageProvider`         | Rows outlive vendors. Without this, switching providers silently repoints every historical key at a bucket that never held it.                                |
-| `sizeBytes`               | `Int` caps at ~2.1 GB, an order of magnitude above the 50 MB ceiling. `BigInt` would buy nothing and cost every consumer a conversion.                        |
-| `fileName`                | Display only. It is attacker-controlled text and is treated as such everywhere.                                                                               |
-| `deletedAt` vs `erasedAt` | Two different facts: "no longer visible" and "the bytes are gone". Compliance needs to prove the second happened, and when.                                   |
-| `purpose`                 | No `@updatedAt`-style mutability anywhere; the service never issues an update touching it (FILE-INV-7). §4.3 makes the database enforce that too.             |
+| Field                     | Why it is the way it is                                                                                                                                                                                                                                                                            |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | `uuid(7)` — matches every other table, and its time-ordering keeps index writes append-mostly.                                                                                                                                                                                                     |
+| `storageKey`              | Never derived from `fileName` or `id`. A key derived from an id is guessable the moment an id leaks; a key derived from a filename invites traversal. See §5.                                                                                                                                      |
+| `storageProvider`         | Rows outlive vendors. Without this, switching providers silently repoints every historical key at a bucket that never held it.                                                                                                                                                                     |
+| `sizeBytes`               | `Int` caps at ~2.1 GB, an order of magnitude above the 50 MB ceiling. `BigInt` would buy nothing and cost every consumer a conversion.                                                                                                                                                             |
+| `fileName`                | Display only. It is attacker-controlled text and is treated as such everywhere.                                                                                                                                                                                                                    |
+| `deletedAt` vs `erasedAt` | Two different facts: "no longer visible" and "the bytes are gone". Compliance needs to prove the second happened, and when.                                                                                                                                                                        |
+| `purpose`                 | Immutable by construction: no code path updates it (FILE-INV-7). **Not** database-enforced — Postgres cannot express column immutability without a trigger, and a trigger guarding a value nothing writes is machinery guarding nothing. 06 §7 asserts no repository update path names the column. |
 
 ### 3.2 What is deliberately absent
 
