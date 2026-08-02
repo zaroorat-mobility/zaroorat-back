@@ -9,7 +9,7 @@ import { registerOtpServices } from '@modules/auth/otp';
 import { registerSessionServices } from '@modules/auth/session';
 import { registerAuthService } from '@modules/auth';
 import { registerUserRepositories, registerUserService } from '@modules/users';
-import { registerFileModule } from '@modules/files';
+import { registerFileModule, registerFileRepositories } from '@modules/files';
 
 export const container = createContainer({ injectionMode: InjectionMode.CLASSIC });
 
@@ -18,11 +18,12 @@ registerDatabaseModule(container);
 registerRedisModule(container);
 registerEventsModule(container);
 registerNotificationModule(container);
-registerFileModule(container); // storage provider — no dependants until phase 2
 registerAuthRepositories(container);
 registerUserRepositories(container);
+registerFileRepositories(container);
 registerTokenServices(container);
 registerOtpServices(container);
 registerSessionServices(container);
 registerAuthService(container); // provisions the user profile in its login tx
 registerUserService(container);
+registerFileModule(container); // storage provider + the upload pair (files doc 01 §12)

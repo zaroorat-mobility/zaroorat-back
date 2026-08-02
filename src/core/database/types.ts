@@ -20,4 +20,8 @@ export type {
   UserRoleAssignment,
   Permission,
   RolePermission,
+  // File custody (consumed by the files repository layer)
+  File,
+  FilePurpose,
+  FileStatus,
 } from '../../generated/prisma';

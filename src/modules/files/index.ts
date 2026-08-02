@@ -1,6 +1,8 @@
-import { asFunction, AwilixContainer } from 'awilix';
+import { asClass, asFunction, AwilixContainer } from 'awilix';
 
 import { createStorageProvider, getStorageConfig } from './storage.config.js';
+import { FileService } from './file.service.js';
+import { FileMetrics } from './file.metrics.js';
 
 export type {
   ObjectHead,
@@ -25,22 +27,65 @@ export {
   type StorageProviderName,
 } from './storage.config.js';
 export { buildStorageKey, STORAGE_KEY_PATTERN } from './storage-key.js';
+export {
+  inspect,
+  hasEnforceableDimensions,
+  matchesSignature,
+  type ImageDimensions,
+  type InspectionResult,
+} from './content-inspector.js';
+export {
+  assertDeclaredUploadAllowed,
+  assertStoredObjectAllowed,
+  peekBudgetFor,
+  policyFor,
+  sanitizeFileName,
+} from './file.policy.js';
+export {
+  FileService,
+  type CreateUploadInput,
+  type CreateUploadResult,
+  type CompleteUploadResult,
+} from './file.service.js';
+export { FileMetrics, type FileMetricFields } from './file.metrics.js';
+export {
+  FileError,
+  FileNotFoundError,
+  FileStateError,
+  FileTooLargeError,
+  FileValidationError,
+  FileInUseError,
+  ChecksumMismatchError,
+  ContentMismatchError,
+  UnsupportedMediaTypeError,
+  UploadExpiredError,
+  UploadNotFoundError,
+  type FileErrorDetail,
+} from './errors.js';
+export { FileRepository, registerFileRepositories } from './repositories/index.js';
+export { FILE_EVENT_CATALOG, FILE_PRODUCER, fileEvent } from './events/index.js';
 
 /**
  * Registers the FILES module into the Awilix container.
  *
  * CLASSIC injection resolves constructor parameters **by name**, so
- * `storageConfig` and `storageProvider` are the names every later consumer must
- * use — the factory registration mirrors the one `smsProvider` uses in
- * `notifications`.
+ * `storageConfig`, `storageProvider`, `fileRepository`, `fileMetrics`, and
+ * `fileService` are the names every consumer must use. The provider is a factory
+ * registration, mirroring `smsProvider` in `notifications`.
  *
- * Phase 1 registers only the provider and its config; the repository, service,
- * controller, and jobs arrive in phases 2–6 (files doc 01 §12).
+ * `fileService` additionally needs `transactionManager`, `eventPublisher`, and
+ * `redisService`, so this must run after the database, events, and Redis
+ * modules.
+ *
+ * Phase 2 registers the upload pair's dependencies; the read and delete paths
+ * and the two jobs arrive in phases 3–6 (files doc 01 §12).
  * @param container The application DI container.
  */
 export function registerFileModule(container: AwilixContainer): void {
   container.register({
     storageConfig: asFunction(getStorageConfig).singleton(),
     storageProvider: asFunction(createStorageProvider).singleton(),
+    fileMetrics: asClass(FileMetrics).singleton(),
+    fileService: asClass(FileService).singleton(),
   });
 }

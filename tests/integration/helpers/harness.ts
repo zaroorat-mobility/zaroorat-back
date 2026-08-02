@@ -47,7 +47,7 @@ export function db(): DatabaseService {
 export async function resetState(): Promise<void> {
   await db().client.$executeRawUnsafe(
     'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
-      '"otp_verifications", "outbox_events", "vehicle_types" RESTART IDENTITY CASCADE',
+      '"files", "otp_verifications", "outbox_events", "vehicle_types" RESTART IDENTITY CASCADE',
   );
   await redis.flushdb();
 }

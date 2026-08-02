@@ -27,6 +27,17 @@ export interface StorageConfig {
   uploadUrlTtlSeconds: number;
   /** Leading bytes fetched by `head` — enough for every signature in doc 02 §5. */
   peekBytes: number;
+  /**
+   * Leading bytes fetched for an **image**, where the header must also yield
+   * dimensions (R-FILE-35).
+   *
+   * A signature needs a handful of bytes. A JPEG's start-of-frame marker sits
+   * after every APP segment that precedes it — a 64 KB EXIF block, ICC profiles,
+   * an embedded thumbnail — so `peekBytes` is nowhere near enough, and failing
+   * closed on "dimensions unreadable" with a 512-byte peek would reject ordinary
+   * camera photographs.
+   */
+  imagePeekBytes: number;
   requestTimeoutMs: number;
   maxRetries: number;
 }
@@ -60,6 +71,7 @@ export function getStorageConfig(): StorageConfig {
     kmsKeyId: process.env.STORAGE_KMS_KEY_ID ?? null,
     uploadUrlTtlSeconds: Number(process.env.STORAGE_UPLOAD_TTL_SEC ?? 900),
     peekBytes: Number(process.env.STORAGE_PEEK_BYTES ?? 512),
+    imagePeekBytes: Number(process.env.STORAGE_IMAGE_PEEK_BYTES ?? 131072),
     requestTimeoutMs: Number(process.env.STORAGE_TIMEOUT_MS ?? 5000),
     maxRetries: Number(process.env.STORAGE_MAX_RETRIES ?? 2),
   };
