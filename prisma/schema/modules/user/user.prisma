@@ -71,10 +71,6 @@ model UserProfile {
   lastName           String?   @map("last_name")
   dateOfBirth        DateTime? @map("date_of_birth") @db.Date
   gender             String?
-  /// The pre-FILES avatar URL. Empty in practice — `userConfig.profileImageHosts`
-  /// defaults to empty, so every value it could hold was rejected at write time.
-  /// Dropped at deploy 3 of the cutover (files doc 03 §7.2).
-  profileImage       String?   @map("profile_image")
   /// The avatar, as a file reference (FILES-OD-2). A domain row never holds a
   /// URL: a URL is minted per read, for one reader, and expires. `@unique` is
   /// R-FILE-33 — at most one live domain row may reference a file.

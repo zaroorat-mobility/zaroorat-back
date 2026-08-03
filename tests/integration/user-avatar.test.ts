@@ -105,14 +105,19 @@ describe('profile image cutover (integration)', () => {
       await setAvatar(user.authHeader, fileId);
 
       const body = (await getMe(user.authHeader)).payload;
-      const row = await db().client.userProfile.findUniqueOrThrow({
-        where: { userId: user.userId },
-      });
+      const columns = await db().client.$queryRaw<{ column_name: string }[]>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'user_profiles'`;
 
       // FILES-OD-2: a stored URL is either public — which violates R-FILE-11 —
       // or expired, and therefore useless. The client exchanges the id for a
-      // short-lived signed URL, per read.
-      assert.equal(row.profileImage, null, 'the old URL column stays empty');
+      // short-lived signed URL, per read. Deploy 3 removed the column that could
+      // have held one at all (doc 03 §7.2).
+      assert.equal(
+        columns.some((column) => column.column_name === 'profile_image'),
+        false,
+        'the URL column is gone, not merely unused',
+      );
       assert.equal(body.includes('http'), false);
       assert.equal(body.includes(storageKey), false);
     });

@@ -16,8 +16,6 @@ export interface UserProfileView {
   /** `YYYY-MM-DD` — date-only, no instant and no timezone (doc 03 §3.1). */
   dateOfBirth: string | null;
   gender: string | null;
-  /** The pre-FILES URL column. Always `null` in practice; dropped at deploy 3. */
-  profileImage: string | null;
   /**
    * The avatar's **file id**, which the client exchanges for a short-lived
    * signed URL at `GET /files/{id}/url` (FILES-OD-2).
@@ -71,7 +69,6 @@ function toProfileView(profile: UserProfile | null): UserProfileView {
     lastName: profile?.lastName ?? null,
     dateOfBirth: toDateOnly(profile?.dateOfBirth ?? null),
     gender: profile?.gender ?? null,
-    profileImage: profile?.profileImage ?? null,
     profileImageFileId: profile?.profileImageFileId ?? null,
     languageCode: profile?.languageCode ?? userConfig.defaultLanguageCode,
     referralCode: profile?.referralCode ?? null,

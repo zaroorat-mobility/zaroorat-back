@@ -58,7 +58,6 @@ function toProfileUpdate(body: UpdateProfileBody): UpdateUserProfileInput {
     changes.dateOfBirth = body.dateOfBirth == null ? null : parseDateOnly(body.dateOfBirth);
   }
   if (Object.hasOwn(body, 'gender')) changes.gender = body.gender ?? null;
-  if (Object.hasOwn(body, 'profileImage')) changes.profileImage = body.profileImage ?? null;
   if (Object.hasOwn(body, 'profileImageFileId')) {
     changes.profileImageFileId = body.profileImageFileId ?? null;
   }

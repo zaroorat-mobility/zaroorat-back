@@ -2,11 +2,15 @@
  * USER module policy (user doc 01 §11 USER-OD-6, doc 02 §2.2).
  *
  * Collection caps live here rather than in code because R-USER-26 requires them
- * to be configuration. The profile-image host allow-list is **fail-closed**: with
- * no hosts configured, every `profileImage` is rejected as `UNTRUSTED_HOST`. That
- * is deliberate — the `files` module that issues those URLs is deferred (doc 01
- * §2.3), so until it ships there is no host the platform can vouch for, and
- * accepting an arbitrary URL would let a profile embed a third-party tracker.
+ * to be configuration.
+ *
+ * **`profileImageHosts` is gone** (USER §8.5, files doc 03 §7.2). It was a
+ * fail-closed allow-list of hosts a `profileImage` URL could point at, and with
+ * none configured it rejected every URL — correct while the module that would
+ * issue them was deferred, since there was no host the platform could vouch for.
+ * `files` removed the need for it rather than filling it in: an avatar is a file
+ * id now, resolved to a short-lived signed URL against a private bucket, so
+ * there is no third-party host left to allow or deny.
  */
 
 /** Parse a comma-separated env list into a frozen, trimmed array. */
@@ -24,8 +28,6 @@ export const userConfig = Object.freeze({
   minimumAgeYears: Number(process.env.USER_MIN_AGE_YEARS ?? 16),
   /** Accepted `languageCode` values — BCP-47 primary subtags (R-USER-7). */
   supportedLanguageCodes: list(process.env.USER_SUPPORTED_LANGUAGES, 'en,hi'),
-  /** Hosts a `profileImage` URL may point at. Empty ⇒ reject everything. */
-  profileImageHosts: list(process.env.USER_PROFILE_IMAGE_HOSTS, ''),
   /** Accepted `gender` values (USER-OD-5 — validated at the edge, stored as text). */
   genderValues: Object.freeze(['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY'] as const),
   /** Default language stamped on a profile created with no preference (doc 03 §3.1). */

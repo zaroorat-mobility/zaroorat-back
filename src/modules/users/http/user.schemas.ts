@@ -77,32 +77,6 @@ const dateOfBirthField = z
   .nullable();
 
 /**
- * An avatar URL issued by the `files` module: absolute `https`, on a
- * platform-owned host. Fail-closed — with no hosts configured, nothing passes
- * (see `userConfig.profileImageHosts`).
- */
-const profileImageField = z
-  .string()
-  .max(2048)
-  .refine((value) => {
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      return false;
-    }
-    return url.protocol === 'https:';
-  }, 'INVALID_FORMAT')
-  .refine((value) => {
-    try {
-      return userConfig.profileImageHosts.includes(new URL(value).host);
-    } catch {
-      return false;
-    }
-  }, 'UNTRUSTED_HOST')
-  .nullable();
-
-/**
  * The avatar, as a `files` id (files doc 03 §7.2).
  *
  * Shape only — a well-formed uuid. **Everything that matters is checked in the
@@ -126,7 +100,10 @@ export const updateProfileSchema = z.strictObject({
   lastName: nameField.optional(),
   dateOfBirth: dateOfBirthField.optional(),
   gender: z.enum(userConfig.genderValues).nullable().optional(),
-  profileImage: profileImageField.optional(),
+  // `profileImage` is deliberately absent, not deprecated-but-accepted: this is
+  // a strict object, so a client still sending the old URL field gets a
+  // `VALIDATION` naming it rather than a silent drop that looks like success
+  // (files doc 03 §7.2, deploy 3).
   profileImageFileId: profileImageFileIdField.optional(),
   languageCode: z
     .string()
@@ -263,7 +240,6 @@ const DETAIL_CODES = new Set([
   'AGE_BELOW_MINIMUM',
   'NOT_ALLOWED',
   'IMMUTABLE',
-  'UNTRUSTED_HOST',
 ]);
 
 /** Derive a vocabulary code from a Zod issue that did not name one itself. */

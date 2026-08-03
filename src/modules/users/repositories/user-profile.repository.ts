@@ -13,7 +13,6 @@ export interface UpdateUserProfileInput {
   lastName?: string | null;
   dateOfBirth?: Date | null;
   gender?: string | null;
-  profileImage?: string | null;
   /**
    * The avatar as a **file id**, never a URL (FILES-OD-2). A stored URL is
    * either public — which violates R-FILE-11 — or expired, and therefore
@@ -118,7 +117,6 @@ export class UserProfileRepository extends BaseRepository {
     if ('lastName' in input) data.lastName = input.lastName;
     if ('dateOfBirth' in input) data.dateOfBirth = input.dateOfBirth;
     if ('gender' in input) data.gender = input.gender;
-    if ('profileImage' in input) data.profileImage = input.profileImage;
     if ('profileImageFileId' in input) data.profileImageFileId = input.profileImageFileId;
     if ('languageCode' in input) data.languageCode = input.languageCode;
 

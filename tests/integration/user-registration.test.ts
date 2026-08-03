@@ -43,7 +43,7 @@ describe('registration provisions the profile (integration)', () => {
     assert.equal(profile.lastName, null);
     assert.equal(profile.dateOfBirth, null);
     assert.equal(profile.gender, null);
-    assert.equal(profile.profileImage, null);
+    assert.equal(profile.profileImageFileId, null, 'no avatar until one is uploaded and attached');
     assert.equal(profile.languageCode, 'en', 'the schema default resolves (R-USER-7)');
     assert.equal(profile.referralCode, null, 'referral mints this later (USER-OD-2)');
   });

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import {
@@ -101,17 +102,25 @@ describe('user profile schema (unit)', () => {
       assert.equal(codeFor({ languageCode: 'kl' }, 'languageCode'), 'NOT_ALLOWED');
     });
 
-    it('rejects a profile image on an unvouched host, fail-closed', () => {
-      // No hosts are configured in test, so every URL is untrusted — that is the
-      // documented default while the `files` module is deferred (doc 01 §2.3).
-      assert.equal(codeFor({ profileImage: 'not-a-url' }, 'profileImage'), 'INVALID_FORMAT');
+    it('takes an avatar as a file id, and rejects anything that is not one', () => {
       assert.equal(
-        codeFor({ profileImage: 'http://cdn.zaroorat.com/a.png' }, 'profileImage'),
+        updateProfileSchema.safeParse({ profileImageFileId: randomUUID() }).success,
+        true,
+      );
+      assert.equal(updateProfileSchema.safeParse({ profileImageFileId: null }).success, true);
+      assert.equal(
+        codeFor({ profileImageFileId: 'not-a-uuid' }, 'profileImageFileId'),
         'INVALID_FORMAT',
       );
+    });
+
+    it('refuses the old profileImage URL outright, rather than ignoring it', () => {
+      // Deploy 3 removed the field (files doc 03 §7.2). A strict object reports
+      // it by name, so a client still sending a URL learns that it did nothing —
+      // a silent drop would look exactly like success.
       assert.equal(
-        codeFor({ profileImage: 'https://evil.example/a.png' }, 'profileImage'),
-        'UNTRUSTED_HOST',
+        codeFor({ profileImage: 'https://cdn.zaroorat.com/a.png' }, 'profileImage'),
+        'NOT_ALLOWED',
       );
     });
   });
@@ -154,7 +163,7 @@ describe('user profile schema (unit)', () => {
         firstName: `${secret}9`,
         dateOfBirth: secret,
         gender: secret,
-        profileImage: `https://evil.example/${secret}`,
+        profileImageFileId: secret,
         languageCode: secret,
       });
       assert.ok(details.length > 0);
