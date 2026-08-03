@@ -19,8 +19,9 @@ import { FileController } from './file.controller.js';
  * this module is **relational**, decided from the caller's relationship to a
  * specific file, which a route-level check cannot see.
  *
- * Phases 2–3 register the upload pair and the read surface; delete arrives in
- * phase 4.
+ * All five endpoints in doc 02 §1. There is no replace endpoint and no list
+ * endpoint: replacement is upload + attach + supersede, and the middle step
+ * belongs to the owning module (FLOW §5A).
  * @param app The Fastify instance (already carrying the deny-by-default gate).
  */
 export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
@@ -30,4 +31,5 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
   app.post('/:id/complete', controller.completeUpload);
   app.get('/:id', controller.getMetadata);
   app.get('/:id/url', controller.getReadUrl);
+  app.delete('/:id', controller.remove);
 }

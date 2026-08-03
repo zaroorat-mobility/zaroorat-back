@@ -94,6 +94,22 @@ export class FileRepository extends BaseRepository {
   }
 
   /**
+   * Load one file by id alone, for the module-to-module surface.
+   *
+   * The other query in this module that is not owner-scoped, alongside
+   * {@link findReadable} — and for the same kind of reason: `supersede` is called
+   * by an owning module with two file ids and no caller, so ownership is checked
+   * by comparing the two rows rather than by the `WHERE` clause. **Not reachable
+   * from any HTTP handler.**
+   * @param id The file id.
+   * @param tx Optional transaction client.
+   * @returns The row, or `null`.
+   */
+  async findById(id: string, tx?: TransactionClient): Promise<File | null> {
+    return (tx ?? this.client).file.findUnique({ where: { id } });
+  }
+
+  /**
    * Transition `PENDING → READY`, conditionally.
    *
    * The `status: 'PENDING'` predicate is what makes FILE-INV-6 structural: of
@@ -130,6 +146,49 @@ export class FileRepository extends BaseRepository {
     const { count } = await this.client.file.updateMany({
       where: { id, status: 'PENDING' },
       data: { status: 'EXPIRED' },
+    });
+    return count === 1;
+  }
+
+  /**
+   * Transition `READY → DELETED`, conditionally (R-FILE-18).
+   *
+   * Soft only: `deleted_at` is set and the row leaves every read path, but the
+   * **object is not touched**. Erasure is the retention job's, never inline.
+   *
+   * Conditional for the same reason {@link markReady} is: of two concurrent
+   * deletes exactly one updates a row, so exactly one `file.deleted` exists.
+   * @param id The file id.
+   * @param deletedAt The soft-delete instant, which starts the retention clock.
+   * @param tx Transaction client — the event commits with this write (R-FILE-24).
+   * @returns `true` when this caller performed the transition.
+   */
+  async softDelete(id: string, deletedAt: Date, tx: TransactionClient): Promise<boolean> {
+    const { count } = await tx.file.updateMany({
+      where: { id, status: 'READY' },
+      data: { status: 'DELETED', deletedAt },
+    });
+    return count === 1;
+  }
+
+  /**
+   * Transition `READY → SUPERSEDED`, conditionally (R-FILE-31).
+   *
+   * Status and successor are written **together** because
+   * `ck_files_superseded_has_successor` makes either one alone illegal, and
+   * `WHERE status = 'READY'` is what keeps the version chain a line under
+   * concurrency: of two replacements of the same file exactly one transitions and
+   * the other is told it is no longer current (FILE-INV-8). The `@unique` on
+   * `superseded_by_id` is the database's backstop for the same thing.
+   * @param id The file being replaced.
+   * @param replacementId The file replacing it.
+   * @param tx The **attaching module's** transaction (R-FILE-27).
+   * @returns `true` when this caller performed the transition.
+   */
+  async markSuperseded(id: string, replacementId: string, tx: TransactionClient): Promise<boolean> {
+    const { count } = await tx.file.updateMany({
+      where: { id, status: 'READY' },
+      data: { status: 'SUPERSEDED', supersededById: replacementId },
     });
     return count === 1;
   }

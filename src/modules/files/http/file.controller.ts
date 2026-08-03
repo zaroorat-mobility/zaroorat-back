@@ -153,6 +153,28 @@ export class FileController {
   };
 
   /**
+   * `DELETE /files/{id}` — soft-delete.
+   *
+   * `204` whether the file was deleted now or already was: a repeat converges
+   * rather than failing (doc 02 §2.5). The object itself is untouched — erasure
+   * belongs to the retention job.
+   */
+  remove = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyFileError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+
+    const params = this.parse(fileIdSchema, request.params);
+    if (!params.ok) return this.handle(request, reply, params.error);
+
+    try {
+      await this.fileService.remove(params.value.id, auth.userId, request.id);
+      return reply.status(204).send();
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
+  };
+
+  /**
    * Parse a payload, converting a Zod failure into a {@link FileValidationError}.
    * @param schema The schema to apply.
    * @param payload The raw request part.

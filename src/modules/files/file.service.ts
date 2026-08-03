@@ -1,4 +1,4 @@
-import { TransactionManager } from '@core/database';
+import { TransactionManager, UniqueConstraintError } from '@core/database';
 import { EventPublisher } from '@core/events';
 import { RedisService } from '@core/cache';
 import { logger } from '@shared/logger/index.js';
@@ -19,13 +19,16 @@ import {
 import {
   ChecksumMismatchError,
   ContentMismatchError,
+  FileInUseError,
   FileNotFoundError,
   FileStateError,
   FileTooLargeError,
   UploadExpiredError,
   UploadNotFoundError,
 } from './errors.js';
+import { findLiveReference } from './file-references.js';
 import { RateLimitedError } from '@modules/auth/errors';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { StorageConfig } from './storage.config.js';
 import type { StorageProvider } from './providers/storage.provider.js';
 
@@ -64,12 +67,16 @@ export interface CompleteUploadResult {
 }
 
 /**
- * The upload pair (files doc 01 §12 phase 2, doc 02 §2.1–§2.2).
+ * A file's whole life: upload, read, delete, and replacement (files doc 02).
  *
  * **No byte passes through this service.** The client PUTs directly to storage
  * using a permission scoped to one key, one method, one content-type, and one
  * size ceiling (R-FILE-1, R-FILE-2). What happens here is validation before the
  * permission is issued, and validation of what actually arrived afterwards.
+ *
+ * {@link assertReferenceable} and {@link supersede} are the module-to-module
+ * surface — the only two methods here with no HTTP route, called by an owning
+ * module inside its own transaction (R-FILE-27).
  */
 export class FileService {
   /**
@@ -219,37 +226,7 @@ export class FileService {
     }
 
     const completedAt = new Date();
-    const transitioned = await this.transactionManager.execute(async (tx) => {
-      const won = await this.fileRepository.markReady(
-        file.id,
-        {
-          sizeBytes: head.sizeBytes,
-          completedAt,
-          ...(head.checksumSha256 != null ? { checksumSha256: head.checksumSha256 } : {}),
-        },
-        tx,
-      );
-      // FILE-INV-6: of two concurrent completions exactly one transitions, and
-      // only the winner writes the event — so exactly one `file.uploaded` exists.
-      if (!won) return false;
-
-      await this.eventPublisher.publish(
-        fileEvent('file.uploaded', {
-          aggregateId: file.id,
-          subjectUserId: ownerUserId,
-          requestId,
-          data: {
-            fileId: file.id,
-            ownerUserId,
-            purpose,
-            contentType: file.contentType,
-            sizeBytes: head.sizeBytes,
-          },
-        }),
-        tx,
-      );
-      return true;
-    });
+    const transitioned = await this.publishReady(file, ownerUserId, head, completedAt, requestId);
 
     if (!transitioned) {
       // The other caller won. Return its result rather than an error: from the
@@ -377,6 +354,259 @@ export class FileService {
     );
     if (!grant.granted) throw new FileNotFoundError();
     return this.toResult(file);
+  }
+
+  /**
+   * Perform the `PENDING → READY` transition and its event, in one transaction.
+   *
+   * Split out from {@link completeUpload} for one reason: the transition is the
+   * only place a **database** invariant can refuse a file whose bytes were
+   * entirely valid. `uq_files_one_live_profile_image` (doc 03 §4.4) allows a
+   * user one live avatar, so a replacement cannot become `READY` while the
+   * previous one still is — and the raw violation escaping produced a `500`
+   * carrying Prisma's own text in Fastify's default envelope, which doc 04 §1
+   * and §5 both forbid.
+   *
+   * The row stays `PENDING`, so the client can release the previous file and
+   * retry within its upload window. That the release is required at all is a
+   * documented contradiction, not a design decision made here — see the phase-4
+   * report; this method only ensures the refusal is a `409` in the platform
+   * envelope either way.
+   *
+   * @returns `true` when this caller performed the transition.
+   * @throws {FileStateError} A live file already occupies this purpose's slot.
+   */
+  private async publishReady(
+    file: { id: string; purpose: string; contentType: string },
+    ownerUserId: string,
+    head: { sizeBytes: number; checksumSha256: string | null },
+    completedAt: Date,
+    requestId: string | null,
+  ): Promise<boolean> {
+    try {
+      return await this.transactionManager.execute(async (tx) => {
+        const won = await this.fileRepository.markReady(
+          file.id,
+          {
+            sizeBytes: head.sizeBytes,
+            completedAt,
+            ...(head.checksumSha256 != null ? { checksumSha256: head.checksumSha256 } : {}),
+          },
+          tx,
+        );
+        // FILE-INV-6: of two concurrent completions exactly one transitions, and
+        // only the winner writes the event — so exactly one `file.uploaded` exists.
+        if (!won) return false;
+
+        await this.eventPublisher.publish(
+          fileEvent('file.uploaded', {
+            aggregateId: file.id,
+            subjectUserId: ownerUserId,
+            requestId,
+            data: {
+              fileId: file.id,
+              ownerUserId,
+              purpose: file.purpose,
+              contentType: file.contentType,
+              sizeBytes: head.sizeBytes,
+            },
+          }),
+          tx,
+        );
+        return true;
+      });
+    } catch (err) {
+      // The storage key was inserted at reservation, so the only unique index
+      // this write can violate is the one-live-file-per-purpose rule. Same
+      // translation `saved-place.service.ts` applies to `uq_saved_places_user_label`.
+      if (err instanceof UniqueConstraintError) {
+        this.fileMetrics.uploadRejected({ purpose: file.purpose, reason: 'CONFLICT' });
+        throw new FileStateError('A live file of this purpose already exists');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Soft-delete a file (doc 02 §2.5).
+   *
+   * **The object is never touched here.** `deleted_at` is set, the row leaves
+   * every read path in the same instant, and the bytes survive until the
+   * retention job's window closes (R-FILE-18). Erasing inline would destroy
+   * evidence at the moment a user asks for it to disappear, which is exactly the
+   * sequence a dispute later needs reconstructed.
+   *
+   * A file a live domain row still references is refused (R-FILE-19,
+   * FILE-INV-5), naming the holding module and nothing else.
+   *
+   * Only `READY → DELETED` is a defined transition (doc 01 §7). Every other
+   * state answers `404`: a `PENDING` reservation is not a file yet, and a
+   * `SUPERSEDED` one is retained evidence a user cannot withdraw (R-FILE-32).
+   * Repeating a delete is `204`, because a converged request succeeded.
+   *
+   * @param fileId The file to remove.
+   * @param ownerUserId The caller, applied in the query's `WHERE` clause.
+   * @param requestId Correlation id for the audit envelope.
+   * @throws {FileNotFoundError} Absent, not the caller's, or not deletable.
+   * @throws {FileInUseError} A live domain row still references it.
+   */
+  async remove(
+    fileId: string,
+    ownerUserId: string,
+    requestId: string | null = null,
+  ): Promise<void> {
+    const file = await this.fileRepository.findOwned(fileId, ownerUserId);
+    if (!file) throw new FileNotFoundError();
+    // Converged, not a refusal — doc 02 §2.5 makes the repeat idempotent.
+    if (file.status === 'DELETED') return;
+    if (file.status !== 'READY') throw new FileNotFoundError();
+
+    const purpose = file.purpose as FilePurposeName;
+    const holder = await findLiveReference(purpose, file.id);
+    if (holder) throw new FileInUseError(holder);
+
+    const deletedAt = new Date();
+    await this.transactionManager.execute(async (tx) => {
+      const won = await this.fileRepository.softDelete(file.id, deletedAt, tx);
+      // The other caller transitioned it and emitted the event. Emitting a
+      // second one would make a single deletion look like two in the audit
+      // trail — the one place that must not be approximate.
+      if (!won) return;
+
+      await this.eventPublisher.publish(
+        fileEvent('file.deleted', {
+          aggregateId: file.id,
+          subjectUserId: file.ownerUserId,
+          requestId,
+          data: {
+            fileId: file.id,
+            ownerUserId: file.ownerUserId,
+            purpose,
+            // Always `self` in v1: this path is owner-scoped and `admin` cannot
+            // delete at all (doc 02 §6A) — an ops actor who could destroy
+            // evidence is the threat model, not a feature.
+            actor: 'self',
+            actorUserId: ownerUserId,
+          },
+        }),
+        tx,
+      );
+    });
+  }
+
+  /**
+   * Refuse unless a file may be attached to a domain row (R-FILE-27, FLOW §5).
+   *
+   * The whole of the boundary between `files` and every module that stores a
+   * file id: the caller passes a uuid and gets a yes or a throw, and neither side
+   * learns anything else. Called **inside the caller's own transaction**, so the
+   * check and the write that depends on it commit or roll back together — a
+   * check that committed separately would be a claim about the past by the time
+   * the row landed.
+   *
+   * Without it a client could attach a `PENDING` id and produce a KYC record
+   * pointing at bytes that were never verified, or never arrived (FILE-INV-3).
+   * It is also what closes the 03 §4A.2 race: an approval naming a file that has
+   * since been `SUPERSEDED` fails loudly rather than landing on a version nobody
+   * is presenting any more.
+   *
+   * @param fileId The file the caller intends to reference.
+   * @param ownerUserId The user the referencing row belongs to.
+   * @param purpose The purpose that row expects.
+   * @param tx The caller's transaction.
+   * @throws {FileNotFoundError} Absent, not that user's, or the wrong purpose.
+   * @throws {FileStateError} Present and the caller's, but not `READY`.
+   * @throws {FileInUseError} Already referenced by a live row (R-FILE-33).
+   */
+  async assertReferenceable(
+    fileId: string,
+    ownerUserId: string,
+    purpose: FilePurposeName,
+    tx: TransactionClient,
+  ): Promise<void> {
+    const file = await this.fileRepository.findOwned(fileId, ownerUserId, tx);
+    // Purpose joins owner in the non-disclosure merge: a caller guessing ids
+    // must not be able to learn what a file it cannot use is for (doc 04 §4).
+    if (!file || file.purpose !== purpose) throw new FileNotFoundError();
+
+    if (file.status !== 'READY' || file.deletedAt !== null) {
+      throw new FileStateError('That file is not available to attach');
+    }
+
+    const holder = await findLiveReference(purpose, fileId, tx);
+    if (holder) throw new FileInUseError(holder);
+  }
+
+  /**
+   * Replace one file with a newer version (R-FILE-31, doc 03 §4A).
+   *
+   * **Replacement is never a deletion.** A driver's previous licence is the
+   * document that was on file for every trip taken before the renewal; a
+   * regulator asking what was valid in March needs an answer, and a row
+   * indistinguishable from a user-initiated deletion cannot give one. So the
+   * previous version becomes `SUPERSEDED`, keeps its bytes for the purpose's
+   * full window measured from here (R-FILE-32), and names its successor.
+   *
+   * Runs in the **attaching module's** transaction: a failed attach must leave
+   * the previous version current and announce nothing. If the swap committed and
+   * the supersession did not, two files would be `READY` and "which licence is
+   * current?" would have two answers.
+   *
+   * @param previousFileId The file being replaced.
+   * @param replacementFileId The file replacing it.
+   * @param tx The caller's transaction.
+   * @param requestId Correlation id for the audit envelope.
+   * @throws {FileNotFoundError} Either file is absent.
+   * @throws {FileStateError} They disagree on owner or purpose, the replacement
+   *         is not `READY`, or the previous is no longer the current version.
+   */
+  async supersede(
+    previousFileId: string,
+    replacementFileId: string,
+    tx: TransactionClient,
+    requestId: string | null = null,
+  ): Promise<void> {
+    if (previousFileId === replacementFileId) {
+      throw new FileStateError('A file cannot supersede itself');
+    }
+
+    const previous = await this.fileRepository.findById(previousFileId, tx);
+    const replacement = await this.fileRepository.findById(replacementFileId, tx);
+    if (!previous || !replacement) throw new FileNotFoundError();
+
+    // A chain that crossed owners or purposes would move a file between read
+    // policies and retention classes — the same thing FILE-INV-7 forbids doing
+    // to `purpose` directly.
+    if (previous.ownerUserId !== replacement.ownerUserId) {
+      throw new FileStateError('A replacement must belong to the same owner');
+    }
+    if (previous.purpose !== replacement.purpose) {
+      throw new FileStateError('A replacement must share the previous purpose');
+    }
+    if (replacement.status !== 'READY') {
+      throw new FileStateError('The replacement file is not available to attach');
+    }
+
+    const won = await this.fileRepository.markSuperseded(previousFileId, replacementFileId, tx);
+    // Already superseded, deleted, or never `READY`. Refusing rather than
+    // silently converging is the point: two concurrent replacements must not
+    // both believe they are the current version (FILE-INV-8).
+    if (!won) throw new FileStateError('That file is no longer the current version');
+
+    await this.eventPublisher.publish(
+      fileEvent('file.superseded', {
+        aggregateId: previous.id,
+        subjectUserId: previous.ownerUserId,
+        requestId,
+        data: {
+          fileId: previous.id,
+          replacementFileId: replacement.id,
+          ownerUserId: previous.ownerUserId,
+          purpose: previous.purpose,
+        },
+      }),
+      tx,
+    );
   }
 
   /**

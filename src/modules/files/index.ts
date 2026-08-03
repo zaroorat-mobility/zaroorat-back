@@ -29,6 +29,12 @@ export {
 export { buildStorageKey, STORAGE_KEY_PATTERN } from './storage-key.js';
 export { decideRead, type ReadGrant } from './read-policy.js';
 export {
+  clearFileReferences,
+  findLiveReference,
+  registerFileReference,
+  type FileReferenceCheck,
+} from './file-references.js';
+export {
   inspect,
   hasEnforceableDimensions,
   matchesSignature,
@@ -78,8 +84,11 @@ export { FILE_EVENT_CATALOG, FILE_PRODUCER, fileEvent } from './events/index.js'
  * `redisService`, so this must run after the database, events, and Redis
  * modules.
  *
- * Phase 2 registers the upload pair's dependencies; the read and delete paths
- * and the two jobs arrive in phases 3–6 (files doc 01 §12).
+ * Phases 2–4 register the upload, read, and lifecycle paths, which share one
+ * service and so one registration; the S3 provider and the two jobs arrive in
+ * phases 5–6 (files doc 01 §12). The reference guard is a module-level registry
+ * rather than a container entry — it is written to by other modules at boot, and
+ * a DI singleton would make "who registered this?" harder to answer, not easier.
  * @param container The application DI container.
  */
 export function registerFileModule(container: AwilixContainer): void {
