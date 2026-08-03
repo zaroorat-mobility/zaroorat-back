@@ -1,4 +1,5 @@
-import type { TransactionManager } from '@core/database/TransactionManager';
+import type { TransactionClient, TransactionManager } from '@core/database/TransactionManager';
+import type { FileService } from '@modules/files';
 import type { EventPublisher } from '@core/events';
 import type { User } from '@core/database/types';
 import { userConfig } from '@config/user';
@@ -15,7 +16,17 @@ export interface UserProfileView {
   /** `YYYY-MM-DD` — date-only, no instant and no timezone (doc 03 §3.1). */
   dateOfBirth: string | null;
   gender: string | null;
+  /** The pre-FILES URL column. Always `null` in practice; dropped at deploy 3. */
   profileImage: string | null;
+  /**
+   * The avatar's **file id**, which the client exchanges for a short-lived
+   * signed URL at `GET /files/{id}/url` (FILES-OD-2).
+   *
+   * Not a URL, and there is deliberately no URL here: one minted at profile-read
+   * time would be a bearer credential with somebody else's expiry, cached by
+   * every client that stores the profile.
+   */
+  profileImageFileId: string | null;
   languageCode: string | null;
   referralCode: string | null;
 }
@@ -61,6 +72,7 @@ function toProfileView(profile: UserProfile | null): UserProfileView {
     dateOfBirth: toDateOnly(profile?.dateOfBirth ?? null),
     gender: profile?.gender ?? null,
     profileImage: profile?.profileImage ?? null,
+    profileImageFileId: profile?.profileImageFileId ?? null,
     languageCode: profile?.languageCode ?? userConfig.defaultLanguageCode,
     referralCode: profile?.referralCode ?? null,
   };
@@ -100,6 +112,10 @@ export class UserService {
    * @param roleRepository AUTH's RBAC membership (read-only here).
    * @param transactionManager Unit-of-work boundary for state + outbox writes.
    * @param eventPublisher Transactional-outbox publisher.
+   * @param fileService FILES' module-to-module surface — the reference check and
+   *        supersession that an avatar change runs inside this module's own
+   *        transaction (R-FILE-27). Nothing else about storage crosses here: no
+   *        bucket, no key, no URL.
    */
   constructor(
     private readonly userRepository: UserRepository,
@@ -107,6 +123,7 @@ export class UserService {
     private readonly roleRepository: RoleRepository,
     private readonly transactionManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
+    private readonly fileService: FileService,
   ) {}
 
   /**
@@ -166,6 +183,9 @@ export class UserService {
     }
 
     const profile = await this.transactionManager.execute(async (tx) => {
+      if ('profileImageFileId' in changes) {
+        await this.attachProfileImage(userId, changes.profileImageFileId ?? null, tx, requestId);
+      }
       const updated = await this.userProfileRepository.update(userId, changes, tx);
       await this.eventPublisher.publish(
         userEvent('user.profile.updated', {
@@ -179,5 +199,52 @@ export class UserService {
     });
 
     return toProfileView(profile);
+  }
+
+  /**
+   * Attach a file as the caller's avatar, superseding the one it replaces
+   * (R-FILE-31, files doc 02 §6A, FLOW §5A).
+   *
+   * **Runs inside the caller's transaction** (R-FILE-27), which is the whole
+   * point of `files` exposing a `tx`-accepting check: the referenceability
+   * question and the write that depends on it commit together, so a check that
+   * passed can never be stale by the time the column lands.
+   *
+   * The old version is **superseded, never deleted**. A deletion says "the user
+   * withdrew it"; supersession says "this was valid until now", and only the
+   * second is true of a photograph someone replaced. Clearing the avatar
+   * outright is the exception: with no successor there is no chain to extend
+   * (`ck_files_superseded_has_successor` would refuse one), so the file simply
+   * becomes unreferenced and the owner may delete it.
+   *
+   * There is no replace endpoint anywhere: replacement is upload, then attach,
+   * and the attach belongs to whoever stores the id.
+   *
+   * @param userId The account whose avatar is changing.
+   * @param nextFileId The new avatar, or `null` to clear it.
+   * @param tx This method's caller's transaction.
+   * @param requestId Correlation id for the `file.superseded` envelope.
+   * @throws {FileNotFoundError} The file is absent, not this user's, or not a
+   *         `PROFILE_IMAGE` — all indistinguishable (FILE-INV-4).
+   * @throws {FileStateError} The file exists but its bytes were never verified.
+   */
+  private async attachProfileImage(
+    userId: string,
+    nextFileId: string | null,
+    tx: TransactionClient,
+    requestId: string | null,
+  ): Promise<void> {
+    const current = (await this.userProfileRepository.findByUserId(userId, tx))?.profileImageFileId;
+    // Re-submitting the avatar already in place is a no-op, not a conflict: the
+    // reference check would otherwise refuse the file for being referenced by
+    // the very row about to be rewritten (R-FILE-33).
+    if ((current ?? null) === nextFileId) return;
+
+    if (nextFileId === null) return;
+
+    await this.fileService.assertReferenceable(nextFileId, userId, 'PROFILE_IMAGE', tx);
+    if (current != null) {
+      await this.fileService.supersede(current, nextFileId, tx, requestId);
+    }
   }
 }

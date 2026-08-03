@@ -79,7 +79,6 @@ describe('files schema (integration)', () => {
         'ix_files_retention_pending',
         'ix_files_sweep',
         'ix_files_sweep_pending',
-        'uq_files_one_live_profile_image',
         'uq_files_storage_key',
       ]) {
         assert.ok(names.includes(expected), `missing index ${expected}`);
@@ -217,43 +216,68 @@ describe('files schema (integration)', () => {
     });
   });
 
-  // ── The profile-image partial unique, in both directions ──────────────────
+  // ── Which avatar is current, after the phase-7 cutover ────────────────────
 
-  describe('uq_files_one_live_profile_image (doc 03 §4.4)', () => {
-    it('refuses a second live profile image for one user', async () => {
-      const owner = await makeUser();
-      await rawInsert(
-        pendingRow(owner, { status: 'READY', completed_at: new Date(), size_bytes: 10 }),
-      );
+  describe('the one-live-avatar rule (doc 03 §4.4 → §7.2)', () => {
+    it('is no longer a partial unique on files', async () => {
+      const rows = await db().client.$queryRaw<{ indexname: string }[]>`
+        SELECT indexname FROM pg_indexes WHERE tablename = 'files'`;
 
-      await assert.rejects(
-        () => rawInsert(pendingRow(owner, { status: 'READY', completed_at: new Date() })),
-        /uq_files_one_live_profile_image/,
+      // `uq_files_one_live_profile_image` allowed one READY PROFILE_IMAGE per
+      // user, which together with FLOW §5A's ordering made avatar replacement
+      // impossible: the new file cannot become READY while the old one is, and
+      // the old one cannot be superseded until the new one is READY. Dropped in
+      // favour of R-FILE-31 — replacement is never a deletion.
+      assert.equal(
+        rows.some((row) => row.indexname === 'uq_files_one_live_profile_image'),
+        false,
       );
     });
 
-    it('ACCEPTS a replacement once the first is soft-deleted', async () => {
-      const owner = await makeUser();
-      const first = randomUUID();
-      await rawInsert(pendingRow(owner, { id: first, status: 'READY', completed_at: new Date() }));
-      await db().client.$executeRawUnsafe(
-        `UPDATE files SET status = 'DELETED', deleted_at = now() WHERE id = $1::uuid`,
-        first,
+    it('is now the profile’s own column, which is unique', async () => {
+      const rows = await db().client.$queryRaw<{ indexname: string; indexdef: string }[]>`
+        SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'user_profiles'`;
+      const unique = rows.find(
+        (row) => row.indexname === 'user_profiles_profile_image_file_id_key',
       );
 
-      // Without this direction the index would look identical in every negative
-      // test above and would have made avatar replacement impossible.
+      // One question, one answer. Two constraints answering "which avatar is
+      // current" is what created the deadlock; this is the one the attaching
+      // module can actually satisfy, and it doubles as R-FILE-33 — a file may be
+      // referenced by at most one live domain row.
+      assert.ok(unique, 'the reference column is unique');
+      assert.match(unique.indexdef, /UNIQUE/);
+    });
+
+    it('lets one user hold several READY profile images, only one referenced', async () => {
+      const owner = await makeUser();
+      await rawInsert(pendingRow(owner, { status: 'READY', completed_at: new Date() }));
+
+      // The replaced ones are bounded by the per-purpose byte quota (doc 08 §5),
+      // which is the mechanism meant to bound them.
       await assert.doesNotReject(() =>
         rawInsert(pendingRow(owner, { status: 'READY', completed_at: new Date() })),
       );
     });
 
-    it('lets two different users each hold a live profile image', async () => {
-      const first = await makeUser();
-      const second = await makeUser();
-      await rawInsert(pendingRow(first, { status: 'READY', completed_at: new Date() }));
-      await assert.doesNotReject(() =>
-        rawInsert(pendingRow(second, { status: 'READY', completed_at: new Date() })),
+    it('refuses two profiles naming the same file (R-FILE-33)', async () => {
+      const owner = await makeUser();
+      const other = await makeUser();
+      const fileId = randomUUID();
+      await rawInsert(pendingRow(owner, { id: fileId, status: 'READY', completed_at: new Date() }));
+      await db().client.userProfile.create({
+        data: { userId: owner, profileImageFileId: fileId },
+      });
+
+      // FILES-OD-13: two live references would make both the retention guard and
+      // FILE_IN_USE ambiguous — "is anyone still using this?" would stop having
+      // a yes/no answer.
+      await assert.rejects(
+        () =>
+          db().client.userProfile.create({
+            data: { userId: other, profileImageFileId: fileId },
+          }),
+        /profile_image_file_id/,
       );
     });
   });

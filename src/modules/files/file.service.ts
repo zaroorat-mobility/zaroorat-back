@@ -1,4 +1,4 @@
-import { TransactionManager, UniqueConstraintError } from '@core/database';
+import { TransactionManager } from '@core/database';
 import { EventPublisher } from '@core/events';
 import { RedisService } from '@core/cache';
 import { logger } from '@shared/logger/index.js';
@@ -359,22 +359,15 @@ export class FileService {
   /**
    * Perform the `PENDING → READY` transition and its event, in one transaction.
    *
-   * Split out from {@link completeUpload} for one reason: the transition is the
-   * only place a **database** invariant can refuse a file whose bytes were
-   * entirely valid. `uq_files_one_live_profile_image` (doc 03 §4.4) allows a
-   * user one live avatar, so a replacement cannot become `READY` while the
-   * previous one still is — and the raw violation escaping produced a `500`
-   * carrying Prisma's own text in Fastify's default envelope, which doc 04 §1
-   * and §5 both forbid.
-   *
-   * The row stays `PENDING`, so the client can release the previous file and
-   * retry within its upload window. That the release is required at all is a
-   * documented contradiction, not a design decision made here — see the phase-4
-   * report; this method only ensures the refusal is a `409` in the platform
-   * envelope either way.
+   * Nothing but the conditional update can refuse this write. It used to have a
+   * `UniqueConstraintError` translation, because `uq_files_one_live_profile_image`
+   * could reject a file whose bytes were entirely valid — but that index was
+   * dropped in the phase-7 cutover (doc 03 §7.2), and a mapping for a constraint
+   * that no longer exists is a comment claiming a hazard that is gone. The
+   * storage key is the only other unique value here and it was written at
+   * reservation.
    *
    * @returns `true` when this caller performed the transition.
-   * @throws {FileStateError} A live file already occupies this purpose's slot.
    */
   private async publishReady(
     file: { id: string; purpose: string; contentType: string },
@@ -383,48 +376,37 @@ export class FileService {
     completedAt: Date,
     requestId: string | null,
   ): Promise<boolean> {
-    try {
-      return await this.transactionManager.execute(async (tx) => {
-        const won = await this.fileRepository.markReady(
-          file.id,
-          {
-            sizeBytes: head.sizeBytes,
-            completedAt,
-            ...(head.checksumSha256 != null ? { checksumSha256: head.checksumSha256 } : {}),
-          },
-          tx,
-        );
-        // FILE-INV-6: of two concurrent completions exactly one transitions, and
-        // only the winner writes the event — so exactly one `file.uploaded` exists.
-        if (!won) return false;
+    return this.transactionManager.execute(async (tx) => {
+      const won = await this.fileRepository.markReady(
+        file.id,
+        {
+          sizeBytes: head.sizeBytes,
+          completedAt,
+          ...(head.checksumSha256 != null ? { checksumSha256: head.checksumSha256 } : {}),
+        },
+        tx,
+      );
+      // FILE-INV-6: of two concurrent completions exactly one transitions, and
+      // only the winner writes the event — so exactly one `file.uploaded` exists.
+      if (!won) return false;
 
-        await this.eventPublisher.publish(
-          fileEvent('file.uploaded', {
-            aggregateId: file.id,
-            subjectUserId: ownerUserId,
-            requestId,
-            data: {
-              fileId: file.id,
-              ownerUserId,
-              purpose: file.purpose,
-              contentType: file.contentType,
-              sizeBytes: head.sizeBytes,
-            },
-          }),
-          tx,
-        );
-        return true;
-      });
-    } catch (err) {
-      // The storage key was inserted at reservation, so the only unique index
-      // this write can violate is the one-live-file-per-purpose rule. Same
-      // translation `saved-place.service.ts` applies to `uq_saved_places_user_label`.
-      if (err instanceof UniqueConstraintError) {
-        this.fileMetrics.uploadRejected({ purpose: file.purpose, reason: 'CONFLICT' });
-        throw new FileStateError('A live file of this purpose already exists');
-      }
-      throw err;
-    }
+      await this.eventPublisher.publish(
+        fileEvent('file.uploaded', {
+          aggregateId: file.id,
+          subjectUserId: ownerUserId,
+          requestId,
+          data: {
+            fileId: file.id,
+            ownerUserId,
+            purpose: file.purpose,
+            contentType: file.contentType,
+            sizeBytes: head.sizeBytes,
+          },
+        }),
+        tx,
+      );
+      return true;
+    });
   }
 
   /**

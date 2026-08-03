@@ -3,6 +3,8 @@ import type { z } from 'zod';
 
 import { AuthError } from '@modules/auth/errors';
 import { replyFromAuthError } from '@modules/auth/http';
+import { FileError } from '@modules/files';
+import { replyFromFileError } from '@modules/files/http';
 import type {
   UpdateEmergencyContactInput,
   UpdateSavedPlaceInput,
@@ -57,6 +59,9 @@ function toProfileUpdate(body: UpdateProfileBody): UpdateUserProfileInput {
   }
   if (Object.hasOwn(body, 'gender')) changes.gender = body.gender ?? null;
   if (Object.hasOwn(body, 'profileImage')) changes.profileImage = body.profileImage ?? null;
+  if (Object.hasOwn(body, 'profileImageFileId')) {
+    changes.profileImageFileId = body.profileImageFileId ?? null;
+  }
   if (Object.hasOwn(body, 'languageCode')) changes.languageCode = body.languageCode ?? null;
   return changes;
 }
@@ -407,10 +412,18 @@ export class UserController {
    * verify, AUTH's per-phone rate limiter — is answered with AUTH's envelope and
    * AUTH's `auth.*` message key, not re-badged as a USER error. Doc 04 §2.2: the
    * client needs one implementation of these codes, not two.
+   *
+   * A `FileError` arrives the same way and for the same reason: attaching an
+   * avatar runs FILES' reference check inside this module's transaction
+   * (R-FILE-27), and its refusals are already catalogued — a file that is not
+   * the caller's is the `404` an unknown id produces (FILE-INV-4), and one whose
+   * bytes were never verified is a `409`. Re-badging either would invent a
+   * second spelling of a code the client already handles.
    */
   private handle(request: FastifyRequest, reply: FastifyReply, err: unknown): FastifyReply {
     if (err instanceof UserError) return replyFromUserError(request, reply, err);
     if (err instanceof AuthError) return replyFromAuthError(request, reply, err);
+    if (err instanceof FileError) return replyFromFileError(request, reply, err);
     throw err;
   }
 }

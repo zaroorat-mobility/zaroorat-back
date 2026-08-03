@@ -298,41 +298,35 @@ describe('file lifecycle (integration)', () => {
       return { fileId, completed };
     }
 
-    it('is refused as a 409 in the platform envelope, not a 500', async () => {
+    it('completes, because the replacement must exist before it can supersede', async () => {
       const user = await loginAs(app, '+919876570040');
       await publish(user.authHeader);
 
       const { completed } = await attempt(user.authHeader);
 
-      // `uq_files_one_live_profile_image` is the refusal, and it fires on a file
-      // whose bytes were entirely valid. Before this was mapped, the raw
-      // violation reached Fastify's default handler as
-      // `{"statusCode":500,…,"message":"Unique constraint failed on: unknown"}` —
-      // wrong status, unparseable shape, and a driver's own prose (doc 04 §5).
-      assert.equal(completed.statusCode, 409);
-      assert.equal(completed.json().error.code, 'CONFLICT');
-      assert.equal(completed.payload.includes('Unique constraint'), false);
-      assert.equal(completed.payload.includes('uq_files'), false);
+      // Until the phase-7 cutover this was a refusal, and the refusal made
+      // avatar replacement impossible: `uq_files_one_live_profile_image` would
+      // not let the new file become READY while the old one was, and
+      // `supersede` will not accept a replacement that is not READY. Neither
+      // could go first. The index was dropped in favour of R-FILE-31; which
+      // avatar is *current* is now `user_profiles.profile_image_file_id`.
+      assert.equal(completed.statusCode, 200, completed.payload);
+      assert.equal(completed.json().status, 'READY');
     });
 
-    it('leaves the reservation retriable once the previous one is released', async () => {
+    it('leaves the previous one READY until something attaches the new one', async () => {
       const user = await loginAs(app, '+919876570041');
       const { fileId: firstId } = await publish(user.authHeader);
-      const { fileId: secondId, completed } = await attempt(user.authHeader);
-      assert.equal(completed.statusCode, 409);
+      const { fileId: secondId } = await attempt(user.authHeader);
 
-      await remove(user.authHeader, firstId);
-      const retried = await app.inject({
-        method: 'POST',
-        url: `/api/v1/files/${secondId}/complete`,
-        headers: user.authHeader,
-      });
-
-      // The row stayed PENDING through the refusal, so the same reservation
-      // completes once the slot is free — no re-upload, no orphaned object.
-      assert.equal(retried.statusCode, 200, retried.payload);
-      const row = await db().client.file.findUniqueOrThrow({ where: { id: secondId } });
-      assert.equal(row.status, 'READY');
+      // Supersession is the attaching module's, in its own transaction
+      // (R-FILE-27) — `files` never demotes a version on its own, because it
+      // cannot know that anything took the new one up.
+      const first = await db().client.file.findUniqueOrThrow({ where: { id: firstId } });
+      const second = await db().client.file.findUniqueOrThrow({ where: { id: secondId } });
+      assert.equal(first.status, 'READY');
+      assert.equal(first.supersededById, null);
+      assert.equal(second.status, 'READY');
     });
   });
 

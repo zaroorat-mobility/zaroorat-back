@@ -65,19 +65,31 @@ model User {
 }
 
 model UserProfile {
-  id           String    @id @default(uuid(7)) @db.Uuid
-  userId       String    @unique @map("user_id") @db.Uuid
-  firstName    String?   @map("first_name")
-  lastName     String?   @map("last_name")
-  dateOfBirth  DateTime? @map("date_of_birth") @db.Date
-  gender       String?
-  profileImage String?   @map("profile_image")
-  languageCode String?   @default("en") @map("language_code")
-  referralCode String?   @unique @map("referral_code")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  userId             String    @unique @map("user_id") @db.Uuid
+  firstName          String?   @map("first_name")
+  lastName           String?   @map("last_name")
+  dateOfBirth        DateTime? @map("date_of_birth") @db.Date
+  gender             String?
+  /// The pre-FILES avatar URL. Empty in practice — `userConfig.profileImageHosts`
+  /// defaults to empty, so every value it could hold was rejected at write time.
+  /// Dropped at deploy 3 of the cutover (files doc 03 §7.2).
+  profileImage       String?   @map("profile_image")
+  /// The avatar, as a file reference (FILES-OD-2). A domain row never holds a
+  /// URL: a URL is minted per read, for one reader, and expires. `@unique` is
+  /// R-FILE-33 — at most one live domain row may reference a file.
+  profileImageFileId String?   @unique @map("profile_image_file_id") @db.Uuid
+  languageCode       String?   @default("en") @map("language_code")
+  referralCode       String?   @unique @map("referral_code")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id])
+  user             User  @relation(fields: [userId], references: [id])
+  // `Restrict`, not Prisma's `SetNull` default for an optional relation: a file
+  // row backing a live avatar must not be removable, and a silent NULL would
+  // turn a foreign-key violation into a user losing their photograph with
+  // nothing in the logs.
+  profileImageFile File? @relation("ProfileImage", fields: [profileImageFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@map("user_profiles")
 }

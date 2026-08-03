@@ -67,12 +67,24 @@ function makeService(opts: { profile?: Record<string, unknown> | null; user?: un
     },
   };
 
+  // The avatar attach is the only path that reaches FILES, and none of these
+  // cases takes it — an unexpected call here would be the bug worth catching.
+  const fileService = {
+    assertReferenceable: async () => {
+      seen.order.push('assertReferenceable');
+    },
+    supersede: async () => {
+      seen.order.push('supersede');
+    },
+  };
+
   const service = new UserService(
     userRepository as never,
     userProfileRepository as never,
     roleRepository as never,
     transactionManager as never,
     eventPublisher as never,
+    fileService as never,
   );
   return { service, seen };
 }

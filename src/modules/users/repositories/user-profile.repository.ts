@@ -14,6 +14,13 @@ export interface UpdateUserProfileInput {
   dateOfBirth?: Date | null;
   gender?: string | null;
   profileImage?: string | null;
+  /**
+   * The avatar as a **file id**, never a URL (FILES-OD-2). A stored URL is
+   * either public — which violates R-FILE-11 — or expired, and therefore
+   * useless. The client exchanges this id for a short-lived signed URL at
+   * `GET /files/{id}/url`.
+   */
+  profileImageFileId?: string | null;
   languageCode?: string | null;
 }
 
@@ -66,6 +73,25 @@ export class UserProfileRepository extends BaseRepository {
   }
 
   /**
+   * Whether any profile still names this file as its avatar (R-FILE-19).
+   *
+   * The answer `files` cannot work out for itself: it holds no foreign key to
+   * this table by design, so it asks the owning module instead. Registered as
+   * the `PROFILE_IMAGE` reference check in the module's DI wiring, and it is
+   * what stops retention erasing an avatar somebody is still wearing
+   * (FILE-INV-5).
+   * @param fileId The file being released or attached.
+   * @param tx The asking transaction, so an uncommitted attach is visible.
+   * @returns `true` while a profile references it.
+   */
+  async isProfileImage(fileId: string, tx?: TransactionClient): Promise<boolean> {
+    const count = await (tx ?? this.client).userProfile.count({
+      where: { profileImageFileId: fileId },
+    });
+    return count > 0;
+  }
+
+  /**
    * Apply a partial profile update, creating the row if the account has none.
    *
    * The upsert is not a workaround for a missing constraint: profile creation
@@ -93,6 +119,7 @@ export class UserProfileRepository extends BaseRepository {
     if ('dateOfBirth' in input) data.dateOfBirth = input.dateOfBirth;
     if ('gender' in input) data.gender = input.gender;
     if ('profileImage' in input) data.profileImage = input.profileImage;
+    if ('profileImageFileId' in input) data.profileImageFileId = input.profileImageFileId;
     if ('languageCode' in input) data.languageCode = input.languageCode;
 
     return (tx ?? this.client).userProfile.upsert({

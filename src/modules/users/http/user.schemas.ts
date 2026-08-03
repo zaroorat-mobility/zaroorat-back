@@ -103,6 +103,18 @@ const profileImageField = z
   .nullable();
 
 /**
+ * The avatar, as a `files` id (files doc 03 §7.2).
+ *
+ * Shape only — a well-formed uuid. **Everything that matters is checked in the
+ * service**, inside the transaction that writes the column: that the file
+ * exists, belongs to this caller, is a `PROFILE_IMAGE`, and had its bytes
+ * verified (R-FILE-27, FILE-INV-3). None of that is knowable from a string, and
+ * a schema that pretended otherwise would be a check a client could route
+ * around.
+ */
+const profileImageFileIdField = z.string().uuid().nullable();
+
+/**
  * `PATCH /api/v1/users/me/profile` (doc 02 §2.2).
  *
  * Strict: an unknown key is an error, never a silent drop. Every field is
@@ -115,6 +127,7 @@ export const updateProfileSchema = z.strictObject({
   dateOfBirth: dateOfBirthField.optional(),
   gender: z.enum(userConfig.genderValues).nullable().optional(),
   profileImage: profileImageField.optional(),
+  profileImageFileId: profileImageFileIdField.optional(),
   languageCode: z
     .string()
     .refine((value) => userConfig.supportedLanguageCodes.includes(value), 'NOT_ALLOWED')
