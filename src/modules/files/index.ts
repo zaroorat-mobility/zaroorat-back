@@ -20,9 +20,11 @@ export {
   type MockUrlRejection,
   type MockUrlVerdict,
 } from './providers/mock.provider.js';
+export { S3StorageProvider } from './providers/s3.provider.js';
 export {
   createStorageProvider,
   getStorageConfig,
+  type ServerSideEncryptionMode,
   type StorageConfig,
   type StorageProviderName,
 } from './storage.config.js';
