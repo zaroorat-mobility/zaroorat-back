@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` · **Doc:** 02 of the AUTH chain · **Stack:** Node.js / Fastify / Prisma (ADR-0006)
-> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / Security · **Last updated:** 2026-07-27
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / Security · **Last updated:** 2026-08-02
 > **Answers:** _How do we mechanically satisfy the AUTH security requirements — token model, OTP, revocation, fraud response?_
 > **Traces from:** [01_AUTH_BUSINESS_REQUIREMENTS](01_AUTH_BUSINESS_REQUIREMENTS.md)
 > **Traces to:** 03_AUTH_DATABASE_SPEC → 04_AUTH_API_SPEC → 05_AUTH_ERROR_CATALOG → 06_AUTH_EVENT_CATALOG → 07_AUTH_TEST_PLAN
@@ -244,9 +244,9 @@ deterministic controls run; the system never fails open.
 - **v1: number change / account recovery is admin/support-assisted, out-of-band.** No self-service
   reset (deferred, doc 01 §2.3).
 - The support flow **must** (R-ACCOUNT-10): verify identity through an audited procedure, be
-  **rate-limited**, write an `audit_log` row (actor, action, before/after), and **never display the
-  OTP or any credential** to staff. Staff _trigger_ a re-verification to the user's new number; they
-  do not read codes.
+  **rate-limited**, write an `admin_activity_logs` row (actor, action, before/after — see doc 03 §6),
+  and **never display the OTP or any credential** to staff. Staff _trigger_ a re-verification to the
+  user's new number; they do not read codes.
 - A completed recovery **preserves the identity** and bumps the epoch (all old sessions die) and
   emits `account.recovery.completed`.
 
@@ -258,8 +258,10 @@ deterministic controls run; the system never fails open.
 - **No secret is ever logged** (R-AUTH-18): OTP codes, raw refresh tokens, JWT signing secret, and
   pepper are excluded from logs and error bodies by a redaction rule in the logger.
 - **Signing secret + pepper** in the secret manager; rotatable; never committed.
-- **Sensitive auth actions** (suspend, role change, forced logout, recovery) write structured
-  `audit_log` rows **in the same transaction** as the change (R-AUTH-21, R-DATA-2).
+- **Sensitive auth actions** (suspend, role change, forced logout, recovery) write their audit-class
+  event to `outbox_events` **in the same transaction** as the change (R-AUTH-21, R-DATA-2); an
+  admin-initiated one additionally writes `admin_activity_logs` from the `admin` module. See doc 03
+  §6 — there is no `audit_log` table.
 - **PII** (phone, device fingerprint) handled per NFR-10; device risk fields treated as security
   data.
 

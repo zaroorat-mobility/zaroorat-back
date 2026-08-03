@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 
-import type { UserSession } from '@core/database/types';
+import type { UserDevice, UserSession } from '@core/database/types';
 import { AuthService, type DeviceContext } from '../auth.service';
 import { AuthError } from '../errors';
 import { replyAuthError, replyFromAuthError } from './error-response';
@@ -34,6 +34,31 @@ function toSessionDto(session: UserSession, currentSid: string) {
     lastSeenAt: session.lastSeenAt,
     expiresAt: session.expiresAt,
     current: session.id === currentSid,
+  };
+}
+
+/**
+ * Present a device as a safe self-service DTO.
+ *
+ * `fingerprint` is deliberately absent. It is a risk signal AUTH matches against,
+ * and handing it back to the client turns it into something an attacker can read
+ * off one compromised session and replay from another (doc 01 R-DEVICE-5 treats
+ * device signals as security data). `isRooted`/`isJailbroken` are included
+ * because the user benefits from seeing them and cannot act on them anyway.
+ */
+function toDeviceDto(device: UserDevice, currentDeviceId: string | null) {
+  return {
+    id: device.id,
+    deviceId: device.deviceId,
+    platform: device.platform,
+    trustState: device.trustState,
+    isRooted: device.isRooted,
+    isJailbroken: device.isJailbroken,
+    appVersion: device.appVersion,
+    osVersion: device.osVersion,
+    lastSeenAt: device.lastSeenAt,
+    createdAt: device.createdAt,
+    current: device.id === currentDeviceId,
   };
 }
 
@@ -165,6 +190,33 @@ export class AuthController {
     const auth = request.auth;
     if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
     await this.authService.logoutAll(auth.userId);
+    return reply.status(204).send();
+  };
+
+  /** `GET /me/devices` — list the caller's bound devices. Auth required. */
+  listDevices = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+    const { devices, currentDeviceId } = await this.authService.listDevices(auth.userId, auth.sid);
+    return reply.status(200).send({ devices: devices.map((d) => toDeviceDto(d, currentDeviceId)) });
+  };
+
+  /**
+   * `DELETE /me/devices/:id` — revoke one of the caller's devices. Auth required.
+   *
+   * Every session bound to the device ends with it (R-DEVICE-3, AUTH-INV-6), so
+   * revoking the device the caller is holding signs the caller out — that is the
+   * intended behaviour for a lost-phone flow, and the `current` flag on the list
+   * is what lets a client warn first.
+   */
+  revokeDevice = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+    const { id } = request.params as { id: string };
+    const revoked = await this.authService.revokeDevice(auth.userId, id);
+    // Unknown and not-owned are the same answer: confirming that someone else's
+    // device exists is an enumeration oracle, exactly as it is for sessions.
+    if (revoked === null) return replyAuthError(request, reply, 'VALIDATION', 'Device not found');
     return reply.status(204).send();
   };
 

@@ -48,6 +48,12 @@ export class TransactionManager {
 
       return await this.provider.client.$transaction(callback, txOptions);
     } catch (error) {
+      // The callback runs application code, so most of what surfaces here is a
+      // domain error the caller threw on purpose to roll the transaction back
+      // (AccountSuspendedError, PhoneInUseError, …). Those must reach the caller
+      // as themselves; translating them would turn every deliberate 403/409 into
+      // a 500. Only genuine driver failures are mapped.
+      if (!PrismaErrorMapper.isPrismaError(error)) throw error;
       throw PrismaErrorMapper.mapError(error, 'Transaction Execution');
     }
   }

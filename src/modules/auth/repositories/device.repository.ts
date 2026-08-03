@@ -38,6 +38,58 @@ export class DeviceRepository extends BaseRepository {
   }
 
   /**
+   * Fetch the device a session is bound to, in one query.
+   *
+   * Used by the sensitive-action guard, which runs on the authorize path and has
+   * only a `sid` to work from — the access token carries `{sub, sid, roles,
+   * epoch}` and nothing about the device (doc 02 §3.2), so this is resolved
+   * rather than claimed. One join rather than two round trips, because it is on a
+   * request path.
+   *
+   * @param sessionId Session UUID (`sid`).
+   * @returns The bound device, or `null` if the session is unknown or was opened
+   *          without a device binding.
+   */
+  async findBySession(sessionId: string): Promise<UserDevice | null> {
+    const session = await this.client.userSession.findUnique({
+      where: { id: sessionId },
+      select: { device: true },
+    });
+    return session?.device ?? null;
+  }
+
+  /**
+   * List a user's bound devices, most recently seen first.
+   *
+   * Revoked devices are included: the point of the list is to show the user
+   * everything that has ever held a session on their account, and hiding a
+   * revocation is hiding the security event they most need to see. The client
+   * distinguishes them by `trustState`.
+   *
+   * @param userId Owner user UUID.
+   * @returns The user's devices, newest activity first, then newest bound.
+   */
+  async findAllByUser(userId: string): Promise<UserDevice[]> {
+    return this.client.userDevice.findMany({
+      where: { userId },
+      orderBy: [{ lastSeenAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+    });
+  }
+
+  /**
+   * Fetch a device, scoped to its owner.
+   *
+   * Ownership belongs in the `WHERE` clause: a device id that belongs to someone
+   * else must return no row, not a row the caller then has to remember to check.
+   * @param userId Owner user UUID.
+   * @param id Device UUID.
+   * @returns The device, or `null` if unknown **or not owned**.
+   */
+  async findOwned(userId: string, id: string): Promise<UserDevice | null> {
+    return this.client.userDevice.findFirst({ where: { id, userId } });
+  }
+
+  /**
    * Find a user's device by its client-reported id.
    * @param userId Owner user UUID.
    * @param deviceId Client-reported stable device id.

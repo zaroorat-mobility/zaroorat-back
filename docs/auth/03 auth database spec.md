@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` (+ `users`) · **Doc:** 03 of the AUTH chain · **Stack:** Prisma / PostgreSQL (ADR-0006)
-> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / Data · **Last updated:** 2026-07-27
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) / Data · **Last updated:** 2026-08-02
 > **Answers:** _What are the exact tables, columns, relations, constraints, and migrations for AUTH?_
 > **Traces from:** [01_BUSINESS_REQUIREMENTS](01_AUTH_BUSINESS_REQUIREMENTS.md) · [02_SECURITY_SPEC](02_AUTH_SECURITY_SPEC.md)
 > **Traces to:** 04_AUTH_API_SPEC → 05 → 06 → 07
@@ -26,7 +26,13 @@ are catalogued in §4 and ship as **hand-authored SQL inside the migration**, no
 | **OD-1** Identity ID      | **UUID**, generated **v7** (time-ordered) for index locality on high-volume tables (ADR-0006).                                                                                                              |
 | **OD-2** Role storage     | **`Role` + `UserRoleAssignment` join table** is the single source of truth. The scalar `role` is **dropped**; the `roles[]` array is **not** introduced. Grant/revoke/expiry are first-class (R-ACCOUNT-7). |
 | **OD-4** Account state    | Enum **`{UNVERIFIED, ACTIVE, SUSPENDED, DEACTIVATED}`** (doc 01 §4.1).                                                                                                                                      |
-| **OD-7** Deferred factors | `email` / `password_hash` kept **nullable & reserved**; `OtpPurpose` trimmed to **`{LOGIN, REGISTER}`** for v1; the rest reserved in comments, not built.                                                   |
+| **OD-7** Deferred factors | `email` / `password_hash` kept **nullable & reserved**; `OtpPurpose` held to the values a shipped flow needs — **`{LOGIN, REGISTER, PHONE_CHANGE}`**; the rest reserved in comments, not built.             |
+
+> **`PHONE_CHANGE` was added after this doc was first written.** OD-7 reserved the name as
+> `CHANGE_PHONE`; the shipped value follows USER doc 02 §2.4.1's spelling, in migration
+> `20260731000000_add_phone_change_otp_purpose`. A distinct purpose is what keeps the flows apart —
+> the OTP secret is stored under a purpose-scoped Redis key, so a code proving control of a new number
+> cannot be replayed against `/auth/otp/verify` to log in as it.
 
 > **Epoch is not a column.** The per-user session epoch (doc 02 §3.3) lives in **Redis**
 > (`auth:epoch:{user_id}`). It is deliberately absent from Postgres — modelling it as a column would
@@ -49,7 +55,8 @@ enum UserStatus {
 enum OtpPurpose {
   LOGIN
   REGISTER
-  // RESET_PASSWORD, CHANGE_PHONE, DELETE_ACCOUNT — reserved, not v1 (OD-7)
+  PHONE_CHANGE // added for USER doc 02 §2.4 — see the note below
+  // RESET_PASSWORD, DELETE_ACCOUNT — reserved, not v1 (OD-7)
 }
 
 enum DeviceTrustState {
@@ -290,8 +297,17 @@ ON CONFLICT (slug) DO NOTHING;
 | `user_roles`        | **Kept** (revoked rows retained — grant/revoke history is audit).    | R-ACCOUNT-7 |
 | `users`             | Soft-deleted, never physically removed; archived per policy.         | R-DATA-1    |
 
-Auth's write-audit (suspend, role change, recovery) lands in the shared **`audit_log`** (long
-retention, append-only) — not duplicated here (R-AUTH-21/28).
+Auth's write-audit (suspend, role change, recovery) is **not duplicated here** (R-AUTH-21/28). It
+lands in two places, both already in the schema:
+
+- **`outbox_events`** — the audit-class events of doc 06, written in the same transaction as the
+  change they record. This is the append-only trail AUTH itself produces.
+- **`admin_activity_logs`** (+ `audit_field_changes`) — the actor-attributed row for an
+  **admin-initiated** action, written by the `admin` module, not by AUTH.
+
+> **There is no `audit_log` table.** Earlier drafts of docs 02, 04, 06, and 07 named one; the schema
+> has never contained it. The two stores above are what ships, and the wording in those docs has been
+> corrected to match. Recorded rather than resolved by inventing a third audit store.
 
 ---
 

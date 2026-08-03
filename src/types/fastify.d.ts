@@ -22,10 +22,15 @@ declare module 'fastify' {
   interface FastifyInstance {
     /** Deny-by-default authentication preHandler (JWT → epoch → sid denylist). */
     authenticate: preHandlerHookHandler;
-    /** Factory producing a role/operability authorization preHandler. */
+    /**
+     * Factory producing an authorization preHandler: role check, live
+     * driver-operability conjunction, and the root/jailbreak refusal for a
+     * module's sensitive actions. Mirrors `AuthorizeOptions` in `auth.plugin.ts`.
+     */
     authorize: (options?: {
       roles?: string[];
       requireOperableDriver?: boolean;
+      requireUntamperedDevice?: boolean;
     }) => preHandlerHookHandler;
   }
 }

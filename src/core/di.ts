@@ -8,6 +8,8 @@ import { registerTokenServices } from '@modules/auth/services';
 import { registerOtpServices } from '@modules/auth/otp';
 import { registerSessionServices } from '@modules/auth/session';
 import { registerAuthService } from '@modules/auth';
+import { registerUserRepositories, registerUserService } from '@modules/users';
+import { registerFileModule, registerFileRepositories } from '@modules/files';
 
 export const container = createContainer({ injectionMode: InjectionMode.CLASSIC });
 
@@ -17,7 +19,11 @@ registerRedisModule(container);
 registerEventsModule(container);
 registerNotificationModule(container);
 registerAuthRepositories(container);
+registerUserRepositories(container);
+registerFileRepositories(container);
 registerTokenServices(container);
 registerOtpServices(container);
 registerSessionServices(container);
-registerAuthService(container);
+registerAuthService(container); // provisions the user profile in its login tx
+registerUserService(container);
+registerFileModule(container); // storage provider + the upload pair (files doc 01 §12)

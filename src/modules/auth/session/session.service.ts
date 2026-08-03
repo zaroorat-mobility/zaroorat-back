@@ -106,6 +106,17 @@ export class SessionService {
   }
 
   /**
+   * The device a session is bound to.
+   * @param sessionId Session UUID (`sid`).
+   * @returns The bound `UserDevice.id`, or `null` if the session is unknown or
+   *          was opened without a device (an older row, or a non-app client).
+   */
+  async deviceIdFor(sessionId: string): Promise<string | null> {
+    const session = await this.sessionRepository.findById(sessionId);
+    return session?.deviceId ?? null;
+  }
+
+  /**
    * Revoke a specific session, but only if it belongs to the caller.
    * @param userId The caller's user UUID.
    * @param sessionId The session (`sid`) to revoke.
@@ -139,23 +150,48 @@ export class SessionService {
    * @param reason Revocation reason (`logout` for user-initiated, `suspension` for ops).
    */
   async logoutAll(userId: string, reason: string = 'logout'): Promise<void> {
-    const active = await this.sessionRepository.findActiveByUser(userId);
-    await this.transactionManager.execute(async (tx) => {
-      await this.sessionRepository.revokeAllByUser(userId, reason, undefined, tx);
-      await this.refreshTokenRepository.revokeAllByUser(userId, reason, undefined, tx);
-      for (const session of active) {
-        await this.eventPublisher.publish(
-          authEvent('auth.session.revoked', {
-            aggregateId: session.id,
-            sessionId: session.id,
-            data: { sessionId: session.id, reason },
-          }),
-          tx,
-        );
-      }
-    });
+    await this.transactionManager.execute((tx) => this.revokeAllInTransaction(userId, reason, tx));
     await this.epochService.bump(userId);
     this.sessionMetrics.logoutAll({ userId, reason });
+  }
+
+  /**
+   * Revoke every session and refresh token for a user **inside a caller's
+   * transaction**, emitting one `auth.session.revoked` per affected `sid`.
+   *
+   * Public so a flow that must revoke as part of a larger unit of work can do so
+   * without nesting transactions — USER's phone change updates the number and
+   * revokes in one commit (user doc 03 §4.2, R-USER-29). Deliberately does *not*
+   * bump the epoch or emit metrics: those are non-transactional side effects that
+   * belong after the caller's commit (R-USER-30). {@link logoutAll} is this method
+   * plus that after-commit half.
+   * @param userId Owner user UUID.
+   * @param reason Revocation reason recorded on every row and event.
+   * @param tx The caller's transaction client.
+   * @returns Count of sessions that were active and are now revoked — the number
+   *          of `auth.session.revoked` events written in this transaction.
+   */
+  async revokeAllInTransaction(
+    userId: string,
+    reason: string,
+    tx: TransactionClient,
+  ): Promise<number> {
+    // Read the active set inside the transaction, so the rows enumerated for the
+    // audit trail are exactly the rows the bulk update below revokes.
+    const active = await this.sessionRepository.findActiveByUser(userId, undefined, tx);
+    await this.sessionRepository.revokeAllByUser(userId, reason, undefined, tx);
+    await this.refreshTokenRepository.revokeAllByUser(userId, reason, undefined, tx);
+    for (const session of active) {
+      await this.eventPublisher.publish(
+        authEvent('auth.session.revoked', {
+          aggregateId: session.id,
+          sessionId: session.id,
+          data: { sessionId: session.id, reason },
+        }),
+        tx,
+      );
+    }
+    return active.length;
   }
 
   /**

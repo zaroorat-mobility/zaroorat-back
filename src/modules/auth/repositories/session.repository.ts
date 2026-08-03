@@ -59,10 +59,16 @@ export class SessionRepository extends BaseRepository {
    * List a user's currently active sessions, oldest first.
    * @param userId Owner user UUID.
    * @param now Reference instant for the expiry check.
+   * @param tx Transaction client to join, so a caller that revokes in bulk
+   *           enumerates exactly the rows its own update will touch.
    * @returns Active sessions ordered by `createdAt` ascending.
    */
-  async findActiveByUser(userId: string, now: Date = new Date()): Promise<UserSession[]> {
-    return this.client.userSession.findMany({
+  async findActiveByUser(
+    userId: string,
+    now: Date = new Date(),
+    tx?: TransactionClient,
+  ): Promise<UserSession[]> {
+    return (tx ?? this.client).userSession.findMany({
       where: { userId, revokedAt: null, expiresAt: { gt: now } },
       orderBy: { createdAt: 'asc' },
     });

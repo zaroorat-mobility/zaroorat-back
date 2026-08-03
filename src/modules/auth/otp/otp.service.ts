@@ -17,11 +17,25 @@ import { OtpValidator } from './otp.validator';
 import { OtpRateLimiter } from './otp.rate-limiter';
 import { OtpMetrics } from './otp.metrics';
 
+/** Matches a canonical UUID in any version. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True when a value can be written to a `@db.Uuid` column without a syntax error. */
+function isUuid(value: string | null | undefined): value is string {
+  return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
 /** Inputs for requesting an OTP. */
 export interface SendOtpInput {
   phoneNumber: string;
   purpose: OtpPurpose;
   userId?: string | null;
+  /**
+   * The **client-reported** device id, used to key the per-device send limit
+   * (doc 02 §4.2). It is only written to the attempt trail when it happens to be
+   * an internal `user_devices.id` — the trail column is a UUID reference, and at
+   * send time no device is bound yet.
+   */
   deviceId?: string | null;
   ip?: string | null;
   /** Fraud metadata captured on the audit trail (non-secret). */
@@ -134,7 +148,14 @@ export class OtpService {
       provider: delivery.provider,
       latencyMs,
       ...(input.userId != null ? { userId: input.userId } : {}),
-      ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
+      // `deviceId` arrives here as the **client-reported** id (doc 04 §2.1's
+      // `device.deviceId`, e.g. "a1b2c3"), which is what the rate limiter keys
+      // on. The column is `@db.Uuid`, a reference to `user_devices.id` — an
+      // internal id that does not exist yet at send time, because binding a
+      // device happens on verify and looking one up here would be the account
+      // probe R-AUTH-19 forbids. Persisting the client string put invalid syntax
+      // into a uuid column and returned 500 for the documented request body.
+      ...(isUuid(input.deviceId) ? { deviceId: input.deviceId } : {}),
       ...(input.ip != null ? { ipAddress: input.ip } : {}),
       ...(input.deviceFingerprint != null ? { deviceFingerprint: input.deviceFingerprint } : {}),
       ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),

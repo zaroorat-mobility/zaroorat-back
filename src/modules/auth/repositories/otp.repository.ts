@@ -79,24 +79,40 @@ export class OtpRepository extends BaseRepository {
 
   /**
    * Update the recorded outcome of an attempt (e.g. `sent` → `verified`).
+   *
+   * **`verified` is terminal.** The write is conditional on the row not already
+   * carrying a `verified_at`, which makes the transition non-regressive under
+   * concurrency: when several clients present the same code at once, exactly one
+   * wins the atomic Redis consume and the losers record failures against the same
+   * challenge row. An unconditional update let whichever finished last decide the
+   * trail, so a login that genuinely succeeded could be filed as `failed` — with
+   * `verified_at` still set, contradicting itself — and the fraud reads in
+   * `countByPhoneSince` and the outcome column would disagree about what happened
+   * (R-AUTH-21/22).
+   *
+   * Ordering does not matter: a late `verified` still overwrites an earlier
+   * `failed`, and a late `failed` cannot overwrite an earlier `verified`.
+   *
    * @param id Attempt row UUID.
    * @param outcome New terminal/interim outcome.
    * @param options Optional `verifiedAt` and `failureReason` to record.
-   * @throws Propagates a not-found error if the id does not exist.
+   * @returns `true` if this call wrote the outcome; `false` if the attempt was
+   *          already verified (or the id is unknown) and was left alone.
    */
   async updateOutcome(
     id: string,
     outcome: OtpOutcome,
     options?: UpdateOutcomeOptions,
-  ): Promise<void> {
-    await this.client.otpVerification.update({
-      where: { id },
+  ): Promise<boolean> {
+    const { count } = await this.client.otpVerification.updateMany({
+      where: { id, verifiedAt: null },
       data: {
         outcome,
         ...(options?.verifiedAt ? { verifiedAt: options.verifiedAt } : {}),
         ...(options?.failureReason ? { failureReason: options.failureReason } : {}),
       },
     });
+    return count === 1;
   }
 
   /**

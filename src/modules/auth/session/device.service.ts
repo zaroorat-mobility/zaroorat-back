@@ -60,6 +60,35 @@ export class DeviceService {
   }
 
   /**
+   * List the devices bound to an account (self-service device management).
+   * @param userId Owner user UUID.
+   * @returns The user's devices, most recently seen first.
+   */
+  async listDevices(userId: string): Promise<UserDevice[]> {
+    return this.deviceRepository.findAllByUser(userId);
+  }
+
+  /**
+   * Revoke a device, but only if it belongs to the caller.
+   *
+   * The ownership check is a scoped read, not a comparison after an unscoped
+   * fetch: an id belonging to another account finds nothing, so there is no row
+   * to leak and no branch to forget. Idempotent — revoking an already-revoked
+   * device re-runs the transition and reports zero sessions killed, because there
+   * were none left to kill.
+   *
+   * @param userId The caller's user UUID.
+   * @param deviceId The device to revoke.
+   * @returns The number of sessions revoked, or `null` if the device is unknown
+   *          or not owned by the caller.
+   */
+  async revokeForUser(userId: string, deviceId: string): Promise<number | null> {
+    const device = await this.deviceRepository.findOwned(userId, deviceId);
+    if (!device) return null;
+    return this.revoke(deviceId, 'self');
+  }
+
+  /**
    * Update a device's last-seen timestamp.
    * @param deviceId Device UUID.
    * @param at Observation instant.
@@ -100,9 +129,12 @@ export class DeviceService {
   /**
    * Revoke a device: mark it `REVOKED` and kill its active sessions (INV-6).
    * @param deviceId Device UUID.
+   * @param actor Who revoked it — `self` for the account's owner, `system` for
+   *              ops and automated revocation. Recorded on the audit event so a
+   *              user-initiated revoke is distinguishable from one done to them.
    * @returns The number of sessions revoked.
    */
-  async revoke(deviceId: string): Promise<number> {
+  async revoke(deviceId: string, actor: string = 'system'): Promise<number> {
     // Mark the device REVOKED and record the audit event atomically; the device
     // is the authoritative gate, so it must never be revoked without its trail.
     await this.transactionManager.execute(async (tx) => {
@@ -111,7 +143,7 @@ export class DeviceService {
         authEvent('auth.device.revoked', {
           aggregateId: deviceId,
           subjectUserId: device.userId,
-          data: { userId: device.userId, deviceId, to: 'REVOKED', actor: 'system' },
+          data: { userId: device.userId, deviceId, to: 'REVOKED', actor },
         }),
         tx,
       );

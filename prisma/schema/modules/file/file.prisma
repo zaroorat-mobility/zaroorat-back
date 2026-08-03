@@ -1,0 +1,81 @@
+// ============================ FILE CUSTODY ============================
+// files doc 03 §3. One table for every uploaded object's metadata and
+// lifecycle; the bytes live in object storage and only the key is stored here.
+// Constraints §4.1–§4.6 are raw SQL in the migration — Prisma expresses none of
+// them.
+
+model File {
+  id              String      @id @default(uuid(7)) @db.Uuid
+  ownerUserId     String      @map("owner_user_id") @db.Uuid
+  purpose         FilePurpose
+  status          FileStatus  @default(PENDING)
+  // Server-generated, unguessable, never reused, never returned (R-FILE-7, FILE-INV-1/2).
+  storageKey      String      @map("storage_key")
+  // Which provider wrote it. A vendor change must not repoint historical keys.
+  storageProvider String      @map("storage_provider")
+  // The client's name, kept for display only. Never part of the key, never trusted.
+  fileName        String      @map("file_name")
+  contentType     String      @map("content_type")
+  // Declared at creation; overwritten with the verified value at completion (R-FILE-5).
+  sizeBytes       Int         @map("size_bytes")
+  checksumSha256  String?     @map("checksum_sha256")
+  // When the write permission lapses. The sweeper reads this (R-FILE-22).
+  uploadExpiresAt DateTime    @map("upload_expires_at")
+  completedAt     DateTime?   @map("completed_at")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  // Soft delete. The object outlives this until retention erases it (R-FILE-18).
+  deletedAt       DateTime?   @map("deleted_at")
+  // Retention moved the bytes to cold storage. Distinct from erasure: the object
+  // still exists (R-FILE-21). Mutually exclusive with erasedAt (FILE-INV-9).
+  archivedAt      DateTime?   @map("archived_at")
+  // Retention destroyed every version of the object (R-FILE-23).
+  erasedAt        DateTime?   @map("erased_at")
+  // The file that replaced this one (R-FILE-31). `@unique` is what keeps a
+  // version chain a line rather than a tree (FILE-INV-8) — Postgres treats NULLs
+  // as distinct, so every current file coexists freely.
+  supersededById  String?     @unique @map("superseded_by_id") @db.Uuid
+
+  owner        User  @relation(fields: [ownerUserId], references: [id])
+  supersededBy File? @relation("FileVersion", fields: [supersededById], references: [id])
+  supersedes   File? @relation("FileVersion")
+
+  // FILE-INV-1. Total, not partial: a key must stay unique across erased rows
+  // too, or a stale signed URL could resolve to somebody else's object. This one
+  // IS expressible in Prisma, so it lives here rather than in raw SQL — `map`
+  // keeps the name doc 03 §4.1 publishes.
+  @@unique([storageKey], map: "uq_files_storage_key")
+  // Ownership scoping — every read filters on owner first (FILE-INV-4).
+  @@index([ownerUserId], map: "ix_files_owner")
+  // The sweeper's query: PENDING rows past their permission window. The partial
+  // form is in raw SQL (03 §4.2) — Prisma cannot express the WHERE clause.
+  @@index([status, uploadExpiresAt], map: "ix_files_sweep")
+  // The retention job's query: closed (deleted or superseded), no terminal
+  // outcome yet. Partial form in raw SQL (03 §4.6).
+  @@index([status, deletedAt], map: "ix_files_retention")
+  @@map("files")
+}
+
+/// Drives every per-purpose policy: MIME allow-list, size and pixel ceilings,
+/// read TTL, EXIF stripping, and retention (files doc 02 §5). There is no
+/// "general" purpose — R-FILE-3.
+enum FilePurpose {
+  PROFILE_IMAGE
+  DRIVER_DOCUMENT
+  VEHICLE_DOCUMENT
+  VEHICLE_IMAGE
+  SOS_EVIDENCE
+  DISPUTE_EVIDENCE
+}
+
+/// The file lifecycle (files doc 01 §7). `archived`/`erased` are not states —
+/// they are terminal outcomes recorded in `archived_at` / `erased_at`.
+enum FileStatus {
+  PENDING
+  READY
+  EXPIRED
+  DELETED
+  /// Replaced by a newer version. NOT deleted: the bytes were valid evidence
+  /// while current, and retention keeps them for their full window (R-FILE-32).
+  SUPERSEDED
+}

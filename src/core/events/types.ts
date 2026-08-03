@@ -26,6 +26,9 @@ export interface PublishInput {
   classification: EventClassification;
   /** Aggregate kind for the outbox row (`user` | `session` | `device` | …). */
   aggregateType: string;
+  /** Emitting module stamped on the envelope. Defaults to `auth` (auth doc 06
+   *  §3); the users module stamps `users` (user doc 05 §2). */
+  producer?: string;
   /** Aggregate id — a UUID; required for durable (outbox) events. */
   aggregateId?: string | null;
   /** Subject user id for the envelope. */

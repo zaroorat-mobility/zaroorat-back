@@ -83,6 +83,40 @@ export class UserRepository extends BaseRepository {
   }
 
   /**
+   * Take a row lock on an identity for the rest of the caller's transaction.
+   *
+   * A read, not a write, so it stays inside USER's read access to this table
+   * (user doc 03 §2). It exists because a per-user cap cannot be expressed as a
+   * Postgres constraint: counting and then inserting is a read-then-write race
+   * that only concurrent callers expose (USER-INV-7). Serialising them on the
+   * owner row makes the count authoritative for the length of the transaction —
+   * doc 06 §4's "a constraint **or a locked count**".
+   *
+   * @param id User UUID.
+   * @param tx The caller's transaction — a lock outside one would release immediately.
+   */
+  async lockForUpdate(id: string, tx: TransactionClient): Promise<void> {
+    await tx.$queryRaw`SELECT 1 FROM users WHERE id = ${id}::uuid FOR UPDATE`;
+  }
+
+  /**
+   * Re-bind an identity to a different phone number (user doc 03 §4.2).
+   *
+   * Only the column changes — `id` is untouched, so every foreign key pointing at
+   * this identity follows it for free (USER-INV-3). Callers must run this inside
+   * the transaction that also revokes the account's sessions (R-USER-29).
+   * @param id User UUID.
+   * @param phoneNumber The new E.164 number.
+   * @param tx Transaction client to join (omit for a standalone write).
+   * @throws Propagates a unique violation (`uq_users_phone_active`) when another
+   *         active account already holds the number — **the index is the
+   *         enforcement**, not the caller's pre-check (doc 03 §4.2).
+   */
+  async updatePhoneNumber(id: string, phoneNumber: string, tx?: TransactionClient): Promise<User> {
+    return (tx ?? this.client).user.update({ where: { id }, data: { phoneNumber } });
+  }
+
+  /**
    * Mark the account's phone number as verified.
    * @param id User UUID.
    */

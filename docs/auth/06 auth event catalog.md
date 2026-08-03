@@ -2,7 +2,7 @@
 
 > **Project:** Zaroorat — Ride-Hailing Platform
 > **Module:** `auth` · **Doc:** 06 of the AUTH chain · **Stack:** Node.js / Fastify / Prisma (ADR-0006)
-> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) · **Last updated:** 2026-07-27
+> **Status:** 🟢 Final (v1) · **Owner:** Engineering (Auth) · **Last updated:** 2026-08-02
 > **Answers:** _What events does AUTH emit, what is in each payload, and what are the delivery and audit guarantees?_
 > **Traces from:** [01_BR](01%20auth%20business%20requirements.md) Appendix C · [02_SECURITY](02%20auth%20security%20spec.md) · [04_API](04%20auth%20api%20spec.md) §6
 > **Traces to:** 07_AUTH_TEST_PLAN
@@ -74,11 +74,11 @@ SCREAMING_SNAKE.
 
 ## 4. Classification
 
-| Class             | Meaning                                                              | Guarantee          |
-| ----------------- | -------------------------------------------------------------------- | ------------------ |
-| **audit**         | Legally/operationally significant; feeds `audit_log` (R-AUTH-21/28). | Transactional (§2) |
-| **domain**        | Drives other modules' behavior (e.g. notifications, session UX).     | At-least-once      |
-| **observability** | Metrics / funnels / abuse counters; loss is tolerable.               | Best-effort        |
+| Class             | Meaning                                                                                                                  | Guarantee          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------ |
+| **audit**         | Legally/operationally significant; written to `outbox_events` in the change's own transaction (R-AUTH-21/28, doc 03 §6). | Transactional (§2) |
+| **domain**        | Drives other modules' behavior (e.g. notifications, session UX).                                                         | At-least-once      |
+| **observability** | Metrics / funnels / abuse counters; loss is tolerable.                                                                   | Best-effort        |
 
 An event may carry more than one concern; the **strictest** class wins its delivery guarantee.
 
@@ -163,13 +163,13 @@ appears only in OTP/login/fraud events and never leaves the internal trust bound
 
 ## 8. Consumer map (who listens, informative)
 
-| Event(s)                                                            | Consumer                   | Purpose                             |
-| ------------------------------------------------------------------- | -------------------------- | ----------------------------------- |
-| `auth.otp.requested/sent`                                           | `notifications`            | OTP delivery, cost/observability    |
-| `auth.*` (audit subset)                                             | `admin`                    | `audit_log`, live-ops timeline      |
-| `auth.login.failed`, `auth.refresh.reuse_detected`, `auth.device.*` | fraud/risk                 | Abuse counters, investigation trail |
-| `auth.session.revoked`                                              | realtime / app             | Sign the affected device out        |
-| `account.suspended/reactivated`, `account.role.*`                   | `notifications`, analytics | Security alerts, funnel             |
+| Event(s)                                                            | Consumer                   | Purpose                                  |
+| ------------------------------------------------------------------- | -------------------------- | ---------------------------------------- |
+| `auth.otp.requested/sent`                                           | `notifications`            | OTP delivery, cost/observability         |
+| `auth.*` (audit subset)                                             | `admin`                    | `admin_activity_logs`, live-ops timeline |
+| `auth.login.failed`, `auth.refresh.reuse_detected`, `auth.device.*` | fraud/risk                 | Abuse counters, investigation trail      |
+| `auth.session.revoked`                                              | realtime / app             | Sign the affected device out             |
+| `account.suspended/reactivated`, `account.role.*`                   | `notifications`, analytics | Security alerts, funnel                  |
 
 Consumers are the authority on their own handling; this table is a routing aid, not a contract on
 their behavior.
