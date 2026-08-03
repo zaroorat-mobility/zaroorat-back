@@ -119,6 +119,26 @@ export class ChecksumMismatchError extends FileError {
   }
 }
 
+/**
+ * The image carries EXIF location metadata (R-FILE-29, doc 04 §2.2).
+ *
+ * `422`, on the same reasoning as {@link ContentMismatchError}: the request was
+ * an empty POST and nothing about it was malformed — what is wrong is the state
+ * the client created out of band. Unlike that one it **is** worth retrying, once
+ * the client re-encodes without the metadata, which is what an app that already
+ * downscales before upload does for free (FILES-OD-5).
+ *
+ * The response says location data was present and nothing more. Echoing the
+ * coordinates back would publish the very thing the rule exists to suppress.
+ */
+export class ExifLocationError extends FileError {
+  constructor() {
+    super('EXIF_LOCATION_PRESENT', 'That image carries location metadata and cannot be accepted', [
+      { field: 'file', code: 'METADATA_NOT_ALLOWED' },
+    ]);
+  }
+}
+
 /** The write permission lapsed before completion (doc 04 §2.2). Start over. */
 export class UploadExpiredError extends FileError {
   constructor() {

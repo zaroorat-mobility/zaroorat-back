@@ -5,16 +5,20 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
+import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
 
-/** A valid PNG header declaring the given dimensions. */
+/**
+ * A valid PNG declaring the given dimensions, optionally padded out.
+ *
+ * Built by the shared fixture rather than by hand: the signature and an IHDR are
+ * no longer enough, because the EXIF walk has to reach `IDAT` before it can
+ * conclude that no metadata chunk is present (R-FILE-29). Padding follows the
+ * pixel data, where a real file's would be.
+ */
 function png(width: number, height: number, padTo = 0): Buffer {
-  const header = Buffer.alloc(Math.max(24, padTo));
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
-  header.write('IHDR', 12, 'ascii');
-  header.writeUInt32BE(width, 16);
-  header.writeUInt32BE(height, 20);
-  return header;
+  const base = image({ width, height });
+  return padTo > base.length ? Buffer.concat([base, Buffer.alloc(padTo - base.length)]) : base;
 }
 
 /** A Linux ELF header — a real executable, renamed. */

@@ -84,8 +84,8 @@ describe('file purpose policy', () => {
     }
   });
 
-  it('preserves EXIF only where the metadata is the evidence (FILES-OD-10)', () => {
-    const preserved = purposes.filter((purpose) => !filePurposePolicy[purpose].stripExif);
+  it('permits EXIF location only where the metadata is the evidence (FILES-OD-10)', () => {
+    const preserved = purposes.filter((purpose) => !filePurposePolicy[purpose].rejectExifLocation);
     assert.deepEqual(preserved.sort(), ['DISPUTE_EVIDENCE', 'SOS_EVIDENCE']);
   });
 

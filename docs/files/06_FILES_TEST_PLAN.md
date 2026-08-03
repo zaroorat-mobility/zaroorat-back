@@ -102,7 +102,8 @@ Plus the partial-unique proof, in the shape AUTH's `uq_user_role_active` test us
 | No-secrets-in-errors       | Every code in 04 §2 asserted to omit URLs, keys, bucket names, and provider prose                                                                                                                                                                                     |
 | Erase clears every version | Overwrite a key three times on the versioned mock, `erase()`, assert **zero** versions and no delete marker. The same sequence with `delete()` must **leave** the earlier versions — otherwise the mock does not model the trap and the test proves nothing (08 §2.2) |
 | Decompression bomb         | A ~4 KB PNG declaring 40,000 × 40,000 → `413` at completion, **without the process allocating for it**. Assert dimensions were read from the header (the decoder is never entered) and peak RSS stays flat (R-FILE-35, 02 §5.2)                                       |
-| EXIF orientation first     | A 6000 × 4000 portrait JPEG with orientation 6 passes a 6000 × 6000 ceiling — it must be normalized before measuring, not refused as 4000 × 6000                                                                                                                      |
+| EXIF orientation first     | A portrait JPEG with orientation 6 is measured as it renders, not as it is stored — normalized before the ceiling check, rather than refused for a shape it does not have                                                                                             |
+| EXIF location refused      | A JPEG, PNG, and WebP each carrying a GPS directory are refused `422`; EXIF **without** GPS is accepted; the two evidence purposes accept GPS; metadata running past the peek is refused rather than assumed clean (FILES-OD-16)                                      |
 | Read TTL < token TTL       | Startup assertion: set `JWT_ACCESS_TTL_SECONDS` below the longest purpose TTL and the app **fails to boot** (R-FILE-36, 08 §8.1)                                                                                                                                      |
 
 ---
@@ -191,7 +192,7 @@ nothing behind them is how a control gets marked present the year after it was r
 | ☐   | Size ceiling per purpose                            | R-FILE-3, 02 §5                         | §3 #2                                                                |
 | ☐   | Filename sanitized, key unaffected                  | R-FILE-28, 02 §5.1                      | §5 path traversal                                                    |
 | ☐   | Storage key unguessable                             | R-FILE-7, 03 §5                         | §5 key unguessability (1,000 keys)                                   |
-| ☐   | EXIF/GPS stripped                                   | R-FILE-29, FILES-OD-10                  | new case in `file-upload`                                            |
+| ☐   | EXIF/GPS never readable                             | R-FILE-29, FILES-OD-10/16               | §5 EXIF location refused                                             |
 | ☐   | No URL/key in response, event, or log               | FILE-INV-2                              | §3 #3, §4                                                            |
 | ☐   | Existence not disclosed on denial                   | FILE-INV-4                              | §4, §5                                                               |
 | ☐   | Privileged reads audited                            | R-FILE-15                               | §3 #5, §6                                                            |

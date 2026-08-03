@@ -1,7 +1,7 @@
 /**
  * Content inspection from an object's leading bytes (files doc 02 §5, §5.2).
  *
- * Two jobs, both performed on a **header slice only** — nothing here decodes an
+ * Three jobs, all performed on a **header slice only** — nothing here decodes an
  * image:
  *
  * 1. **Magic bytes.** The declared content-type is a claim; these bytes are the
@@ -11,6 +11,16 @@
  *    is entered. That ordering is the whole defence: a 5 MB PNG can legally
  *    decode to 40,000 × 40,000, which is 6.4 GB of RGBA, and a byte ceiling
  *    cannot see it coming.
+ * 3. **Location metadata** (R-FILE-29). EXIF GPS lives in a container-level
+ *    segment — a JPEG `APP1`, a PNG `eXIf` chunk, a WebP `EXIF` chunk — every
+ *    one of which sits beside the pixel data rather than inside it. So finding
+ *    it is a walk over the same header slice, and costs no extra round trip and
+ *    no decoder.
+ *
+ * The **orientation tag is applied to the dimensions** before they are returned,
+ * because a 6000 × 4000 portrait photograph stores its frame transposed and
+ * would otherwise be measured as 4000 × 6000 and refused for the wrong reason
+ * (doc 02 §5.2).
  */
 
 /** The pixel extent read out of an image header. */
@@ -19,12 +29,23 @@ export interface ImageDimensions {
   height: number;
 }
 
+/**
+ * What the header proves about location metadata.
+ *
+ * `UNKNOWN` is not "probably fine": it means the metadata region ran past the
+ * peek, so absence could not be established. For a purpose that requires
+ * stripping, that is refused — a privacy control that fails open is not a
+ * control (R-FILE-29).
+ */
+export type LocationVerdict = 'ABSENT' | 'PRESENT' | 'UNKNOWN';
+
 /** Why a header could not be accepted. */
 export type InspectionFailure = 'MAGIC_MISMATCH' | 'DIMENSIONS_UNREADABLE';
 
 /** The outcome of inspecting a header slice. */
 export type InspectionResult =
-  { ok: true; dimensions: ImageDimensions | null } | { ok: false; reason: InspectionFailure };
+  | { ok: true; dimensions: ImageDimensions | null; location: LocationVerdict }
+  | { ok: false; reason: InspectionFailure };
 
 /**
  * Leading-byte signatures per content-type (doc 02 §5).
@@ -71,7 +92,7 @@ export function hasEnforceableDimensions(contentType: string): boolean {
  */
 export function inspect(declared: string, header: Buffer): InspectionResult {
   if (!matchesSignature(declared, header)) return { ok: false, reason: 'MAGIC_MISMATCH' };
-  if (!DIMENSIONED.has(declared)) return { ok: true, dimensions: null };
+  if (!DIMENSIONED.has(declared)) return { ok: true, dimensions: null, location: 'ABSENT' };
 
   const dimensions = readDimensions(declared, header);
   // Fail closed. A legitimate image states its size in its header; one whose
@@ -79,7 +100,33 @@ export function inspect(declared: string, header: Buffer): InspectionResult {
   // padded to push the frame header out of reach — and accepting it would mean
   // accepting an image whose decoded cost is unknown (R-FILE-35).
   if (!dimensions) return { ok: false, reason: 'DIMENSIONS_UNREADABLE' };
-  return { ok: true, dimensions };
+
+  const exif = readExif(declared, header);
+  return {
+    ok: true,
+    dimensions: applyOrientation(dimensions, exif.orientation),
+    location: exif.location,
+  };
+}
+
+/**
+ * Swap the axes when the orientation tag says the frame is stored rotated.
+ *
+ * Orientations 5–8 are the quarter-turns; 1–4 are upright or mirrored. A phone
+ * held sideways writes a 4000 × 6000 frame and an orientation of 6, and every
+ * viewer shows it as 6000 × 4000 — so measuring the stored frame against a
+ * per-axis ceiling refuses the picture for a shape it does not actually have
+ * (doc 02 §5.2).
+ * @param dimensions The frame as stored.
+ * @param orientation The EXIF orientation tag, if the header carried one.
+ * @returns The dimensions as a viewer would render them.
+ */
+function applyOrientation(
+  dimensions: ImageDimensions,
+  orientation: number | null,
+): ImageDimensions {
+  if (orientation === null || orientation < 5 || orientation > 8) return dimensions;
+  return { width: dimensions.height, height: dimensions.width };
 }
 
 /**
@@ -93,6 +140,181 @@ export function matchesSignature(declared: string, header: Buffer): boolean {
   if (!signature) return false;
   if (header.length < signature.length) return false;
   return signature.every((byte, index) => byte === null || header[index] === byte);
+}
+
+// ── EXIF (R-FILE-29) ─────────────────────────────────────────────────────────
+
+/** IFD0 tag for the GPS sub-directory pointer — the presence of location data. */
+const TAG_GPS_IFD = 0x8825;
+
+/** IFD0 tag for the orientation the frame should be rendered at. */
+const TAG_ORIENTATION = 0x0112;
+
+/** One IFD entry is a tag, a type, a count, and a value-or-offset. */
+const IFD_ENTRY_BYTES = 12;
+
+/** What a header slice yielded about its EXIF block. */
+interface ExifFacts {
+  location: LocationVerdict;
+  orientation: number | null;
+}
+
+/** Nothing found, and nothing left unread — the common case for a screenshot. */
+const NO_EXIF: ExifFacts = { location: 'ABSENT', orientation: null };
+
+/** The metadata region ran past the slice, so absence could not be proven. */
+const INCONCLUSIVE: ExifFacts = { location: 'UNKNOWN', orientation: null };
+
+/**
+ * Find the EXIF block for a format and read what this module cares about.
+ * @param declared The verified content-type.
+ * @param header The leading bytes.
+ * @returns Whether location data is present, and the orientation tag.
+ */
+function readExif(declared: string, header: Buffer): ExifFacts {
+  if (declared === 'image/jpeg') return readJpegExif(header);
+  if (declared === 'image/png') return readPngExif(header);
+  if (declared === 'image/webp') return readWebpExif(header);
+  return NO_EXIF;
+}
+
+/**
+ * JPEG: the EXIF block is an `APP1` segment carrying the marker `Exif\0\0`.
+ *
+ * The walk ends at `SOS`, the start of the entropy-coded scan: everything before
+ * it is metadata and everything after is pixels, so reaching it **proves**
+ * there is no EXIF rather than merely failing to find one. Running out of buffer
+ * first proves nothing, and says so.
+ */
+function readJpegExif(header: Buffer): ExifFacts {
+  let offset = 2; // past SOI
+  while (offset + 4 <= header.length) {
+    if (header[offset] !== 0xff) return INCONCLUSIVE;
+    const marker = header[offset + 1];
+    if (marker === undefined) return INCONCLUSIVE;
+
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
+    if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd9)) {
+      offset += 2;
+      continue;
+    }
+    // SOS: metadata is over. Anything past here is compressed pixel data.
+    if (marker === 0xda) return NO_EXIF;
+
+    const length = header.readUInt16BE(offset + 2);
+    if (length < 2) return INCONCLUSIVE;
+    const payloadStart = offset + 4;
+    const payloadEnd = offset + 2 + length;
+
+    if (marker === 0xe1 && payloadEnd <= header.length) {
+      if (header.toString('ascii', payloadStart, payloadStart + 6) === 'Exif\0\0') {
+        return readTiff(header.subarray(payloadStart + 6, payloadEnd));
+      }
+    }
+    // The segment we needed to read is only partly here.
+    if (marker === 0xe1 && payloadEnd > header.length) return INCONCLUSIVE;
+
+    offset = payloadEnd;
+  }
+  return INCONCLUSIVE;
+}
+
+/**
+ * PNG: EXIF lives in the ancillary `eXIf` chunk, which precedes `IDAT`.
+ *
+ * Reaching `IDAT` is the same proof `SOS` is for a JPEG — the pixel data has
+ * started, so no further metadata chunk can be the one we were looking for.
+ */
+function readPngExif(header: Buffer): ExifFacts {
+  let offset = 8; // past the signature
+  while (offset + 8 <= header.length) {
+    const length = header.readUInt32BE(offset);
+    const type = header.toString('ascii', offset + 4, offset + 8);
+    const dataStart = offset + 8;
+
+    if (type === 'IDAT') return NO_EXIF;
+    if (type === 'eXIf') {
+      if (dataStart + length > header.length) return INCONCLUSIVE;
+      return readTiff(header.subarray(dataStart, dataStart + length));
+    }
+    offset = dataStart + length + 4; // + CRC
+  }
+  return INCONCLUSIVE;
+}
+
+/**
+ * WebP: an `EXIF` chunk in the RIFF container, present only in the extended
+ * (`VP8X`) form.
+ *
+ * `VP8 ` and `VP8L` files are a single pixel chunk and cannot carry metadata at
+ * all, which is a conclusive absence rather than a failed search.
+ */
+function readWebpExif(header: Buffer): ExifFacts {
+  if (header.length < 16) return INCONCLUSIVE;
+  if (header.toString('ascii', 12, 16) !== 'VP8X') return NO_EXIF;
+
+  let offset = 12;
+  while (offset + 8 <= header.length) {
+    const fourcc = header.toString('ascii', offset, offset + 4);
+    const size = header.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+
+    if (fourcc === 'EXIF') {
+      if (dataStart + size > header.length) return INCONCLUSIVE;
+      const block = header.subarray(dataStart, dataStart + size);
+      // Some encoders prefix the JPEG-style marker; most write raw TIFF.
+      return block.toString('ascii', 0, 6) === 'Exif\0\0'
+        ? readTiff(block.subarray(6))
+        : readTiff(block);
+    }
+    // RIFF chunks are padded to an even length.
+    offset = dataStart + size + (size % 2);
+  }
+  return NO_EXIF;
+}
+
+/**
+ * Read IFD0 of a TIFF block for the GPS pointer and the orientation tag.
+ *
+ * Only IFD0 is walked. The GPS directory is reached through a **pointer stored
+ * in IFD0**, so its presence there is the whole question — there is no need to
+ * follow it and read coordinates, and not following it means no second bounds
+ * check and no chance of a crafted offset sending the reader anywhere.
+ * @param tiff The EXIF payload, starting at its byte-order mark.
+ * @returns What the directory declares.
+ */
+function readTiff(tiff: Buffer): ExifFacts {
+  if (tiff.length < 8) return INCONCLUSIVE;
+
+  const byteOrder = tiff.toString('ascii', 0, 2);
+  if (byteOrder !== 'II' && byteOrder !== 'MM') return INCONCLUSIVE;
+  const little = byteOrder === 'II';
+
+  const u16 = (at: number): number => (little ? tiff.readUInt16LE(at) : tiff.readUInt16BE(at));
+  const u32 = (at: number): number => (little ? tiff.readUInt32LE(at) : tiff.readUInt32BE(at));
+
+  const ifdOffset = u32(4);
+  if (ifdOffset + 2 > tiff.length) return INCONCLUSIVE;
+
+  const entries = u16(ifdOffset);
+  const end = ifdOffset + 2 + entries * IFD_ENTRY_BYTES;
+  if (end > tiff.length) return INCONCLUSIVE;
+
+  let orientation: number | null = null;
+  let hasLocation = false;
+  for (let index = 0; index < entries; index += 1) {
+    const entry = ifdOffset + 2 + index * IFD_ENTRY_BYTES;
+    const tag = u16(entry);
+    if (tag === TAG_GPS_IFD) hasLocation = true;
+    // SHORT values sit in the first two bytes of the value field, in the
+    // block's byte order — not right-aligned.
+    if (tag === TAG_ORIENTATION) orientation = u16(entry + 8);
+  }
+
+  return { location: hasLocation ? 'PRESENT' : 'ABSENT', orientation };
 }
 
 /** Dispatch to the per-format header reader. */

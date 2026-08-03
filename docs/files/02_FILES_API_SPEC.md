@@ -98,13 +98,15 @@ The client calls this after its PUT succeeds. **This is where the file becomes r
 5. For images, read **pixel dimensions from the header** and check them against the purpose ceiling
    — before any decode (R-FILE-35, §5.2).
 6. Compare the checksum, if one was declared.
-7. Strip EXIF where the purpose requires it (R-FILE-29), decoding only now that both the byte size
-   and the pixel count are known to be bounded.
+7. Refuse the image if it carries **EXIF location data** and the purpose does not preserve it
+   (R-FILE-29, FILES-OD-16). Read from the same header slice as steps 4–5; nothing is decoded and
+   nothing is rewritten.
 8. On any failure: **delete the object**, mark the row `EXPIRED`, and return the specific error.
 9. On success: `PENDING → READY` and emit `file.uploaded` **in one transaction** (R-FILE-24).
 
-Steps 3–5 are ordered cheapest-first and each is a hard gate: bytes, then declared type, then decoded
-size. Nothing expensive runs until everything cheap has passed.
+Steps 3–7 are ordered cheapest-first and each is a hard gate: bytes, then declared type, then pixel
+count, then metadata. Every one of them reads the header slice `head()` already returned, so the
+whole of completion is one round trip to storage.
 
 **Response — `200 OK`**
 
@@ -236,7 +238,7 @@ previous split across two documents meant a change had to land in both, and it a
 
 Backed by `file.config.ts` — configuration, never code (R-FILE-3, R-FILE-20).
 
-| Purpose            | MIME allow-list                                            | Max size | Max pixels    | Read TTL | EXIF stripped | Retention               | Terminal action |
+| Purpose            | MIME allow-list                                            | Max size | Max pixels    | Read TTL | GPS refused   | Retention               | Terminal action |
 | ------------------ | ---------------------------------------------------------- | -------- | ------------- | -------- | ------------- | ----------------------- | --------------- |
 | `PROFILE_IMAGE`    | `image/jpeg`, `image/png`, `image/webp`                    | 5 MB     | 4096 × 4096   | 10 min   | ✅            | 365 d after replacement | erase           |
 | `DRIVER_DOCUMENT`  | `image/jpeg`, `image/png`, `image/webp`, `application/pdf` | 10 MB    | 5000 × 5000   | 5 min    | ✅            | **8 years**             | archive         |
@@ -281,7 +283,7 @@ client's string, and that check is exactly the one an attacker chooses their fil
 This mapping is one-way and total — every allowed content-type has exactly one extension, and no
 extension is accepted that does not appear here.
 
-### 5.2 Pixel ceilings exist because we decode (R-FILE-35)
+### 5.2 Pixel ceilings, and why nothing is decoded (R-FILE-35)
 
 The size ceiling bounds **bytes on the wire**. It does not bound what those bytes become.
 
@@ -289,26 +291,49 @@ A 5 MB PNG can legally decode to 40,000 × 40,000 pixels — **6.4 GB** of RGBA 
 those in parallel take the process down, and the request that does it looks, at every layer that
 checks size, entirely legitimate.
 
-This matters here specifically because **R-FILE-29 makes us decode.** Stripping EXIF is not a
-metadata edit on an opaque blob; it means parsing the image. The EXIF requirement created the attack
-surface, and until now nothing bounded it — the two requirements were correct apart and unsafe
-together.
+An earlier draft of this section said the ceiling mattered "because R-FILE-29 makes us decode".
+It does not: FILES-OD-16 settled the metadata rule as a **refusal**, and refusing is a container
+walk, not a decode. So v1 never enters a decoder at all, and the ceiling guards the day something
+does — a thumbnailer, an OCR pass, an ops preview — rather than a hazard already present.
 
-So, at completion, before any decode:
+At completion, all from the header slice `head()` already returned:
 
-1. Read dimensions from the **header only** — every allowed format declares them in its first bytes,
-   which `head()` already fetches for magic-byte validation. No pixels are decoded to learn this.
-2. Reject `width × height` above the purpose's ceiling → `413 FILE_TOO_LARGE` with
+1. Read dimensions from the **header only** — every allowed format declares them in its first bytes.
+   No pixels are read to learn this.
+2. **Normalize by the EXIF orientation tag first**, so a 6000 × 4000 portrait photograph is not
+   measured as 4000 × 6000. A phone held sideways writes a transposed frame and an orientation of 6;
+   measuring the stored frame refuses the picture for a shape it does not have.
+3. Reject `width × height` above the purpose's ceiling → `413 FILE_TOO_LARGE` with
    `details[].limit`.
-3. Reject a declared dimension the decoder later contradicts.
-4. Only then decode, with the decoder's own pixel limit set to the same ceiling as a second line.
-
-**EXIF orientation is normalized before the check**, so a 6000 × 4000 portrait photo is not measured
-as 4000 × 6000 and refused for the wrong reason.
+4. Reject an image carrying EXIF location data, where the purpose does not preserve it (§5.3).
 
 PDFs are not decoded and have no pixel ceiling — `application/pdf` is stored as delivered, never
-parsed. A PDF is a program, and rendering one to strip metadata would be a far larger surface than
-the metadata is worth.
+parsed. A PDF is a program, and rendering one to inspect it would be a far larger surface than the
+inspection is worth.
+
+### 5.3 Location metadata is refused, not stripped (R-FILE-29, FILES-OD-16)
+
+EXIF GPS lives in a **container-level segment** — a JPEG `APP1`, a PNG `eXIf` chunk, a WebP `EXIF`
+chunk — beside the pixel data rather than inside it. Finding it is a walk over bytes already
+fetched.
+
+| Verdict   | Meaning                                             | Purpose strips → | Purpose keeps → |
+| --------- | --------------------------------------------------- | ---------------- | --------------- |
+| `ABSENT`  | The walk reached the pixel data without finding GPS | accept           | accept          |
+| `PRESENT` | An IFD0 GPS pointer is there                        | **`422`**        | accept          |
+| `UNKNOWN` | The metadata region ran past the peek               | **`422`**        | accept          |
+
+`UNKNOWN` is refused because a privacy control that fails open is not a control: _"I looked and
+found nothing"_ and _"I ran out of bytes"_ are different answers. In practice it is rare — a JPEG's
+`APP1` is capped at 64 KB by the format and `STORAGE_IMAGE_PEEK_BYTES` is 128 KB.
+
+Only the **presence of the GPS directory pointer in IFD0** is checked. The pointer is not followed:
+its presence is the whole question, and not following it means no second bounds check and no chance
+of a crafted offset sending the reader somewhere else.
+
+An image with EXIF but no GPS is **accepted**. A camera writes make, model, exposure, and
+orientation on every frame; refusing those would refuse nearly every photograph, and none of them
+says where anyone lives.
 
 ### 5.1 Filename policy (R-FILE-28)
 

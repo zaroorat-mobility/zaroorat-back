@@ -39,8 +39,12 @@ export interface FilePurposePolicy {
   readonly maxPixels: { readonly width: number; readonly height: number } | null;
   /** Signed-read lifetime. Always shorter than the access token (R-FILE-36). */
   readonly readTtlSeconds: number;
-  /** Strip EXIF, except where the metadata *is* the evidence (FILES-OD-10). */
-  readonly stripExif: boolean;
+  /**
+   * Refuse an image carrying EXIF location data, except where the metadata
+   * *is* the evidence (FILES-OD-10). Refused, not rewritten: stripping means
+   * bytes through the API process, which R-FILE-1 forbids (FILES-OD-16).
+   */
+  readonly rejectExifLocation: boolean;
   /** When the retention clock starts, and what it does when it runs out. */
   readonly retention: {
     readonly afterDays: number;
@@ -71,7 +75,7 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: bounded(process.env.FILE_MAX_PROFILE_IMAGE_BYTES, 5 * MB, 5 * MB),
     maxPixels: { width: 4096, height: 4096 },
     readTtlSeconds: 600,
-    stripExif: true,
+    rejectExifLocation: true,
     retention: { afterDays: 365, trigger: 'REPLACED', action: 'ERASE' },
   },
   DRIVER_DOCUMENT: {
@@ -79,7 +83,7 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: bounded(process.env.FILE_MAX_DRIVER_DOCUMENT_BYTES, 10 * MB, 10 * MB),
     maxPixels: { width: 5000, height: 5000 },
     readTtlSeconds: 300,
-    stripExif: true,
+    rejectExifLocation: true,
     retention: { afterDays: 2920, trigger: 'DRIVER_RELATIONSHIP_ENDED', action: 'ARCHIVE' },
   },
   VEHICLE_DOCUMENT: {
@@ -87,7 +91,7 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: bounded(process.env.FILE_MAX_VEHICLE_DOCUMENT_BYTES, 10 * MB, 10 * MB),
     maxPixels: { width: 5000, height: 5000 },
     readTtlSeconds: 300,
-    stripExif: true,
+    rejectExifLocation: true,
     retention: { afterDays: 2920, trigger: 'VEHICLE_RETIRED', action: 'ARCHIVE' },
   },
   VEHICLE_IMAGE: {
@@ -95,7 +99,7 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: bounded(process.env.FILE_MAX_VEHICLE_IMAGE_BYTES, 5 * MB, 5 * MB),
     maxPixels: { width: 6000, height: 6000 },
     readTtlSeconds: 600,
-    stripExif: true,
+    rejectExifLocation: true,
     retention: { afterDays: 90, trigger: 'VEHICLE_RETIRED', action: 'ERASE' },
   },
   SOS_EVIDENCE: {
@@ -103,7 +107,7 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: bounded(process.env.FILE_MAX_SOS_EVIDENCE_BYTES, 50 * MB, 50 * MB),
     maxPixels: { width: 8000, height: 8000 },
     readTtlSeconds: 120,
-    stripExif: false,
+    rejectExifLocation: false,
     retention: { afterDays: 3650, trigger: 'INCIDENT_CLOSED', action: 'ARCHIVE' },
   },
   DISPUTE_EVIDENCE: {
@@ -111,7 +115,7 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: bounded(process.env.FILE_MAX_DISPUTE_EVIDENCE_BYTES, 10 * MB, 10 * MB),
     maxPixels: { width: 8000, height: 8000 },
     readTtlSeconds: 180,
-    stripExif: false,
+    rejectExifLocation: false,
     retention: { afterDays: 1825, trigger: 'DISPUTE_CLOSED', action: 'ARCHIVE' },
   },
 } as const satisfies Record<string, FilePurposePolicy>);

@@ -5,6 +5,7 @@ import { FileService } from '../../../src/modules/files/file.service.js';
 import { FileMetrics } from '../../../src/modules/files/file.metrics.js';
 import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
 import { STORAGE_KEY_PATTERN } from '../../../src/modules/files/storage-key.js';
+import { png } from '../../helpers/image-fixtures.js';
 import type { StorageConfig } from '../../../src/modules/files/storage.config.js';
 
 const OWNER = '0198a0b3-0000-7000-8000-000000000001';
@@ -172,14 +173,15 @@ describe('FileService.completeUpload — unit of work (R-FILE-24)', () => {
     createdAt: new Date(Date.now() - 5_000),
   };
 
-  /** A 1x1 PNG header the inspector accepts. */
+  /**
+   * A 1x1 PNG the inspector accepts.
+   *
+   * A bare signature plus an IHDR is not enough any more: the EXIF walk has to
+   * reach `IDAT` to conclude that no metadata chunk is present, and a header that
+   * simply stops is reported as unproven rather than clean (R-FILE-29).
+   */
   function pngHeader(): Buffer {
-    const buffer = Buffer.alloc(24);
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
-    buffer.write('IHDR', 12, 'ascii');
-    buffer.writeUInt32BE(1, 16);
-    buffer.writeUInt32BE(1, 20);
-    return buffer;
+    return png({ width: 1, height: 1 });
   }
 
   it('writes the row change and the event in the SAME transaction', async () => {

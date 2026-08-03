@@ -122,21 +122,21 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: 5 * 1024 * 1024,
     maxPixels: { width: 4096, height: 4096 },
     readTtlSeconds: 600,
-    stripExif: true,
+    rejectExifLocation: true,
     retention: { afterDays: 365, trigger: 'REPLACED', action: 'ERASE' },
   },
   // … one entry per purpose, exactly matching 02 §5
 } as const);
 ```
 
-| Field            | Env-overridable? | Why                                                                                                  |
-| ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------- |
-| `mimeTypes`      | ❌               | Security control — §8.2                                                                              |
-| `maxPixels`      | ❌               | Security control (R-FILE-35); a raised ceiling is a decompression budget                             |
-| `stripExif`      | ❌               | Privacy control (R-FILE-29)                                                                          |
-| `retention`      | ❌               | Compliance; changing it needs the review in §3.1, not a deploy                                       |
-| `maxBytes`       | ✅ per purpose   | The one value with a legitimate operational reason to differ — a staging bucket with a smaller quota |
-| `readTtlSeconds` | ✅ globally down | May be tightened, never past the R-FILE-36 assertion (§8.1)                                          |
+| Field                | Env-overridable? | Why                                                                                                  |
+| -------------------- | ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `mimeTypes`          | ❌               | Security control — §8.2                                                                              |
+| `maxPixels`          | ❌               | Security control (R-FILE-35); a raised ceiling is a decompression budget                             |
+| `rejectExifLocation` | ❌               | Privacy control (R-FILE-29, FILES-OD-16)                                                             |
+| `retention`          | ❌               | Compliance; changing it needs the review in §3.1, not a deploy                                       |
+| `maxBytes`           | ✅ per purpose   | The one value with a legitimate operational reason to differ — a staging bucket with a smaller quota |
+| `readTtlSeconds`     | ✅ globally down | May be tightened, never past the R-FILE-36 assertion (§8.1)                                          |
 
 **Two of six are overridable, and both only in the safe direction.** A knob that can loosen a
 security control is not configuration, it is a bypass with a `.env` file for a key.

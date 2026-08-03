@@ -24,6 +24,7 @@ export const FILE_ERROR_STATUS: Record<string, number> = {
   UNSUPPORTED_MEDIA_TYPE: 415,
   CONTENT_MISMATCH: 422,
   CHECKSUM_MISMATCH: 422,
+  EXIF_LOCATION_PRESENT: 422,
 };
 
 /** Resolve the HTTP status for an error code (unknown codes are a 500, not a guess). */

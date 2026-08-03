@@ -51,6 +51,7 @@ export {
   matchesSignature,
   type ImageDimensions,
   type InspectionResult,
+  type LocationVerdict,
 } from './content-inspector.js';
 export {
   assertDeclaredUploadAllowed,
@@ -75,6 +76,7 @@ export {
   FileInUseError,
   ChecksumMismatchError,
   ContentMismatchError,
+  ExifLocationError,
   UnsupportedMediaTypeError,
   UploadExpiredError,
   UploadNotFoundError,

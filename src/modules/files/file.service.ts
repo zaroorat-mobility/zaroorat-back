@@ -19,6 +19,7 @@ import {
 import {
   ChecksumMismatchError,
   ContentMismatchError,
+  ExifLocationError,
   FileInUseError,
   FileNotFoundError,
   FileStateError,
@@ -177,6 +178,8 @@ export class FileService {
    * @throws {ContentMismatchError} The bytes are not the declared type.
    * @throws {ChecksumMismatchError} The declared digest does not match.
    * @throws {FileTooLargeError} The real size or pixel count is over the ceiling.
+   * @throws {ExifLocationError} The image carries EXIF location metadata and the
+   *         purpose does not preserve it (R-FILE-29).
    */
   async completeUpload(
     fileId: string,
@@ -223,6 +226,17 @@ export class FileService {
     } catch (error) {
       await this.rejectUpload(file.id, file.storageKey, purpose, 'FILE_TOO_LARGE');
       throw error;
+    }
+
+    // R-FILE-29, last because it is the only gate that can pass an image the
+    // earlier ones would have rejected anyway. A phone JPEG carries the
+    // coordinates it was taken at, and an avatar that discloses the rider's home
+    // address is a privacy failure no access control catches — so the two
+    // evidence purposes, where the metadata *is* the evidence, are exempt
+    // (FILES-OD-10).
+    if (policyFor(purpose).rejectExifLocation && inspection.location !== 'ABSENT') {
+      await this.rejectUpload(file.id, file.storageKey, purpose, 'EXIF_LOCATION_PRESENT');
+      throw new ExifLocationError();
     }
 
     const completedAt = new Date();

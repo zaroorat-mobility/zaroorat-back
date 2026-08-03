@@ -109,19 +109,20 @@ describe('content inspector — magic bytes (doc 02 §5)', () => {
   });
 });
 
+/** The dimensions a header yields, asserting the header itself was accepted. */
+function dimensionsOf(contentType: string, header: Buffer) {
+  const result = inspect(contentType, header);
+  assert.equal(result.ok, true, `header rejected: ${result.ok ? '' : result.reason}`);
+  return result.ok ? result.dimensions : null;
+}
+
 describe('content inspector — dimensions (R-FILE-35)', () => {
   it('reads PNG dimensions from IHDR', () => {
-    assert.deepEqual(inspect('image/png', png(1920, 1080)), {
-      ok: true,
-      dimensions: { width: 1920, height: 1080 },
-    });
+    assert.deepEqual(dimensionsOf('image/png', png(1920, 1080)), { width: 1920, height: 1080 });
   });
 
   it('reads JPEG dimensions from the start-of-frame marker', () => {
-    assert.deepEqual(inspect('image/jpeg', jpeg(4032, 3024)), {
-      ok: true,
-      dimensions: { width: 4032, height: 3024 },
-    });
+    assert.deepEqual(dimensionsOf('image/jpeg', jpeg(4032, 3024)), { width: 4032, height: 3024 });
   });
 
   it('finds the JPEG frame header past a large EXIF block', () => {
@@ -129,20 +130,14 @@ describe('content inspector — dimensions (R-FILE-35)', () => {
     // header. This is why the image peek budget is 128 KB and not 512 bytes.
     const withExif = jpeg(4032, 3024, 60000);
     assert.ok(withExif.length > 60000);
-    assert.deepEqual(inspect('image/jpeg', withExif), {
-      ok: true,
-      dimensions: { width: 4032, height: 3024 },
-    });
+    assert.deepEqual(dimensionsOf('image/jpeg', withExif), { width: 4032, height: 3024 });
   });
 
   it('reads both WebP container variants', () => {
-    assert.deepEqual(inspect('image/webp', webpLossy(800, 600)), {
-      ok: true,
-      dimensions: { width: 800, height: 600 },
-    });
-    assert.deepEqual(inspect('image/webp', webpExtended(1200, 900)), {
-      ok: true,
-      dimensions: { width: 1200, height: 900 },
+    assert.deepEqual(dimensionsOf('image/webp', webpLossy(800, 600)), { width: 800, height: 600 });
+    assert.deepEqual(dimensionsOf('image/webp', webpExtended(1200, 900)), {
+      width: 1200,
+      height: 900,
     });
   });
 
@@ -152,10 +147,7 @@ describe('content inspector — dimensions (R-FILE-35)', () => {
     // decoder allocates (doc 02 §5.2).
     const bomb = png(40000, 40000);
     assert.ok(bomb.length < 100, 'the header alone is tiny — that is the attack');
-    assert.deepEqual(inspect('image/png', bomb), {
-      ok: true,
-      dimensions: { width: 40000, height: 40000 },
-    });
+    assert.deepEqual(dimensionsOf('image/png', bomb), { width: 40000, height: 40000 });
   });
 
   it('fails closed when an image header yields no dimensions', () => {
@@ -180,10 +172,7 @@ describe('content inspector — dimensions (R-FILE-35)', () => {
   it('carries no dimensions for formats it never parses', () => {
     // A PDF is a program; rendering one to measure it would be a far larger
     // surface than the measurement is worth (doc 02 §5.2).
-    assert.deepEqual(inspect('application/pdf', Buffer.from('%PDF-1.7')), {
-      ok: true,
-      dimensions: null,
-    });
+    assert.deepEqual(dimensionsOf('application/pdf', Buffer.from('%PDF-1.7')), null);
     assert.equal(hasEnforceableDimensions('application/pdf'), false);
     assert.equal(hasEnforceableDimensions('video/mp4'), false);
   });
