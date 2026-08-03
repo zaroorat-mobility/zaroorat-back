@@ -46,6 +46,21 @@ export function registerFileReference(purpose: FilePurposeName, check: FileRefer
   CHECKS.set(purpose, check);
 }
 
+/**
+ * Whether any module has claimed a purpose's references.
+ *
+ * The distinction {@link findLiveReference} cannot make: it returns `null` both
+ * for "nobody holds this" and for "nobody is here to ask". Deletion may treat
+ * those alike — the caller owns the file and asked. **Retention may not**:
+ * erasure is irreversible, so a purpose with no module to ask is a purpose
+ * retention leaves alone (doc 03 §6).
+ * @param purpose The purpose to check.
+ * @returns `true` when a module owns that purpose's references.
+ */
+export function hasFileReferenceOwner(purpose: FilePurposeName): boolean {
+  return CHECKS.has(purpose);
+}
+
 /** Drop every registration. For tests, which register a stand-in module. */
 export function clearFileReferences(): void {
   CHECKS.clear();

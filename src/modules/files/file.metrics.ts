@@ -69,6 +69,46 @@ export class FileMetrics {
     this.emit('read.denied', fields);
   }
 
+  /** Reservations the sweeper reclaimed this run (doc 09 §2.4). */
+  sweeperReclaimed(fields?: FileMetricFields): void {
+    this.emit('sweeper.reclaimed', fields);
+  }
+
+  /** Files moved to cold storage, keeping the bytes (R-FILE-21). */
+  retentionArchived(fields?: FileMetricFields): void {
+    this.emit('retention.archived', fields);
+  }
+
+  /** Files whose every version was destroyed (R-FILE-23). */
+  retentionErased(fields?: FileMetricFields): void {
+    this.emit('retention.erased', fields);
+  }
+
+  /**
+   * Retention could not proceed on a file.
+   *
+   * Either the owning module still holds a reference (R-FILE-19) or the work
+   * failed its last attempt and was dead-lettered. **Sustained, this is an
+   * alert** (doc 09 §2.5): a consumer that never releases a reference means a
+   * compliance window closes with the bytes still there.
+   */
+  retentionBlocked(fields?: FileMetricFields): void {
+    this.emit('retention.blocked', fields);
+  }
+
+  /**
+   * The four gauges in doc 09 §2.4, emitted **by the jobs, per run**.
+   *
+   * Not computed on a scrape: a `sum(size_bytes) GROUP BY purpose` every fifteen
+   * seconds is a table scan on a table that only grows. Once a night, from a job
+   * already reading those rows, is free — and until a job runtime exists these
+   * are dark, which is a real consequence of doc 01 §13.4 rather than an
+   * oversight.
+   */
+  storageGauge(gauge: string, fields?: FileMetricFields): void {
+    this.emit(gauge, fields);
+  }
+
   /**
    * Emit one structured metric line.
    * @param event The metric suffix, appended to `file.`.

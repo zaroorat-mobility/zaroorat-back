@@ -3,6 +3,8 @@ import { asClass, asFunction, AwilixContainer } from 'awilix';
 import { createStorageProvider, getStorageConfig } from './storage.config.js';
 import { FileService } from './file.service.js';
 import { FileMetrics } from './file.metrics.js';
+import { FileSweeperJob } from './jobs/sweeper.job.js';
+import { FileRetentionJob } from './jobs/retention.job.js';
 
 export type {
   ObjectHead,
@@ -33,9 +35,16 @@ export { decideRead, type ReadGrant } from './read-policy.js';
 export {
   clearFileReferences,
   findLiveReference,
+  hasFileReferenceOwner,
   registerFileReference,
   type FileReferenceCheck,
 } from './file-references.js';
+export { FileSweeperJob, type SweepResult } from './jobs/sweeper.job.js';
+export {
+  FileRetentionJob,
+  type DeadLetteredFile,
+  type RetentionResult,
+} from './jobs/retention.job.js';
 export {
   inspect,
   hasEnforceableDimensions,
@@ -99,5 +108,10 @@ export function registerFileModule(container: AwilixContainer): void {
     storageProvider: asFunction(createStorageProvider).singleton(),
     fileMetrics: asClass(FileMetrics).singleton(),
     fileService: asClass(FileService).singleton(),
+    // Registered but **not scheduled** (doc 07 §8.3): there is no job runtime,
+    // so nothing calls them. Registering anyway is what lets the day a scheduler
+    // lands be a wiring change rather than a construction problem.
+    fileSweeperJob: asClass(FileSweeperJob).singleton(),
+    fileRetentionJob: asClass(FileRetentionJob).singleton(),
   });
 }

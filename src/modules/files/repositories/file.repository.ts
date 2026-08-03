@@ -194,6 +194,144 @@ export class FileRepository extends BaseRepository {
   }
 
   /**
+   * Reservations whose upload window has closed (R-FILE-22, doc 09 §4.1).
+   *
+   * `EXPIRED` is included alongside `PENDING` because doc 01 §7 ends that state
+   * at the sweeper too — a row refused at completion is evidence an upload was
+   * attempted, and nothing else ever collects it. Doc 09 §4.1's query names only
+   * `PENDING`; see the phase-6 report.
+   * @param now The sweep instant.
+   * @param limit Batch size.
+   * @returns Rows to reclaim, oldest first.
+   */
+  async findSweepable(now: Date, limit: number): Promise<File[]> {
+    return this.client.file.findMany({
+      where: { status: { in: ['PENDING', 'EXPIRED'] }, uploadExpiresAt: { lt: now } },
+      orderBy: { uploadExpiresAt: 'asc' },
+      take: limit,
+    });
+  }
+
+  /**
+   * Remove a row outright — the sweeper's second step, and the only hard delete
+   * in this module.
+   *
+   * Safe only for a reservation that never became `READY`: it was never
+   * referenceable (R-FILE-6), so nothing can be pointing at it. Every other
+   * disappearance in this module is a soft delete.
+   * @param id The file id.
+   * @returns `true` when a row was removed.
+   */
+  async deleteReservation(id: string): Promise<boolean> {
+    const { count } = await this.client.file.deleteMany({
+      where: { id, status: { in: ['PENDING', 'EXPIRED'] } },
+    });
+    return count === 1;
+  }
+
+  /**
+   * Files whose retention window has closed (doc 09 §4.2).
+   *
+   * The clock starts at the **close**, not at upload: `deleted_at` for a deleted
+   * file, and supersession for a superseded one (doc 03 §4A). A job that started
+   * every clock at upload would archive an active driver's licence out from
+   * under them on its eighth anniversary.
+   *
+   * Supersession has no column of its own, so `updated_at` stands in for it —
+   * sound only because nothing writes to a `SUPERSEDED` row except retention,
+   * which removes it from this query. Reported in phase 6 rather than papered
+   * over.
+   * @param due One cutoff per purpose; a file closed at or before its purpose's
+   *        cutoff is eligible.
+   * @param limit Batch size.
+   * @returns Rows to process, longest-closed first.
+   */
+  async findRetainable(
+    due: readonly { purpose: FilePurpose; closedBefore: Date }[],
+    limit: number,
+  ): Promise<File[]> {
+    if (due.length === 0) return [];
+    return this.client.file.findMany({
+      where: {
+        erasedAt: null,
+        archivedAt: null,
+        OR: due.map(({ purpose, closedBefore }) => ({
+          purpose,
+          OR: [
+            { deletedAt: { lte: closedBefore } },
+            { status: 'SUPERSEDED' as const, updatedAt: { lte: closedBefore } },
+          ],
+        })),
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: limit,
+    });
+  }
+
+  /**
+   * Record a terminal retention outcome (FILE-INV-9).
+   *
+   * One method for both outcomes because they are mutually exclusive and the
+   * database enforces it — `ck_files_archive_xor_erase` rejects a row carrying
+   * both, which is what makes the `action` field in `file.erased` trustworthy.
+   * @param id The file id.
+   * @param outcome Which terminal outcome occurred.
+   * @param at When it occurred.
+   * @param tx Transaction client — the event commits with this write.
+   * @returns `true` when this caller recorded the outcome.
+   */
+  async markRetired(
+    id: string,
+    outcome: 'ARCHIVED' | 'ERASED',
+    at: Date,
+    tx: TransactionClient,
+  ): Promise<boolean> {
+    const { count } = await tx.file.updateMany({
+      where: { id, archivedAt: null, erasedAt: null },
+      data: outcome === 'ARCHIVED' ? { archivedAt: at } : { erasedAt: at },
+    });
+    return count === 1;
+  }
+
+  /** How many reservations are outstanding — the `file.objects.pending` gauge. */
+  async countPending(): Promise<number> {
+    return this.client.file.count({ where: { status: 'PENDING' } });
+  }
+
+  /** How many closed files are still awaiting a terminal outcome (doc 09 §2.4). */
+  async countAwaitingRetention(): Promise<number> {
+    return this.client.file.count({
+      where: {
+        erasedAt: null,
+        archivedAt: null,
+        OR: [{ deletedAt: { not: null } }, { status: 'SUPERSEDED' }],
+      },
+    });
+  }
+
+  /**
+   * Live object count and byte total per purpose (doc 09 §2.4).
+   *
+   * Emitted by the retention job once a night rather than computed on a scrape:
+   * `sum(size_bytes) GROUP BY purpose` every fifteen seconds is a table scan on a
+   * table that only grows.
+   * @returns One row per purpose that has live files.
+   */
+  async storageByPurpose(): Promise<{ purpose: FilePurpose; files: number; bytes: number }[]> {
+    const grouped = await this.client.file.groupBy({
+      by: ['purpose'],
+      where: { status: 'READY', deletedAt: null },
+      _count: { _all: true },
+      _sum: { sizeBytes: true },
+    });
+    return grouped.map((row) => ({
+      purpose: row.purpose,
+      files: row._count._all,
+      bytes: row._sum.sizeBytes ?? 0,
+    }));
+  }
+
+  /**
    * Total stored bytes for a user, for the quota check (R-FILE-30).
    *
    * Counts `PENDING` and `READY` and **excludes soft-deleted rows**: the bytes

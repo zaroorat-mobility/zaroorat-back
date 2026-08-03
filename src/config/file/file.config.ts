@@ -161,6 +161,20 @@ export const fileConfig = Object.freeze({
   maxTotalBytesPerPurpose: Number(process.env.FILE_QUOTA_PURPOSE_BYTES ?? 200 * MB),
   /** Bytes a single user may upload in a rolling day. */
   maxDailyBytesPerUser: Number(process.env.FILE_QUOTA_DAILY_BYTES ?? 200 * MB),
+  /** Reservations the sweeper reclaims per run (doc 08 §6). */
+  sweeperBatchSize: Number(process.env.FILE_SWEEPER_BATCH ?? 500),
+  /** Files retention processes per run. */
+  retentionBatchSize: Number(process.env.FILE_RETENTION_BATCH ?? 200),
+  /**
+   * Retention attempts on one file before it is dead-lettered (doc 09 §4.3).
+   *
+   * The sweeper has no equivalent because its failure mode is "an orphan
+   * survives another fifteen minutes" — self-correcting and free. Retention's is
+   * "a file that should have been erased was not", which is a compliance
+   * finding: it must not fail silently, and it must not retry forever pretending
+   * it will eventually work.
+   */
+  jobMaxAttempts: Number(process.env.FILE_JOB_MAX_ATTEMPTS ?? 5),
 });
 
 export type FileConfig = typeof fileConfig;
