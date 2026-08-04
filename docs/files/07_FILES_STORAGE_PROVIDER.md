@@ -347,7 +347,7 @@ load-bearing and must match the registration keys exactly.
 | `fileService`                         | singleton | `asClass`                                                                                                    |
 | `fileMetrics`                         | singleton | `asClass`                                                                                                    |
 | `fileController`                      | singleton | `asClass`                                                                                                    |
-| `fileSweeperJob` / `fileRetentionJob` | singleton | Registered but not scheduled (01 §13.4)                                                                      |
+| `fileSweeperJob` / `fileRetentionJob` | singleton | Resolved by name from the `files-maintenance` worker (01 §13.4)                                              |
 
 ---
 

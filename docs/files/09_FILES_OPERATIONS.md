@@ -72,8 +72,10 @@ The four gauges are **emitted by the jobs**, not computed on a scrape. A `SELECT
 GROUP BY purpose` on every Prometheus scrape is a table scan every 15 seconds; once a night, from a
 job already reading those rows, is free.
 
-**Until the job runtime exists, these gauges are dark.** That is a real consequence of 01 §13.4, not
-an oversight: storage growth is unobservable until phase 6 ships.
+**These gauges light up on the jobs' schedule, not on demand.** The sweeper emits its pair every 15
+minutes and retention emits its pair nightly, so a gauge is at worst one interval stale — and is dark
+entirely if the `files-maintenance` worker is not deployed, which is itself the signal that nothing
+is reclaiming orphans.
 
 ### 2.5 Alerts worth defining
 
@@ -113,9 +115,12 @@ credentials (04 §5).
 
 ## 4. Background jobs
 
-Two jobs, both specified, both **inert until a runtime exists** (01 §13.4). Both are written as
-plain services and tested by direct invocation (06 §8) — the same shape as
-`AccountService.restore()`, which also has no caller yet.
+Two jobs, both running on the `files-maintenance` queue (01 §13.4). Both stay written as plain
+services and tested by direct invocation (06 §8); the worker's processor is a thin adapter that
+resolves one from the container and calls `run(now)`, so nothing about the jobs knows a queue exists.
+
+Both cron patterns below are interpreted in **`Etc/UTC`**, pinned by the scheduler rather than
+inherited from the host clock.
 
 ### 4.1 The sweeper — R-FILE-22
 
@@ -165,6 +170,7 @@ To be added to [14_Operations/02_runbooks.md](../14_Operations/02_runbooks.md) w
 | Symptom                                       | First move                                                                           |
 | --------------------------------------------- | ------------------------------------------------------------------------------------ |
 | All uploads returning `503`                   | Check readiness `storage` contributor; likely credentials or bucket policy           |
+| No maintenance job has run at all             | Check the `files-maintenance` worker deployment is up — it owns the schedules too    |
 | `CONTENT_MISMATCH` spike from one app version | Client bug — do not relax the check; ship a client fix                               |
 | `file.objects.pending` climbing               | Sweeper stopped, or a client that never calls `complete`                             |
 | A `READY` file whose object is missing        | Data loss. Restore from the versioned bucket (§6), then audit the reference guard    |

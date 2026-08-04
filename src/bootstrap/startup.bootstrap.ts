@@ -1,7 +1,6 @@
 import { config } from '@config';
 import { bootstrapDatabase } from './database.bootstrap.js';
 import { bootstrapRedis } from './redis.bootstrap.js';
-import { bootstrapQueue } from './queue.bootstrap.js';
 import { bootstrapStorage } from './storage.bootstrap.js';
 import { bootstrapEvents } from './events.bootstrap.js';
 import { createApp } from '../app/index.js';
@@ -12,7 +11,10 @@ export async function startup() {
     await bootstrapDatabase();
     await bootstrapRedis();
     await bootstrapEvents();
-    await bootstrapQueue();
+    // No `bootstrapQueue()` here: background jobs run in their own process
+    // (`src/worker.ts`, handbook volume 08 §31) and that process owns their
+    // schedules. The API enqueues nothing today; when it does, it opens the
+    // queue lazily at the call site.
     await bootstrapStorage();
 
     const app = await createApp();

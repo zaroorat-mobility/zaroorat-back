@@ -148,11 +148,16 @@ remotely. So §3 #6 is proven against the **mock provider's injectable clock**, 
 what it covers: our TTL arithmetic and our refusal to reuse URLs. That a real S3 signature expires
 on time is AWS's contract, not ours, and testing it in CI would be testing AWS.
 
-**Phase 6 has no runtime.** The sweeper and retention job are tested as **services, called
-directly** — the same way `AccountService.restore()` is tested in USER, which also has no HTTP
-caller. What is _not_ covered is that a scheduler invokes them, because no scheduler exists
-([01 §13.4](01_FILES_BUSINESS_REQUIREMENTS.md#134-fr-files-is-p0-but-depends-on-a-runtime-that-does-not-exist-)).
-That gap closes with the job runtime, not with this module.
+**Phase 6's jobs are tested as services, called directly** — the same way `AccountService.restore()`
+is tested in USER. That stays the right shape now that a runtime exists: what each job _does_ needs
+a database and a storage provider, not a queue, and routing it through BullMQ to assert it would
+only make the failures harder to read.
+
+**That a scheduler invokes them** is covered separately, by `tests/integration/job-runtime.test.ts`
+against real Redis: the schedules survive being registered twice (the multi-replica case), and a job
+put on `files-maintenance` reaches the service that performs it. The two suites meet at the job
+name, and a unit test asserts the schedule table and the worker's dispatch map list the same names —
+the one disagreement neither integration suite would notice.
 
 ---
 

@@ -228,8 +228,9 @@ encode the same fact twice and drift.
 
 ## 6. Job schedules
 
-Consumed by 09 §4. Present here so every tunable lives in one document; **inert until a job runtime
-exists** (01 §13.4).
+Consumed by 09 §4, and now live: `src/jobs/scheduler` reads `sweeperCron` and `retentionCron` and
+upserts one BullMQ schedule each (01 §13.4). Both patterns are interpreted in `Etc/UTC`, pinned so
+the schedule does not mean a different hour on a laptop than on a cluster node.
 
 | Key                  | Env                     | Default        |
 | -------------------- | ----------------------- | -------------- |

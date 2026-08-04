@@ -394,7 +394,7 @@ OTP delivery requires and nothing more.
 
 | Path                 | Lines | What it is meant to hold                                                                       |
 | -------------------- | ----- | ---------------------------------------------------------------------------------------------- |
-| `src/jobs`           | 10    | Workers, queues, schedulers, producers, consumers — **all empty**                              |
+| `src/jobs`           | ~300  | Queue, scheduler, worker — **real**; `producers`/`consumers` still empty                       |
 | `src/infrastructure` | 14    | Database, maps, notification, payment, queue, redis, storage adapters                          |
 | `src/integrations`   | 0     | `aws-s3`, `google-maps`, `msg91`, `razorpay`, `sendgrid`, `stripe` — **all empty directories** |
 | `src/middleware`     | 6     | `auth.ts`, `idempotency.ts`, `role.ts` — the real versions live in `core`/`modules` instead    |
@@ -402,11 +402,15 @@ OTP delivery requires and nothing more.
 
 Two consequences worth naming:
 
-- **There is no background-job runtime.** `bootstrapQueue()` and `bootstrapStorage()` are literal
-  `// Placeholder for Milestone 2` bodies. The one exception is the **outbox relay**, which is real,
-  wired in `events.bootstrap.ts`, and stopped cleanly on shutdown. Everything else asynchronous —
-  notification delivery, the deletion-retention job, matching timeouts, document-expiry sweeps — has
-  nowhere to run yet.
+- **The background-job runtime exists, with one queue on it.** `src/worker.ts` is a second entry
+  point sharing the API's composition root: BullMQ, one `files-maintenance` queue, an idempotent
+  schedule table, and a graceful-drain shutdown. FILES' sweeper and retention job run on it. The
+  **outbox relay** stays separate and API-side — it is a single-instance poller, and a second copy in
+  the worker would dispatch every event twice. What still has nowhere to run is everything with no
+  queue declared yet: notification delivery, matching timeouts, document-expiry sweeps. Those are now
+  a schedule-table entry each, not a missing runtime. `bootstrapStorage()` is still a literal
+  `// Placeholder for Milestone 2` body, so the readiness `storage` contributor 09 §3 specifies does
+  not exist.
 - **The only live third-party integration is MSG91.** Maps, object storage, and both payment
   providers are empty directories, so FR-GEO, FR-FILES, and FR-PAYMENTS have no external edge at all.
 
@@ -443,8 +447,9 @@ Not everything unbuilt is unprepared:
 5. **`geo`** — presence and location fixes; PostGIS is already installed and in use.
 6. **`pricing`** → **`matching`** → **`dispatch`/`rides`** — the core loop, in dependency order.
 7. **`payments` (cash)** — settles the loop.
-8. **A job runtime** — needed by (4)–(7) and by the retention job from (2). The outbox relay is the
-   working precedent to copy.
+8. ~~**A job runtime**~~ — ✅ **shipped**. BullMQ on the existing Redis, one queue, a schedule table,
+   and `src/worker.ts` as a second entry point (handbook volume 08). Adding a job to (2) or (4)–(7)
+   is now a row in `JOB_SCHEDULES` plus a handler registration, not a runtime.
 
 **`admin`** sits outside this chain: it unblocks USER phase 6's caller and every ops surface, and it
 is M3 in the release plan — but its absence blocks nothing in the MVP path.

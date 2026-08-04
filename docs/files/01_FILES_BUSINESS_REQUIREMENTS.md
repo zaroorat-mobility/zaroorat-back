@@ -268,8 +268,10 @@ Ordered so each phase is shippable and the next builds on it.
 | **6** | Sweeper (orphans) + retention job                                                  | 4, **a job runtime** |
 | **7** | Profile-image cutover: `user_profiles.profile_image` → file id                     | 3, 5                 |
 
-**Phase 6 is blocked.** `src/jobs/` is five 2-line stubs and `bootstrapQueue()` is a placeholder;
-there is nowhere for a scheduled job to run. Phases 1–5 and 7 do not depend on it. See §13.4.
+**Phase 6's dependency is now met.** The job runtime shipped separately (handbook volume 08):
+`files-maintenance` is a BullMQ queue, `src/jobs/scheduler` upserts both cron schedules, and
+`src/worker.ts` is the process that runs them. Both jobs are still plain services invoked by a thin
+processor, so they remain testable by direct call. See §13.4.
 
 **Every phase ships its own tests and its own events.** Neither is a later phase. This is the
 standing rule the AUTH and USER milestones were built under — implement, unit-test, integration-test,
@@ -316,10 +318,21 @@ handler serves all modules. Volume 7 is stale.
 
 ### 13.4 FR-FILES is P0 but depends on a runtime that does not exist 🟡
 
-The retention job (R-FILE-20) and the orphan sweeper (R-FILE-22) both need a scheduler. There is
-none. Phase 6 is therefore specified and deliberately unscheduled; §12 sequences it last so nothing
-else waits on it. Until it ships, orphans accumulate — bounded, because a `PENDING` row is unusable
-and small.
+The retention job (R-FILE-20) and the orphan sweeper (R-FILE-22) both need a scheduler. There was
+none, so phase 6 was specified and deliberately unscheduled, and §12 sequenced it last so nothing
+else waited on it.
+
+**Resolution — the job runtime shipped.** `src/jobs/` is now a BullMQ queue (`files-maintenance`), a
+schedule table, and a worker; `src/worker.ts` is its entry point and `npm run worker` starts it. The
+two jobs did not change — the runtime resolves them from the same container the API uses and calls
+the same `run(now)` the tests already called.
+
+**One ambiguity surfaced while wiring it.** 09 §4.2 says retention runs "daily 03:00" and never
+names a timezone. Left to the host, that is 03:00 UTC on a cluster node and 03:00 IST on a laptop.
+The scheduler pins `Etc/UTC` per volume 08 §27 and records the choice in
+`SCHEDULE_TIMEZONE` — note that 03:00 UTC is 08:30 IST, inside the Indian morning peak rather than
+the quiet window "03:00" implies. If the intent was the quiet window, `FILE_RETENTION_CRON` should
+be `30 21 * * *`. Flagged rather than guessed.
 
 ### 13.5 `src/core/storage/` and `src/integrations/aws-s3/` are empty 🟢
 

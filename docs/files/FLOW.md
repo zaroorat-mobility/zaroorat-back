@@ -139,9 +139,10 @@ PENDING, upload_expires_at < now()
 ```
 
 Orphans are **harmless while they accumulate** — a `PENDING` row cannot be read, cannot be attached
-(R-FILE-6), and costs a row. This is what makes it acceptable that the sweeper has nowhere to run
-yet ([01 §13.4](01_FILES_BUSINESS_REQUIREMENTS.md#134-fr-files-is-p0-but-depends-on-a-runtime-that-does-not-exist-)):
-the backlog is bounded by upload attempts and cleans up in one pass whenever the job runtime lands.
+(R-FILE-6), and costs a row. That property is what let this ship before a scheduler existed, and it
+is still what makes a stopped worker a slow problem rather than an outage. The sweeper now runs
+every 15 minutes on the `files-maintenance` queue
+([01 §13.4](01_FILES_BUSINESS_REQUIREMENTS.md#134-fr-files-is-p0-but-depends-on-a-runtime-that-does-not-exist-)).
 
 ---
 

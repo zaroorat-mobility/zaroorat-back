@@ -165,8 +165,12 @@ export const fileConfig = Object.freeze({
   maxTotalBytesPerPurpose: Number(process.env.FILE_QUOTA_PURPOSE_BYTES ?? 200 * MB),
   /** Bytes a single user may upload in a rolling day. */
   maxDailyBytesPerUser: Number(process.env.FILE_QUOTA_DAILY_BYTES ?? 200 * MB),
+  /** How often the orphan sweeper runs (doc 08 §6, doc 09 §4.1). */
+  sweeperCron: process.env.FILE_SWEEPER_CRON ?? '*/15 * * * *',
   /** Reservations the sweeper reclaims per run (doc 08 §6). */
   sweeperBatchSize: Number(process.env.FILE_SWEEPER_BATCH ?? 500),
+  /** How often retention runs (doc 08 §6, doc 09 §4.2). */
+  retentionCron: process.env.FILE_RETENTION_CRON ?? '0 3 * * *',
   /** Files retention processes per run. */
   retentionBatchSize: Number(process.env.FILE_RETENTION_BATCH ?? 200),
   /**
