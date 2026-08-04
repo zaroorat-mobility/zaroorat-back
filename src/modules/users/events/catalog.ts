@@ -29,6 +29,11 @@ export const USER_EVENT_CATALOG: Record<string, CatalogEntry> = {
   'user.account.deactivated': { classification: 'audit', aggregateType: 'user' },
   'user.account.deletion_requested': { classification: 'audit', aggregateType: 'user' },
   'user.account.restored': { classification: 'audit', aggregateType: 'user' },
+  // The erasure job's terminal record. Audit-class and emitted in the same
+  // transaction that closes the ledger row, because it is the only surviving
+  // proof the obligation was discharged — the personal data it describes is
+  // gone by the time anyone reads it.
+  'user.account.erased': { classification: 'audit', aggregateType: 'user' },
   // §3.4 Owned collections
   'user.emergency_contact.added': { classification: 'domain', aggregateType: 'user' },
   'user.emergency_contact.updated': { classification: 'domain', aggregateType: 'user' },

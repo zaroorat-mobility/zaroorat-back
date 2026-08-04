@@ -126,4 +126,24 @@ export class UserProfileRepository extends BaseRepository {
       update: data,
     });
   }
+
+  /**
+   * Delete an account's profile (account erasure, R-USER-18/19).
+   *
+   * A hard delete: doc 03 §6 says the profile "lives and dies with the account",
+   * and a soft-deleted profile is a retained name and date of birth.
+   *
+   * This also releases the avatar's `RESTRICT` foreign key, which is why the
+   * erasure job removes the file **after** this and not before — FILES refuses
+   * to delete an object a live row still references, and that refusal is the
+   * guard working.
+   *
+   * @param userId Owner's user UUID.
+   * @param tx Transaction client to join.
+   * @returns Count removed (0 or 1) — reported in the erasure audit event.
+   */
+  async deleteForUser(userId: string, tx?: TransactionClient): Promise<number> {
+    const { count } = await (tx ?? this.client).userProfile.deleteMany({ where: { userId } });
+    return count;
+  }
 }

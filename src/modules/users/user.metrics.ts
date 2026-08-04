@@ -37,6 +37,22 @@ export class UserMetrics {
     this.emit('phone.rate_limited', fields);
   }
 
+  /** One erasure run's outcome (R-USER-18/19). */
+  accountsErased(fields?: UserMetricFields): void {
+    this.emit('accounts.erased', fields);
+  }
+
+  /**
+   * An erasure was held back by an open obligation.
+   *
+   * Worth alerting on if it persists: a request that never clears is a
+   * compliance promise the platform is not keeping, and the reason is always in
+   * another module.
+   */
+  erasureBlocked(fields?: UserMetricFields): void {
+    this.emit('erasure.blocked', fields);
+  }
+
   private emit(event: string, fields?: UserMetricFields): void {
     logger.info({ metric: `user.${event}`, ...fields }, `[metric] user.${event}`);
   }

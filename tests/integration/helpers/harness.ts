@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { after } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { container } from '../../../src/core/di.js';
 import { createApp } from '../../../src/app/app.js';
 import { redis } from '../../../src/core/cache/client.js';
 import type { DatabaseService } from '../../../src/core/database/DatabaseService.js';
+import type { PrismaClientProvider } from '../../../src/core/database/client/PrismaClientProvider.js';
 import type { OtpGenerator } from '../../../src/modules/auth/otp/otp.generator.js';
 
 /**
@@ -27,6 +29,26 @@ function patchOtp(): void {
 }
 patchOtp();
 
+// Release the shared Postgres pool and Redis client once this file's tests end,
+// so the process exits on its own.
+//
+// This is what lets the runner drop `--test-force-exit`, and that matters more
+// than tidiness. Every test process points at the same `zaroorat_test` database
+// and the same Redis db, and `resetState` truncates and flushes both globally —
+// so a file whose process is killed before it finishes draining overlaps the
+// next file, and that file's reset lands inside a still-running test. The
+// symptoms were a 401 `OTP_INVALID` on a code sent seconds earlier (someone
+// else's `flushdb`) and foreign-key violations against a user that had just
+// logged in (someone else's `TRUNCATE`) — on a different set of files each run.
+//
+// Registered here rather than in each of the 27 files: this module is imported
+// by all of them, and an import runs before the importing file's body, so this
+// hook is in place no matter what the file forgets.
+after(async () => {
+  await container.resolve<PrismaClientProvider>('provider').disconnect();
+  await redis.quit();
+});
+
 /** The Prisma-backed database service (for direct row assertions). */
 export function db(): DatabaseService {
   return container.resolve<DatabaseService>('databaseService');
@@ -47,6 +69,7 @@ export function db(): DatabaseService {
 export async function resetState(): Promise<void> {
   await db().client.$executeRawUnsafe(
     'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
+      '"account_deletion_requests", ' +
       '"files", "otp_verifications", "outbox_events", "vehicle_types" RESTART IDENTITY CASCADE',
   );
   await redis.flushdb();

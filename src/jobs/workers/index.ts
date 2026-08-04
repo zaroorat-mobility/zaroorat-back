@@ -2,11 +2,18 @@ import { Worker, type Job } from 'bullmq';
 
 import { logger } from '@shared/logger/index.js';
 import type { RetentionResult, SweepResult } from '@modules/files';
+import type { ErasureResult } from '@modules/users';
 import { container } from '../../core/di.js';
-import { JOB_NAMES, QUEUE_NAMES, createQueueConnection, type JobName } from '../queues/index.js';
+import {
+  JOB_NAMES,
+  QUEUE_NAMES,
+  createQueueConnection,
+  type JobName,
+  type QueueName,
+} from '../queues/index.js';
 
 /** What one maintenance run reports back. Stored as the job's return value. */
-export type MaintenanceResult = SweepResult | RetentionResult;
+export type MaintenanceResult = SweepResult | RetentionResult | ErasureResult;
 
 /** The shape the worker needs from a scheduled job — the whole contract. */
 export interface MaintenanceRunner {
@@ -30,6 +37,7 @@ export interface JobResolver {
 export const MAINTENANCE_HANDLERS: Readonly<Record<JobName, string>> = Object.freeze({
   [JOB_NAMES.FILE_SWEEP]: 'fileSweeperJob',
   [JOB_NAMES.FILE_RETENTION]: 'fileRetentionJob',
+  [JOB_NAMES.ACCOUNT_ERASURE]: 'accountErasureJob',
 });
 
 /**
@@ -54,33 +62,46 @@ export async function runMaintenanceJob(
 ): Promise<MaintenanceResult> {
   const registration = (MAINTENANCE_HANDLERS as Record<string, string | undefined>)[name];
   if (!registration) {
-    throw new Error(`No handler registered for job "${name}" on ${QUEUE_NAMES.FILES_MAINTENANCE}`);
+    throw new Error(`No handler registered for job "${name}"`);
   }
   return resolver.resolve<MaintenanceRunner>(registration).run(now);
 }
 
 /**
- * Start the `files-maintenance` worker.
+ * Start a worker on one maintenance queue.
  *
- * `concurrency: 1` (volume 08 §17): both jobs are singleton batch scans that
- * already take a Redis lock, so a second concurrent run would acquire nothing
- * and return immediately — parallelism here buys no throughput and only makes
- * the metrics harder to read.
+ * `concurrency: 1` (volume 08 §17): every job on these queues is a singleton
+ * batch scan that already takes a Redis lock, so a second concurrent run would
+ * acquire nothing and return immediately — parallelism here buys no throughput
+ * and only makes the metrics harder to read.
+ *
+ * One worker per queue rather than one per process, so a queue can later move to
+ * its own deployment (volume 08 §33) by starting a different subset here, with
+ * no change to the jobs themselves.
+ * @param name The queue to consume.
  * @returns The running worker, for the shutdown path to close.
  */
-export function startFilesMaintenanceWorker(): Worker<unknown, MaintenanceResult> {
+export function startMaintenanceWorker(name: QueueName): Worker<unknown, MaintenanceResult> {
   const worker = new Worker<unknown, MaintenanceResult>(
-    QUEUE_NAMES.FILES_MAINTENANCE,
+    name,
     (job: Job<unknown, MaintenanceResult>) => runMaintenanceJob(job.name),
     { connection: createQueueConnection(), concurrency: 1 },
   );
 
   worker.on('completed', (job, result) => {
-    logger.info({ job: job.name, jobId: job.id, result }, 'Maintenance job completed');
+    logger.info({ queue: name, job: job.name, jobId: job.id, result }, 'Maintenance job completed');
   });
   worker.on('failed', (job, err) => {
-    logger.error({ err, job: job?.name, jobId: job?.id }, 'Maintenance job failed');
+    logger.error({ err, queue: name, job: job?.name, jobId: job?.id }, 'Maintenance job failed');
   });
 
   return worker;
+}
+
+/**
+ * Start a worker on every declared maintenance queue.
+ * @returns The running workers, for the shutdown path to close.
+ */
+export function startMaintenanceWorkers(): Worker<unknown, MaintenanceResult>[] {
+  return Object.values(QUEUE_NAMES).map(startMaintenanceWorker);
 }

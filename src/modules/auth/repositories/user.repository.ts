@@ -132,4 +132,41 @@ export class UserRepository extends BaseRepository {
   async softDelete(id: string, at: Date = new Date()): Promise<void> {
     await this.client.user.update({ where: { id }, data: { deletedAt: at } });
   }
+
+  /**
+   * Strip every identifier from an identity and soft-delete it, keeping the row.
+   *
+   * The erasure half of the platform's answer to "append-only records versus the
+   * right to erasure": **anonymize the identifiers, retain the immutable
+   * financial and safety record** (`docs/15_Security/03` §Privacy by design).
+   * Around fifty tables reference `users.id` — every ride, ledger entry, and
+   * dispute the law requires us to keep — so the row survives and stops naming
+   * anyone.
+   *
+   * The phone number becomes a per-account tombstone rather than a shared
+   * constant. `uq_users_phone_active` is partial on live rows, so a shared value
+   * would not collide; it would simply mean every erased account shares one
+   * phone number, which is a sentence nobody should have to explain. The value
+   * is deliberately not E.164, so no client input can ever match it.
+   *
+   * Idempotent — running it twice writes the same columns twice.
+   *
+   * @param id User UUID.
+   * @param at Erasure timestamp.
+   * @param tx Transaction client to join, so the identity and the personal data
+   *           it owns disappear together.
+   */
+  async anonymize(id: string, at: Date, tx?: TransactionClient): Promise<void> {
+    await (tx ?? this.client).user.update({
+      where: { id },
+      data: {
+        phoneNumber: `erased:${id}`,
+        email: null,
+        passwordHash: null,
+        isPhoneVerified: false,
+        isEmailVerified: false,
+        deletedAt: at,
+      },
+    });
+  }
 }

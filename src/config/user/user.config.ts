@@ -56,10 +56,18 @@ export const userConfig = Object.freeze({
   deactivationReasons: Object.freeze(['NOT_USING', 'PRIVACY', 'SWITCHING', 'OTHER'] as const),
   /**
    * Days between a deletion request and the erasure the retention job performs
-   * (R-USER-18/19, R-DATA-1). Only used to compute the `scheduledFor` this module
-   * reports and audits — nothing here erases anything.
+   * (R-USER-18/19, R-DATA-1).
+   *
+   * Read **once**, when the request is accepted: the date lands in
+   * `account_deletion_requests.scheduled_for` and the job reads it from there.
+   * Lowering this number therefore shortens the window for future requests and
+   * cannot bring forward one a user has already been given a date for.
    */
   deletionRetentionDays: Number(process.env.USER_DELETION_RETENTION_DAYS ?? 30),
+  /** How often the erasure job looks for due requests. */
+  erasureCron: process.env.USER_ERASURE_CRON ?? '30 3 * * *',
+  /** Accounts erased per run. Small: each one is many deletes and is irreversible. */
+  erasureBatchSize: Number(process.env.USER_ERASURE_BATCH ?? 100),
 });
 
 export type UserConfig = typeof userConfig;

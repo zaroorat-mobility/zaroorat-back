@@ -190,6 +190,22 @@ export class SavedPlaceRepository extends BaseRepository {
   }
 
   /**
+   * Delete every place an account holds (account erasure, R-USER-18/19).
+   *
+   * A hard delete. Home and work addresses are among the most sensitive rows the
+   * platform holds (doc 03 §6), and retaining them under a `deleted_at` would
+   * retain exactly what the request asked to be rid of.
+   *
+   * @param userId Owner's user UUID.
+   * @param tx Transaction client to join.
+   * @returns Count removed — reported in the erasure audit event.
+   */
+  async deleteAllForUser(userId: string, tx?: TransactionClient): Promise<number> {
+    const { count } = await (tx ?? this.client).savedPlace.deleteMany({ where: { userId } });
+    return count;
+  }
+
+  /**
    * Set (or clear) the PostGIS geography derived from a coordinate pair
    * (doc 03 §4.4).
    *

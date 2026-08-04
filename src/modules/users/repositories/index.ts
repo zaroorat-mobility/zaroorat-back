@@ -4,9 +4,11 @@ import { UserProfileRepository } from './user-profile.repository';
 import { EmergencyContactRepository } from './emergency-contact.repository';
 import { SavedPlaceRepository } from './saved-place.repository';
 import { ObligationsRepository } from './obligations.repository';
+import { DeletionRequestRepository } from './deletion-request.repository';
 
 export { UserProfileRepository, type UpdateUserProfileInput } from './user-profile.repository';
 export { ObligationsRepository, type Obligation } from './obligations.repository';
+export { DeletionRequestRepository, type DeletionRequest } from './deletion-request.repository';
 export {
   EmergencyContactRepository,
   type CreateEmergencyContactInput,
@@ -33,5 +35,6 @@ export function registerUserRepositories(container: AwilixContainer): void {
     emergencyContactRepository: asClass(EmergencyContactRepository).singleton(),
     savedPlaceRepository: asClass(SavedPlaceRepository).singleton(),
     obligationsRepository: asClass(ObligationsRepository).singleton(),
+    deletionRequestRepository: asClass(DeletionRequestRepository).singleton(),
   });
 }

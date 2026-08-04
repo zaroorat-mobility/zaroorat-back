@@ -13,6 +13,7 @@ import { config } from '@config';
  */
 export const QUEUE_NAMES = Object.freeze({
   FILES_MAINTENANCE: 'files-maintenance',
+  USERS_MAINTENANCE: 'users-maintenance',
 } as const);
 
 /** A queue this application declares. */
@@ -27,6 +28,7 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 export const JOB_NAMES = Object.freeze({
   FILE_SWEEP: 'file-sweep',
   FILE_RETENTION: 'file-retention',
+  ACCOUNT_ERASURE: 'account-erasure',
 } as const);
 
 /** A job this application schedules. */
@@ -54,15 +56,16 @@ export function createQueueConnection(): Redis {
 }
 
 /**
- * Queue-level defaults for `files-maintenance` (volume 08 §18).
+ * Queue-level defaults for the maintenance queues (volume 08 §18).
  *
- * `attempts: 1` is a decision, not an oversight. Both jobs are batch scans that
- * already isolate failure per item and already own their retry semantics: the
- * sweeper leaves the row and retries on the next tick (files doc 09 §4.1), and
- * retention counts attempts per file and dead-letters at five (§4.3). A
- * queue-level retry would re-run the whole scan — contending for the same Redis
- * lock, redoing work the next tick redoes anyway, and inflating the per-file
- * attempt counter that retention's compliance alert reads.
+ * `attempts: 1` is a decision, not an oversight. Every job here is a batch scan
+ * that already isolates failure per item and owns its retry semantics: the
+ * sweeper leaves the row and retries on the next tick (files doc 09 §4.1),
+ * retention counts attempts per file and dead-letters at five (§4.3), and
+ * account erasure leaves the request `PENDING` for the next run. A queue-level
+ * retry would re-run the whole scan — contending for the same Redis lock,
+ * redoing work the next tick redoes anyway, and inflating the per-file attempt
+ * counter that retention's compliance alert reads.
  *
  * Both `removeOn*` are bounded counts rather than `false`: job history is
  * useful for the last few runs and is unbounded Redis growth after that.
@@ -73,23 +76,41 @@ export const MAINTENANCE_JOB_OPTIONS: JobsOptions = Object.freeze({
   removeOnFail: { count: 500 },
 });
 
-let filesMaintenance: Queue | null = null;
+const open = new Map<QueueName, Queue>();
 
 /**
- * The `files-maintenance` queue, created on first use.
+ * A maintenance queue, created on first use.
  *
- * One queue, not two, because volume 08 §15 sizes queue count by *distinct*
- * retry/priority/monitoring needs and these two jobs have none: both are
- * low-priority, self-locking, idempotent scans that run on a clock. They are
- * separated at the job-name level, which is where their difference actually is.
+ * **One queue per owning module, not one per job.** Volume 08 §15 sizes queue
+ * count by *distinct* retry/priority/monitoring needs, and every job here shares
+ * all three — they are low-priority, self-locking, idempotent scans on a clock.
+ * What differs is who owns them, which is what §16's domain prefix and §22's
+ * data-ownership-by-module are for: `grep files-maintenance` finds FILES' jobs
+ * and nothing else. A single shared queue would name one module and accumulate
+ * every other, which is precisely §16's documented mistake.
+ * @param name The queue to open.
  * @returns The shared queue handle.
  */
+export function maintenanceQueue(name: QueueName): Queue {
+  let queue = open.get(name);
+  if (!queue) {
+    queue = new Queue(name, {
+      connection: createQueueConnection(),
+      defaultJobOptions: MAINTENANCE_JOB_OPTIONS,
+    });
+    open.set(name, queue);
+  }
+  return queue;
+}
+
+/** The FILES sweeper and retention queue. */
 export function filesMaintenanceQueue(): Queue {
-  filesMaintenance ??= new Queue(QUEUE_NAMES.FILES_MAINTENANCE, {
-    connection: createQueueConnection(),
-    defaultJobOptions: MAINTENANCE_JOB_OPTIONS,
-  });
-  return filesMaintenance;
+  return maintenanceQueue(QUEUE_NAMES.FILES_MAINTENANCE);
+}
+
+/** The USER account-erasure queue. */
+export function usersMaintenanceQueue(): Queue {
+  return maintenanceQueue(QUEUE_NAMES.USERS_MAINTENANCE);
 }
 
 /**
@@ -99,7 +120,7 @@ export function filesMaintenanceQueue(): Queue {
  * run on failures too.
  */
 export async function closeQueues(): Promise<void> {
-  const queue = filesMaintenance;
-  filesMaintenance = null;
-  if (queue) await queue.close();
+  const queues = [...open.values()];
+  open.clear();
+  await Promise.all(queues.map((queue) => queue.close()));
 }

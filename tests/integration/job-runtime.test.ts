@@ -12,10 +12,7 @@ import {
   filesMaintenanceQueue,
 } from '../../src/jobs/queues/index.js';
 import { SCHEDULE_TIMEZONE, registerJobSchedules } from '../../src/jobs/scheduler/index.js';
-import {
-  startFilesMaintenanceWorker,
-  type MaintenanceResult,
-} from '../../src/jobs/workers/index.js';
+import { startMaintenanceWorker, type MaintenanceResult } from '../../src/jobs/workers/index.js';
 import type { SweepResult } from '../../src/modules/files/jobs/sweeper.job.js';
 
 /** Give a real worker room to connect, pull, and run; far above observed timings. */
@@ -142,7 +139,7 @@ describe('job runtime (integration)', () => {
       }
       await queue.obliterate({ force: true });
 
-      worker = startFilesMaintenanceWorker();
+      worker = startMaintenanceWorker(QUEUE_NAMES.FILES_MAINTENANCE);
     });
 
     it(

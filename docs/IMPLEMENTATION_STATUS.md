@@ -349,14 +349,27 @@ restricted to `Date` here, because ioredis and Prisma need real timers. The test
 gone delete it, which is precisely what the TTL does, and say so. Closing this properly needs a fake
 Redis or a clock-aware wrapper around the lock.
 
-### 8.3 There is no deletion-request ledger
+### 8.3 There is no deletion-request ledger — ✅ closed
 
-`docs/user/02` §2.8 says the endpoint "records the request", but **no table exists** for a retention
-job to query. The only durable record is the `user.account.deletion_requested` outbox event — which
-is a dispatch queue, not a ledger; the relay deletes rows once dispatched. The endpoint is correct
-and audited today, but the erasure job that `docs/user/01` R-USER-18/19 implies **cannot be written
-until a `deletion_requests` table exists**. This is the one structural gap rather than an incremental
-one.
+`docs/user/02` §2.8 said the endpoint "records the request" and **no table existed** for a retention
+job to query. The only durable record was the `user.account.deletion_requested` outbox event — a
+dispatch queue, not a ledger: append-only by platform policy, with no "erased yet?" state to set and
+nothing to index a due-date scan on. (The relay marks rows `PUBLISHED` rather than deleting them, as
+the earlier wording here claimed; either way it is not a ledger.) The endpoint was correct and
+audited and still accepted an obligation nothing could discharge.
+
+`account_deletion_requests` now records it, in the same transaction as the audit event, and
+`AccountErasureJob` discharges it on the `users-maintenance` queue. **Restoring an account cancels
+its pending request in the restore transaction** — without that the account comes back, the user uses
+it, and the job erases them on the original date anyway, which is the one failure in this module that
+would be silent, dated, and irreversible.
+
+Erasure follows `docs/15_Security/03`'s resolution of R-DATA-1 versus the DPDP right to erasure:
+personal identifiers are erased or anonymized, the immutable financial and safety record is retained.
+The profile, the emergency contacts, and the saved places are removed; the avatar is released to
+FILES' retention; the `users` row is kept and anonymized, because ~50 tables reference it. The
+obligation check is re-run at erasure — a dispute opened after the account closed must not have its
+counterparty erased mid-investigation.
 
 ### 8.4 The admin module is two stub files
 
@@ -449,9 +462,8 @@ Not everything unbuilt is unprepared:
 
 1. ~~**Close §8.1**~~ — ✅ done. 12 integration tests over both caps, plus the `auth.session.revoked`
    payload defect they surfaced.
-2. **`deletion_requests` table + retention job** (§8.3) — the only structural gap in shipped code, and
-   a compliance obligation. **Now unblocked**: the job runtime exists, so the erasure job is a
-   schedule-table row.
+2. ~~**`deletion_requests` table + retention job**~~ (§8.3) — ✅ done. `account_deletion_requests`,
+   `AccountErasureJob`, and a `users-maintenance` schedule entry; 36 tests.
 
 **To make the product exist** — the MVP order the release plan implies, each blocked on the one before it:
 

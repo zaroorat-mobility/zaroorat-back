@@ -21,6 +21,9 @@ describe('USER event catalog (unit)', () => {
     assert.deepEqual(audit, [
       'user.account.deactivated',
       'user.account.deletion_requested',
+      // The erasure job's terminal record — audit-class because it is the only
+      // proof the obligation was discharged once the data it describes is gone.
+      'user.account.erased',
       'user.account.restored',
       'user.phone.changed',
     ]);

@@ -72,8 +72,26 @@ function makeService(opts: Options = {}) {
     },
   };
 
+  // A ledger that actually remembers, so the "a repeat keeps the original date"
+  // rule is testable rather than assumed.
+  let opened: { id: string; userId: string; status: string; scheduledFor: Date } | null = null;
+  const deletionRequestRepository = {
+    open: async (_userId: string, scheduledFor: Date, tx?: TransactionClient) => {
+      seen.order.push(tx === TX ? 'ledger:open' : 'ledger:open:OUTSIDE_TX');
+      opened ??= { id: 'req-1', userId: USER_ID, status: 'PENDING', scheduledFor };
+      return opened;
+    },
+    findPending: async () => opened,
+    cancelForUser: async (_userId: string, _at: Date, tx?: TransactionClient) => {
+      seen.order.push(tx === TX ? 'ledger:cancel' : 'ledger:cancel:OUTSIDE_TX');
+      opened = null;
+      return 1;
+    },
+  };
+
   const service = new AccountService(
     obligationsRepository as never,
+    deletionRequestRepository as never,
     userRepository as never,
     authService as never,
     epochService as never,
@@ -172,13 +190,16 @@ describe('AccountService.requestDeletion (unit)', () => {
       'obligations',
       'tx:begin',
       'deactivate',
+      'ledger:open',
       'publish:user.account.deactivated',
       'publish:user.account.deletion_requested',
       'tx:commit',
       'epoch:bump',
     ]);
     // An account whose deletion is on record is always already shut — the two can
-    // never diverge because they commit together.
+    // never diverge because they commit together. The ledger row is in that same
+    // transaction, so a promise is never recorded without the shutdown, or the
+    // other way round.
     for (const published of seen.published) assert.equal(published.tx, TX);
   });
 
@@ -227,10 +248,21 @@ describe('AccountService.restore (unit)', () => {
     assert.deepEqual(seen.order, [
       'tx:begin',
       'activate',
+      'ledger:cancel',
       'publish:user.account.restored',
       'tx:commit',
     ]);
     assert.equal(seen.published[0]!.tx, TX, 'the event commits with the status change');
+  });
+
+  it('cancels the pending erasure in the same transaction', async () => {
+    // Without this the account comes back, the user uses it, and the job erases
+    // them on the original date anyway — silent, dated, and irreversible.
+    const { service, seen } = makeService();
+    await service.restore(USER_ID, ACTOR_ID);
+
+    assert.ok(seen.order.includes('ledger:cancel'), 'the request is cancelled');
+    assert.ok(!seen.order.includes('ledger:cancel:OUTSIDE_TX'), 'inside the restore transaction');
   });
 
   it('records the operator, not just the subject', async () => {

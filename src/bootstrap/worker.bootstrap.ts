@@ -6,7 +6,7 @@ import { PrismaClientProvider } from '@core/database/client/PrismaClientProvider
 import { logger } from '@shared/logger/index.js';
 import { container } from '../core/di.js';
 import { closeQueues } from '../jobs/queues/index.js';
-import { startFilesMaintenanceWorker } from '../jobs/workers/index.js';
+import { startMaintenanceWorkers } from '../jobs/workers/index.js';
 import { bootstrapDatabase } from './database.bootstrap.js';
 import { bootstrapQueue } from './queue.bootstrap.js';
 import { bootstrapRedis } from './redis.bootstrap.js';
@@ -34,17 +34,20 @@ const SHUTDOWN_GRACE_MS = 120_000;
  * inside their transaction — the API's relay picks them up.
  * @returns The running worker.
  */
-export async function startWorker(): Promise<Worker> {
+export async function startWorker(): Promise<Worker[]> {
   try {
     await bootstrapDatabase();
     await bootstrapRedis();
     await bootstrapQueue();
 
-    const worker = startFilesMaintenanceWorker();
-    registerWorkerShutdown(worker);
+    const workers = startMaintenanceWorkers();
+    registerWorkerShutdown(workers);
 
-    logger.info(`Worker started — environment: ${config.app.environment}`);
-    return worker;
+    logger.info(
+      { queues: workers.map((worker) => worker.name) },
+      `Worker started — environment: ${config.app.environment}`,
+    );
+    return workers;
   } catch (err) {
     logger.error({ err }, 'Failed to start worker');
     process.exit(1);
@@ -56,10 +59,11 @@ export async function startWorker(): Promise<Worker> {
  *
  * `worker.close()` stops pulling new jobs and waits for the current one — the
  * ordering that keeps a routine rollout from manufacturing stalled jobs that
- * then need recovery.
- * @param worker The worker to stop.
+ * then need recovery. Every worker drains in parallel; they share nothing but
+ * the grace period.
+ * @param workers The workers to stop.
  */
-function registerWorkerShutdown(worker: Worker): void {
+function registerWorkerShutdown(workers: Worker[]): void {
   // Guard against double-SIGTERM races, the same way the API's shutdown does.
   let shuttingDown = false;
 
@@ -76,8 +80,8 @@ function registerWorkerShutdown(worker: Worker): void {
     forceExit.unref();
 
     try {
-      await worker.close();
-      logger.info('Worker closed.');
+      await Promise.all(workers.map((worker) => worker.close()));
+      logger.info('Workers closed.');
 
       await closeQueues();
       await container.resolve<PrismaClientProvider>('provider').disconnect();

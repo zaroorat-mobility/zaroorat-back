@@ -145,4 +145,21 @@ export class EmergencyContactRepository extends BaseRepository {
     });
     return count === 1;
   }
+
+  /**
+   * Delete every contact an account holds (account erasure, R-USER-18/19).
+   *
+   * A hard delete, not a soft one. These rows are personal data about **third
+   * parties** who never signed up — doc 03 §6 says they are "erased with the
+   * account, never retained past it", and a `deleted_at` on somebody else's
+   * phone number retains it.
+   *
+   * @param userId Owner's user UUID.
+   * @param tx Transaction client to join.
+   * @returns Count removed — reported in the erasure audit event.
+   */
+  async deleteAllForUser(userId: string, tx?: TransactionClient): Promise<number> {
+    const { count } = await (tx ?? this.client).emergencyContact.deleteMany({ where: { userId } });
+    return count;
+  }
 }

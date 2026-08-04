@@ -1,11 +1,10 @@
-import type { Queue } from 'bullmq';
-
 import { fileConfig } from '@config/file/file.config.js';
+import { userConfig } from '@config/user';
 import { logger } from '@shared/logger/index.js';
 import {
   JOB_NAMES,
   QUEUE_NAMES,
-  filesMaintenanceQueue,
+  maintenanceQueue,
   type JobName,
   type QueueName,
 } from '../queues/index.js';
@@ -55,12 +54,15 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     name: JOB_NAMES.FILE_RETENTION,
     pattern: fileConfig.retentionCron,
   },
+  {
+    // Half an hour after FILES' retention, not alongside it. Both erase, and
+    // account erasure hands its avatar to FILES — running them together would
+    // have one job's output land after the other job had already scanned for it.
+    queue: QUEUE_NAMES.USERS_MAINTENANCE,
+    name: JOB_NAMES.ACCOUNT_ERASURE,
+    pattern: userConfig.erasureCron,
+  },
 ]);
-
-/** Where a {@link JobSchedule}'s `queue` name resolves to an actual queue. */
-const QUEUE_HANDLES: Readonly<Record<QueueName, () => Queue>> = Object.freeze({
-  [QUEUE_NAMES.FILES_MAINTENANCE]: filesMaintenanceQueue,
-});
 
 /**
  * Install (or update) every schedule in {@link JOB_SCHEDULES}.
@@ -73,7 +75,7 @@ const QUEUE_HANDLES: Readonly<Record<QueueName, () => Queue>> = Object.freeze({
  */
 export async function registerJobSchedules(): Promise<void> {
   for (const schedule of JOB_SCHEDULES) {
-    const queue = QUEUE_HANDLES[schedule.queue]();
+    const queue = maintenanceQueue(schedule.queue);
     await queue.upsertJobScheduler(
       schedule.name,
       { pattern: schedule.pattern, tz: SCHEDULE_TIMEZONE },

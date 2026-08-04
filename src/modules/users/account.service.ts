@@ -4,7 +4,7 @@ import { userConfig } from '@config/user';
 import { AuthService } from '@modules/auth';
 import { EpochService } from '@modules/auth/services';
 import type { UserRepository } from '@modules/auth/repositories';
-import { ObligationsRepository } from './repositories';
+import { DeletionRequestRepository, ObligationsRepository } from './repositories';
 import { userEvent } from './events';
 import {
   AccountHasObligationsError,
@@ -40,6 +40,7 @@ export type DeactivationReason = (typeof userConfig.deactivationReasons)[number]
 export class AccountService {
   /**
    * @param obligationsRepository The cross-module "is this account clear?" read.
+   * @param deletionRequestRepository The erasure ledger.
    * @param userRepository AUTH's identity repository (read-only here).
    * @param authService AUTH's owner of `users.status` and the session tables.
    * @param epochService Post-commit epoch bump — what actually ends access.
@@ -48,6 +49,7 @@ export class AccountService {
    */
   constructor(
     private readonly obligationsRepository: ObligationsRepository,
+    private readonly deletionRequestRepository: DeletionRequestRepository,
     private readonly userRepository: UserRepository,
     private readonly authService: AuthService,
     private readonly epochService: EpochService,
@@ -96,6 +98,14 @@ export class AccountService {
    * Performs the deactivation above **and** records the request, so the two can
    * never diverge: an account whose deletion is on record is always already shut.
    *
+   * The ledger row is written in the **same transaction** as the audit event.
+   * Before that row existed the endpoint's only durable trace was the event
+   * itself — a dispatch queue, not a ledger — so the promise was made and nothing
+   * could discharge it (`IMPLEMENTATION_STATUS` §8.3).
+   *
+   * A repeat returns the **original** date rather than a new one. The user was
+   * told when their data would be gone; asking again is not consent to move it.
+   *
    * @param userId Subject from the verified token.
    * @param requestId Correlation id for the event envelope.
    * @returns When the retention job may erase the identity.
@@ -105,11 +115,12 @@ export class AccountService {
     userId: string,
     requestId: string | null = null,
   ): Promise<DeletionRequestResult> {
-    const scheduledFor = new Date(
-      Date.now() + userConfig.deletionRetentionDays * 86_400_000,
-    ).toISOString();
+    const proposed = new Date(Date.now() + userConfig.deletionRetentionDays * 86_400_000);
+    const scheduledFor = proposed.toISOString();
 
     await this.close(userId, async (tx) => {
+      await this.deletionRequestRepository.open(userId, proposed, tx);
+
       // The departure itself is audited exactly as §2.7 audits it — no invented
       // reason, because the client did not give one.
       await this.eventPublisher.publish(
@@ -130,7 +141,11 @@ export class AccountService {
       );
     });
 
-    return { scheduledFor };
+    // Answer with the date on record, not the one just computed. They differ
+    // only when a duplicate request was already in flight — and then the recorded
+    // one is the date the first response promised.
+    const recorded = await this.deletionRequestRepository.findPending(userId);
+    return { scheduledFor: recorded?.scheduledFor.toISOString() ?? scheduledFor };
   }
 
   /**
@@ -164,6 +179,11 @@ export class AccountService {
 
     await this.transactionManager.execute(async (tx) => {
       await this.authService.activateInTransaction(userId, tx);
+      // Restoring an account cancels its pending erasure, in the same
+      // transaction. Without this the account comes back, the user logs in and
+      // uses it, and the job erases them on the original date anyway — the one
+      // failure in this module that is silent, dated, and irreversible.
+      await this.deletionRequestRepository.cancelForUser(userId, new Date(), tx);
       await this.eventPublisher.publish(
         userEvent('user.account.restored', {
           subjectUserId: userId,

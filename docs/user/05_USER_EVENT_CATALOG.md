@@ -73,12 +73,20 @@ Plus **two events USER does not own but does trigger**, emitted in the same tran
 
 ### 3.3 Account lifecycle
 
-| Type                              | Class          | Emitted when                               | `data` payload                        |
-| --------------------------------- | -------------- | ------------------------------------------ | ------------------------------------- |
-| `user.account.deactivated`        | domain + audit | Self-service deactivation committed        | `{ userId, actor: "self", reason? }`  |
-| `user.account.deletion_requested` | audit          | A deletion request was accepted            | `{ userId, scheduledFor }`            |
-| `user.account.restored`           | domain + audit | An admin reactivated a deactivated account | `{ userId, actor: "admin", actorId }` |
+| Type                              | Class          | Emitted when                               | `data` payload                                                        |
+| --------------------------------- | -------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| `user.account.deactivated`        | domain + audit | Self-service deactivation committed        | `{ userId, actor: "self", reason? }`                                  |
+| `user.account.deletion_requested` | audit          | A deletion request was accepted            | `{ userId, scheduledFor }`                                            |
+| `user.account.restored`           | domain + audit | An admin reactivated a deactivated account | `{ userId, actor: "admin", actorId }`                                 |
+| `user.account.erased`             | audit          | The retention job discharged a request     | `{ userId, emergencyContacts, savedPlaces, profile, avatarReleased }` |
 
+- `user.account.erased` carries **counts, not contents**. It outlives the data it describes — by the
+  time anyone reads it the profile, the contacts, and the places are gone — so it has to say what was
+  removed without becoming a copy of it. It is also the only surviving proof the obligation was
+  discharged, which is why it commits in the same transaction that closes the ledger row.
+- It is emitted **once per erasure**. The ledger transition is conditional on the request still being
+  `PENDING`, so two runners produce one event between them: a single irreversible act must not look
+  like two in an audit trail.
 - `user.account.restored` is emitted by the `admin` flow that calls AUTH's existing `activate`; it is
   catalogued here because the **subject** is a user-module concern and consumers look for it under
   `user.*`. AUTH's `account.reactivated` remains the ops-suspension counterpart — a reactivation from

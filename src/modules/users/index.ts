@@ -6,6 +6,7 @@ import { PhoneChangeService } from './phone-change.service';
 import { EmergencyContactService } from './emergency-contact.service';
 import { SavedPlaceService } from './saved-place.service';
 import { AccountService } from './account.service';
+import { AccountErasureJob } from './jobs/account-erasure.job';
 import { UserMetrics } from './user.metrics';
 
 export { UserService, type UserAccountView, type UserProfileView } from './user.service';
@@ -51,7 +52,9 @@ export {
   EmergencyContactRepository,
   SavedPlaceRepository,
   ObligationsRepository,
+  DeletionRequestRepository,
   registerUserRepositories,
+  type DeletionRequest,
   type Obligation,
   type Coordinates,
   type UpdateUserProfileInput,
@@ -59,6 +62,7 @@ export {
   type UpdateSavedPlaceInput,
 } from './repositories';
 export { USER_EVENT_CATALOG, USER_PRODUCER, userEvent } from './events';
+export { AccountErasureJob, type ErasureResult } from './jobs/account-erasure.job';
 
 /**
  * Registers the USER services into the Awilix container.
@@ -85,6 +89,9 @@ export function registerUserService(container: AwilixContainer): void {
     emergencyContactService: asClass(EmergencyContactService).singleton(),
     savedPlaceService: asClass(SavedPlaceService).singleton(),
     accountService: asClass(AccountService).singleton(),
+    // Scheduled on `users-maintenance` (handbook volume 08); the worker resolves
+    // it by this name.
+    accountErasureJob: asClass(AccountErasureJob).singleton(),
   });
 
   // The first live reference any module claims (files doc 03 §6, §7.2).
