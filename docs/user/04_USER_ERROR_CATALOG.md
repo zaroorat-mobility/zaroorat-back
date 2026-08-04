@@ -141,7 +141,10 @@ highlight fields without parsing prose.
 | `AGE_BELOW_MINIMUM` | Under the minimum age                   | `dateOfBirth`  |
 | `NOT_ALLOWED`       | Value outside the accepted set          | `gender`       |
 | `IMMUTABLE`         | Field cannot be set through this module | `phoneNumber`  |
-| `UNTRUSTED_HOST`    | URL is not on a platform-owned host     | `profileImage` |
+
+`UNTRUSTED_HOST` was removed with the profile-image cutover (files doc 03 §7.2). A profile holds a
+file id, not a URL, so there is no host to distrust — and a code a client still handles for an input
+that no longer exists is a branch that can never be reached or tested.
 
 ---
 

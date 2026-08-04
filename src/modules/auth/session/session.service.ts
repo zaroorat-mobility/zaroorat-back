@@ -185,8 +185,9 @@ export class SessionService {
       await this.eventPublisher.publish(
         authEvent('auth.session.revoked', {
           aggregateId: session.id,
+          subjectUserId: userId,
           sessionId: session.id,
-          data: { sessionId: session.id, reason },
+          data: { userId, sessionId: session.id, reason },
         }),
         tx,
       );
@@ -231,11 +232,17 @@ export class SessionService {
       const acquired = await this.sessionRepository.revoke(sessionId, reason, undefined, tx);
       if (!acquired) return false;
       await this.refreshTokenRepository.revokeBySession(sessionId, reason, undefined, tx);
+      // Read after winning the race, not before: `revoke` is an `updateMany` and
+      // cannot hand back the row it touched, and doc 06 §5.2 requires the audit
+      // event to name the user. A session id alone forces every consumer to join
+      // back to a row that erasure may one day have removed.
+      const owner = (await this.sessionRepository.findById(sessionId, tx))?.userId ?? null;
       await this.eventPublisher.publish(
         authEvent('auth.session.revoked', {
           aggregateId: sessionId,
+          subjectUserId: owner,
           sessionId,
-          data: { sessionId, reason },
+          data: { userId: owner, sessionId, reason },
         }),
         tx,
       );

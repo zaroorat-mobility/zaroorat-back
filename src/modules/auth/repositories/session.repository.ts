@@ -49,10 +49,13 @@ export class SessionRepository extends BaseRepository {
   /**
    * Fetch a session by its `sid`.
    * @param id Session UUID (`sid`).
+   * @param tx Transaction client to join, so a revocation can read the owner it
+   *           is about to audit inside the same unit of work (omit for a
+   *           standalone read).
    * @returns The session, or `null` if unknown.
    */
-  async findById(id: string): Promise<UserSession | null> {
-    return this.client.userSession.findUnique({ where: { id } });
+  async findById(id: string, tx?: TransactionClient): Promise<UserSession | null> {
+    return (tx ?? this.client).userSession.findUnique({ where: { id } });
   }
 
   /**

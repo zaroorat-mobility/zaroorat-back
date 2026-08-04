@@ -322,14 +322,24 @@ four endpoints where nine now ship.
 
 Each of these is reported, not silently carried.
 
-### 8.1 The concurrent-session cap is implemented but untested ⚠️
+### 8.1 The concurrent-session cap is implemented but untested — ✅ closed
 
 `docs/auth/07` §3 criterion 7 and §5's fraud matrix require that a 6th login evicts session #1 and
-emits `auth.session.revoked`. The eviction logic exists (`src/modules/auth/session/session.service.ts:253`,
-`SessionRepository.findOldestActive`) and the cap is configured per role
-(`src/config/session/session.config.ts`), but **no test asserts it**. This is the only acceptance
-criterion in either module without coverage. It is a small integration test — 6 logins, assert the
-first `sid` returns `SESSION_REVOKED` and the event fired.
+emits `auth.session.revoked`. The eviction logic existed and the cap was configured per role, but
+nothing asserted either — the only acceptance criterion in either module without coverage.
+
+`tests/integration/auth-session-cap.test.ts` closes it: 12 tests over both caps. The standard cap
+(5) evicting exactly one on the 6th login, oldest first, the evicted `sid` returning
+`SESSION_REVOKED`, every survivor still working, the refresh family revoked with it, and the audit
+event emitted once. The privileged cap (2) is covered too, because `capForRoles` picking the wrong
+number **fails open and looks like nothing**: an operator account silently getting five sessions
+instead of two is the account where that matters most.
+
+**It found a real defect.** All three `auth.session.revoked` emissions omitted `userId` from the
+payload and left the envelope subject null, though `docs/auth/06` §5.2 specifies
+`{ userId, sessionId, reason }` and every neighbouring event carries it. A session-revocation audit
+record that cannot name the user forces every consumer to join back to a row that erasure may one
+day remove. Fixed in `SessionService`, and asserted in both the payload and the envelope.
 
 ### 8.2 The lockout's 15-minute lift is unverified
 
@@ -356,12 +366,15 @@ is implemented, audited, and covered by 5 integration tests, but nothing calls i
 the operator authentication, the `users:suspend` scope check, and the `admin_activity_logs` row all
 belong to `admin`. That module is the natural next body of work.
 
-### 8.5 The profile-image host allow-list rejects everything
+### 8.5 The profile-image host allow-list rejects everything — ✅ obsolete
 
-`userConfig.profileImageHosts` defaults to empty, and empty means **reject every URL** as
-`UNTRUSTED_HOST`. This is deliberate and fail-closed: the `files` module that would issue trusted
-URLs is deferred, so there is no host the platform can vouch for, and accepting an arbitrary one
-would let a profile embed a third-party tracker. It becomes a real feature the day `files` ships.
+`userConfig.profileImageHosts` defaulted to empty, and empty meant **reject every URL** as
+`UNTRUSTED_HOST` — deliberate and fail-closed, because no host the platform could vouch for existed
+while `files` was deferred.
+
+`files` shipped, and the allow-list did not become a feature: it was deleted. A profile now holds a
+**file id**, not a URL (`user_profiles.profile_image_file_id`), so there is no host to trust and no
+third-party tracker to embed. The column, the config key, and the error code are all gone.
 
 ---
 
@@ -434,8 +447,11 @@ Not everything unbuilt is unprepared:
 
 **To close out what is already built** (small, and worth doing before moving on):
 
-1. **Close §8.1** — one integration test for the concurrent-session cap; the last uncovered acceptance criterion.
-2. **`deletion_requests` table + retention job** (§8.3) — the only structural gap in shipped code, and a compliance obligation.
+1. ~~**Close §8.1**~~ — ✅ done. 12 integration tests over both caps, plus the `auth.session.revoked`
+   payload defect they surfaced.
+2. **`deletion_requests` table + retention job** (§8.3) — the only structural gap in shipped code, and
+   a compliance obligation. **Now unblocked**: the job runtime exists, so the erasure job is a
+   schedule-table row.
 
 **To make the product exist** — the MVP order the release plan implies, each blocked on the one before it:
 

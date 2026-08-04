@@ -213,12 +213,13 @@ landing on a version nobody is presenting.
 
 ## 6. The profile-image cutover
 
-USER ships today with `user_profiles.profile_image` as a URL string, validated against
-`userConfig.profileImageHosts` — which **defaults to empty and therefore rejects every URL**. That
+USER shipped `user_profiles.profile_image` as a URL string, validated against
+`userConfig.profileImageHosts` — which **defaulted to empty and therefore rejected every URL**. That
 fail-closed default was correct: with no `files` module, there was no host the platform could vouch
 for.
 
-This module removes the need for the allow-list entirely:
+This module removed the need for the allow-list entirely (cutover complete; the column, the config
+key, and `UNTRUSTED_HOST` are all deleted):
 
 ```
 before:  profile_image = "https://some-host/…"   → rejected, because no host is trusted
