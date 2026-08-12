@@ -271,17 +271,38 @@ model ScheduledJob {
   @@map("scheduled_jobs")
 }
 
+/// The transactional outbox. Rows are written in the same transaction as the
+/// state change they record, and the relay claims, dispatches, and retires them.
 model OutboxEvent {
   id            String       @id @default(uuid(7)) @db.Uuid
+  /// The envelope's own id, lifted out of `payload` so the database can reject a
+  /// double-enqueue and consumers have a dedupe key that survives a replay.
+  eventId       String       @unique @map("event_id") @db.Uuid
   aggregateType String       @map("aggregate_type")
   aggregateId   String       @map("aggregate_id") @db.Uuid
   eventType     String       @map("event_type")
   payload       Json
   status        OutboxStatus @default(PENDING)
   retries       Int          @default(0)
+  /// Truncated failure text from the last attempt — what an operator reads when
+  /// a row lands in the dead-letter state.
+  lastError     String?      @map("last_error")
+  /// Earliest instant this row may be claimed. Backoff pushes it out on failure.
+  nextAttemptAt DateTime     @default(now()) @map("next_attempt_at")
+  /// When the current PROCESSING claim was taken; the reaper's input.
+  claimedAt     DateTime?    @map("claimed_at")
+  /// Identifies *which* claim is current, so a relay whose claim was reaped
+  /// cannot overwrite the result of the relay holding the row now. PROCESSING
+  /// alone says a row is claimed but not by whom, and both owners read it the
+  /// same way.
+  claimToken    String?      @map("claim_token") @db.Uuid
   publishedAt   DateTime?    @map("published_at")
   createdAt     DateTime     @default(now()) @map("created_at")
 
+  /// The relay's claim query: `WHERE status = ... AND next_attempt_at <= now()
+  /// ORDER BY created_at, id`. Without it that is a sequential scan plus a sort
+  /// over the whole table, once a second, from every replica.
+  @@index([status, nextAttemptAt, createdAt, id])
   @@map("outbox_events")
 }
 

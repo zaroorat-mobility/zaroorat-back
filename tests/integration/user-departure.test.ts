@@ -3,11 +3,18 @@ import { randomUUID } from 'node:crypto';
 import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
-import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
+import {
+  bootApp,
+  db,
+  FIXED_OTP,
+  loginAs,
+  resetState,
+  type LoggedInUser,
+} from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
 import { userConfig } from '../../src/config/user/index.js';
-import type { AccountService } from '../../src/modules/users/account.service.js';
-import { UserError } from '../../src/modules/users/errors.js';
+import type { AccountService } from '../../src/modules/users/services/account/account.service.js';
+import { UserError } from '../../src/modules/users/errors/user.errors.js';
 
 const LEAVER = '+919876515001';
 const DRIVER = '+919876515002';
@@ -15,16 +22,6 @@ const DRIVER = '+919876515002';
 const DEACTIVATE = '/api/v1/users/me/deactivate';
 const DELETE_REQUEST = '/api/v1/users/me/delete-request';
 
-/**
- * Departure — deactivation and the request for erasure (user doc 02 §2.7–§2.8,
- * FLOW §6, R-USER-16…21).
- *
- * Acceptance criterion 06 §3 #8 and invariant USER-INV-6. The transaction shape
- * and the payload rules are pinned at unit level in
- * tests/unit/users/account-service-tx.test.ts; what needs a real database is the
- * obligation reads, the fact that access actually ends, and the fact that no row
- * is ever removed.
- */
 describe('account departure (integration)', () => {
   let app: FastifyInstance;
 
@@ -47,7 +44,6 @@ describe('account departure (integration)', () => {
     });
   }
 
-  /** `GET /me` with a raw token — the probe for "does this credential still work?". */
   function probe(accessToken: string) {
     return app.inject({
       method: 'GET',
@@ -56,19 +52,11 @@ describe('account departure (integration)', () => {
     });
   }
 
-  /** Outbox payloads of one event type. */
   async function events(eventType: string) {
     const rows = await db().client.outboxEvent.findMany({ where: { eventType } });
     return rows.map((row) => row.payload as unknown as { data: Record<string, unknown> });
   }
 
-  /**
-   * Put a ride in flight for `customerId`.
-   *
-   * A `Ride` sits at the end of the whole `rides` aggregate, and both it and
-   * `RideRequest` carry a `NOT NULL` PostGIS column Prisma cannot write — hence
-   * the two raw inserts. Everything else takes its schema default.
-   */
   async function seedActiveRide(customerId: string): Promise<void> {
     const client = db().client;
     const driverAccount = await loginAs(app, DRIVER);
@@ -345,13 +333,24 @@ describe('account departure (integration)', () => {
       payload: { phoneNumber: LEAVER },
     });
     assert.equal(reused.statusCode, 200, 'the send itself never reveals account state');
+
+    // …and the gate is on `verify`, which is where it has to be. This assertion
+
+    const reverify = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/otp/verify',
+      headers: { 'idempotency-key': randomUUID() },
+      payload: { phoneNumber: LEAVER, code: FIXED_OTP, challengeId: reused.json().challengeId },
+    });
+    assert.equal(reverify.statusCode, 403, reverify.payload);
+    assert.equal(reverify.json().error.code, 'ACCOUNT_DEACTIVATED');
+
     assert.equal(
       await db().client.user.count({ where: { phoneNumber: LEAVER, deletedAt: null } }),
       1,
       'still exactly one live row for the number',
     );
 
-    // Now the retention job does its half — a soft delete, never a physical one.
     await db().client.user.update({
       where: { id: original.userId },
       data: { deletedAt: new Date() },
@@ -368,15 +367,161 @@ describe('account departure (integration)', () => {
     );
   });
 
-  // ── Ops restore, R-USER-17 ────────────────────────────────────────────────
+  async function attemptLogin(phoneNumber: string) {
+    const sent = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/otp/send',
+      payload: { phoneNumber },
+    });
+    return app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/otp/verify',
+      headers: { 'idempotency-key': randomUUID() },
+      payload: { phoneNumber, code: FIXED_OTP, challengeId: sent.json().challengeId },
+    });
+  }
+
+  describe('a closed account cannot authenticate', () => {
+    it('refuses the login and issues nothing', async () => {
+      const user = await loginAs(app, LEAVER);
+      assert.equal((await post(DEACTIVATE, user)).statusCode, 204);
+
+      const sessionsBefore = await db().client.userSession.count({
+        where: { userId: user.userId },
+      });
+
+      const response = await attemptLogin(LEAVER);
+      assert.equal(response.statusCode, 403, response.payload);
+      assert.equal(response.json().error.code, 'ACCOUNT_DEACTIVATED');
+      assert.ok(!response.payload.includes('accessToken'), 'no token pair in the body');
+
+      assert.equal(
+        await db().client.userSession.count({ where: { userId: user.userId } }),
+        sessionsBefore,
+        'no session row was created',
+      );
+      assert.equal(
+        await db().client.userSession.count({ where: { userId: user.userId, revokedAt: null } }),
+        0,
+        'and none of them is live',
+      );
+      assert.equal(
+        await db().client.refreshToken.count({
+          where: { userId: user.userId, revokedAt: null },
+        }),
+        0,
+        'no refresh token survived or was minted',
+      );
+    });
+
+    it('does not quietly reactivate the account, or record a login', async () => {
+      const user = await loginAs(app, LEAVER);
+      const before = await db().client.user.findUniqueOrThrow({ where: { id: user.userId } });
+      assert.equal((await post(DEACTIVATE, user)).statusCode, 204);
+
+      await attemptLogin(LEAVER);
+
+      const after = await db().client.user.findUniqueOrThrow({ where: { id: user.userId } });
+      assert.equal(after.status, 'DEACTIVATED', 'the status the user chose is still theirs');
+      assert.deepEqual(after.lastLoginAt, before.lastLoginAt, 'a refusal is not a login');
+    });
+
+    it('leaves a pending deletion request exactly where it was', async () => {
+      const user = await loginAs(app, LEAVER);
+      assert.equal((await post(DELETE_REQUEST, user)).statusCode, 202);
+
+      const before = await db().client.accountDeletionRequest.findFirstOrThrow({
+        where: { userId: user.userId },
+      });
+
+      const response = await attemptLogin(LEAVER);
+      assert.equal(response.statusCode, 403);
+
+      const after = await db().client.accountDeletionRequest.findFirstOrThrow({
+        where: { userId: user.userId },
+      });
+      assert.equal(after.status, before.status, 'still pending — a login cannot cancel it');
+      assert.deepEqual(after.scheduledFor, before.scheduledFor, 'and the date did not move');
+    });
+
+    it('turns away a suspended account with its own code', async () => {
+      const user = await loginAs(app, LEAVER);
+      await db().client.user.update({
+        where: { id: user.userId },
+        data: { status: 'SUSPENDED' },
+      });
+
+      const response = await attemptLogin(LEAVER);
+      assert.equal(response.statusCode, 403, response.payload);
+      assert.equal(
+        response.json().error.code,
+        'ACCOUNT_SUSPENDED',
+        'an ops suspension is appealed, a self-deactivation is restored — different copy',
+      );
+    });
+
+    it('still lets an untouched account log in', async () => {
+      const response = await attemptLogin(DRIVER);
+      assert.equal(response.statusCode, 200, response.payload);
+      assert.ok(response.json().accessToken);
+    });
+  });
+
+  describe('two lifecycle operations racing one account', () => {
+    it('audits one departure, not two, when deactivate races delete-request', async () => {
+      const user = await loginAs(app, LEAVER);
+
+      const [deactivate, deleteRequest] = await Promise.all([
+        post(DEACTIVATE, user),
+        post(DELETE_REQUEST, user),
+      ]);
+
+      const codes = [deactivate.statusCode, deleteRequest.statusCode].sort();
+      assert.deepEqual(codes, [202, 204], `${deactivate.payload} / ${deleteRequest.payload}`);
+
+      assert.equal(
+        (await events('user.account.deactivated')).length,
+        1,
+        'one departure, one audit row',
+      );
+
+      const row = await db().client.user.findUniqueOrThrow({ where: { id: user.userId } });
+      assert.equal(row.status, 'DEACTIVATED');
+    });
+
+    it('opens at most one deletion request when two arrive together', async () => {
+      const user = await loginAs(app, LEAVER);
+
+      const responses = await Promise.all([post(DELETE_REQUEST, user), post(DELETE_REQUEST, user)]);
+      for (const response of responses) {
+        assert.equal(response.statusCode, 202, response.payload);
+      }
+
+      const pending = await db().client.accountDeletionRequest.findMany({
+        where: { userId: user.userId, status: 'PENDING' },
+      });
+      assert.equal(pending.length, 1, 'a second request must not open a second ledger row');
+
+      const dates = new Set(responses.map((r) => r.json().scheduledFor));
+      assert.equal(dates.size, 1, 'and both callers were quoted that same date');
+    });
+
+    it('lets neither through while an obligation is open', async () => {
+      const user = await loginAs(app, LEAVER);
+      await seedActiveRide(user.userId);
+
+      const responses = await Promise.all([post(DEACTIVATE, user), post(DELETE_REQUEST, user)]);
+      for (const response of responses) {
+        assert.equal(response.statusCode, 409, response.payload);
+        assert.equal(response.json().error.code, 'ACCOUNT_HAS_OBLIGATIONS');
+      }
+
+      const row = await db().client.user.findUniqueOrThrow({ where: { id: user.userId } });
+      assert.equal(row.status, 'ACTIVE', 'the obligation check held under contention too');
+    });
+  });
 
   describe('restore (R-USER-17)', () => {
-    /**
-     * The seam the `admin` module calls. It is exercised through the container
-     * rather than over HTTP because there is no route and there should not be
-     * one: the surface, the `users:suspend` scope that guards it, and the
-     * `admin_activity_logs` row belong to a module that does not exist yet.
-     */
     function accountService(): AccountService {
       return container.resolve<AccountService>('accountService');
     }
@@ -395,8 +540,6 @@ describe('account departure (integration)', () => {
       const row = await db().client.user.findUniqueOrThrow({ where: { id: original.userId } });
       assert.equal(row.status, 'ACTIVE');
 
-      // R-USER-17 in one line: ops can undo a departure, and the account comes
-      // back as itself — same id, same history (USER-INV-6).
       const returned = await loginAs(app, LEAVER);
       assert.equal(returned.userId, original.userId);
       const profile = await db().client.userProfile.findUnique({
@@ -412,8 +555,6 @@ describe('account departure (integration)', () => {
       const operator = await loginAs(app, DRIVER);
       await accountService().restore(original.userId, operator.userId);
 
-      // Reactivation returns the ability to authenticate, not the tokens that were
-      // invalidated — the epoch is never lowered (R-AUTH-13).
       const stale = await probe(original.accessToken);
       assert.equal(stale.statusCode, 401);
       assert.equal(stale.json().error.code, 'TOKEN_STALE');
@@ -440,9 +581,6 @@ describe('account departure (integration)', () => {
         actorId: operator.userId,
       });
 
-      // A reactivation from ops **suspension** is AUTH's `account.reactivated`;
-      // a restore from self-deactivation is this one. Different business events
-      // with different notification copy (doc 05 §3.3).
       assert.equal((await events('account.reactivated')).length, 0);
     });
 
@@ -473,8 +611,6 @@ describe('account departure (integration)', () => {
       );
     });
   });
-
-  // ── Guard wiring ──────────────────────────────────────────────────────────
 
   it('is closed to unauthenticated callers', async () => {
     for (const url of [DEACTIVATE, DELETE_REQUEST]) {

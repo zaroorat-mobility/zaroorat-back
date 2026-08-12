@@ -17,17 +17,17 @@ export async function createApp(): Promise<FastifyInstance> {
 
     requestIdHeader: 'x-request-id',
 
-    trustProxy: true,
+    trustProxy: Number(process.env.TRUSTED_PROXY_HOPS ?? 1),
 
     bodyLimit: 10 * 1024 * 1024,
   });
 
+  app.setErrorHandler(errorHandler);
+  app.setNotFoundHandler(notFoundHandler);
+
   await registerPlugins(app);
   await registerHooks(app);
   await registerRoutes(app);
-
-  app.setErrorHandler(errorHandler);
-  app.setNotFoundHandler(notFoundHandler);
 
   return app;
 }

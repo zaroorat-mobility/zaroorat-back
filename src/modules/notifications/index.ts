@@ -14,14 +14,6 @@ export {
 } from './notification.config';
 export { NotificationService, type SendSmsOptions } from './notification.service';
 
-/**
- * Registers the notification module into the Awilix container.
- *
- * `smsProvider` is a factory registration (CLASSIC injection resolves its
- * `notificationConfig` param by name) that yields the mock or MSG91 provider;
- * `notificationService` depends on `smsProvider` + `notificationConfig`.
- * @param container The application DI container.
- */
 export function registerNotificationModule(container: AwilixContainer): void {
   container.register({
     notificationConfig: asFunction(getNotificationConfig).singleton(),

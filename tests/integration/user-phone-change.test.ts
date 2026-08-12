@@ -16,14 +16,6 @@ const OWNER = '+919876513001';
 const TARGET = '+919876513002';
 const HOLDER = '+919876513003';
 
-/**
- * The two-step phone-number change (user doc 02 §2.4, FLOW §4).
- *
- * Acceptance criteria 06 §3 #4/#5/#6 and the database half of USER-INV-3 (the
- * identity survives) and USER-INV-4 (nothing issued before the change survives).
- * The unit-level half — that the write, the revocation, and the events share one
- * transaction — lives in tests/unit/users/phone-change-service.test.ts.
- */
 describe('phone-number change (integration)', () => {
   let app: FastifyInstance;
 
@@ -37,7 +29,6 @@ describe('phone-number change (integration)', () => {
     await resetState();
   });
 
-  /** Step 1: ask for a change and return the raw reply. */
   function requestChange(user: LoggedInUser, newPhoneNumber: string) {
     return app.inject({
       method: 'POST',
@@ -47,7 +38,6 @@ describe('phone-number change (integration)', () => {
     });
   }
 
-  /** Step 2: confirm a challenge and return the raw reply. */
   function verifyChange(
     user: LoggedInUser,
     challengeId: string,
@@ -61,14 +51,12 @@ describe('phone-number change (integration)', () => {
     });
   }
 
-  /** Run both steps for the happy path, asserting step 1 succeeded. */
   async function changeNumber(user: LoggedInUser, newPhoneNumber: string) {
     const requested = await requestChange(user, newPhoneNumber);
     assert.equal(requested.statusCode, 202, requested.payload);
     return verifyChange(user, requested.json().challengeId);
   }
 
-  /** Outbox envelopes of one type, in write order. */
   async function events(eventType: string) {
     const rows = await db().client.outboxEvent.findMany({
       where: { eventType },
@@ -95,8 +83,6 @@ describe('phone-number change (integration)', () => {
     assert.equal(after.phoneNumber, TARGET);
     assert.equal(after.createdAt.getTime(), before.createdAt.getTime(), 'same row, not a new one');
 
-    // A pre-existing related row still joins — the whole reason identity is keyed
-    // on a surrogate UUID rather than the number (doc 03 §4.2).
     const roles = await db().client.userRoleAssignment.findMany({
       where: { userId: user.userId },
     });
@@ -123,8 +109,7 @@ describe('phone-number change (integration)', () => {
 
     assert.equal(response.statusCode, 401);
     assert.equal(response.json().error.code, 'OTP_INVALID');
-    // USER adds no 401 of its own — this is AUTH's code and AUTH's envelope
-    // (doc 04 §2.2), so the client needs one implementation, not two.
+
     assert.equal(response.json().error.messageKey, 'auth.otp_invalid');
 
     const row = await db().client.user.findUniqueOrThrow({ where: { id: user.userId } });
@@ -159,8 +144,7 @@ describe('phone-number change (integration)', () => {
     const response = await changeNumber(user, HOLDER);
     assert.equal(response.statusCode, 200, response.payload);
     assert.equal(response.json().user.phoneNumber, HOLDER);
-    // The partial unique index covers live rows only, so both rows now carry the
-    // number and only one of them is active (auth doc 03 §4).
+
     const rows = await db().client.user.findMany({ where: { phoneNumber: HOLDER } });
     assert.equal(rows.length, 2);
   });
@@ -184,7 +168,6 @@ describe('phone-number change (integration)', () => {
     assert.ok(!JSON.stringify(error).includes('9876513002'), 'no submitted value in the body');
   });
 
-  // USER-INV-4 — the reason a number change is treated as an account recovery.
   it('signs out every device, including the caller, and re-credentials only the caller', async () => {
     const first = await loginAs(app, OWNER);
     const second = await loginAs(app, OWNER);
@@ -235,8 +218,6 @@ describe('phone-number change (integration)', () => {
       sessionsRevoked: 2,
     });
 
-    // doc 06 §5: the count is the number of revocation events in the same commit,
-    // not an independent tally that could drift from it.
     const revoked = await events('auth.session.revoked');
     const forThisChange = revoked.filter((event) => event.data.reason === 'phone_changed');
     assert.equal(forThisChange.length, changed.data.sessionsRevoked);
@@ -280,9 +261,6 @@ describe('phone-number change (integration)', () => {
     const first = await verifyChange(user, challengeId, { key });
     assert.equal(first.statusCode, 200, first.payload);
 
-    // The retry presents the pair the change returned. It has to: the caller's
-    // original token is stale the moment the change commits, and the gate runs
-    // before any handler — see the test below.
     const retry = await app.inject({
       method: 'POST',
       url: '/api/v1/users/me/phone/verify',
@@ -307,11 +285,6 @@ describe('phone-number change (integration)', () => {
     const key = randomUUID();
     assert.equal((await verifyChange(user, challengeId, { key })).statusCode, 200);
 
-    // Doc 02 §5 wants a dropped response replayed on retry, and doc 04 §2.2 wants
-    // this module's own change to make the caller's token stale. A client that
-    // never saw the response still holds that token, so the gate answers before
-    // the stored response can be reached. The invariant wins, deliberately — and
-    // nothing is re-executed, which is what §5 was protecting against.
     const retry = await verifyChange(user, challengeId, { key });
     assert.equal(retry.statusCode, 401);
     assert.equal(retry.json().error.code, 'TOKEN_STALE');
@@ -327,9 +300,6 @@ describe('phone-number change (integration)', () => {
   it('caps change requests per account, independently of AUTH’s per-phone limits', async () => {
     const user = await loginAs(app, OWNER);
 
-    // Repeating the same target keeps AUTH's resend cooldown in play, so only the
-    // first request actually sends — the cap being tested here is USER's own
-    // per-account one (R-USER-15).
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const allowed = await requestChange(user, TARGET);
       assert.equal(allowed.statusCode, 202, `attempt ${attempt + 1}: ${allowed.payload}`);
@@ -348,10 +318,6 @@ describe('phone-number change (integration)', () => {
     const requested = await requestChange(user, TARGET);
     assert.equal(requested.statusCode, 202);
 
-    // AUTH's OTP store is keyed by (purpose, phone), so a second requester for the
-    // same target is handed the same challenge id. Binding the challenge to its
-    // requester is what stops that from becoming a way to take a number someone
-    // else is mid-way through claiming.
     const stolen = await verifyChange(stranger, requested.json().challengeId);
     assert.equal(stolen.statusCode, 401);
     assert.equal(stolen.json().error.code, 'OTP_INVALID');
@@ -364,10 +330,6 @@ describe('phone-number change (integration)', () => {
     const holder = await loginAs(app, HOLDER);
     const user = await loginAs(app, OWNER);
 
-    // doc 03 §4.2: the application re-check inside the transaction is a courtesy
-    // for the error message — the partial unique index is the enforcement. This
-    // asserts the index directly, bypassing the service entirely, because two
-    // callers that both pass the re-check is exactly what it has to survive.
     await assert.rejects(
       db().client.user.update({ where: { id: user.userId }, data: { phoneNumber: HOLDER } }),
       /Unique constraint|uq_users_phone_active/i,

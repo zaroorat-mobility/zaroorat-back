@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 export const EnvironmentSchema = z.object({
-  // Must stay in sync with ENV_FILES in ./loader.ts and with prisma.config.ts.
   APP_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
 
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),

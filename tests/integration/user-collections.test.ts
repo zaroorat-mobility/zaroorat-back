@@ -14,12 +14,6 @@ const STRANGER = '+919876514002';
 const CONTACTS = '/api/v1/users/me/emergency-contacts';
 const PLACES = '/api/v1/users/me/saved-places';
 
-/**
- * The owned collections (user doc 02 §2.5–§2.6, R-USER-22…26).
- *
- * Acceptance criterion 06 §3 #7, invariants USER-INV-2 and USER-INV-7, and the
- * doc 06 §8 schema checks for the four objects the §5 migration ships.
- */
 describe('emergency contacts and saved places (integration)', () => {
   let app: FastifyInstance;
 
@@ -47,7 +41,6 @@ describe('emergency contacts and saved places (integration)', () => {
     });
   }
 
-  /** Add a contact, asserting it was accepted, and return the created item. */
   async function addContact(user: LoggedInUser, overrides: Record<string, unknown> = {}) {
     const response = await call('POST', CONTACTS, user, {
       contactName: 'Priya',
@@ -58,20 +51,16 @@ describe('emergency contacts and saved places (integration)', () => {
     return response.json();
   }
 
-  /** Add a saved place, asserting it was accepted, and return the created item. */
   async function addPlace(user: LoggedInUser, overrides: Record<string, unknown> = {}) {
     const response = await call('POST', PLACES, user, { label: 'Home', ...overrides });
     assert.equal(response.statusCode, 201, response.payload);
     return response.json();
   }
 
-  /** Outbox payloads of one event type. */
   async function events(eventType: string) {
     const rows = await db().client.outboxEvent.findMany({ where: { eventType } });
     return rows.map((row) => row.payload as unknown as { data: Record<string, unknown> });
   }
-
-  // ── Emergency contacts ────────────────────────────────────────────────────
 
   describe('emergency contacts', () => {
     it('creates, lists, edits, and removes a contact', async () => {
@@ -109,7 +98,6 @@ describe('emergency contacts and saved places (integration)', () => {
         '`sos` notifies in this order',
       );
 
-      // Two reads of an unchanged list must not swap the tied pair.
       const again = (await call('GET', CONTACTS, user)).json() as { id: string }[];
       assert.deepEqual(
         again.map((c) => c.id),
@@ -144,8 +132,7 @@ describe('emergency contacts and saved places (integration)', () => {
       assert.equal(overflow.statusCode, 409);
       const error = overflow.json().error;
       assert.equal(error.code, 'LIMIT_EXCEEDED');
-      // The copy says "5 of 5 used" without the client hard-coding a number that
-      // lives in configuration (doc 04 §3, R-USER-26).
+
       assert.deepEqual(error.details, [
         {
           field: 'emergencyContacts',
@@ -176,16 +163,12 @@ describe('emergency contacts and saved places (integration)', () => {
         contactId: created.id,
       });
 
-      // A third party who never accepted platform terms is not broadcast
-      // (doc 05 §3.4, doc 06 §5 "third-party data containment").
       const all = await db().client.outboxEvent.findMany();
       const payloads = JSON.stringify(all.map((row) => row.payload));
       assert.ok(!payloads.includes('Priya'), 'no contact name in any event');
       assert.ok(!payloads.includes('+919876500042'), 'no contact number in any event');
     });
   });
-
-  // ── Saved places ──────────────────────────────────────────────────────────
 
   describe('saved places', () => {
     it('creates, lists, edits, and removes a place', async () => {
@@ -231,7 +214,6 @@ describe('emergency contacts and saved places (integration)', () => {
       assert.equal(clash.statusCode, 409);
       assert.equal(clash.json().error.code, 'CONFLICT');
 
-      // And on an edit, not just a create.
       const other = await addPlace(user, { label: 'Work' });
       const renamed = await call('PATCH', `${PLACES}/${other.id}`, user, { label: 'HOME' });
       assert.equal(renamed.statusCode, 409);
@@ -268,9 +250,6 @@ describe('emergency contacts and saved places (integration)', () => {
         SELECT ST_X(location::geometry) AS lng, ST_Y(location::geometry) AS lat
           FROM saved_places WHERE id = ${created.id}::uuid`;
 
-      // Swapping ST_MakePoint's arguments fails silently — the point lands in the
-      // wrong hemisphere rather than raising. Bengaluru is 12.97 N, 77.59 E; the
-      // swap would put it in the Arabian Sea off Somalia.
       assert.ok(Math.abs(point!.lat - 12.9716) < 1e-6, `latitude was ${point!.lat}`);
       assert.ok(Math.abs(point!.lng - 77.5946) < 1e-6, `longitude was ${point!.lng}`);
     });
@@ -328,8 +307,6 @@ describe('emergency contacts and saved places (integration)', () => {
     });
   });
 
-  // ── Ownership, USER-INV-2 ─────────────────────────────────────────────────
-
   describe('ownership (USER-INV-2, R-USER-25)', () => {
     it('answers 404 — never 403 — for every route on another user’s item', async () => {
       const user = await loginAs(app, OWNER);
@@ -337,7 +314,6 @@ describe('emergency contacts and saved places (integration)', () => {
       const contact = await addContact(user);
       const place = await addPlace(user);
 
-      // Table-driven so a route added later without scoping fails here (doc 06 §4).
       const routes = [
         ['PATCH', `${CONTACTS}/${contact.id}`, { priority: 9 }],
         ['DELETE', `${CONTACTS}/${contact.id}`, undefined],
@@ -351,7 +327,6 @@ describe('emergency contacts and saved places (integration)', () => {
         assert.equal(response.json().error.code, 'NOT_FOUND', `${method} ${url}`);
       }
 
-      // And the owner's rows are untouched afterwards.
       assert.equal((await call('GET', CONTACTS, user)).json()[0].priority, 1);
       assert.equal((await call('GET', PLACES, user)).json()[0].label, 'Home');
     });
@@ -364,8 +339,6 @@ describe('emergency contacts and saved places (integration)', () => {
       const owned = await call('DELETE', `${CONTACTS}/${contact.id}`, stranger);
       const absent = await call('DELETE', `${CONTACTS}/${randomUUID()}`, stranger);
 
-      // `requestId` is the only field that may differ — a 403 on one and a 404 on
-      // the other is exactly the oracle R-USER-25 forbids.
       const strip = (raw: string) => {
         const body = JSON.parse(raw) as { error: Record<string, unknown> };
         delete body.error.requestId;
@@ -390,8 +363,7 @@ describe('emergency contacts and saved places (integration)', () => {
       for (const url of urls) {
         for (const method of ['GET', 'POST', 'PATCH', 'DELETE'] as const) {
           const response = await app.inject({ method, url, payload: {} });
-          // A method the route table does not define is a 404 from Fastify; every
-          // method it does define is stopped by the gate.
+
           if (response.statusCode === 404 && response.json().error === undefined) continue;
           assert.equal(response.statusCode, 401, `${method} ${url}`);
           assert.equal(response.json().error.code, 'TOKEN_INVALID', `${method} ${url}`);
@@ -407,15 +379,10 @@ describe('emergency contacts and saved places (integration)', () => {
     });
   });
 
-  // ── Caps under concurrency, USER-INV-7 ────────────────────────────────────
-
   it('holds the cap under concurrent creates (USER-INV-7)', async () => {
     const user = await loginAs(app, OWNER);
     const cap = userConfig.maxEmergencyContacts;
 
-    // A read-then-write cap check passes every sequential test and fails this one:
-    // cap+5 callers each read cap-1 and each decide they may proceed. The owner-row
-    // lock is what serialises them (doc 06 §4).
     const attempts = Array.from({ length: cap + 5 }, (_, i) =>
       call('POST', CONTACTS, user, { contactName: `Racer ${i}`, phoneNumber: '+919876500042' }),
     );
@@ -429,8 +396,6 @@ describe('emergency contacts and saved places (integration)', () => {
     const rows = await db().client.emergencyContact.count({ where: { userId: user.userId } });
     assert.equal(rows, cap, 'the database agrees');
   });
-
-  // ── Atomicity, criterion 9 ────────────────────────────────────────────────
 
   it('rolls the row back when its event cannot be written (doc 05 §4)', async () => {
     const user = await loginAs(app, OWNER);
@@ -457,8 +422,6 @@ describe('emergency contacts and saved places (integration)', () => {
       'no half-written pair in either direction',
     );
   });
-
-  // ── The §5 migration, doc 06 §8 ───────────────────────────────────────────
 
   describe('the doc 03 §5 schema objects', () => {
     it('ships all four indexes, with the geospatial one on GiST', async () => {
@@ -489,7 +452,6 @@ describe('emergency contacts and saved places (integration)', () => {
       const user = await loginAs(app, OWNER);
       await addPlace(user, { label: 'home' });
 
-      // Bypassing the service entirely: the index is the enforcement (doc 03 §5).
       await assert.rejects(
         db().client.savedPlace.create({ data: { userId: user.userId, label: 'HOME' } }),
         /Unique constraint|uq_saved_places_user_label/i,

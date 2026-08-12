@@ -1,58 +1,58 @@
-import { EventEmitter } from 'node:events';
 import type { EventEnvelope } from './types';
 
-/** A subscriber invoked with a delivered event envelope. */
 export type EventHandler = (envelope: EventEnvelope) => void | Promise<void>;
 
-/**
- * In-process publish/subscribe bus — the v1 substitute for an external broker.
- *
- * The outbox relay dispatches durable events here, and observability events are
- * emitted here directly. Consumers subscribe by event type or to all events. A
- * handler error is isolated so one bad subscriber cannot break delivery to
- * others (at-least-once, per-subject ordering is preserved by the relay).
- */
+export type Unsubscribe = () => void;
+
+export interface DeliveryResult {
+  delivered: number;
+  failures: unknown[];
+}
+
+const ALL = '*';
+
 export class EventBus {
-  private readonly emitter = new EventEmitter();
+  private readonly handlers = new Map<string, Set<EventHandler>>();
 
-  constructor() {
-    // Many modules may subscribe; avoid the default 10-listener warning.
-    this.emitter.setMaxListeners(100);
+  async emit(envelope: EventEnvelope): Promise<DeliveryResult> {
+    const subscribers = [
+      ...(this.handlers.get(envelope.type) ?? []),
+      ...(this.handlers.get(ALL) ?? []),
+    ];
+
+    const settled = await Promise.allSettled(subscribers.map(async (handler) => handler(envelope)));
+
+    return {
+      delivered: settled.filter((result) => result.status === 'fulfilled').length,
+      failures: settled
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason),
+    };
   }
 
-  /**
-   * Deliver an envelope to type-specific and wildcard subscribers.
-   * @param envelope The event to deliver.
-   */
-  emit(envelope: EventEnvelope): void {
-    this.emitter.emit(envelope.type, envelope);
-    this.emitter.emit('*', envelope);
+  on(type: string, handler: EventHandler): Unsubscribe {
+    return this.register(type, handler);
   }
 
-  /**
-   * Subscribe to a single event type.
-   * @param type The dotted event type.
-   * @param handler The subscriber.
-   */
-  on(type: string, handler: EventHandler): void {
-    this.emitter.on(type, this.wrap(handler));
+  onAny(handler: EventHandler): Unsubscribe {
+    return this.register(ALL, handler);
   }
 
-  /**
-   * Subscribe to every event.
-   * @param handler The subscriber.
-   */
-  onAny(handler: EventHandler): void {
-    this.emitter.on('*', this.wrap(handler));
+  listenerCount(type: string): number {
+    return this.handlers.get(type)?.size ?? 0;
   }
 
-  private wrap(handler: EventHandler): (envelope: EventEnvelope) => void {
-    return (envelope) => {
-      try {
-        void Promise.resolve(handler(envelope)).catch(() => undefined);
-      } catch {
-        // A subscriber must never break delivery to others.
-      }
+  private register(channel: string, handler: EventHandler): Unsubscribe {
+    let set = this.handlers.get(channel);
+    if (!set) {
+      set = new Set();
+      this.handlers.set(channel, set);
+    }
+    set.add(handler);
+
+    return () => {
+      set.delete(handler);
+      if (set.size === 0) this.handlers.delete(channel);
     };
   }
 }

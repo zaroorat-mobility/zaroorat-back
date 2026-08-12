@@ -3,11 +3,16 @@ import { asClass, AwilixContainer } from 'awilix';
 import { UserProfileRepository } from './user-profile.repository';
 import { EmergencyContactRepository } from './emergency-contact.repository';
 import { SavedPlaceRepository } from './saved-place.repository';
-import { ObligationsRepository } from './obligations.repository';
+import { ObligationRepository } from './obligation.repository';
 import { DeletionRequestRepository } from './deletion-request.repository';
 
+export { UserRepository } from './user.repository';
 export { UserProfileRepository, type UpdateUserProfileInput } from './user-profile.repository';
-export { ObligationsRepository, type Obligation } from './obligations.repository';
+export {
+  ObligationRepository,
+  ObligationsRepository,
+  type Obligation,
+} from './obligation.repository';
 export { DeletionRequestRepository, type DeletionRequest } from './deletion-request.repository';
 export {
   EmergencyContactRepository,
@@ -21,20 +26,12 @@ export {
   type UpdateSavedPlaceInput,
 } from './saved-place.repository';
 
-/**
- * Registers the USER repository layer into the Awilix container.
- *
- * Each repository is a singleton constructed with the shared `databaseService`
- * (CLASSIC injection resolves the constructor param by name), exactly as the
- * auth repositories do.
- * @param container The application DI container.
- */
 export function registerUserRepositories(container: AwilixContainer): void {
   container.register({
     userProfileRepository: asClass(UserProfileRepository).singleton(),
     emergencyContactRepository: asClass(EmergencyContactRepository).singleton(),
     savedPlaceRepository: asClass(SavedPlaceRepository).singleton(),
-    obligationsRepository: asClass(ObligationsRepository).singleton(),
+    obligationsRepository: asClass(ObligationRepository).singleton(),
     deletionRequestRepository: asClass(DeletionRequestRepository).singleton(),
   });
 }

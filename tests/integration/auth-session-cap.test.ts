@@ -9,35 +9,20 @@ import { redis } from '../../src/core/cache/client.js';
 import { RedisKeys } from '../../src/core/cache/keys.js';
 import { otpConfig } from '../../src/config/otp/otp.config.js';
 import { sessionConfig } from '../../src/config/session/session.config.js';
-import type { AuthService } from '../../src/modules/auth/auth.service.js';
+import type { AuthService } from '../../src/modules/auth/services/auth.service.js';
+import type { SessionService } from '../../src/modules/auth/services/session/session.service.js';
 
 const BASE = '/api/v1/auth';
 
 const PHONE = '+919876517001';
 const PRIVILEGED = '+919876517002';
 
-/** One login's credentials plus the session row it opened. */
 interface Login {
   userId: string;
   accessToken: string;
   sessionId: string;
 }
 
-/**
- * The concurrent-session cap (auth doc 07 §3 criterion 7, doc 02 §7's fraud
- * matrix).
- *
- * The eviction has existed since AUTH shipped and nothing asserted it — the one
- * acceptance criterion in either module without coverage
- * (`IMPLEMENTATION_STATUS` §8.1). It is a fraud control: the cap is what stops a
- * stolen credential from quietly accumulating sessions, so "it is implemented"
- * and "it works" need to be different statements.
- *
- * Both halves are covered here, because `capForRoles` picking the wrong number
- * fails open and looks like nothing: an operator account silently getting the
- * standard cap of five instead of two is exactly the account where that matters
- * most.
- */
 describe('concurrent-session cap (integration)', () => {
   let app: FastifyInstance;
 
@@ -53,14 +38,6 @@ describe('concurrent-session cap (integration)', () => {
 
   const auth = () => container.resolve<AuthService>('authService');
 
-  /**
-   * Log in once more on the same phone.
-   *
-   * The per-phone OTP counter is cleared first, using the same key builder and
-   * the same scope production uses so it cannot drift. Six logins is four more
-   * than that limit allows, and the limit under test here is the session cap —
-   * `otp:req` has its own coverage in the OTP suite.
-   */
   async function login(phoneNumber: string): Promise<Login> {
     await redis.del(RedisKeys.rateLimit(otpConfig.rateLimits.perPhone.scope, phoneNumber));
 
@@ -87,14 +64,12 @@ describe('concurrent-session cap (integration)', () => {
     return { userId: body.user.id, accessToken: body.accessToken, sessionId: newest.id };
   }
 
-  /** Log in `count` times in sequence, oldest session first. */
   async function loginTimes(phoneNumber: string, count: number): Promise<Login[]> {
     const logins: Login[] = [];
     for (let i = 0; i < count; i += 1) logins.push(await login(phoneNumber));
     return logins;
   }
 
-  /** Call an authenticated endpoint with this session's access token. */
   const probe = (accessToken: string) =>
     app.inject({
       method: 'GET',
@@ -102,7 +77,6 @@ describe('concurrent-session cap (integration)', () => {
       headers: { authorization: `Bearer ${accessToken}` },
     });
 
-  /** Every `auth.session.revoked` payload in the outbox. */
   async function revocationEvents(): Promise<
     { userId: string; sessionId: string; reason: string }[]
   > {
@@ -115,7 +89,6 @@ describe('concurrent-session cap (integration)', () => {
     );
   }
 
-  /** The envelope subject of every `auth.session.revoked` in the outbox. */
   async function revocationSubjects(): Promise<(string | null)[]> {
     const rows = await db().client.outboxEvent.findMany({
       where: { eventType: 'auth.session.revoked' },
@@ -176,8 +149,6 @@ describe('concurrent-session cap (integration)', () => {
     it('emits auth.session.revoked for the evicted session and no other', async () => {
       const logins = await loginTimes(PHONE, sessionConfig.maxConcurrentSessions + 1);
 
-      // Doc 06 §5.2's payload, in full. `userId` is what lets a consumer act on
-      // this without joining back to a row erasure may eventually remove.
       assert.deepEqual(await revocationEvents(), [
         { userId: logins[0]!.userId, sessionId: logins[0]!.sessionId, reason: 'cap_evicted' },
       ]);
@@ -204,7 +175,6 @@ describe('concurrent-session cap (integration)', () => {
     });
 
     it('also revokes the evicted session’s refresh tokens', async () => {
-      // Otherwise eviction is cosmetic: the holder refreshes and is back in.
       const logins = await loginTimes(PHONE, sessionConfig.maxConcurrentSessions + 1);
 
       const live = await db().client.refreshToken.count({
@@ -216,7 +186,6 @@ describe('concurrent-session cap (integration)', () => {
 
   describe('the privileged cap', () => {
     it('is tighter than the standard one', () => {
-      // The test below proves the code reads this; this proves it is worth reading.
       assert.ok(
         sessionConfig.privilegedMaxConcurrentSessions < sessionConfig.maxConcurrentSessions,
       );
@@ -250,6 +219,92 @@ describe('concurrent-session cap (integration)', () => {
       assert.equal(
         (await revocationEvents()).length,
         opened - sessionConfig.privilegedMaxConcurrentSessions,
+      );
+    });
+  });
+  describe('under concurrent logins', () => {
+    async function activeCount(userId: string): Promise<number> {
+      return db().client.userSession.count({
+        where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      });
+    }
+
+    async function raceSessions(userId: string, count: number): Promise<string[]> {
+      const sessions = container.resolve<SessionService>('sessionService');
+      const opened = await Promise.all(
+        Array.from({ length: count }, () =>
+          sessions.create({
+            userId,
+            loginMethod: 'otp',
+            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          }),
+        ),
+      );
+      return opened.map((session) => session.id);
+    }
+
+    it('never exceeds the cap when several logins land at once', async () => {
+      const cap = sessionConfig.maxConcurrentSessions;
+      const seeded = await loginTimes(PHONE, cap);
+      const userId = seeded[0]!.userId;
+      assert.equal(await activeCount(userId), cap, 'precondition: at the cap');
+
+      await raceSessions(userId, 3);
+
+      assert.equal(
+        await activeCount(userId),
+        cap,
+        'the account must sit exactly at its cap, not above it',
+      );
+    });
+
+    it('keeps every surviving session usable and every evicted one dead', async () => {
+      const cap = sessionConfig.maxConcurrentSessions;
+      const seeded = await loginTimes(PHONE, cap);
+      const userId = seeded[0]!.userId;
+
+      const fresh = await raceSessions(userId, 2);
+
+      for (const sessionId of fresh) {
+        const row = await db().client.userSession.findUniqueOrThrow({
+          where: { id: sessionId },
+        });
+        assert.equal(row.revokedAt, null, 'a login must not evict itself');
+      }
+    });
+
+    it('denylists every session it evicts, however they raced', async () => {
+      const cap = sessionConfig.maxConcurrentSessions;
+      const seeded = await loginTimes(PHONE, cap);
+      const userId = seeded[0]!.userId;
+
+      await raceSessions(userId, 2);
+
+      const revoked = await db().client.userSession.findMany({
+        where: { userId, revokedAt: { not: null } },
+      });
+      assert.ok(revoked.length >= 2, 'evictions happened');
+      for (const session of revoked) {
+        const denied = await redis.exists(RedisKeys.sidRevoked(session.id));
+        assert.equal(denied, 1, `evicted session ${session.id} was not denylisted`);
+      }
+    });
+
+    it('audits one revocation per eviction, not one per racing login', async () => {
+      const cap = sessionConfig.maxConcurrentSessions;
+      const seeded = await loginTimes(PHONE, cap);
+      const userId = seeded[0]!.userId;
+
+      await raceSessions(userId, 2);
+
+      const evictions = (await revocationEvents()).filter((e) => e.reason === 'cap_evicted');
+      const revokedRows = await db().client.userSession.count({
+        where: { userId, revokedAt: { not: null } },
+      });
+      assert.equal(
+        evictions.length,
+        revokedRows,
+        'the conditional revoke means one event per session actually evicted',
       );
     });
   });

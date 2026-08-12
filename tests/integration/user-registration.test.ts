@@ -8,12 +8,6 @@ import type { UserRepository } from '../../src/modules/auth/repositories/user.re
 
 const phone = '+919876512001';
 
-/**
- * The profile row is created by AUTH's registration transaction, not by any USER
- * endpoint (FLOW §1). This suite is acceptance criterion 01 §13 #1 and the
- * database half of USER-INV-1: exactly one profile per account, created
- * atomically with it, and none at all if the registration rolls back.
- */
 describe('registration provisions the profile (integration)', () => {
   let app: FastifyInstance;
 
@@ -27,7 +21,6 @@ describe('registration provisions the profile (integration)', () => {
     await resetState();
   });
 
-  /** The `user.profile.created` envelopes currently in the outbox. */
   async function profileCreatedEvents() {
     return db().client.outboxEvent.findMany({ where: { eventType: 'user.profile.created' } });
   }
@@ -81,9 +74,6 @@ describe('registration provisions the profile (integration)', () => {
   });
 
   it('leaves zero profiles when the registration transaction rolls back', async () => {
-    // Inject a failure after the user, profile, session, and outbox rows have
-    // been written. If the profile insert really joined the unit of work, the
-    // rollback takes it with everything else (doc 03 §4.1, doc 06 §4).
     const repo = container.resolve<UserRepository>('userRepository');
     const original = repo.updateLastLoginAt.bind(repo);
     repo.updateLastLoginAt = async () => {
@@ -106,8 +96,6 @@ describe('registration provisions the profile (integration)', () => {
     await assert.rejects(
       db().client.userProfile.create({ data: { userId: user.userId } }),
       (err: Error) => {
-        // Prisma reports the unique violation on user_profiles_user_id_key —
-        // "at most one" is structural, not a service-layer check (doc 03 §3.1).
         assert.match(err.message, /Unique constraint|user_id/i);
         return true;
       },
@@ -125,8 +113,6 @@ describe('registration provisions the profile (integration)', () => {
   });
 
   it('heals an account whose profile is missing, on its next login', async () => {
-    // An account registered before this wiring shipped has no profile row. It
-    // must not stay that way — the next login provisions and announces one.
     const user = await loginAs(app, phone);
     await db().client.userProfile.deleteMany({ where: { userId: user.userId } });
     await db().client.outboxEvent.deleteMany({ where: { eventType: 'user.profile.created' } });

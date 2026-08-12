@@ -1,9 +1,3 @@
-/**
- * Structured error codes that are safe to retry.
- *
- * Prisma: P2024 (pool exhausted), P2034 (write conflict / deadlock)
- * pg / Node.js: ECONNRESET, ECONNREFUSED, ETIMEDOUT
- */
 const TRANSIENT_ERROR_CODES = new Set([
   'P2024',
   'P2034',
@@ -13,15 +7,6 @@ const TRANSIENT_ERROR_CODES = new Set([
 ]);
 
 export class RetryService {
-  /**
-   * Executes an operation with exponential backoff and full jitter.
-   * Only retries on known transient errors — never on fatal errors
-   * such as authentication failures or constraint violations.
-   *
-   * Full jitter (delay = random(0, ceiling)) desynchronises retries across
-   * Kubernetes pod replicas, preventing a thundering herd against the database
-   * during outages or rolling restarts.
-   */
   public async executeWithRetry<T>(
     operation: () => Promise<T>,
     maxRetries: number = 3,

@@ -3,12 +3,6 @@ import { PrismaClientProvider } from '@core/database/client/PrismaClientProvider
 import { RetryService } from '@core/database/retry/RetryService.js';
 import { registerReadinessCheck } from '@core/health/index.js';
 
-/**
- * Orchestrates database startup.
- *
- * This is the only place in the application that calls database lifecycle
- * methods. Domain services use DatabaseService which has no lifecycle access.
- */
 export async function bootstrapDatabase(): Promise<void> {
   const provider = container.resolve<PrismaClientProvider>('provider');
   const retry = container.resolve<RetryService>('retryService');

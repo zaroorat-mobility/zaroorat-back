@@ -1,18 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { SessionService } from '../../../src/modules/auth/session/session.service.js';
+import { SessionService } from '../../../src/modules/auth/services/session/session.service.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 
-/** A sentinel tx object the fake TransactionManager hands to the callback. */
 const TX = { __tx: true } as unknown as TransactionClient;
 
-/**
- * Wire a SessionService whose collaborators capture the transaction argument they
- * receive, so the test can prove the DB revoke, the family revoke, and the audit
- * event all run inside the SAME transaction (the UoW guarantee).
- */
 function makeService(opts: { revokeWon?: boolean } = {}) {
   const seen = {
     executeCalls: 0,
@@ -67,6 +61,8 @@ function makeService(opts: { revokeWon?: boolean } = {}) {
   const service = new SessionService(
     sessionRepository as never,
     refreshTokenRepository as never,
+
+    { lockForUpdate: async () => undefined } as never,
     redisService as never,
     epochService as never,
     sessionMetrics as never,
@@ -77,9 +73,6 @@ function makeService(opts: { revokeWon?: boolean } = {}) {
   return { service, seen };
 }
 
-// Proves the UoW guarantee for session revocation: the row revoke, the refresh
-// family revoke, and the auth.session.revoked audit event all commit in one
-// transaction; the Redis denylist runs only after, and only on the winning call.
 describe('SessionService revoke — unit of work', () => {
   it('threads a single tx through the revoke, the family revoke, and the audit event', async () => {
     const { service, seen } = makeService({ revokeWon: true });
@@ -96,7 +89,6 @@ describe('SessionService revoke — unit of work', () => {
     const { service, seen } = makeService({ revokeWon: true });
     await service.logout('s1');
 
-    // Everything transactional happens before the denylist write.
     assert.deepEqual(seen.order, ['revoke', 'family', 'publish', 'denylist']);
     assert.equal(seen.denylistRevoked, 1);
   });

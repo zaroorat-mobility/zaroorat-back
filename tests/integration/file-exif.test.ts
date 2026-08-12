@@ -8,15 +8,6 @@ import { container } from '../../src/core/di.js';
 import { jpeg, png, tiffBlock, webp } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
 
-/**
- * Location metadata, end to end (files doc 01 R-FILE-29, FILES-OD-10).
- *
- * The requirement is that GPS coordinates never become readable. What this
- * module does about it is **refuse the upload**, not rewrite it: stripping would
- * mean pulling the bytes into the API process, which R-FILE-1 forbids outright
- * and NFR-1's 300 ms budget could not absorb. The client re-encodes — which an
- * app that already downscales before upload (FILES-OD-5) does for free.
- */
 describe('file exif policy (integration)', () => {
   let app: FastifyInstance;
   let provider: MockStorageProvider;
@@ -33,10 +24,6 @@ describe('file exif policy (integration)', () => {
     provider.reset();
   });
 
-  /**
-   * Reserve, PUT the given bytes, and complete.
-   * @returns The completion reply and the file's id and key.
-   */
   async function upload(
     auth: { authorization: string },
     body: Buffer,
@@ -66,8 +53,6 @@ describe('file exif policy (integration)', () => {
     return { completed, fileId, storageKey: row.storageKey };
   }
 
-  // ── Refusal, for the purposes that must not keep it ───────────────────────
-
   describe('an image carrying GPS coordinates', () => {
     it('is refused at completion with EXIF_LOCATION_PRESENT', async () => {
       const user = await loginAs(app, '+919876620001');
@@ -86,9 +71,6 @@ describe('file exif policy (integration)', () => {
         jpeg({ exif: tiffBlock({ gps: true }) }),
       );
 
-      // Same treatment as a renamed executable: a refused upload must not linger
-      // as something a retry could complete, and its bytes must not sit in the
-      // bucket unreferenced.
       assert.equal(await provider.head(storageKey, 8), null);
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.equal(row.status, 'EXPIRED');
@@ -104,7 +86,6 @@ describe('file exif policy (integration)', () => {
         headers: user.authHeader,
       });
 
-      // R-FILE-29's actual requirement: the coordinates never reach a reader.
       assert.equal(read.statusCode, 404);
     });
 
@@ -113,8 +94,6 @@ describe('file exif policy (integration)', () => {
 
       const { completed } = await upload(user.authHeader, jpeg({ exif: tiffBlock({ gps: true }) }));
 
-      // Echoing the coordinates back would publish the very thing the rule
-      // exists to suppress (doc 04 §5).
       const details = completed.json().error.details;
       assert.deepEqual(details, [{ field: 'file', code: 'METADATA_NOT_ALLOWED' }]);
     });
@@ -129,9 +108,6 @@ describe('file exif policy (integration)', () => {
         contentType: 'image/webp',
       });
 
-      // A rule that covered one container would be a rule an attacker satisfies
-      // by choosing a different one, and every image list in doc 02 §5 accepts
-      // all three.
       assert.equal(asPng.completed.json().error.code, 'EXIF_LOCATION_PRESENT');
       assert.equal(asWebp.completed.json().error.code, 'EXIF_LOCATION_PRESENT');
     });
@@ -151,8 +127,6 @@ describe('file exif policy (integration)', () => {
     });
   });
 
-  // ── Acceptance, and the evidence exemption (FILES-OD-10) ──────────────────
-
   describe('what is still accepted', () => {
     it('accepts an image with EXIF but no GPS', async () => {
       const user = await loginAs(app, '+919876620010');
@@ -162,9 +136,6 @@ describe('file exif policy (integration)', () => {
         jpeg({ exif: tiffBlock({ orientation: 1 }) }),
       );
 
-      // A camera writes make, model, exposure, and orientation on every frame.
-      // Refusing those would refuse nearly every photograph, and none of them
-      // says where anyone lives.
       assert.equal(completed.statusCode, 200, completed.payload);
     });
 
@@ -183,9 +154,6 @@ describe('file exif policy (integration)', () => {
         { purpose: 'SOS_EVIDENCE' },
       );
 
-      // FILES-OD-10: for the two evidence purposes the metadata *is* the
-      // evidence — and they are already the most tightly read-scoped purposes in
-      // the module (doc 02 §4).
       assert.equal(completed.statusCode, 200, completed.payload);
       assert.ok(provider.versionIds(storageKey).length > 0, 'the bytes are kept as delivered');
     });
@@ -213,24 +181,18 @@ describe('file exif policy (integration)', () => {
         contentType: 'application/pdf',
       });
 
-      // A PDF is a program, and rendering one to inspect its metadata would be a
-      // far larger surface than the metadata is worth (doc 02 §5.2).
       assert.equal(completed.statusCode, 200, completed.payload);
     });
   });
 
-  // ── Fail-closed, and the orientation fix ──────────────────────────────────
-
   describe('an image whose metadata cannot be read', () => {
     it('is refused rather than assumed clean', async () => {
       const user = await loginAs(app, '+919876620020');
-      // Metadata that runs past the peek: absence cannot be established.
+
       const truncated = jpeg({ truncated: true });
 
       const { completed } = await upload(user.authHeader, truncated);
 
-      // A privacy control that fails open is not a control. "I looked and found
-      // nothing" and "I ran out of bytes" are different answers.
       assert.equal(completed.statusCode, 422);
       assert.equal(completed.json().error.code, 'EXIF_LOCATION_PRESENT');
     });
@@ -242,7 +204,6 @@ describe('file exif policy (integration)', () => {
         purpose: 'SOS_EVIDENCE',
       });
 
-      // Nothing has to be proven about metadata that is allowed to stay.
       assert.equal(completed.statusCode, 200, completed.payload);
     });
   });
@@ -250,9 +211,7 @@ describe('file exif policy (integration)', () => {
   describe('a photograph taken sideways', () => {
     it('is measured as it renders, not as it is stored', async () => {
       const user = await loginAs(app, '+919876620030');
-      // VEHICLE_IMAGE's ceiling is 6000 x 6000. Stored 4000 x 6000 with
-      // orientation 6, this renders as 6000 x 4000 — inside the ceiling either
-      // way, but transposition is what the assertion below pins.
+
       const sideways = jpeg({ width: 4000, height: 6000, exif: tiffBlock({ orientation: 6 }) });
 
       const { completed, fileId } = await upload(user.authHeader, sideways, {
@@ -265,8 +224,7 @@ describe('file exif policy (integration)', () => {
 
     it('is refused when the rendered shape exceeds the ceiling', async () => {
       const user = await loginAs(app, '+919876620031');
-      // 3000 x 5000 stored, orientation 6, so it renders 5000 x 3000 — over
-      // PROFILE_IMAGE's 4096 width. Measured untransposed it would have passed.
+
       const sideways = jpeg({ width: 3000, height: 5000, exif: tiffBlock({ orientation: 6 }) });
 
       const { completed } = await upload(user.authHeader, sideways);

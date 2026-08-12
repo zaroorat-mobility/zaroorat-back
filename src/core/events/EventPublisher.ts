@@ -1,51 +1,66 @@
 import { randomUUID } from 'node:crypto';
+
+import { logger } from '@shared/logger/index.js';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { OutboxRepository } from './OutboxRepository';
 import { EventBus } from './EventBus';
-import type { EventEnvelope, PublishInput } from './types';
+import { OutboxMetrics } from './OutboxMetrics';
+import { isDurable, type EventEnvelope, type PublishInput } from './types';
 
-/** Producer stamped on an envelope when the caller does not name one. */
-const DEFAULT_PRODUCER = 'auth';
-/** Current envelope schema version (auth doc 06 §3/§7). */
 const ENVELOPE_VERSION = 1;
+const DEFAULT_EVENT_VERSION = 1;
 
-/**
- * Publishes domain events (auth doc 06).
- *
- * Builds the canonical envelope and routes by classification: `audit`/`domain`
- * events are written to the **outbox** — pass the state change's transaction
- * client so they commit atomically — while `observability` events are emitted
- * best-effort straight to the in-process bus. Payloads must be non-secret (§6).
- */
 export class EventPublisher {
-  /**
-   * @param outboxRepository Durable event store.
-   * @param eventBus In-process delivery for best-effort events.
-   */
   constructor(
     private readonly outboxRepository: OutboxRepository,
     private readonly eventBus: EventBus,
+    private readonly outboxMetrics: OutboxMetrics,
   ) {}
 
-  /**
-   * Publish an event. Durable events require an `aggregateId` (UUID) and commit
-   * to the outbox (in `tx` when provided); observability events go to the bus.
-   * @param input The event to publish.
-   * @param tx Optional transaction client for durable, atomic enqueue.
-   */
   async publish(input: PublishInput, tx?: TransactionClient): Promise<void> {
-    const envelope = this.buildEnvelope(input);
+    if (!isDurable(input.classification)) {
+      if (tx) {
+        throw new Error(
+          `Observability event "${input.type}" was published with a transaction client. ` +
+            'Best-effort events emit immediately and cannot participate in a transaction.',
+        );
+      }
 
-    if (input.classification === 'observability') {
-      this.eventBus.emit(envelope);
+      const envelope = this.buildEnvelope(input);
+      void this.eventBus
+        .emit(envelope)
+        .then(({ failures }) => {
+          if (failures.length === 0) return;
+          this.outboxMetrics.observabilityDropped({ eventType: input.type });
+          logger.warn(
+            {
+              eventId: envelope.eventId,
+              type: input.type,
+              failures: failures.map(EventPublisher.describe),
+            },
+            '[events] observability subscriber(s) failed; not retried',
+          );
+        })
+        .catch((err: unknown) => {
+          logger.error({ err, type: input.type }, '[events] observability dispatch failed');
+        });
       return;
     }
 
-    // Durable (audit/domain): append to the outbox, ideally in the caller's tx.
+    const aggregateId = input.aggregateId ?? input.subjectUserId;
+    if (!aggregateId) {
+      throw new Error(
+        `Durable event "${input.type}" requires an aggregateId. ` +
+          'An outbox row with no aggregate cannot be ordered or replayed per aggregate.',
+      );
+    }
+
+    const envelope = this.buildEnvelope(input);
     await this.outboxRepository.enqueue(
       {
+        eventId: envelope.eventId,
         aggregateType: input.aggregateType,
-        aggregateId: input.aggregateId ?? input.subjectUserId ?? envelope.eventId,
+        aggregateId,
         eventType: input.type,
         payload: envelope,
       },
@@ -53,13 +68,18 @@ export class EventPublisher {
     );
   }
 
+  private static describe(reason: unknown): string {
+    return reason instanceof Error ? reason.message : String(reason);
+  }
+
   private buildEnvelope(input: PublishInput): EventEnvelope {
     return {
       eventId: randomUUID(),
       type: input.type,
-      version: ENVELOPE_VERSION,
+      version: input.version ?? DEFAULT_EVENT_VERSION,
+      envelopeVersion: ENVELOPE_VERSION,
       occurredAt: new Date().toISOString(),
-      producer: input.producer ?? DEFAULT_PRODUCER,
+      producer: input.producer,
       subject: { userId: input.subjectUserId ?? null },
       correlation: { requestId: input.requestId ?? null, sessionId: input.sessionId ?? null },
       data: input.data,

@@ -18,16 +18,6 @@ export { PermissionRepository } from './permission.repository';
 export { DeviceRepository, type CreateDeviceInput } from './device.repository';
 export { DriverAccessRepository } from './driver-access.repository';
 
-/**
- * Registers the auth repository layer into the Awilix container.
- *
- * Each repository is a singleton constructed with the shared `databaseService`
- * (Awilix CLASSIC injection resolves the constructor param by name). Registration
- * order does not matter — resolution is lazy and `databaseService` is provided by
- * the database module registered before this one.
- *
- * @param container The application DI container.
- */
 export function registerAuthRepositories(container: AwilixContainer): void {
   container.register({
     userRepository: asClass(UserRepository).singleton(),

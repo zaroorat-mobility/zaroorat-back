@@ -2,51 +2,22 @@ import type { Redis } from 'ioredis';
 import { RedisProvider } from '../RedisProvider';
 import { RedisKeys } from '../keys';
 
-/**
- * Stored-response idempotency (auth doc 04 §5, NFR-RESIL-02).
- *
- * A keyed mutation (verify / refresh) stores its success response here; a retry
- * with the same `Idempotency-Key` replays the stored value instead of executing
- * again. This store handles serialization and the claim/read/write mechanics; the
- * decision of what constitutes a replay-vs-execute is a service concern. The
- * database unique constraints remain the ultimate safety net (doc 06 §Consistency).
- */
 export class IdempotencyStore {
   private readonly client: Redis;
 
-  /** @param redisProvider Owner of the shared ioredis client. */
   constructor(redisProvider: RedisProvider) {
     this.client = redisProvider.client;
   }
 
-  /**
-   * Read a previously stored response for a key.
-   * @typeParam T Shape of the stored value.
-   * @param key Client idempotency key.
-   * @returns The parsed value, or `null` if nothing is stored.
-   */
   async get<T>(key: string): Promise<T | null> {
     const raw = await this.client.get(RedisKeys.idempotency(key));
     return raw ? (JSON.parse(raw) as T) : null;
   }
 
-  /**
-   * Store (overwrite) a response for a key with a TTL.
-   * @param key Client idempotency key.
-   * @param value JSON-serialisable response to store.
-   * @param ttlSeconds Retention window (~24 h for auth flows).
-   */
   async put(key: string, value: unknown, ttlSeconds: number): Promise<void> {
     await this.client.set(RedisKeys.idempotency(key), JSON.stringify(value), 'EX', ttlSeconds);
   }
 
-  /**
-   * Atomically claim a key by storing a value only if absent.
-   * @param key Client idempotency key.
-   * @param value JSON-serialisable value to store on claim.
-   * @param ttlSeconds Retention window.
-   * @returns `true` if this call claimed the key; `false` if it already existed.
-   */
   async putIfAbsent(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
     const set = await this.client.set(
       RedisKeys.idempotency(key),
@@ -56,5 +27,39 @@ export class IdempotencyStore {
       'NX',
     );
     return set === 'OK';
+  }
+
+  async forget(key: string): Promise<void> {
+    await this.client.del(RedisKeys.idempotency(key));
+  }
+
+  async runOnce<T>(key: string, ttlSeconds: number, operation: () => Promise<T>): Promise<T> {
+    const claimed = await this.putIfAbsent(key, { state: 'in_flight' }, ttlSeconds);
+
+    if (!claimed) {
+      const record = await this.get<IdempotencyRecord<T>>(key);
+      if (record?.state === 'done') return record.result;
+      throw new IdempotencyInFlightError();
+    }
+
+    try {
+      const result = await operation();
+      await this.put(key, { state: 'done', result } satisfies IdempotencyRecord<T>, ttlSeconds);
+      return result;
+    } catch (err) {
+      await this.forget(key);
+      throw err;
+    }
+  }
+}
+
+export type IdempotencyRecord<T> = { state: 'in_flight' } | { state: 'done'; result: T };
+
+export class IdempotencyInFlightError extends Error {
+  readonly code = 'IDEMPOTENCY_IN_PROGRESS';
+
+  constructor(message = 'A request with this Idempotency-Key is already in progress') {
+    super(message);
+    this.name = 'IdempotencyInFlightError';
   }
 }

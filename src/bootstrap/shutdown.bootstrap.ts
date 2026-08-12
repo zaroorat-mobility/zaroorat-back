@@ -6,7 +6,6 @@ import { PrismaClientProvider } from '@core/database/client/PrismaClientProvider
 import { OutboxRelay } from '@core/events';
 
 export async function bootstrapShutdown(app: FastifyInstance): Promise<void> {
-  // Guard against double-SIGTERM races (e.g., kubelet followed by container runtime)
   let shuttingDown = false;
 
   const shutdown = async (signal: string) => {
@@ -19,7 +18,7 @@ export async function bootstrapShutdown(app: FastifyInstance): Promise<void> {
       await app.close();
       app.log.info('Fastify server closed.');
 
-      container.resolve<OutboxRelay>('outboxRelay').stop();
+      await container.resolve<OutboxRelay>('outboxRelay').stop();
       app.log.info('Outbox relay stopped.');
 
       const provider = container.resolve<PrismaClientProvider>('provider');

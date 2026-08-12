@@ -15,15 +15,8 @@ import { SCHEDULE_TIMEZONE, registerJobSchedules } from '../../src/jobs/schedule
 import { startMaintenanceWorker, type MaintenanceResult } from '../../src/jobs/workers/index.js';
 import type { SweepResult } from '../../src/modules/files/jobs/sweeper.job.js';
 
-/** Give a real worker room to connect, pull, and run; far above observed timings. */
 const JOB_TIMEOUT_MS = 15_000;
 
-/**
- * Wait for the worker to finish one job by name.
- * @param worker The running worker.
- * @param name The job name to wait for.
- * @returns The job's result.
- */
 function nextResult(worker: Worker, name: string): Promise<MaintenanceResult> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`timed out waiting for ${name}`)), 10_000);
@@ -40,23 +33,13 @@ function nextResult(worker: Worker, name: string): Promise<MaintenanceResult> {
   });
 }
 
-/**
- * The job runtime (handbook volume 08), against the real Redis the tests use.
- *
- * This is the gap files doc 01 §13.4 named: the sweeper and retention jobs were
- * complete and tested, and nothing called them. What is proved here is only the
- * calling — that a schedule survives being registered twice, and that a job put
- * on the queue reaches the service that performs it. What each job *does* stays
- * covered by `file-jobs.test.ts`, which invokes them directly and does not need
- * a queue to do it.
- */
 describe('job runtime (integration)', () => {
   let app: FastifyInstance;
   let worker: Worker;
 
   before(async () => {
     app = await bootApp();
-    // A flush would take BullMQ's keys with it mid-run; reset once, up front.
+
     await resetState();
     await filesMaintenanceQueue().obliterate({ force: true });
   });
@@ -80,8 +63,6 @@ describe('job runtime (integration)', () => {
     });
 
     it('is idempotent across replicas', async () => {
-      // Every worker pod runs this at startup. Three replicas must not mean
-      // three sweeps every fifteen minutes (volume 08 §28).
       await registerJobSchedules();
       await registerJobSchedules();
 
@@ -130,9 +111,6 @@ describe('job runtime (integration)', () => {
 
   describe('worker dispatch', () => {
     before(async () => {
-      // Tear the schedules down before a worker exists to consume them: a run
-      // that starts at :14 would otherwise race a real `*/15` sweep and see
-      // someone else's result.
       const queue = filesMaintenanceQueue();
       for (const scheduler of await queue.getJobSchedulers()) {
         await queue.removeJobScheduler(scheduler.key);
@@ -151,7 +129,6 @@ describe('job runtime (integration)', () => {
 
         const result = (await pending) as SweepResult;
 
-        // An empty `files` table: nothing to reclaim, and the lock was free.
         assert.equal(result.ran, true);
         assert.equal(result.scanned, 0);
         assert.equal(result.failed, 0);
@@ -184,8 +161,6 @@ describe('job runtime (integration)', () => {
     });
 
     it('records the result on the completed job', { timeout: JOB_TIMEOUT_MS }, async () => {
-      // `removeOnComplete: { count: 100 }` keeps recent history, which is what
-      // makes "did the 03:00 run do anything?" answerable without a log search.
       const pending = nextResult(worker, JOB_NAMES.FILE_SWEEP);
       const job = await filesMaintenanceQueue().add(JOB_NAMES.FILE_SWEEP, {});
       await pending;

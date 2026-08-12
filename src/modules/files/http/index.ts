@@ -15,3 +15,9 @@ export {
   type CreateUploadBody,
   type FileIdParams,
 } from './file.schemas.js';
+export {
+  createUploadResponse,
+  fileMetadataResponse,
+  readUrlResponse,
+  fileErrorResponseSchema,
+} from './file.responses.js';

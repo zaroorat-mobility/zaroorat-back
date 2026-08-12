@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { JwtService } from '../../../src/modules/auth/services/jwt.service.js';
-import { TokenInvalidError } from '../../../src/modules/auth/errors.js';
+import { JwtService } from '../../../src/modules/auth/services/token/jwt.service.js';
+import { TokenInvalidError } from '../../../src/modules/auth/errors/auth.errors.js';
 import { makeJwtConfig } from '../../helpers/config.js';
 
 const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -11,9 +11,6 @@ const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).to
 const sign = (secret: string, signingInput: string): string =>
   createHmac('sha256', secret).update(signingInput).digest('base64url');
 
-// Proves the stateless access-token contract from doc 02 §3.1 and the distinct
-// 401-family behaviour from doc 05 §4: HS256 pinning, constant-time signature,
-// expiry, and issuer enforcement.
 describe('JwtService', () => {
   const config = makeJwtConfig({ issuer: 'zaroorat-test', accessTtlSeconds: 900 });
   const service = new JwtService(config);
@@ -66,8 +63,7 @@ describe('JwtService', () => {
       exp: now + 900,
       iss: 'zaroorat-test',
     });
-    // Signature is computed correctly with the real secret, so only alg-pinning
-    // (not the signature check) can reject it.
+
     const token = `${header}.${payload}.${sign(config.accessSecret, `${header}.${payload}`)}`;
     assert.throws(() => service.verify(token), TokenInvalidError);
   });
@@ -86,5 +82,28 @@ describe('JwtService', () => {
     );
     const token = other.sign(input);
     assert.throws(() => service.verify(token), TokenInvalidError);
+  });
+
+  it('supports zero-downtime key rotation using kid', () => {
+    const oldConfig = makeJwtConfig({ primaryKid: 'v1', accessSecret: 'secret-v1' });
+    const oldService = new JwtService(oldConfig);
+    const tokenV1 = oldService.sign(input);
+
+    const newConfig = makeJwtConfig({
+      primaryKid: 'v2',
+      accessSecret: 'secret-v2',
+      accessSecrets: {
+        v1: 'secret-v1',
+        v2: 'secret-v2',
+      },
+    });
+    const newService = new JwtService(newConfig);
+
+    const claimsV1 = newService.verify(tokenV1);
+    assert.equal(claimsV1.sub, 'u1');
+
+    const tokenV2 = newService.sign(input);
+    const claimsV2 = newService.verify(tokenV2);
+    assert.equal(claimsV2.sub, 'u1');
   });
 });

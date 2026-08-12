@@ -19,6 +19,16 @@ model File {
   // Declared at creation; overwritten with the verified value at completion (R-FILE-5).
   sizeBytes       Int         @map("size_bytes")
   checksumSha256  String?     @map("checksum_sha256")
+  /// Malware verdict. A file is never READY without `CLEAN` (or `SKIPPED`,
+  /// which only exists outside production).
+  scanStatus      FileScanStatus @default(PENDING) @map("scan_status")
+  scannedAt       DateTime?      @map("scanned_at")
+  /// The scanner's threat identifier, for the security event and investigation.
+  /// Never returned to the uploader — it discloses scanner internals.
+  scanThreat      String?        @map("scan_threat")
+  /// Why the file was REJECTED, as a stable code (`THREAT`, `CONTENT_MISMATCH`,
+  /// `EXIF_LOCATION_PRESENT`, …). Drives metrics and support, not the response.
+  rejectedReason  String?        @map("rejected_reason")
   // When the write permission lapses. The sweeper reads this (R-FILE-22).
   uploadExpiresAt DateTime    @map("upload_expires_at")
   completedAt     DateTime?   @map("completed_at")
@@ -53,6 +63,9 @@ model File {
   // The sweeper's query: PENDING rows past their permission window. The partial
   // form is in raw SQL (03 §4.2) — Prisma cannot express the WHERE clause.
   @@index([status, uploadExpiresAt], map: "ix_files_sweep")
+  // The scan-result and validation workers' queries: files sitting in a
+  // non-terminal state waiting for the next step.
+  @@index([status, scanStatus], map: "ix_files_scan")
   // The retention job's query: closed (deleted or superseded), no terminal
   // outcome yet. Partial form in raw SQL (03 §4.6).
   @@index([status, deletedAt], map: "ix_files_retention")
@@ -73,12 +86,51 @@ enum FilePurpose {
 
 /// The file lifecycle (files doc 01 §7). `archived`/`erased` are not states —
 /// they are terminal outcomes recorded in `archived_at` / `erased_at`.
+///
+/// ```
+/// PENDING ──▶ UPLOADED ──▶ SCANNING ──▶ VALIDATING ──▶ READY
+///    │            │            │             │
+///    └──▶ EXPIRED ┘            └──▶ REJECTED ◀┘
+/// ```
+///
+/// A file is only readable at `READY`, and only reaches it by passing malware
+/// scanning **and** content validation. Nothing promotes an object on the
+/// strength of it merely existing in the bucket.
 enum FileStatus {
+  /// Reserved. A presigned PUT has been issued; no object is known to exist.
   PENDING
+  /// The client says it uploaded, and the object was found in quarantine with
+  /// the declared size and checksum. Not yet scanned, not yet inspected.
+  UPLOADED
+  /// Awaiting a malware verdict from the scanner.
+  SCANNING
+  /// Scanned clean; the content inspector is checking what the bytes actually
+  /// are (magic bytes, dimensions, EXIF, structure).
+  VALIDATING
   READY
+  /// Failed scanning or validation. Terminal: no read URL is ever issued, and
+  /// the quarantined object is destroyed by retention.
+  REJECTED
   EXPIRED
   DELETED
   /// Replaced by a newer version. NOT deleted: the bytes were valid evidence
   /// while current, and retention keeps them for their full window (R-FILE-32).
   SUPERSEDED
+}
+
+/// The malware verdict, tracked separately from the lifecycle so "not scanned
+/// yet" and "scanned clean" are never conflated with "is READY".
+enum FileScanStatus {
+  /// No verdict yet.
+  PENDING
+  /// The scanner found no threat. Required before READY.
+  CLEAN
+  /// A threat was found. The file is REJECTED and the object destroyed.
+  THREAT
+  /// The scanner could not produce a verdict (access error, unsupported, too
+  /// large). Treated as a failure, never as clean.
+  FAILED
+  /// Scanning is deliberately not configured — development and test only.
+  /// Boot refuses this in production.
+  SKIPPED
 }

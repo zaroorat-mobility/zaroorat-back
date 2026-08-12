@@ -8,10 +8,6 @@ import { DatabaseMetrics } from './monitoring/DatabaseMetrics';
 import { getDatabaseConfiguration } from './configuration/DatabaseConfiguration';
 import { getPoolConfiguration } from './configuration/PoolConfiguration';
 
-/**
- * Registers all database infrastructure into the Awilix DI container.
- * Registration order matters: dependencies must appear before their consumers.
- */
 export function registerDatabaseModule(container: AwilixContainer) {
   container.register({
     dbConfig: asFunction(getDatabaseConfiguration).singleton(),

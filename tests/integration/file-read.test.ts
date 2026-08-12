@@ -8,13 +8,6 @@ import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
 
-/**
- * A valid 800x600 PNG.
- *
- * Built by the shared fixture rather than by hand: the header alone is no longer
- * enough, because the EXIF walk has to reach `IDAT` before it can conclude that
- * no metadata chunk is present (R-FILE-29).
- */
 function png(): Buffer {
   return image({ width: 800, height: 600 });
 }
@@ -35,7 +28,6 @@ describe('file read (integration)', () => {
     provider.reset();
   });
 
-  /** Upload and complete a file of the given purpose, returning its id and key. */
   async function publish(
     auth: { authorization: string },
     purpose = 'PROFILE_IMAGE',
@@ -57,7 +49,6 @@ describe('file read (integration)', () => {
     return { fileId, key: row.storageKey };
   }
 
-  /** Grant a role to an account, as `admin` will once that module exists. */
   async function grantRole(userId: string, slug: string): Promise<void> {
     const role = await db().client.role.findFirstOrThrow({ where: { slug } });
     await db().client.userRoleAssignment.create({ data: { userId, roleId: role.id } });
@@ -66,8 +57,6 @@ describe('file read (integration)', () => {
   function readUrl(auth: { authorization: string }, fileId: string, query = '') {
     return app.inject({ method: 'GET', url: `/api/v1/files/${fileId}/url${query}`, headers: auth });
   }
-
-  // ── The owner path ────────────────────────────────────────────────────────
 
   describe('GET /files/:id/url', () => {
     it('mints a URL for the owner, with the purpose TTL', async () => {
@@ -79,8 +68,7 @@ describe('file read (integration)', () => {
       assert.equal(response.statusCode, 200);
       const body = response.json();
       assert.equal(body.contentType, 'image/png');
-      // PROFILE_IMAGE is 10 minutes (doc 02 §5), and R-FILE-36 keeps every read
-      // TTL under the 15-minute access token.
+
       const ttlMs = new Date(body.expiresAt).getTime() - Date.now();
       assert.ok(ttlMs > 9 * 60_000 && ttlMs <= 10 * 60_000 + 5_000, `ttl was ${ttlMs}ms`);
     });
@@ -102,7 +90,7 @@ describe('file read (integration)', () => {
       const url = (await readUrl(user.authHeader, fileId)).json().url as string;
 
       assert.deepEqual(provider.verifyUrl(url, { method: 'GET' }), { ok: true, key });
-      // A read permission cannot be turned into a write one.
+
       assert.deepEqual(provider.verifyUrl(url, { method: 'PUT' }), {
         ok: false,
         reason: 'wrong-method',
@@ -115,7 +103,7 @@ describe('file read (integration)', () => {
       const url = (await readUrl(user.authHeader, fileId)).json().url as string;
 
       assert.equal(provider.verifyUrl(url, { method: 'GET' }).ok, true);
-      // Move the storage clock past the 10-minute window.
+
       provider.setClock(() => new Date(Date.now() + 11 * 60_000));
       assert.deepEqual(provider.verifyUrl(url, { method: 'GET' }), {
         ok: false,
@@ -143,14 +131,10 @@ describe('file read (integration)', () => {
 
       await readUrl(user.authHeader, fileId);
 
-      // Auditing every avatar render would drown the trail in noise; R-FILE-15
-      // says *privileged* reads (doc 05 §3).
       const reads = await db().client.outboxEvent.findMany({ where: { eventType: 'file.read' } });
       assert.equal(reads.length, 0);
     });
   });
-
-  // ── Non-disclosure ────────────────────────────────────────────────────────
 
   describe('a caller who may not read', () => {
     it('cannot tell another user’s file from one that never existed', async () => {
@@ -168,8 +152,7 @@ describe('file read (integration)', () => {
         delete body.error.requestId;
         return body;
       };
-      // Byte-identical, not merely the same code: a shape difference is an
-      // oracle too (FILE-INV-4).
+
       assert.deepEqual(strip(onOthers.payload), strip(onNothing.payload));
     });
 
@@ -190,8 +173,6 @@ describe('file read (integration)', () => {
     });
   });
 
-  // ── The privileged path, and its audit ────────────────────────────────────
-
   describe('an ops reader', () => {
     it('may read another user’s file, and the read is audited (R-FILE-15)', async () => {
       const owner = await loginAs(app, '+919876550020');
@@ -199,7 +180,6 @@ describe('file read (integration)', () => {
       await grantRole(operator.userId, 'admin');
       const { fileId } = await publish(owner.authHeader, 'DRIVER_DOCUMENT');
 
-      // Re-login so the token carries the new role claim.
       const opsSession = await loginAs(app, '+919876550021');
       const response = await readUrl(opsSession.authHeader, fileId);
 
@@ -233,8 +213,7 @@ describe('file read (integration)', () => {
       const [audit] = await db().client.outboxEvent.findMany({
         where: { eventType: 'file.read' },
       });
-      // An audit that could be dropped is not an audit: doc 05 §2 puts nothing
-      // on the observability tier.
+
       assert.equal(audit?.status, 'PENDING', 'it is in the durable outbox');
       assert.equal(audit?.aggregateType, 'file');
     });
@@ -258,8 +237,6 @@ describe('file read (integration)', () => {
       assert.equal(serialized.includes('me.png'), false, 'no filename');
     });
   });
-
-  // ── Metadata ──────────────────────────────────────────────────────────────
 
   describe('GET /files/:id', () => {
     it('returns metadata without minting or auditing anything', async () => {
@@ -292,8 +269,6 @@ describe('file read (integration)', () => {
       assert.equal(response.statusCode, 404);
     });
   });
-
-  // ── Only READY is readable ────────────────────────────────────────────────
 
   describe('a file that is not READY', () => {
     it('is invisible even to its owner while still PENDING', async () => {

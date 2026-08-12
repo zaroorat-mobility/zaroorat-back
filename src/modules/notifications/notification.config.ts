@@ -5,23 +5,12 @@ import type { SmsProvider } from './providers/sms.provider';
 
 export type SmsProviderName = 'mock' | 'msg91';
 
-/** Resolved notification settings. MSG91 fields are read from the environment
- *  (consistent with the DB pool config) and are absent in mock environments. */
 export interface NotificationConfig {
   smsProvider: SmsProviderName;
-  /** MSG91 template used for OTP delivery (required when provider is `msg91`). */
   otpTemplateId?: string;
   msg91: { authKey: string; senderId?: string } | null;
 }
 
-/**
- * Build the notification configuration from the environment.
- *
- * The provider defaults to `mock` in development/test and `msg91` in
- * staging/production, overridable with `SMS_PROVIDER`. MSG91 credentials come
- * from `MSG91_AUTH_KEY` / `MSG91_SENDER_ID` / `MSG91_OTP_TEMPLATE_ID`.
- * @returns The resolved configuration.
- */
 export function getNotificationConfig(): NotificationConfig {
   const explicit = process.env.SMS_PROVIDER as SmsProviderName | undefined;
   const env = config.app.environment;
@@ -41,15 +30,6 @@ export function getNotificationConfig(): NotificationConfig {
   };
 }
 
-/**
- * Provider factory — selects the concrete {@link SmsProvider} from config.
- *
- * Fails fast if `msg91` is selected without credentials, so a misconfigured
- * production instance cannot silently drop OTP SMS.
- * @param notificationConfig Resolved notification configuration.
- * @returns The chosen SMS provider instance.
- * @throws Error when `msg91` is selected but `MSG91_AUTH_KEY` is missing.
- */
 export function createSmsProvider(notificationConfig: NotificationConfig): SmsProvider {
   if (notificationConfig.smsProvider === 'msg91') {
     if (!notificationConfig.msg91) {

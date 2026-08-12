@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { AUTH_EVENT_CATALOG, authEvent } from '../../../src/modules/auth/events/catalog.js';
+import {
+  AUTH_EVENT_CATALOG,
+  authEvent,
+  type AuthEventType,
+} from '../../../src/modules/auth/events/catalog.js';
 
-// Locks the doc 06 catalog: every type resolves a valid classification + aggregate
-// kind, the audit subset (§6) is durable, and authEvent fills the envelope inputs.
 describe('AUTH event catalog (doc 06 §4–§6)', () => {
   it('classifies every entry as a known delivery class', () => {
     for (const [type, entry] of Object.entries(AUTH_EVENT_CATALOG)) {
@@ -17,7 +19,7 @@ describe('AUTH event catalog (doc 06 §4–§6)', () => {
   });
 
   it('marks the doc 06 §6 audit subset as durable (audit), not observability', () => {
-    const auditSubset = [
+    const auditSubset: AuthEventType[] = [
       'auth.login.succeeded',
       'auth.session.revoked',
       'auth.refresh.reuse_detected',
@@ -31,7 +33,12 @@ describe('AUTH event catalog (doc 06 §4–§6)', () => {
   });
 
   it('keeps the noisy hot-path signals as observability (best-effort)', () => {
-    for (const type of ['auth.otp.requested', 'auth.otp.sent', 'auth.login.failed']) {
+    const observability: AuthEventType[] = [
+      'auth.otp.requested',
+      'auth.otp.sent',
+      'auth.login.failed',
+    ];
+    for (const type of observability) {
       assert.equal(AUTH_EVENT_CATALOG[type]?.classification, 'observability');
     }
   });
@@ -56,7 +63,13 @@ describe('authEvent() builder', () => {
   });
 
   it('throws on an unknown event type (catalog is the closed source of truth)', () => {
-    assert.throws(() => authEvent('auth.made.up', {}), /Unknown AUTH event type/);
+    assert.throws(() => authEvent('auth.made.up' as AuthEventType, {}), /Unknown AUTH event type/);
+  });
+
+  it('stamps this module as the producer on every event', () => {
+    for (const type of Object.keys(AUTH_EVENT_CATALOG) as AuthEventType[]) {
+      assert.equal(authEvent(type, { subjectUserId: 'u1' }).producer, 'auth', type);
+    }
   });
 
   it('defaults optional correlation fields to null and data to an empty object', () => {

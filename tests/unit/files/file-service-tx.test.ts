@@ -1,20 +1,21 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { FileService } from '../../../src/modules/files/file.service.js';
-import { FileMetrics } from '../../../src/modules/files/file.metrics.js';
+import { FileService } from '../../../src/modules/files/services/file.service.js';
+import { FileMetrics } from '../../../src/modules/files/metrics/file.metrics.js';
 import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
-import { STORAGE_KEY_PATTERN } from '../../../src/modules/files/storage-key.js';
+import { STORAGE_KEY_PATTERN } from '../../../src/modules/files/utils/storage-key.js';
 import { png } from '../../helpers/image-fixtures.js';
-import type { StorageConfig } from '../../../src/modules/files/storage.config.js';
+import type { StorageConfig } from '../../../src/modules/files/config/storage.config.js';
 
 const OWNER = '0198a0b3-0000-7000-8000-000000000001';
 const FILE_ID = '0198f2c1-0000-7000-8000-0000000000f1';
 
-/** Minimal storage config for the service under test. */
 const storageConfig: StorageConfig = {
   provider: 'mock',
   bucket: null,
+  quarantineBucket: null,
+  scanner: 'disabled',
   region: 'ap-south-1',
   endpoint: null,
   forcePathStyle: false,
@@ -28,7 +29,6 @@ const storageConfig: StorageConfig = {
   maxRetries: 2,
 };
 
-/** A rate limiter and quota view that always allows. */
 function permissiveRedis(): never {
   return {
     rateLimit: {
@@ -37,7 +37,6 @@ function permissiveRedis(): never {
   } as never;
 }
 
-/** Build the service with recording doubles. */
 function makeService(overrides: {
   create?: (input: unknown) => Promise<unknown>;
   findOwned?: () => Promise<unknown>;
@@ -113,8 +112,6 @@ describe('FileService.createUpload — ordering (R-FILE-26)', () => {
       sizeBytes: 1024,
     });
 
-    // Signing first would leave a client holding a valid write permission for a
-    // key the system has no record of — an object nobody can find or delete.
     assert.deepEqual(order, ['row', 'sign']);
   });
 
@@ -153,8 +150,6 @@ describe('FileService.createUpload — ordering (R-FILE-26)', () => {
       sizeBytes: 10,
     });
 
-    // A permission bound to the declared size would let a client that lied
-    // small upload small; binding the policy ceiling is what R-FILE-2 means.
     assert.equal(boundMax, 5 * 1024 * 1024);
   });
 });
@@ -173,13 +168,6 @@ describe('FileService.completeUpload — unit of work (R-FILE-24)', () => {
     createdAt: new Date(Date.now() - 5_000),
   };
 
-  /**
-   * A 1x1 PNG the inspector accepts.
-   *
-   * A bare signature plus an IHDR is not enough any more: the EXIF walk has to
-   * reach `IDAT` to conclude that no metadata chunk is present, and a header that
-   * simply stops is reported as unproven rather than clean (R-FILE-29).
-   */
   function pngHeader(): Buffer {
     return png({ width: 1, height: 1 });
   }
@@ -213,7 +201,6 @@ describe('FileService.completeUpload — unit of work (R-FILE-24)', () => {
       provider,
       findOwned: async () => (settled ? { ...pendingRow, status: 'READY' } : pendingRow),
       markReady: async () => {
-        // The other caller transitioned first.
         settled = true;
         return false;
       },
@@ -221,8 +208,6 @@ describe('FileService.completeUpload — unit of work (R-FILE-24)', () => {
 
     const result = await service.completeUpload(FILE_ID, OWNER);
 
-    // Exactly one file.uploaded exists for a file, even under concurrency —
-    // enforced by the WHERE clause, not by consumer deduplication.
     assert.equal(published.length, 0);
     assert.equal(result.status, 'READY', 'the loser still observes success');
   });

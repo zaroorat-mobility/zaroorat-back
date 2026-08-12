@@ -79,5 +79,9 @@ model OtpVerification {
 
   @@index([phoneNumber])
   @@index([createdAt])
+  // The nightly retention purge's only query: `expires_at < cutoff ORDER BY
+  // expires_at LIMIT n` (AuthRetentionJob). Without it that batch is a full scan
+  // plus a top-N sort of the largest table in the schema, every night.
+  @@index([expiresAt])
   @@map("otp_verifications")
 }

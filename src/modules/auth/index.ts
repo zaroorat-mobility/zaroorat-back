@@ -1,5 +1,7 @@
 import { asClass, AwilixContainer } from 'awilix';
-import { AuthService } from './auth.service';
+import { AuthService } from './services/auth.service';
+import { AuthRetentionJob } from './jobs/auth-retention.job';
+import { EpochInvalidationConsumer } from './consumers/epoch-invalidation.consumer';
 
 export {
   AuthService,
@@ -7,19 +9,26 @@ export {
   type VerifyOtpInput,
   type AuthLoginResult,
   type DeviceContext,
-} from './auth.service';
+} from './services/auth.service';
 
-/**
- * Registers the top-level auth service (Phase 8) into the Awilix container.
- *
- * CLASSIC injection resolves its dependencies by name (`otpService`,
- * `userRepository`, `roleRepository`, `deviceService`, `sessionService`,
- * `tokenService`, `redisService`, `jwtConfig`, `sessionConfig`). Must run after
- * every module it composes has been registered.
- * @param container The application DI container.
- */
+export * from './consumers';
+export * from './controllers';
+export * from './routes';
+export * from './schemas';
+export * from './repositories';
+export * from './metrics';
+export * from './plugins';
+export * from './events';
+export * from './errors';
+export * from './constants';
+export * from './types';
+export * from './utils';
+export { AuthRetentionJob, type AuthRetentionResult } from './jobs/auth-retention.job';
+
 export function registerAuthService(container: AwilixContainer): void {
   container.register({
     authService: asClass(AuthService).singleton(),
+    authRetentionJob: asClass(AuthRetentionJob).singleton(),
+    epochInvalidationConsumer: asClass(EpochInvalidationConsumer).singleton(),
   });
 }

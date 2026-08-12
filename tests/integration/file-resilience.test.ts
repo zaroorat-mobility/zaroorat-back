@@ -9,25 +9,10 @@ import { png as image } from '../helpers/image-fixtures.js';
 import { fileConfig } from '../../src/config/file/file.config.js';
 import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
 
-/**
- * A valid 800x600 PNG.
- *
- * Built by the shared fixture rather than by hand: the header alone is no longer
- * enough, because the EXIF walk has to reach `IDAT` before it can conclude that
- * no metadata chunk is present (R-FILE-29).
- */
 function png(): Buffer {
   return image({ width: 800, height: 600 });
 }
 
-/**
- * Fail-closed behaviour, rate limits, and the properties the read path claims
- * about credential lifetime (files doc 06 §5).
- *
- * These exist because the module's failure modes are where it is most dangerous:
- * a dependency that cannot answer must never be read as permission, and must
- * never surface as a `200` carrying a null URL (doc 04 §6).
- */
 describe('file resilience (integration)', () => {
   let app: FastifyInstance;
   let provider: MockStorageProvider;
@@ -60,7 +45,6 @@ describe('file resilience (integration)', () => {
     });
   }
 
-  /** Upload and complete, returning the file id. */
   async function publish(auth: { authorization: string }): Promise<string> {
     const created = await createUpload(auth);
     const fileId = created.json().fileId as string;
@@ -77,8 +61,6 @@ describe('file resilience (integration)', () => {
   function readUrl(auth: { authorization: string }, fileId: string) {
     return app.inject({ method: 'GET', url: `/api/v1/files/${fileId}/url`, headers: auth });
   }
-
-  // ── Fail-closed (doc 04 §6, doc 06 §5) ────────────────────────────────────
 
   describe('when the storage backend is unreachable', () => {
     it('answers 503 on sign, never a 500 and never a 200', async () => {
@@ -125,9 +107,6 @@ describe('file resilience (integration)', () => {
 
       const body = (await createUpload(user.authHeader)).json();
 
-      // The bug this test was written for: an unmapped StorageError reached
-      // Fastify's generic handler and produced {statusCode, error, message} —
-      // a shape no client of this API knows how to read.
       assert.deepEqual(Object.keys(body), ['error']);
       assert.ok(body.error.messageKey, 'carries an i18n key');
       assert.ok(body.error.requestId, 'carries a correlation id');
@@ -139,8 +118,6 @@ describe('file resilience (integration)', () => {
 
       const payload = (await createUpload(user.authHeader)).payload;
 
-      // The same bug leaked `Storage operation "signUpload" failed` to the
-      // client, which doc 04 §5 forbids.
       assert.equal(payload.includes('signUpload'), false);
       assert.equal(payload.includes('injected mock failure'), false);
       assert.equal(payload.includes('mock-storage'), false);
@@ -160,15 +137,10 @@ describe('file resilience (integration)', () => {
 
       await createUpload(user.authHeader);
 
-      // R-FILE-26's payoff: the row exists and the sweeper will collect it. The
-      // reverse ordering would have left a signed permission for a key nothing
-      // knows about.
       const pending = await db().client.file.count({ where: { status: 'PENDING' } });
       assert.equal(pending, 1);
     });
   });
-
-  // ── Rate limits (02 §6, R-FILE-9) ─────────────────────────────────────────
 
   describe('rate limits', () => {
     it('trips the per-purpose upload axis and reports Retry-After', async () => {
@@ -205,8 +177,6 @@ describe('file resilience (integration)', () => {
     });
   });
 
-  // ── Credential lifetime (R-FILE-34, FILES-OD-14) ──────────────────────────
-
   describe('a minted read URL', () => {
     it('stays valid after the account is suspended — the TTL is the bound', async () => {
       const user = await loginAs(app, '+919876560020');
@@ -218,11 +188,6 @@ describe('file resilience (integration)', () => {
         data: { status: 'SUSPENDED' },
       });
 
-      // FILES-OD-14, stated rather than left to look like an oversight: a signed
-      // URL is a bearer credential held by the client, and the only ways to
-      // revoke one are rotating the signing key (which invalidates everyone's)
-      // or proxying every read through the API (which is what R-FILE-1 exists to
-      // avoid). The exposure is bounded by a TTL measured in minutes.
       assert.equal(provider.verifyUrl(url, { method: 'GET' }).ok, true);
     });
 
@@ -230,11 +195,6 @@ describe('file resilience (integration)', () => {
       const user = await loginAs(app, '+919876560021');
       const fileId = await publish(user.authHeader);
 
-      // Revocation is the **epoch bump**, not a status column: the gate checks
-      // the token's `epoch` claim against Redis, which is what makes revocation
-      // take effect within one request cycle (NFR-5). Writing
-      // `users.status = SUSPENDED` directly would change nothing the gate reads
-      // — a mistake this test originally made, and the reason it is spelled out.
       const epochService = container.resolve<{ bump: (id: string) => Promise<number> }>(
         'epochService',
       );
@@ -247,8 +207,6 @@ describe('file resilience (integration)', () => {
     });
   });
 
-  // ── Authorization precedes minting (R-FILE-13) ────────────────────────────
-
   describe('a denied read', () => {
     it('signs nothing at all', async () => {
       const owner = await loginAs(app, '+919876560030');
@@ -259,9 +217,7 @@ describe('file resilience (integration)', () => {
       const response = await readUrl(stranger.authHeader, fileId);
 
       assert.equal(response.statusCode, 404);
-      // R-FILE-13: authorization is decided *before* minting, never from
-      // possession of an id. A signature minted and then discarded would still
-      // have existed, and a bug could return it.
+
       assert.equal(provider.calls.signDownload, before);
     });
   });

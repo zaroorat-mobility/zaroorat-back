@@ -1,6 +1,13 @@
 export type { EventEnvelope, PublishInput, EventClassification } from './types';
-export { EventBus, type EventHandler } from './EventBus';
-export { OutboxRepository, type OutboxRecord, type PendingOutboxEvent } from './OutboxRepository';
+export { isDurable, DURABLE_CLASSIFICATIONS } from './types';
+export { EventBus, type EventHandler, type Unsubscribe, type DeliveryResult } from './EventBus';
+export {
+  OutboxRepository,
+  type OutboxRecord,
+  type ClaimedOutboxEvent,
+  type OutboxStats,
+} from './OutboxRepository';
 export { EventPublisher } from './EventPublisher';
-export { OutboxRelay } from './OutboxRelay';
+export { OutboxRelay, type RelayTickResult } from './OutboxRelay';
+export { OutboxMetrics, type OutboxMetricFields } from './OutboxMetrics';
 export { registerEventsModule } from './EventsModule';

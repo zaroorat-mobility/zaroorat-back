@@ -11,27 +11,10 @@ import type { MockStorageProvider } from '../../src/modules/files/providers/mock
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * A valid 800x600 PNG.
- *
- * Built by the shared fixture rather than by hand: the header alone is no longer
- * enough, because the EXIF walk has to reach `IDAT` before it can conclude that
- * no metadata chunk is present (R-FILE-29).
- */
 function png(): Buffer {
   return image({ width: 800, height: 600 });
 }
 
-/**
- * The profile-image cutover (files doc 03 §7.2, FLOW §6, FILES-OD-2/8).
- *
- * `user_profiles.profile_image` was a URL string validated against
- * `userConfig.profileImageHosts` — a list that **defaults to empty and therefore
- * rejected every URL**. That fail-closed default was correct: with no `files`
- * module there was no host the platform could vouch for. This is what replaces
- * it, and the sentence the whole module exists for: _a domain row never holds a
- * URL, only a file id; a URL is minted per read, for one reader, and expires._
- */
 describe('profile image cutover (integration)', () => {
   let app: FastifyInstance;
   let provider: MockStorageProvider;
@@ -50,7 +33,6 @@ describe('profile image cutover (integration)', () => {
     provider.reset();
   });
 
-  /** Upload and complete an avatar, returning its file id and key. */
   async function uploadAvatar(
     auth: { authorization: string },
     purpose = 'PROFILE_IMAGE',
@@ -87,8 +69,6 @@ describe('profile image cutover (integration)', () => {
     return app.inject({ method: 'GET', url: '/api/v1/users/me', headers: auth });
   }
 
-  // ── Attaching (R-FILE-27, FLOW §5) ────────────────────────────────────────
-
   describe('setting an avatar', () => {
     it('stores a file id, and the profile reads it back', async () => {
       const user = await loginAs(app, '+919876610001');
@@ -111,10 +91,6 @@ describe('profile image cutover (integration)', () => {
         SELECT column_name FROM information_schema.columns
         WHERE table_name = 'user_profiles'`;
 
-      // FILES-OD-2: a stored URL is either public — which violates R-FILE-11 —
-      // or expired, and therefore useless. The client exchanges the id for a
-      // short-lived signed URL, per read. Deploy 3 removed the column that could
-      // have held one at all (doc 03 §7.2).
       assert.equal(
         columns.some((column) => column.column_name === 'profile_image'),
         false,
@@ -135,9 +111,6 @@ describe('profile image cutover (integration)', () => {
         headers: user.authHeader,
       });
 
-      // FILES-OD-8: a rider's face is not a public asset. Same private bucket,
-      // same signed reads, same TTL as a KYC document — which is what removed
-      // the need for `profileImageHosts` at all (USER §8.5).
       assert.equal(minted.statusCode, 200);
       assert.equal(provider.verifyUrl(minted.json().url as string, { method: 'GET' }).ok, true);
     });
@@ -158,8 +131,6 @@ describe('profile image cutover (integration)', () => {
 
       const patched = await setAvatar(user.authHeader, created.json().fileId as string);
 
-      // Without the reference check a client could attach a reservation and
-      // produce a profile pointing at bytes that never arrived.
       assert.equal(patched.statusCode, 409);
       assert.equal(patched.json().error.code, 'CONFLICT');
     });
@@ -172,8 +143,6 @@ describe('profile image cutover (integration)', () => {
       const stolen = await setAvatar(stranger.authHeader, fileId);
       const absent = await setAvatar(stranger.authHeader, randomUUID());
 
-      // FILE-INV-4: given a file id, telling these apart would confirm that a
-      // specific file exists for a specific person.
       assert.equal(stolen.statusCode, 404);
       assert.deepEqual(
         { ...stolen.json().error, requestId: null },
@@ -187,8 +156,6 @@ describe('profile image cutover (integration)', () => {
 
       const patched = await setAvatar(user.authHeader, fileId);
 
-      // A licence attached as an avatar would move between read policies and
-      // retention classes — the thing FILE-INV-7 forbids doing to `purpose`.
       assert.equal(patched.statusCode, 404);
     });
 
@@ -204,17 +171,12 @@ describe('profile image cutover (integration)', () => {
         payload: { firstName: 'Aarav', profileImageFileId: randomUUID() },
       });
 
-      // The check and the write it guards are in one transaction (R-FILE-27):
-      // a refused avatar must not take the name change with it, nor let it
-      // through alone.
       assert.equal(refused.statusCode, 404);
       const profile = (await getMe(user.authHeader)).json().profile;
       assert.equal(profile.profileImageFileId, fileId);
       assert.equal(profile.firstName, null);
     });
   });
-
-  // ── Replacing (R-FILE-31, FLOW §5A) ───────────────────────────────────────
 
   describe('replacing an avatar', () => {
     it('supersedes the previous one rather than deleting it', async () => {
@@ -227,8 +189,7 @@ describe('profile image cutover (integration)', () => {
 
       assert.equal(patched.statusCode, 200, patched.payload);
       const previous = await db().client.file.findUniqueOrThrow({ where: { id: first.fileId } });
-      // R-FILE-31. "The user withdrew it" and "this was valid until now" are
-      // different compliance statements, and only the second is true here.
+
       assert.equal(previous.status, 'SUPERSEDED');
       assert.equal(previous.supersededById, second.fileId);
       assert.equal(previous.deletedAt, null);
@@ -239,10 +200,6 @@ describe('profile image cutover (integration)', () => {
       const first = await uploadAvatar(user.authHeader);
       await setAvatar(user.authHeader, first.fileId);
 
-      // The whole sequence, in the order FLOW §5A specifies: upload, complete,
-      // attach, supersede. Under `uq_files_one_live_profile_image` the second
-      // completion failed, and the old file could not be superseded until the
-      // new one was READY — neither could go first.
       const second = await uploadAvatar(user.authHeader);
       await setAvatar(user.authHeader, second.fileId);
       const third = await uploadAvatar(user.authHeader);
@@ -272,8 +229,6 @@ describe('profile image cutover (integration)', () => {
         headers: user.authHeader,
       });
 
-      // Retained as evidence (R-FILE-32), not served: reading history is an
-      // `admin` capability that does not exist yet.
       assert.equal(stale.statusCode, 404);
     });
 
@@ -288,8 +243,6 @@ describe('profile image cutover (integration)', () => {
         where: { eventType: { in: ['file.superseded', 'user.profile.updated'] } },
       });
 
-      // R-FILE-27: a failed profile write leaves the previous version current
-      // and announces nothing, because both rows are in one transaction.
       assert.equal(events.filter((e) => e.eventType === 'file.superseded').length, 1);
       assert.ok(events.some((e) => e.eventType === 'user.profile.updated'));
     });
@@ -301,32 +254,64 @@ describe('profile image cutover (integration)', () => {
 
       const again = await setAvatar(user.authHeader, fileId);
 
-      // Otherwise the reference check would refuse the file for being referenced
-      // by the very row about to be rewritten (R-FILE-33).
       assert.equal(again.statusCode, 200, again.payload);
       const file = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.equal(file.status, 'READY');
     });
 
-    it('clears the avatar without superseding anything', async () => {
+    it('clears the avatar and releases the file rather than superseding it', async () => {
       const user = await loginAs(app, '+919876610025');
       const { fileId } = await uploadAvatar(user.authHeader);
       await setAvatar(user.authHeader, fileId);
 
       const cleared = await setAvatar(user.authHeader, null);
 
-      // With no successor there is no chain to extend — and
-      // `ck_files_superseded_has_successor` would refuse one. The file simply
-      // becomes unreferenced, and its owner may now delete it.
       assert.equal(cleared.statusCode, 200);
       assert.equal(cleared.json().profileImageFileId, null);
       const file = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
-      assert.equal(file.status, 'READY');
-      assert.equal(file.supersededById, null);
+      assert.equal(file.status, 'DELETED');
+      assert.ok(file.deletedAt, 'and dated, which is what retention selects on');
+      assert.equal(file.supersededById, null, 'nothing replaced it');
+    });
+
+    it('makes a cleared avatar collectable by the retention job', async () => {
+      const user = await loginAs(app, '+919876610026');
+      const { fileId, storageKey } = await uploadAvatar(user.authHeader);
+      await setAvatar(user.authHeader, fileId);
+      await setAvatar(user.authHeader, null);
+
+      const result = await retention.run(new Date(Date.now() + 400 * DAY_MS));
+
+      assert.equal(result.erased + result.archived, 1, JSON.stringify(result));
+      assert.deepEqual(provider.versionIds(storageKey), [], 'the object is gone from storage');
+    });
+
+    it('releases the file in the same transaction as the profile update', async () => {
+      const user = await loginAs(app, '+919876610027');
+      const { fileId } = await uploadAvatar(user.authHeader);
+      await setAvatar(user.authHeader, fileId);
+
+      await setAvatar(user.authHeader, null);
+
+      const profile = await db().client.userProfile.findUniqueOrThrow({
+        where: { userId: user.userId },
+      });
+      const file = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
+      assert.equal(profile.profileImageFileId, null);
+      assert.equal(file.status, 'DELETED');
+    });
+
+    it('is idempotent — clearing an already-empty avatar changes nothing', async () => {
+      const user = await loginAs(app, '+919876610028');
+
+      const first = await setAvatar(user.authHeader, null);
+      const second = await setAvatar(user.authHeader, null);
+
+      assert.equal(first.statusCode, 200);
+      assert.equal(second.statusCode, 200, second.payload);
+      assert.equal(second.json().profileImageFileId, null);
     });
   });
-
-  // ── The reference guard, now that a module has claimed the purpose ────────
 
   describe('with `users` holding the reference', () => {
     it('refuses to delete an avatar somebody is wearing', async () => {
@@ -340,8 +325,6 @@ describe('profile image cutover (integration)', () => {
         headers: user.authHeader,
       });
 
-      // FILE-INV-5, live for the first time: before this cutover no module held
-      // a reference, so nothing could ever answer "yes".
       assert.equal(deleted.statusCode, 409);
       assert.equal(deleted.json().error.code, 'FILE_IN_USE');
       assert.equal(deleted.json().error.module, 'users');
@@ -371,10 +354,6 @@ describe('profile image cutover (integration)', () => {
 
       const result = await retention.run(new Date(Date.now() + 400 * DAY_MS));
 
-      // Registering the checker is what switched retention on for this purpose
-      // at all — the job skips any purpose no module has claimed. The superseded
-      // version's clock started at supersession (R-FILE-32); the current one is
-      // not a candidate at all, because nothing closed it.
       assert.equal(result.erased, 1);
       assert.deepEqual(provider.versionIds(first.storageKey), []);
       assert.ok(provider.versionIds(second.storageKey).length > 0, 'the current avatar survives');

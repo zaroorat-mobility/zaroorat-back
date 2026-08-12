@@ -1,26 +1,22 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { OtpService } from '../../../src/modules/auth/otp/otp.service.js';
+import { OtpService } from '../../../src/modules/auth/services/otp/otp.service.js';
 import {
   OtpExpiredError,
   OtpInvalidError,
   OtpLockedError,
-} from '../../../src/modules/auth/errors.js';
+} from '../../../src/modules/auth/errors/auth.errors.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import { makeOtpConfig } from '../../helpers/config.js';
 
-/**
- * A fully stubbed OtpService whose verify-path collaborators are driven by the
- * scenario flags. Every outward call is captured so the test can assert both the
- * thrown error and the emitted audit signal without any Redis/DB/HTTP.
- */
 function makeService(opts: {
   isLocked?: boolean;
   validFormat?: boolean;
   consumeMatches?: boolean;
   challengeExpired?: boolean;
   registerLocks?: boolean;
+  challenge?: Record<string, unknown> | null;
 }) {
   const published: PublishInput[] = [];
   const calls = {
@@ -52,11 +48,17 @@ function makeService(opts: {
       },
     },
   };
+
+  const storedChallenge = {
+    id: 'c1',
+    phoneNumber: '+919000000000',
+    purpose: 'LOGIN',
+    verifiedAt: null,
+    expiresAt: new Date(Date.now() + (opts.challengeExpired ? -60_000 : 60_000)),
+    ...(opts.challenge ?? {}),
+  };
   const otpRepository = {
-    findById: async () =>
-      opts.challengeExpired
-        ? { id: 'c1', verifiedAt: null, expiresAt: new Date(Date.now() - 60_000) }
-        : { id: 'c1', verifiedAt: null, expiresAt: new Date(Date.now() + 60_000) },
+    findById: async () => (opts.challenge === null ? null : storedChallenge),
     updateOutcome: async (_id: string, outcome: string) => {
       calls.updatedOutcomes.push(outcome);
     },
@@ -104,14 +106,10 @@ const verifyInput = {
   challengeId: 'c1',
 };
 
-// Proves the OTP verify security contract: single-use success, expiry ≠ lockout,
-// merged failure (enumeration resistance, doc 05 §3.2), and that the emitted
-// auth.login.failed reason never distinguishes "no account" from "wrong code"
-// (doc 06 §6 / R-AUTH-19).
 describe('OtpService.verify', () => {
   it('consumes the code and clears state on a correct match (single-use)', async () => {
     const { service, calls } = makeService({ consumeMatches: true });
-    await service.verify(verifyInput); // resolves — no throw
+    await service.verify(verifyInput);
 
     assert.equal(calls.clearAttempts, 1);
     assert.equal(calls.clearChallenge, 1);
@@ -121,7 +119,7 @@ describe('OtpService.verify', () => {
   it('throws OTP_LOCKED immediately when the phone is already locked', async () => {
     const { service, calls } = makeService({ isLocked: true });
     await assert.rejects(() => service.verify(verifyInput), OtpLockedError);
-    // Short-circuits before any consume / failed-attempt accounting.
+
     assert.equal(calls.registerFailedAttempt, 0);
   });
 
@@ -164,6 +162,73 @@ describe('OtpService.verify', () => {
     assert.equal(calls.smsSent, 1, 'a lockout must notify the account holder');
     const failed = published.find((p) => p.type === 'auth.login.failed');
     assert.equal(failed?.data?.reason, 'locked');
+  });
+
+  describe('challenge ownership', () => {
+    const rejections: [string, Parameters<typeof makeService>[0]][] = [
+      ['a challenge belonging to another phone', { challenge: { phoneNumber: '+919111111111' } }],
+      ['a challenge raised for another purpose', { challenge: { purpose: 'PHONE_CHANGE' } }],
+      ['a challenge that was already verified', { challenge: { verifiedAt: new Date() } }],
+      ['a challenge id that does not exist', { challenge: null }],
+    ];
+
+    for (const [name, opts] of rejections) {
+      it(`refuses ${name}, as OTP_INVALID`, async () => {
+        const { service, calls } = makeService({ consumeMatches: true, ...opts });
+        await assert.rejects(() => service.verify(verifyInput), OtpInvalidError);
+
+        assert.equal(calls.clearAttempts, 0, 'the code was not consumed');
+
+        assert.deepEqual(calls.updatedOutcomes, [], 'no outcome written to a foreign challenge');
+
+        assert.equal(calls.registerFailedAttempt, 1);
+      });
+    }
+
+    it('accepts a challenge bound to this phone and purpose', async () => {
+      const { service, calls } = makeService({ consumeMatches: true });
+      await service.verify(verifyInput);
+      assert.deepEqual(calls.updatedOutcomes, ['verified']);
+    });
+
+    it('still verifies when the client sends no challengeId at all', async () => {
+      const { service, calls } = makeService({ consumeMatches: true });
+      const { challengeId: _omitted, ...withoutChallenge } = verifyInput;
+      await service.verify(withoutChallenge);
+      assert.equal(calls.clearAttempts, 1);
+    });
+
+    it('locks out on the final foreign-challenge attempt, like any other failure', async () => {
+      const { service, calls } = makeService({ challenge: null, registerLocks: true });
+      await assert.rejects(() => service.verify(verifyInput), OtpLockedError);
+      assert.equal(calls.smsSent, 1, 'the account holder is told about the lockout');
+    });
+
+    it('reports a foreign challenge exactly as a wrong code does (no oracle)', async () => {
+      const foreign = makeService({ challenge: { phoneNumber: '+919111111111' } });
+      const wrongCode = makeService({ consumeMatches: false });
+
+      const errors = await Promise.all(
+        [foreign, wrongCode].map(async ({ service }) => {
+          try {
+            await service.verify(verifyInput);
+            return null;
+          } catch (err) {
+            return err as Error;
+          }
+        }),
+      );
+
+      const [a, b] = errors;
+      assert.equal(a?.constructor.name, b?.constructor.name);
+      assert.equal(a?.message, b?.message, 'the two must be indistinguishable to a caller');
+      for (const published of [foreign.published, wrongCode.published]) {
+        assert.equal(
+          published.find((p) => p.type === 'auth.login.failed')?.data?.reason,
+          'invalid',
+        );
+      }
+    });
   });
 
   it('never emits a login.failed reason that reveals account existence (R-AUTH-19)', async () => {

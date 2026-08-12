@@ -8,18 +8,10 @@ import { createApp } from '../../src/app/app.js';
 
 const BASE = '/api/v1/auth';
 
-/**
- * AUTH-INV-7 (doc 07 §4, the key cross-module regression guard): a ride-accept
- * action is permitted only when role=driver AND drivers.verification_status=
- * VERIFIED AND the driver is not suspended. Flipping any one to false denies.
- * Exercised against a protected test route through the real authorize guard.
- */
 describe('driver operability gate (AUTH-INV-7, integration)', () => {
   let app: FastifyInstance;
 
   before(async () => {
-    // Build manually so the stand-in route is added before ready() — a guarded
-    // ride-accept endpoint wired exactly as real ride ops will be.
     app = await createApp();
     app.get(
       '/test/ride-accept',
@@ -35,7 +27,6 @@ describe('driver operability gate (AUTH-INV-7, integration)', () => {
     await resetState();
   });
 
-  /** Log in a phone; returns the access token (roles snapshot) + user id. */
   async function login(phone: string): Promise<{ accessToken: string; userId: string }> {
     const sent = await app.inject({
       method: 'POST',
@@ -53,14 +44,13 @@ describe('driver operability gate (AUTH-INV-7, integration)', () => {
     return { accessToken: verified.json().accessToken, userId: verified.json().user.id };
   }
 
-  /** Register a driver-role account and return a token whose claims include `driver`. */
   async function driverLogin(phone: string): Promise<{ accessToken: string; userId: string }> {
-    const first = await login(phone); // creates the account + customer role
+    const first = await login(phone);
     const role = await db().client.role.findUniqueOrThrow({ where: { slug: 'driver' } });
     await db().client.userRoleAssignment.create({
       data: { userId: first.userId, roleId: role.id },
     });
-    // Re-login so the JWT roles snapshot includes `driver`.
+
     return login(phone);
   }
 

@@ -1,4 +1,5 @@
-// Re-export specific types from the generated Prisma Client to avoid deep imports in feature code
+import { Prisma } from '../../generated/prisma/index.js';
+
 export type {
   User,
   Driver,
@@ -8,7 +9,6 @@ export type {
   UserStatus,
   RideStatus,
   Prisma,
-  // Auth / identity models (consumed by the auth repository layer)
   OtpVerification,
   OtpPurpose,
   UserSession,
@@ -20,8 +20,10 @@ export type {
   UserRoleAssignment,
   Permission,
   RolePermission,
-  // File custody (consumed by the files repository layer)
   File,
   FilePurpose,
   FileStatus,
 } from '../../generated/prisma';
+
+export type Decimal = Prisma.Decimal;
+export const Decimal = Prisma.Decimal;

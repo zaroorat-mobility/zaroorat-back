@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { OtpGenerator } from '../../../src/modules/auth/otp/otp.generator.js';
+import { OtpGenerator } from '../../../src/modules/auth/services/otp/otp.generator.js';
 import { makeOtpConfig } from '../../helpers/config.js';
 
-// Proves the OTP source-of-randomness properties from doc 02 §4.1: fixed length,
-// numeric only, leading zeros preserved, and no obvious bias/repetition.
 describe('OtpGenerator', () => {
   it('produces a code of exactly the configured length', () => {
     const gen = new OtpGenerator(makeOtpConfig({ codeLength: 6 }));
@@ -39,7 +37,7 @@ describe('OtpGenerator', () => {
     const gen = new OtpGenerator(makeOtpConfig());
     const codes = new Set<string>();
     for (let i = 0; i < 100; i += 1) codes.add(gen.generate());
-    // 100 draws from a 10^6 space should essentially never collide to one value.
+
     assert.ok(codes.size > 90, `expected high uniqueness, got ${codes.size} distinct of 100`);
   });
 });

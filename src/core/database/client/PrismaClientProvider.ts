@@ -13,14 +13,6 @@ export interface DatabaseHealth {
   timestamp: Date;
 }
 
-/**
- * Infrastructure owner of the database connection lifecycle.
- *
- * Owns the singleton PrismaClient, startup verification, operational health,
- * and the state machine that prevents double-initialization or shutdown races.
- * Domain services and repositories must never touch this class directly —
- * they go through DatabaseService.
- */
 export class PrismaClientProvider {
   private _client: ProviderClient | null = null;
   private _state: ProviderState = ProviderState.UNINITIALIZED;
@@ -31,7 +23,6 @@ export class PrismaClientProvider {
     private readonly poolConfig: PoolConfiguration,
   ) {}
 
-  /** Lazily initialises the singleton client on first access. */
   public get client(): ProviderClient {
     if (!this._client) {
       this._state = ProviderState.INITIALIZING;
@@ -41,15 +32,10 @@ export class PrismaClientProvider {
     return this._client;
   }
 
-  /** Current lifecycle state — useful for observability and guard checks. */
   public get state(): ProviderState {
     return this._state;
   }
 
-  /**
-   * Verifies the connection at boot time via a raw round-trip.
-   * Called only by database.bootstrap.ts — never by application code.
-   */
   public async verifyConnection(): Promise<void> {
     try {
       await this.client.$queryRaw`SELECT 1`;
@@ -58,10 +44,6 @@ export class PrismaClientProvider {
     }
   }
 
-  /**
-   * Operational health check for Kubernetes readiness probes.
-   * Called only by database.bootstrap.ts — never by application code.
-   */
   public async health(): Promise<DatabaseHealth> {
     const start = performance.now();
     try {
@@ -81,10 +63,6 @@ export class PrismaClientProvider {
     }
   }
 
-  /**
-   * Closes the connection pool.
-   * Called only by shutdown.bootstrap.ts — never by application code.
-   */
   public async disconnect(): Promise<void> {
     if (this._client && this._state !== ProviderState.DISCONNECTING) {
       try {

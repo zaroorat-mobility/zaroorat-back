@@ -357,8 +357,15 @@ enum JobStatus {
   CANCELLED
 }
 
+/// Outbox row lifecycle. PENDING is the only claimable state, and a row stays
+/// PENDING across failed attempts (retries++ and next_attempt_at pushed out) so
+/// a transient dispatch error is retried rather than dropped. PROCESSING is a
+/// claim held by one relay; the reaper returns a stale claim to PENDING.
+/// FAILED is the dead-letter state — terminal, reached only after the attempt
+/// budget is spent, and alerted on.
 enum OutboxStatus {
   PENDING
+  PROCESSING
   PUBLISHED
   FAILED
 }

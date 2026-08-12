@@ -5,24 +5,14 @@ import {
   clearFileReferences,
   findLiveReference,
   registerFileReference,
-} from '../../../src/modules/files/file-references.js';
+} from '../../../src/modules/files/references/file-references.js';
 
-/**
- * The reference guard (files doc 01 R-FILE-19/33, FILE-INV-5).
- *
- * `files` cannot read another module's tables, so "is anyone still using this?"
- * is answered by asking the module that would know. These tests pin the two
- * properties that make that safe: an unregistered purpose is **not** an implicit
- * yes, and the answer is a module name rather than a count (FILES-OD-13).
- */
 describe('file reference guard', () => {
   afterEach(() => {
     clearFileReferences();
   });
 
   it('reports nothing held when no module has registered', async () => {
-    // The v1 state: no domain table has a file-id column yet (doc 01 §13.1), so
-    // nothing can hold a reference and every delete is free to proceed.
     assert.equal(await findLiveReference('PROFILE_IMAGE', 'f1'), null);
   });
 
@@ -54,8 +44,6 @@ describe('file reference guard', () => {
       },
     });
 
-    // Doc 02 §6A maps each purpose to exactly one owning module, which is what
-    // keeps the answer a yes/no instead of a count across modules.
     assert.equal(await findLiveReference('PROFILE_IMAGE', 'f1'), null);
     assert.deepEqual(asked, []);
     assert.equal(await findLiveReference('DRIVER_DOCUMENT', 'f2'), 'documents');
@@ -73,8 +61,6 @@ describe('file reference guard', () => {
     });
     const tx = { marker: true };
 
-    // R-FILE-27: the question and the write that depends on it must commit
-    // together, so the checker has to see the caller's transaction.
     await findLiveReference('DRIVER_DOCUMENT', 'f1', tx as never);
 
     assert.equal(received, tx);
@@ -95,8 +81,6 @@ describe('file reference guard', () => {
       },
     });
 
-    // Fail-closed: a module that cannot answer must never be read as consent to
-    // delete. Swallowing this would erase a file somebody still references.
     await assert.rejects(() => findLiveReference('PROFILE_IMAGE', 'f1'), /database unavailable/);
   });
 });

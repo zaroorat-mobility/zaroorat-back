@@ -4,12 +4,6 @@ import { beforeEach, describe, it } from 'node:test';
 import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
 import { StorageError } from '../../../src/modules/files/providers/storage.provider.js';
 
-/**
- * The mock provider is a deliverable, not a fixture (files doc 07 §7): every
- * other FILES test trusts it, so the properties it claims are asserted here
- * first. If the mock does not model versioning, the erase test in phase 6 would
- * pass against a provider that never reproduced the bug it guards (doc 08 §2.2).
- */
 describe('MockStorageProvider', () => {
   const KEY = 'dd/2026/08/c9f0f895fb98ab9159f51fd0297e236d.pdf';
   let provider: MockStorageProvider;
@@ -17,8 +11,6 @@ describe('MockStorageProvider', () => {
   beforeEach(() => {
     provider = new MockStorageProvider();
   });
-
-  // ── Versioning: the property the real bucket has and a Map does not ────────
 
   describe('versioning', () => {
     it('keeps every write as a distinct version', () => {
@@ -44,8 +36,7 @@ describe('MockStorageProvider', () => {
       await provider.delete(KEY);
 
       assert.equal(await provider.head(KEY, 512), null, 'hidden by the delete marker');
-      // Two versions plus the marker. This is the trap doc 08 §2.2 describes:
-      // on a versioned bucket a delete destroys nothing.
+
       assert.equal(provider.versionIds(KEY).length, 3);
     });
 
@@ -56,8 +47,6 @@ describe('MockStorageProvider', () => {
 
       await provider.erase(KEY);
 
-      // The contrast with the previous test is the whole point: "gone" has to
-      // mean gone exactly once, on the retention path (R-FILE-23).
       assert.deepEqual(provider.versionIds(KEY), []);
       assert.equal(await provider.head(KEY, 512), null);
     });
@@ -78,8 +67,6 @@ describe('MockStorageProvider', () => {
     });
   });
 
-  // ── Archive is the opposite of erase ──────────────────────────────────────
-
   describe('archive', () => {
     it('preserves the bytes and marks the storage class', async () => {
       provider.putObject(KEY, Buffer.from('evidence'), 'application/pdf');
@@ -92,13 +79,9 @@ describe('MockStorageProvider', () => {
     });
 
     it('refuses to archive an object that is not there', async () => {
-      // Unlike delete, this is a real fault: retention asked to preserve
-      // something that does not exist, which means its bookkeeping is wrong.
       await assert.rejects(() => provider.archive(KEY), StorageError);
     });
   });
-
-  // ── Signatures actually bind something ────────────────────────────────────
 
   describe('signed upload URLs', () => {
     it('accepts the exact request it was signed for', async () => {
@@ -174,8 +157,6 @@ describe('MockStorageProvider', () => {
     });
   });
 
-  // ── TTL, through the clock seam rather than a timer ───────────────────────
-
   describe('expiry', () => {
     it('accepts a URL a second before it expires and refuses it a second after', async () => {
       const start = new Date('2026-08-02T10:00:00Z');
@@ -200,8 +181,6 @@ describe('MockStorageProvider', () => {
       });
     });
   });
-
-  // ── Fail-closed support ───────────────────────────────────────────────────
 
   describe('injected failures', () => {
     it('throws a StorageError carrying the operation and the retryable flag', async () => {
@@ -240,8 +219,6 @@ describe('MockStorageProvider', () => {
       );
     });
   });
-
-  // ── Call recording, for "no byte transits the API" ────────────────────────
 
   describe('call recording', () => {
     it('counts every contract call', async () => {

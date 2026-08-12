@@ -8,5 +8,9 @@ export { OtpStore } from './stores/OtpStore';
 export { EpochStore } from './stores/EpochStore';
 export { SidBlacklistStore } from './stores/SidBlacklistStore';
 export { RateLimitStore, type RateLimitResult } from './stores/RateLimitStore';
-export { IdempotencyStore } from './stores/IdempotencyStore';
+export {
+  IdempotencyStore,
+  IdempotencyInFlightError,
+  type IdempotencyRecord,
+} from './stores/IdempotencyStore';
 export { LockStore } from './stores/LockStore';

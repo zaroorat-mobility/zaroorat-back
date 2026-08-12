@@ -6,8 +6,11 @@ import {
   assertStoredObjectAllowed,
   peekBudgetFor,
   sanitizeFileName,
-} from '../../../src/modules/files/file.policy.js';
-import { FileTooLargeError, UnsupportedMediaTypeError } from '../../../src/modules/files/errors.js';
+} from '../../../src/modules/files/policies/file.policy.js';
+import {
+  FileTooLargeError,
+  UnsupportedMediaTypeError,
+} from '../../../src/modules/files/errors/file.errors.js';
 
 describe('filename policy (R-FILE-28, doc 02 §5.1)', () => {
   it('keeps only the basename, so traversal never survives', () => {
@@ -16,14 +19,11 @@ describe('filename policy (R-FILE-28, doc 02 §5.1)', () => {
   });
 
   it('derives the extension from the content-type and discards the client’s', () => {
-    // `licence.PDF.exe` contributes nothing: the suffix is decided by the bytes.
     assert.equal(sanitizeFileName('licence.PDF.exe', 'application/pdf'), 'licence.PDF.pdf');
     assert.equal(sanitizeFileName('photo.png', 'image/jpeg'), 'photo.jpg');
   });
 
   it('strips bidirectional overrides — the spoof a reviewer would fall for', () => {
-    // U+202E renders `invoice<RLO>gnp.exe` as `invoiceexe.png`. Magic bytes make
-    // it non-fatal, but an ops console is where a human decides.
     const spoofed = `invoice${String.fromCodePoint(0x202e)}gnp.exe`;
     const cleaned = sanitizeFileName(spoofed, 'image/png');
     assert.equal(cleaned.includes(String.fromCodePoint(0x202e)), false);
@@ -58,8 +58,6 @@ describe('filename policy (R-FILE-28, doc 02 §5.1)', () => {
   });
 
   it('caps the length in UTF-8 bytes, not characters', () => {
-    // A 255-character Urdu name is far more than 255 bytes, and the column and
-    // every filesystem count bytes.
     const long = 'ا'.repeat(400);
     const cleaned = sanitizeFileName(long, 'image/png');
     assert.ok(Buffer.byteLength(cleaned) <= 255, `was ${Buffer.byteLength(cleaned)} bytes`);
@@ -68,7 +66,7 @@ describe('filename policy (R-FILE-28, doc 02 §5.1)', () => {
 
   it('never splits a multi-byte code point when truncating', () => {
     const cleaned = sanitizeFileName('🎉'.repeat(200), 'image/png');
-    // A split surrogate would round-trip as U+FFFD.
+
     assert.equal(cleaned.includes('�'), false);
   });
 });
@@ -114,7 +112,6 @@ describe('stored-object validation (R-FILE-5, R-FILE-35)', () => {
   });
 
   it('refuses a decompression bomb on pixel count alone', () => {
-    // 4 KB on the wire, 40,000 x 40,000 decoded. The byte ceiling sees nothing.
     assert.throws(
       () =>
         assertStoredObjectAllowed('PROFILE_IMAGE', 'image/png', 4096, {
@@ -149,8 +146,6 @@ describe('peek budget (doc 08 §2)', () => {
   });
 
   it('asks only for the signature budget otherwise', () => {
-    // Fetching 128 KB to check four bytes of `%PDF` would be waste on every
-    // document upload.
     assert.equal(peekBudgetFor('application/pdf', 512, 131072), 512);
     assert.equal(peekBudgetFor('video/mp4', 512, 131072), 512);
   });

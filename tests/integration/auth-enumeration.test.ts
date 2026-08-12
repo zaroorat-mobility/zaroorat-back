@@ -7,30 +7,12 @@ import { FIXED_OTP, bootApp, db, loginAs, resetState } from './helpers/harness.j
 import { container } from '../../src/core/di.js';
 import { redis } from '../../src/core/cache/client.js';
 import { RedisKeys } from '../../src/core/cache/keys.js';
-import type { OtpHasher } from '../../src/modules/auth/otp/otp.hasher.js';
+import type { OtpHasher } from '../../src/modules/auth/services/otp/otp.hasher.js';
 import type { UserRepository } from '../../src/modules/auth/repositories/user.repository.js';
 
-/** Registered before each relevant test. */
 const KNOWN = '+919876527001';
-/** Never registered, and never sent to except by the test that needs it. */
 const UNKNOWN = '+919876527002';
 
-/**
- * Enumeration resistance (R-AUTH-19, doc 02 §4.4, doc 07 §5).
- *
- * Doc 02 §4.4 makes three claims. Two are about responses and are decided
- * byte-for-byte. The third — "timing is kept uniform (do the same hash/compare
- * work on the miss path)" — names a **mechanism**, and that is what these tests
- * assert.
- *
- * **There is deliberately no wall-clock assertion here.** A tolerance tight
- * enough to catch a real oracle is looser than the noise of a shared Postgres and
- * Redis container plus GC, so it would fail on a busy runner and get deleted the
- * first week. Counting the work instead is deterministic and strictly stronger:
- * it fails on the *cause* (an extra lookup on one path) rather than on a
- * downstream symptom that a fast machine can hide. A wall-clock check belongs in
- * a dedicated benchmark, not in a suite that gates merges.
- */
 describe('enumeration resistance (integration)', () => {
   let app: FastifyInstance;
 
@@ -61,7 +43,6 @@ describe('enumeration resistance (integration)', () => {
     });
   }
 
-  /** A response body with the per-request correlation id removed. */
   function stable(payload: string): unknown {
     const body = JSON.parse(payload) as Record<string, unknown> & {
       error?: Record<string, unknown>;
@@ -71,13 +52,6 @@ describe('enumeration resistance (integration)', () => {
     return body;
   }
 
-  /**
-   * Count calls to a method on a resolved singleton for the duration of `body`.
-   *
-   * The services hold the same instance the container does, so replacing a method
-   * on it is observed by code that captured the reference at construction — the
-   * trick the harness already uses to pin the OTP generator.
-   */
   async function countCalls<T extends object, K extends keyof T>(
     target: T,
     method: K,
@@ -97,8 +71,6 @@ describe('enumeration resistance (integration)', () => {
     return calls;
   }
 
-  // ── §4.4 bullet 1: send never reveals new vs returning ────────────────────
-
   describe('the send response', () => {
     it('is shaped identically for a registered and an unknown number', async () => {
       await loginAs(app, KNOWN);
@@ -116,8 +88,6 @@ describe('enumeration resistance (integration)', () => {
       assert.equal(a.expiresInSec, b.expiresInSec);
       assert.equal(a.resendAvailableInSec, b.resendAvailableInSec);
 
-      // The only field that differs is the opaque challenge id, and its *form*
-      // is identical, so its presence reveals nothing either.
       const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       assert.match(String(a.challengeId), uuid);
       assert.match(String(b.challengeId), uuid);
@@ -126,13 +96,10 @@ describe('enumeration resistance (integration)', () => {
 
     it('creates no account, so send itself cannot be the probe', async () => {
       await send(UNKNOWN);
-      // Account creation happens on first successful verify, never here
-      // (doc 02 §4.4) — otherwise a probe would leave evidence of itself.
+
       assert.equal(await db().client.user.count({ where: { phoneNumber: UNKNOWN } }), 0);
     });
   });
-
-  // ── §4.4 bullet 2: verify failures are merged ─────────────────────────────
 
   describe('the verify failure', () => {
     it('cannot tell "no account" from "wrong code"', async () => {
@@ -167,14 +134,10 @@ describe('enumeration resistance (integration)', () => {
       const replayed = await verify(KNOWN, FIXED_OTP, challengeId);
       const wrong = await verify(KNOWN, '000000', challengeId);
 
-      // A consumed code and a wrong code are the same answer: distinguishing
-      // them tells an attacker their guess was right, only late.
       assert.equal(replayed.statusCode, 401);
       assert.deepEqual(stable(replayed.payload), stable(wrong.payload));
     });
   });
-
-  // ── §4.4 bullet 3: the miss path does the same work ───────────────────────
 
   describe('the miss path does equal work either way', () => {
     it('hashes the presented code the same number of times', async () => {
@@ -191,8 +154,6 @@ describe('enumeration resistance (integration)', () => {
         await verify(UNKNOWN, '000000', unknownChallenge);
       });
 
-      // This is doc 02 §4.4's "same hash/compare work on the miss path", asserted
-      // as the mechanism rather than as elapsed milliseconds.
       assert.equal(onKnown, 1, 'the known-phone miss still hashes');
       assert.equal(onUnknown, onKnown, 'and the unknown-phone miss does the same');
     });
@@ -207,11 +168,6 @@ describe('enumeration resistance (integration)', () => {
         assert.equal((await verify(KNOWN, '000000', challengeId)).statusCode, 401);
       });
 
-      // The strongest form of the property, and the reason no stopwatch is
-      // needed: the failure path contains no account-existence branch at all, so
-      // there is nothing whose cost could differ between a known and an unknown
-      // phone. A future lookup added here fails this test immediately, where a
-      // timing assertion would only notice once the machine was quiet enough.
       assert.equal(lookups, 0);
     });
 
@@ -223,9 +179,6 @@ describe('enumeration resistance (integration)', () => {
         assert.equal((await verify(UNKNOWN, FIXED_OTP, challengeId)).statusCode, 200);
       });
 
-      // The contrast that makes the previous test meaningful: the lookup exists,
-      // and it is reached only once the caller has already proved control of the
-      // number — at which point they know the answer anyway.
       assert.ok(lookups > 0);
     });
   });

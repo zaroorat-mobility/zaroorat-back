@@ -1,27 +1,30 @@
 import { FastifyInstance } from 'fastify';
 import { healthRoute } from './health/health.route.js';
 import { readyRoute } from './health/ready.route.js';
+import { metricsRoute } from './health/metrics.route.js';
 import { registerAuthRoutes } from '@modules/auth/http';
-import { registerUserRoutes } from '@modules/users/http';
+import { registerUserRoutes } from '@modules/users/routes';
 import { registerFileRoutes } from '@modules/files/http';
+import { rideRoutes } from '@modules/rides/routes';
+import { driverRoutes } from '@modules/drivers/routes';
+import { paymentRoutes } from '@modules/payments/routes';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(healthRoute, { prefix: '/api/v1' });
-  await app.register(healthRoute); // Also register at root for basic load balancers
+  await app.register(healthRoute);
 
   await app.register(readyRoute, { prefix: '/api/v1' });
-  await app.register(readyRoute); // Kubernetes probes hit the unprefixed path
+  await app.register(readyRoute);
 
-  // AUTH API (doc 04) — base path /api/v1/auth (platform convention; nginx
-  // proxies /api/v1/*).
+  await app.register(metricsRoute);
+
   await app.register(registerAuthRoutes, { prefix: '/api/v1/auth' });
 
-  // USER API (user doc 02) — base path /api/v1/users. Every route is protected
-  // by AUTH's deny-by-default gate; this module declares no public route.
   await app.register(registerUserRoutes, { prefix: '/api/v1/users' });
 
-  // FILES API (files doc 02) — base path /api/v1/files. Every route is
-  // protected by AUTH's deny-by-default gate; this module declares no public
-  // route, because a private bucket behind a public API is not private.
   await app.register(registerFileRoutes, { prefix: '/api/v1/files' });
+
+  await app.register(rideRoutes, { prefix: '/api/v1/rides' });
+  await app.register(driverRoutes, { prefix: '/api/v1/drivers' });
+  await app.register(paymentRoutes, { prefix: '/api/v1/payments' });
 }

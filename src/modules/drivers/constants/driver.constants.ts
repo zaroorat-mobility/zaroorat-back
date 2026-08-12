@@ -1,0 +1,34 @@
+export const DRIVER_VERIFICATION_STATUS = {
+  PENDING: 'PENDING',
+  DOCUMENT_REVIEW: 'DOCUMENT_REVIEW',
+  VERIFIED: 'VERIFIED',
+  REJECTED: 'REJECTED',
+  SUSPENDED: 'SUSPENDED',
+} as const;
+
+export type DriverVerificationStatusType =
+  (typeof DRIVER_VERIFICATION_STATUS)[keyof typeof DRIVER_VERIFICATION_STATUS];
+
+export const DRIVER_STATUS = {
+  OFFLINE: 'OFFLINE',
+  ONLINE: 'ONLINE',
+  BUSY: 'BUSY',
+  ON_TRIP: 'ON_TRIP',
+  BREAK: 'BREAK',
+} as const;
+
+export type DriverStatusType = (typeof DRIVER_STATUS)[keyof typeof DRIVER_STATUS];
+
+export const DRIVER_DOCUMENT_TYPE = {
+  DRIVING_LICENSE: 'DRIVING_LICENSE',
+  RC: 'RC',
+  INSURANCE: 'INSURANCE',
+  AADHAAR: 'AADHAAR',
+  PAN: 'PAN',
+  PUC: 'PUC',
+  POLICE_VERIFICATION: 'POLICE_VERIFICATION',
+  PROFILE_PHOTO: 'PROFILE_PHOTO',
+} as const;
+
+export type DriverDocumentTypeEnum =
+  (typeof DRIVER_DOCUMENT_TYPE)[keyof typeof DRIVER_DOCUMENT_TYPE];

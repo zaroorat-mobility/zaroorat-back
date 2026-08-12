@@ -7,45 +7,24 @@ import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/h
 import { container } from '../../src/core/di.js';
 import { userConfig } from '../../src/config/user/index.js';
 import { png as image } from '../helpers/image-fixtures.js';
-import type { AccountService } from '../../src/modules/users/account.service.js';
+import type { AccountService } from '../../src/modules/users/services/account/account.service.js';
 import type { AccountErasureJob } from '../../src/modules/users/jobs/account-erasure.job.js';
 import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
 
-/**
- * A phone number no other test in this file has used.
- *
- * Every test here registers, erases, and sometimes re-registers the same person,
- * and erasure deliberately returns a number to circulation. Sharing one number
- * across twenty-one tests makes each of them depend on the previous one's
- * `TRUNCATE` having fully landed — which is a race, and it flakes. A fresh
- * number costs nothing and removes the dependency entirely.
- */
 let issued = 8000;
 const phone = (): string => `+91987651${(issued += 1)}`;
 
 const DELETE_REQUEST = '/api/v1/users/me/delete-request';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A valid 800x600 PNG from the shared builder. */
 function png(): Buffer {
   return image({ width: 800, height: 600 });
 }
 
-/**
- * The deletion ledger and the erasure that discharges it (R-USER-18/19,
- * doc 02 §2.8, doc 03 §6).
- *
- * `POST /me/delete-request` used to record its promise only as an outbox event —
- * a dispatch queue, not a ledger — so the endpoint accepted an obligation nothing
- * could discharge (`IMPLEMENTATION_STATUS` §8.3). What needs a real database here
- * is that the row exists, that a restore cancels it, and that the erasure leaves
- * an identity behind that no longer names anybody.
- */
 describe('account erasure (integration)', () => {
   let app: FastifyInstance;
   let job: AccountErasureJob;
   let provider: MockStorageProvider;
-  /** This test's departing account. Reassigned per test, never reused. */
   let leaver: string;
 
   beforeEach(() => {
@@ -60,11 +39,7 @@ describe('account erasure (integration)', () => {
   after(async () => {
     await app.close();
   });
-  // After, matching every other suite. Resetting on the way *in* looks safer and
-  // is not: `TRUNCATE` takes an ACCESS EXCLUSIVE lock on fifty cascading tables,
-  // and a truncate that lands while the test's first login is in flight wipes the
-  // account the test just created. Measured — moving it here made a suite that
-  // failed three times in five deterministic.
+
   afterEach(async () => {
     await resetState();
     provider.reset();
@@ -72,7 +47,6 @@ describe('account erasure (integration)', () => {
 
   const account = () => container.resolve<AccountService>('accountService');
 
-  /** Ask for erasure as the authenticated caller, asserting it was accepted. */
   async function requestDeletion(user: LoggedInUser) {
     const response = await app.inject({
       method: 'POST',
@@ -83,18 +57,10 @@ describe('account erasure (integration)', () => {
     return response;
   }
 
-  /** The ledger row for an account, whatever state it is in. */
   function ledgerRow(userId: string) {
     return db().client.accountDeletionRequest.findFirstOrThrow({ where: { userId } });
   }
 
-  /**
-   * Age a request until its window has closed, standing in for the wait.
-   *
-   * Both columns move, because only moving `scheduledFor` would forge a row that
-   * could never occur — `ck_deletion_requests_window` refuses a request that
-   * comes due before it was made, and a test should not need an impossible row.
-   */
   async function makeDue(userId: string): Promise<void> {
     const window = userConfig.deletionRetentionDays * DAY_MS;
     const requestedAt = new Date(Date.now() - window - DAY_MS);
@@ -104,7 +70,6 @@ describe('account erasure (integration)', () => {
     });
   }
 
-  /** Upload, complete, and attach an avatar. Returns its file id. */
   async function attachAvatar(user: LoggedInUser): Promise<string> {
     const created = await app.inject({
       method: 'POST',
@@ -143,7 +108,6 @@ describe('account erasure (integration)', () => {
     return fileId;
   }
 
-  /** Give the account something to lose. */
   async function seedPersonalData(user: LoggedInUser): Promise<void> {
     await app.inject({
       method: 'PATCH',
@@ -169,8 +133,6 @@ describe('account erasure (integration)', () => {
       },
     });
   }
-
-  // ── The ledger ────────────────────────────────────────────────────────────
 
   describe('recording the request', () => {
     it('writes a pending row the job can find', async () => {
@@ -206,8 +168,6 @@ describe('account erasure (integration)', () => {
     });
 
     it('refuses a second open request for the same account', async () => {
-      // The partial unique index. Two rows would both come due, and the second
-      // would emit a duplicate audit event for an erasure that happened once.
       const user = await loginAs(app, leaver);
       await requestDeletion(user);
 
@@ -233,8 +193,6 @@ describe('account erasure (integration)', () => {
     });
 
     it('refuses a status and timestamp that disagree', async () => {
-      // `ERASED` with no `erased_at` makes "when was this discharged?"
-      // unanswerable by the only table that claims to answer it.
       const user = await loginAs(app, leaver);
       await requestDeletion(user);
       const row = await ledgerRow(user.userId);
@@ -250,12 +208,8 @@ describe('account erasure (integration)', () => {
     });
   });
 
-  // ── Cancellation ──────────────────────────────────────────────────────────
-
   describe('restoring an account', () => {
     it('cancels the pending erasure', async () => {
-      // Without this the account comes back, the user uses it, and the job
-      // erases them on the original date anyway.
       const user = await loginAs(app, leaver);
       const operator = await loginAs(app, phone());
       await requestDeletion(user);
@@ -283,6 +237,69 @@ describe('account erasure (integration)', () => {
       assert.equal(identity.phoneNumber, leaver, 'still theirs');
     });
 
+    it('erases nothing when a restore commits while the job is running', async () => {
+      const user = await loginAs(app, leaver);
+      const operator = await loginAs(app, phone());
+      await seedPersonalData(user);
+      await requestDeletion(user);
+      await makeDue(user.userId);
+
+      const [result] = await Promise.all([
+        job.run(),
+        account().restore(user.userId, operator.userId),
+      ]);
+
+      const identity = await db().client.user.findUniqueOrThrow({ where: { id: user.userId } });
+      const ledger = await ledgerRow(user.userId);
+
+      if (identity.deletedAt === null) {
+        assert.equal(ledger.status, 'CANCELLED', 'restore won');
+        assert.equal(identity.phoneNumber, leaver, 'the number is still theirs');
+        assert.equal(result.erased, 0);
+        assert.ok(
+          (await db().client.emergencyContact.count({ where: { userId: user.userId } })) > 0,
+          'and nothing was scrubbed — no partial erasure',
+        );
+      } else {
+        assert.equal(ledger.status, 'ERASED', 'erasure won');
+        assert.equal(result.erased, 1);
+        assert.equal(
+          await db().client.emergencyContact.count({ where: { userId: user.userId } }),
+          0,
+          'and the scrub completed',
+        );
+      }
+
+      const erasedEvents = await db().client.outboxEvent.count({
+        where: { eventType: 'user.account.erased' },
+      });
+      assert.equal(
+        erasedEvents,
+        identity.deletedAt === null ? 0 : 1,
+        'an erasure is audited exactly when it happened',
+      );
+    });
+
+    it('never leaves a scrubbed account with a cancelled request', async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const user = await loginAs(app, leaver);
+        const operator = await loginAs(app, phone());
+        await seedPersonalData(user);
+        await requestDeletion(user);
+        await makeDue(user.userId);
+
+        await Promise.all([job.run(), account().restore(user.userId, operator.userId)]);
+
+        const identity = await db().client.user.findUniqueOrThrow({ where: { id: user.userId } });
+        const ledger = await ledgerRow(user.userId);
+        assert.ok(
+          !(ledger.status === 'CANCELLED' && identity.deletedAt !== null),
+          'an account was erased against a cancelled request',
+        );
+        await resetState();
+      }
+    });
+
     it('lets the user ask again, on a fresh window', async () => {
       const user = await loginAs(app, leaver);
       const operator = await loginAs(app, phone());
@@ -304,8 +321,6 @@ describe('account erasure (integration)', () => {
       );
     });
   });
-
-  // ── The erasure ───────────────────────────────────────────────────────────
 
   describe('erasing a due account', () => {
     it('does nothing before the window closes', async () => {
@@ -331,6 +346,81 @@ describe('account erasure (integration)', () => {
       assert.equal(await client.userProfile.count({ where: { userId: user.userId } }), 0);
       assert.equal(await client.emergencyContact.count({ where: { userId: user.userId } }), 0);
       assert.equal(await client.savedPlace.count({ where: { userId: user.userId } }), 0);
+    });
+
+    describe('erasure completeness', () => {
+      it('deletes the OTP trail, which is keyed by the phone number itself', async () => {
+        const user = await loginAs(app, leaver);
+        await requestDeletion(user);
+        await makeDue(user.userId);
+
+        assert.ok(
+          (await db().client.otpVerification.count({ where: { phoneNumber: leaver } })) > 0,
+          'precondition: the trail exists',
+        );
+
+        await job.run();
+
+        assert.equal(
+          await db().client.otpVerification.count({ where: { phoneNumber: leaver } }),
+          0,
+          'the real number must not survive erasure in the OTP trail',
+        );
+        assert.equal(
+          await db().client.otpVerification.count({ where: { userId: user.userId } }),
+          0,
+        );
+      });
+
+      it('strips IP and user-agent from the session history, keeping the rows', async () => {
+        const user = await loginAs(app, leaver);
+        await requestDeletion(user);
+        await makeDue(user.userId);
+
+        await job.run();
+
+        const sessions = await db().client.userSession.findMany({
+          where: { userId: user.userId },
+        });
+        assert.ok(sessions.length > 0, 'the history survives for security review (R-AUTH-29)');
+        for (const session of sessions) {
+          assert.equal(session.ipAddress, null);
+          assert.equal(session.userAgent, null);
+        }
+      });
+
+      it('strips the fingerprint and push token from devices, keeping the rows', async () => {
+        const user = await loginAs(app, leaver);
+        await requestDeletion(user);
+        await makeDue(user.userId);
+
+        await job.run();
+
+        const devices = await db().client.userDevice.findMany({ where: { userId: user.userId } });
+        for (const device of devices) {
+          assert.equal(device.fingerprint, null);
+          assert.equal(device.fcmToken, null);
+          assert.equal(device.deviceId, null);
+          assert.equal(device.trustState, 'REVOKED');
+        }
+      });
+
+      it('leaves no plaintext phone number anywhere in the durable event stream', async () => {
+        const user = await loginAs(app, leaver);
+        await requestDeletion(user);
+        await makeDue(user.userId);
+
+        await job.run();
+
+        const events = await db().client.outboxEvent.findMany();
+        assert.ok(events.length > 0, 'precondition: the audit trail exists');
+        const serialized = JSON.stringify(events.map((event) => event.payload));
+        assert.ok(
+          !serialized.includes(leaver),
+          'the erased number must not remain in outbox_events',
+        );
+        assert.ok(!serialized.includes(user.accessToken));
+      });
     });
 
     it('keeps the identity row and strips every identifier from it', async () => {
@@ -361,8 +451,6 @@ describe('account erasure (integration)', () => {
     });
 
     it('frees the number for a fresh signup', async () => {
-      // The whole point of the partial unique index: erasure returns the phone
-      // to circulation, and the new account is a different person.
       const user = await loginAs(app, leaver);
       await requestDeletion(user);
       await makeDue(user.userId);
@@ -398,13 +486,25 @@ describe('account erasure (integration)', () => {
       });
       assert.equal(rows.length, 1);
       const { data } = rows[0]!.payload as unknown as { data: Record<string, unknown> };
+
       assert.deepEqual(data, {
         userId: user.userId,
         emergencyContacts: 1,
         savedPlaces: 1,
         profile: 1,
+        devices: 1,
+        sessions: 1,
+        otpAttempts: 1,
         avatarReleased: false,
       });
+
+      for (const [field, value] of Object.entries(data)) {
+        if (field === 'userId') continue;
+        assert.ok(
+          typeof value === 'number' || typeof value === 'boolean',
+          `${field} must be a count or a flag, not content (got ${typeof value})`,
+        );
+      }
     });
 
     it('is idempotent — a second run finds nothing to do', async () => {
@@ -433,13 +533,10 @@ describe('account erasure (integration)', () => {
       const file = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.equal(file.status, 'DELETED', 'soft-deleted, for FILES retention to erase');
       assert.ok(file.deletedAt);
-      // FILES owns when the bytes go. Reaching into its bucket from here would
-      // put two schedules in charge of one deletion.
+
       assert.equal(file.erasedAt, null);
     });
   });
-
-  // ── Refusals ──────────────────────────────────────────────────────────────
 
   describe('refusals', () => {
     it('holds back an account with an open dispute', async () => {

@@ -1,13 +1,14 @@
 import type { EventClassification, PublishInput } from '@core/events';
 
-/** Classification + aggregate kind for each AUTH event (auth doc 06 §4–§5). */
 interface CatalogEntry {
   classification: EventClassification;
   aggregateType: string;
+  version?: number;
 }
 
-/** The AUTH event catalog — the single source of delivery semantics per type. */
-export const AUTH_EVENT_CATALOG: Record<string, CatalogEntry> = {
+export const AUTH_PRODUCER = 'auth';
+
+export const AUTH_EVENT_CATALOG = {
   'auth.otp.requested': { classification: 'observability', aggregateType: 'phone' },
   'auth.otp.sent': { classification: 'observability', aggregateType: 'phone' },
   'auth.otp.verified': { classification: 'audit', aggregateType: 'user' },
@@ -24,9 +25,10 @@ export const AUTH_EVENT_CATALOG: Record<string, CatalogEntry> = {
   'account.suspended': { classification: 'audit', aggregateType: 'user' },
   'account.reactivated': { classification: 'audit', aggregateType: 'user' },
   'account.recovery.completed': { classification: 'audit', aggregateType: 'user' },
-};
+} satisfies Record<string, CatalogEntry>;
 
-/** Correlation/subject fields supplied when emitting an AUTH event. */
+export type AuthEventType = keyof typeof AUTH_EVENT_CATALOG;
+
 export interface AuthEventFields {
   aggregateId?: string | null;
   subjectUserId?: string | null;
@@ -35,21 +37,15 @@ export interface AuthEventFields {
   data?: Record<string, unknown>;
 }
 
-/**
- * Build a {@link PublishInput} for an AUTH event, filling classification and
- * aggregate type from the catalog. The aggregate id defaults to the subject user
- * (override for session/device aggregates).
- * @param type The AUTH event type.
- * @param fields Subject/correlation ids and payload.
- * @returns A ready-to-publish event input.
- */
-export function authEvent(type: string, fields: AuthEventFields): PublishInput {
-  const entry = AUTH_EVENT_CATALOG[type];
+export function authEvent(type: AuthEventType, fields: AuthEventFields): PublishInput {
+  const entry: CatalogEntry | undefined = AUTH_EVENT_CATALOG[type];
   if (!entry) throw new Error(`Unknown AUTH event type: ${type}`);
   return {
     type,
     classification: entry.classification,
     aggregateType: entry.aggregateType,
+    producer: AUTH_PRODUCER,
+    ...(entry.version != null ? { version: entry.version } : {}),
     aggregateId: fields.aggregateId ?? fields.subjectUserId ?? null,
     subjectUserId: fields.subjectUserId ?? null,
     sessionId: fields.sessionId ?? null,

@@ -8,23 +8,18 @@ import {
   findImmutableFields,
   parseDateOnly,
   updateProfileSchema,
-} from '../../../src/modules/users/http/user.schemas.js';
+} from '../../../src/modules/users/schemas/user.schemas.js';
 
-/** Parse and return the doc 04 §6 details for a failing body. */
 function detailsFor(body: unknown) {
   const parsed = updateProfileSchema.safeParse(body);
   assert.equal(parsed.success, false, 'expected the body to be rejected');
   return detailsFromZodIssues(parsed.error!.issues);
 }
 
-/** The `code` reported for a single-field failure. */
 function codeFor(body: unknown, field: string): string | undefined {
   return detailsFor(body).find((d) => d.field === field)?.code;
 }
 
-// Validation rules for PATCH /me/profile (doc 02 §2.2) and the details
-// vocabulary (doc 04 §6). The privacy assertion — details never carry the
-// submitted value (doc 04 §5) — is the one that matters most here.
 describe('user profile schema (unit)', () => {
   describe('partial-update semantics (R-USER-5)', () => {
     it('accepts an empty body — nothing present means nothing changes', () => {
@@ -84,9 +79,6 @@ describe('user profile schema (unit)', () => {
     });
 
     it('answers one bad date with exactly one code', () => {
-      // Every rule on this field runs independently, so a future date used to
-      // come back as MUST_BE_PAST *and* AGE_BELOW_MINIMUM — two contradictory
-      // pieces of copy for one mistake. Each date has exactly one reason.
       for (const value of ['11-03-1994', '2026-02-30', '2999-01-01']) {
         assert.equal(detailsFor({ dateOfBirth: value }).length, 1, value);
       }
@@ -115,9 +107,6 @@ describe('user profile schema (unit)', () => {
     });
 
     it('refuses the old profileImage URL outright, rather than ignoring it', () => {
-      // Deploy 3 removed the field (files doc 03 §7.2). A strict object reports
-      // it by name, so a client still sending a URL learns that it did nothing —
-      // a silent drop would look exactly like success.
       assert.equal(
         codeFor({ profileImage: 'https://cdn.zaroorat.com/a.png' }, 'profileImage'),
         'NOT_ALLOWED',

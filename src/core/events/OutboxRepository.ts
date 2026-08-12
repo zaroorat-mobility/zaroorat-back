@@ -1,44 +1,41 @@
+import { randomUUID } from 'node:crypto';
+
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { EventEnvelope } from './types';
 
-/** A row to append to the outbox. */
 export interface OutboxRecord {
+  eventId: string;
   aggregateType: string;
   aggregateId: string;
   eventType: string;
   payload: EventEnvelope;
 }
 
-/** A pending outbox row as read by the relay. */
-export interface PendingOutboxEvent {
+export interface ClaimedOutboxEvent {
   id: string;
   eventType: string;
+  retries: number;
   payload: EventEnvelope;
+  claimToken: string;
 }
 
-/**
- * Data access for the transactional outbox (`outbox_events`).
- *
- * `enqueue` accepts an optional transaction client so the event row commits in
- * the **same transaction** as the state change it records (auth doc 06 §2). The
- * relay reads pending rows and marks them published/failed.
- */
+export interface OutboxStats {
+  pending: number;
+  dead: number;
+  oldestPendingAgeMs: number;
+}
+
 export class OutboxRepository extends BaseRepository {
-  /** @param databaseService Resolved singleton facade over the Prisma client. */
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
 
-  /**
-   * Append an event to the outbox, optionally within a caller's transaction.
-   * @param record The aggregate reference, type, and envelope payload.
-   * @param tx Transaction client to join (omit for a standalone write).
-   */
   async enqueue(record: OutboxRecord, tx?: TransactionClient): Promise<void> {
     const db = tx ?? this.client;
     await db.outboxEvent.create({
       data: {
+        eventId: record.eventId,
         aggregateType: record.aggregateType,
         aggregateId: record.aggregateId,
         eventType: record.eventType,
@@ -47,44 +44,116 @@ export class OutboxRepository extends BaseRepository {
     });
   }
 
-  /**
-   * Fetch the oldest pending events for the relay.
-   * @param limit Maximum rows to return.
-   * @returns Pending events, oldest first.
-   */
-  async fetchPending(limit: number): Promise<PendingOutboxEvent[]> {
-    const rows = await this.client.outboxEvent.findMany({
-      where: { status: 'PENDING' },
-      orderBy: { createdAt: 'asc' },
-      take: limit,
-      select: { id: true, eventType: true, payload: true },
-    });
-    return rows.map((row) => ({
-      id: row.id,
-      eventType: row.eventType,
-      payload: row.payload as unknown as EventEnvelope,
-    }));
+  async claimBatch(limit: number, now: Date = new Date()): Promise<ClaimedOutboxEvent[]> {
+    const claimToken = randomUUID();
+    return this.client.$queryRaw<ClaimedOutboxEvent[]>`
+      UPDATE outbox_events
+      SET status = 'PROCESSING', claimed_at = ${now}, claim_token = ${claimToken}::uuid
+      WHERE id IN (
+        SELECT id FROM outbox_events
+        WHERE status = 'PENDING' AND next_attempt_at <= ${now}
+        ORDER BY created_at, id
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, event_type AS "eventType", retries, payload, claim_token AS "claimToken"
+    `;
   }
 
-  /**
-   * Mark an event published.
-   * @param id Outbox row id.
-   */
-  async markPublished(id: string): Promise<void> {
-    await this.client.outboxEvent.update({
-      where: { id },
-      data: { status: 'PUBLISHED', publishedAt: new Date() },
+  async markPublished(ids: string[], claimToken: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const { count } = await this.client.outboxEvent.updateMany({
+      where: { id: { in: ids }, claimToken },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimToken: null,
+        lastError: null,
+      },
     });
+    return count;
   }
 
-  /**
-   * Mark an event failed and increment its retry count.
-   * @param id Outbox row id.
-   */
-  async markFailed(id: string): Promise<void> {
-    await this.client.outboxEvent.update({
-      where: { id },
-      data: { status: 'FAILED', retries: { increment: 1 } },
+  async releaseUnprocessed(ids: string[], claimToken: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const { count } = await this.client.outboxEvent.updateMany({
+      where: { id: { in: ids }, claimToken },
+      data: { status: 'PENDING', claimedAt: null, claimToken: null, nextAttemptAt: new Date() },
     });
+    return count;
+  }
+
+  async releaseForRetry(
+    id: string,
+    claimToken: string,
+    error: string,
+    nextAttemptAt: Date,
+  ): Promise<number> {
+    const { count } = await this.client.outboxEvent.updateMany({
+      where: { id, claimToken },
+      data: {
+        status: 'PENDING',
+        retries: { increment: 1 },
+        lastError: error,
+        nextAttemptAt,
+        claimedAt: null,
+        claimToken: null,
+      },
+    });
+    return count;
+  }
+
+  async markDead(id: string, claimToken: string, error: string): Promise<number> {
+    const { count } = await this.client.outboxEvent.updateMany({
+      where: { id, claimToken },
+      data: {
+        status: 'FAILED',
+        retries: { increment: 1 },
+        lastError: error,
+        claimedAt: null,
+        claimToken: null,
+      },
+    });
+    return count;
+  }
+
+  async reclaimStale(claimedBefore: Date): Promise<number> {
+    const { count } = await this.client.outboxEvent.updateMany({
+      where: { status: 'PROCESSING', claimedAt: { lt: claimedBefore } },
+
+      data: { status: 'PENDING', claimedAt: null, claimToken: null },
+    });
+    return count;
+  }
+
+  async prunePublished(publishedBefore: Date, limit: number): Promise<number> {
+    const deleted = await this.client.$executeRaw`
+      DELETE FROM outbox_events
+      WHERE id IN (
+        SELECT id FROM outbox_events
+        WHERE status = 'PUBLISHED' AND published_at < ${publishedBefore}
+        LIMIT ${limit}
+      )
+    `;
+    return deleted;
+  }
+
+  async stats(now: Date = new Date()): Promise<OutboxStats> {
+    const [pending, dead, oldest] = await Promise.all([
+      this.client.outboxEvent.count({ where: { status: 'PENDING' } }),
+      this.client.outboxEvent.count({ where: { status: 'FAILED' } }),
+      this.client.outboxEvent.findFirst({
+        where: { status: 'PENDING' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { createdAt: true },
+      }),
+    ]);
+
+    return {
+      pending,
+      dead,
+      oldestPendingAgeMs: oldest ? Math.max(0, now.getTime() - oldest.createdAt.getTime()) : 0,
+    };
   }
 }

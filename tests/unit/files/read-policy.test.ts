@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { decideRead } from '../../../src/modules/files/read-policy.js';
+import { decideRead } from '../../../src/modules/files/policies/read-policy.js';
 import type { FilePurposeName } from '../../../src/config/file/file.config.js';
 
 const OWNER = 'user-owner';
@@ -16,7 +16,6 @@ const PURPOSES: FilePurposeName[] = [
   'DISPUTE_EVIDENCE',
 ];
 
-/** The whole of this module's authorization (files doc 02 §4). */
 describe('read policy', () => {
   it('always grants the owner, for every purpose', () => {
     for (const purpose of PURPOSES) {
@@ -29,8 +28,6 @@ describe('read policy', () => {
   });
 
   it('denies an unrelated user every purpose, whatever ordinary roles they hold', () => {
-    // A rider must never read a driver's licence, and a driver must never read a
-    // rider's photo. There is no "same trip" exception in v1.
     for (const purpose of PURPOSES) {
       assert.deepEqual(
         decideRead(
@@ -44,8 +41,6 @@ describe('read policy', () => {
   });
 
   it('grants an admin every purpose, naming the scope that authorized it', () => {
-    // The scope travels into the audit event so a later review can ask "who
-    // could do this, and should they still?" (doc 05 §3.2).
     assert.deepEqual(
       decideRead(
         { ownerUserId: OWNER, purpose: 'DRIVER_DOCUMENT' },
@@ -74,7 +69,6 @@ describe('read policy', () => {
       true,
     );
 
-    // A support agent has no business in KYC or somebody's avatar.
     assert.equal(
       decideRead({ ownerUserId: OWNER, purpose: 'DRIVER_DOCUMENT' }, support).granted,
       false,
@@ -86,8 +80,6 @@ describe('read policy', () => {
   });
 
   it('gives an ops actor reading their OWN file the owner grant, not an audited one', () => {
-    // Otherwise every admin looking at their own avatar would write an
-    // access-audit record, and the audit trail would drown in noise.
     assert.deepEqual(
       decideRead(
         { ownerUserId: OWNER, purpose: 'PROFILE_IMAGE' },

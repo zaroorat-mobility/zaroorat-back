@@ -7,15 +7,6 @@ import {
 } from './DatabaseError';
 
 export class PrismaErrorMapper {
-  /**
-   * True when the error came from Prisma and is therefore worth translating.
-   *
-   * `mapError` wraps *anything* it is handed, which is correct at a call site
-   * that only ever sees driver failures. A call site that also runs application
-   * code — a transaction callback — must ask this first, or a domain error thrown
-   * inside the callback is rewritten as a `DatabaseError` and a deliberate 403
-   * reaches the client as a 500.
-   */
   public static isPrismaError(error: unknown): boolean {
     return (
       error instanceof Prisma.PrismaClientKnownRequestError ||
@@ -26,9 +17,6 @@ export class PrismaErrorMapper {
     );
   }
 
-  /**
-   * Translates a Prisma-specific error into a domain DatabaseError.
-   */
   public static mapError(error: unknown, context?: string): Error {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       switch (error.code) {

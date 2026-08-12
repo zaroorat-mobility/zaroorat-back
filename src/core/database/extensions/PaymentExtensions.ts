@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Prisma } from '../../../generated/prisma';
 
 export const paymentExtension = Prisma.defineExtension({
@@ -6,7 +7,7 @@ export const paymentExtension = Prisma.defineExtension({
     paymentTransaction: {
       async findPendingPayments() {
         const ctx = Prisma.getExtensionContext(this);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
         return (ctx as any).findMany({ where: { status: 'PENDING' } });
       },
     },

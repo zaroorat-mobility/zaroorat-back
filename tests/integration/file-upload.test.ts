@@ -8,20 +8,11 @@ import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
 
-/**
- * A valid PNG declaring the given dimensions, optionally padded out.
- *
- * Built by the shared fixture rather than by hand: the signature and an IHDR are
- * no longer enough, because the EXIF walk has to reach `IDAT` before it can
- * conclude that no metadata chunk is present (R-FILE-29). Padding follows the
- * pixel data, where a real file's would be.
- */
 function png(width: number, height: number, padTo = 0): Buffer {
   const base = image({ width, height });
   return padTo > base.length ? Buffer.concat([base, Buffer.alloc(padTo - base.length)]) : base;
 }
 
-/** A Linux ELF header — a real executable, renamed. */
 const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00]);
 
 describe('file upload (integration)', () => {
@@ -40,7 +31,6 @@ describe('file upload (integration)', () => {
     provider.reset();
   });
 
-  /** Ask for an upload permission. */
   function request(
     auth: { authorization: string },
     body: Record<string, unknown>,
@@ -54,7 +44,6 @@ describe('file upload (integration)', () => {
     });
   }
 
-  /** Complete an upload. */
   function complete(auth: { authorization: string }, fileId: string) {
     return app.inject({
       method: 'POST',
@@ -63,7 +52,6 @@ describe('file upload (integration)', () => {
     });
   }
 
-  /** A default valid profile-image request body. */
   const PROFILE_BODY = {
     purpose: 'PROFILE_IMAGE',
     fileName: 'me.png',
@@ -71,7 +59,6 @@ describe('file upload (integration)', () => {
     sizeBytes: 2048,
   };
 
-  /** Run the whole happy path and return the file id and its key. */
   async function uploadPng(
     auth: { authorization: string },
     dimensions: [number, number] = [800, 600],
@@ -82,8 +69,6 @@ describe('file upload (integration)', () => {
     provider.putObject(row.storageKey, png(...dimensions), 'image/png');
     return { fileId, key: row.storageKey };
   }
-
-  // ── The two-step protocol ──────────────────────────────────────────────────
 
   describe('POST /files', () => {
     it('reserves a PENDING row and returns a scoped permission', async () => {
@@ -214,9 +199,7 @@ describe('file upload (integration)', () => {
 
       assert.equal(response.statusCode, 422);
       assert.equal(response.json().error.code, 'CONTENT_MISMATCH');
-      // The object is gone from every read path. Its earlier version survives
-      // behind a delete marker, which is what a versioned bucket does — only
-      // retention's erase() removes versions (doc 08 §2.2).
+
       assert.equal(await provider.head(row.storageKey, 32), null);
 
       const after = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
@@ -228,7 +211,7 @@ describe('file upload (integration)', () => {
       const created = await request(user.authHeader, PROFILE_BODY);
       const fileId = created.json().fileId as string;
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
-      // A tiny object that declares 40,000 x 40,000 — 6.4 GB decoded.
+
       const bomb = png(40000, 40000);
       assert.ok(bomb.length < 100);
       provider.putObject(row.storageKey, bomb, 'image/png');
@@ -299,7 +282,7 @@ describe('file upload (integration)', () => {
       const onNothing = await complete(stranger.authHeader, randomUUID());
 
       assert.equal(onOthers.statusCode, 404);
-      // Byte-identical after stripping the correlation id (FILE-INV-4).
+
       const strip = (payload: string): unknown => {
         const body = JSON.parse(payload) as { error: Record<string, unknown> };
         delete body.error.requestId;
@@ -317,18 +300,14 @@ describe('file upload (integration)', () => {
     });
   });
 
-  // ── The property the whole protocol exists for ────────────────────────────
-
   describe('no byte transits the API (R-FILE-1)', () => {
     it('completes an upload without the API ever writing an object', async () => {
       const user = await loginAs(app, '+919876540020');
       const { fileId, key } = await uploadPng(user.authHeader);
-      // Everything the API did to storage so far, plus the completion.
+
       const before = { ...provider.calls };
       await complete(user.authHeader, fileId);
 
-      // The API signs and reads a header. It never PUTs — there is no `put` on
-      // the interface for it to call (doc 07 §2.2).
       assert.ok(provider.calls.signUpload >= before.signUpload);
       assert.ok(provider.calls.head > before.head);
       assert.ok(provider.versionIds(key).length > 0, 'the object exists — the client wrote it');

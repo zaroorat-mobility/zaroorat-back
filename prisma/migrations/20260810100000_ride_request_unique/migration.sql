@@ -1,0 +1,39 @@
+-- One ride per ride request.
+--
+-- `rides.request_id` had no unique constraint, and `LifecycleService.accept`
+-- read the request outside its transaction, validated that stale copy, and then
+-- inserted unconditionally. Two drivers accepting the same request at the same
+-- moment therefore both passed validation and both inserted — producing two
+-- rides, with two different drivers, for one customer request. Both were then
+-- billable and both could be completed.
+--
+-- The application fix is a row lock plus a conditional claim on the request
+-- (`RideRequestRepository.claimForMatch`). This constraint is the backstop
+-- underneath it: even if the lock were lost — a bad refactor, a replica reading
+-- stale state, a direct write from a script — the second insert fails loudly
+-- instead of silently double-booking.
+--
+-- ## Pre-existing duplicates
+--
+-- The index build FAILS if duplicates already exist, which is the correct
+-- outcome: duplicated rides are a financial data question (which ride is real,
+-- was either paid, was either driver compensated) and must not be resolved by a
+-- migration guessing. Check before deploying:
+--
+--   SELECT request_id, count(*), array_agg(id ORDER BY created_at)
+--   FROM rides GROUP BY request_id HAVING count(*) > 1;
+--
+-- If that returns rows, reconcile them by hand — cancel the losing ride, settle
+-- or reverse its fare — and re-run. On a database that has never served traffic
+-- (the current state: the rides routes are not mounted) it returns nothing.
+--
+-- ## Build strategy
+--
+-- Plain build, not CONCURRENTLY, for the reason `20260801000000` records:
+-- Prisma wraps each migration in a transaction and CONCURRENTLY cannot run
+-- inside one. `rides` is empty or small today, so the exclusive lock is
+-- momentary. If this ever lands on a large `rides` table, build it out-of-band
+-- with CREATE UNIQUE INDEX CONCURRENTLY first and let IF NOT EXISTS turn this
+-- into a no-op.
+CREATE UNIQUE INDEX IF NOT EXISTS "rides_request_id_key"
+  ON "rides" ("request_id");

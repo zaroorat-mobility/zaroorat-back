@@ -9,30 +9,13 @@ import { png as image } from '../helpers/image-fixtures.js';
 import {
   clearFileReferences,
   registerFileReference,
-} from '../../src/modules/files/file-references.js';
+} from '../../src/modules/files/references/file-references.js';
 import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
 
-/**
- * A valid 800x600 PNG.
- *
- * Built by the shared fixture rather than by hand: the header alone is no longer
- * enough, because the EXIF walk has to reach `IDAT` before it can conclude that
- * no metadata chunk is present (R-FILE-29).
- */
 function png(): Buffer {
   return image({ width: 800, height: 600 });
 }
 
-/**
- * Soft delete (files doc 02 §2.5, doc 06 §3 #9, FILE-INV-5).
- *
- * The claim under test is a two-part one and the parts pull in opposite
- * directions: a deleted file must vanish from every read path **immediately**,
- * and its bytes must **survive** until the retention job's window closes
- * (R-FILE-18). A test that only checked the first half would pass against an
- * implementation that erased inline and destroyed evidence at the moment a user
- * asked for it to disappear.
- */
 describe('file lifecycle (integration)', () => {
   let app: FastifyInstance;
   let provider: MockStorageProvider;
@@ -59,7 +42,6 @@ describe('file lifecycle (integration)', () => {
     });
   }
 
-  /** Upload and complete, returning the file id and its storage key. */
   async function publish(
     auth: { authorization: string },
     purpose = 'PROFILE_IMAGE',
@@ -81,15 +63,12 @@ describe('file lifecycle (integration)', () => {
     return app.inject({ method: 'DELETE', url: `/api/v1/files/${fileId}`, headers: auth });
   }
 
-  /** Every `file.deleted` in the outbox, newest last. */
   async function deletedEvents() {
     return db().client.outboxEvent.findMany({
       where: { eventType: 'file.deleted' },
       orderBy: { createdAt: 'asc' },
     });
   }
-
-  // ── The row leaves the read path, the bytes do not ────────────────────────
 
   describe('deleting a file the caller owns', () => {
     it('answers 204 and soft-deletes the row', async () => {
@@ -121,8 +100,6 @@ describe('file lifecycle (integration)', () => {
         headers: user.authHeader,
       });
 
-      // Doc 04 §4 case 3: the owner's own soft-deleted file is a `404`, the same
-      // one a nonexistent id produces.
       assert.equal(url.statusCode, 404);
       assert.equal(metadata.statusCode, 404);
       assert.equal(url.json().error.code, 'NOT_FOUND');
@@ -134,9 +111,6 @@ describe('file lifecycle (integration)', () => {
 
       await remove(user.authHeader, fileId);
 
-      // R-FILE-18: erasure is the retention job's and never inline. Destroying
-      // the bytes here would take out the evidence a later dispute needs, at
-      // exactly the moment somebody asked for it to disappear.
       assert.notEqual(await provider.head(storageKey, 8), null, 'the object survives');
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.equal(row.erasedAt, null);
@@ -149,8 +123,6 @@ describe('file lifecycle (integration)', () => {
 
       await remove(user.authHeader, fileId);
 
-      // Doc 08 §5: the bytes survive until retention, but charging a user for
-      // storage they asked to delete is indefensible.
       const live = await db().client.file.aggregate({
         where: { ownerUserId: user.userId, deletedAt: null, status: { in: ['PENDING', 'READY'] } },
         _sum: { sizeBytes: true },
@@ -158,8 +130,6 @@ describe('file lifecycle (integration)', () => {
       assert.equal(live._sum.sizeBytes, null);
     });
   });
-
-  // ── Idempotency and refusals ──────────────────────────────────────────────
 
   describe('repeating or misdirecting a delete', () => {
     it('answers 204 again, and emits exactly one event', async () => {
@@ -169,9 +139,6 @@ describe('file lifecycle (integration)', () => {
       assert.equal((await remove(user.authHeader, fileId)).statusCode, 204);
       assert.equal((await remove(user.authHeader, fileId)).statusCode, 204);
 
-      // A converged repeat succeeded (doc 02 §2.5) — but two `file.deleted`
-      // records would make one deletion look like two in the audit trail, which
-      // is the one place that must not be approximate.
       assert.equal((await deletedEvents()).length, 1);
     });
 
@@ -198,8 +165,6 @@ describe('file lifecycle (integration)', () => {
 
       const response = await remove(user.authHeader, fileId);
 
-      // Doc 01 §7: only `READY → DELETED` is a defined transition. A reservation
-      // is reclaimed by the sweeper, not deleted by its owner.
       assert.equal(response.statusCode, 404);
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.equal(row.status, 'PENDING');
@@ -216,10 +181,6 @@ describe('file lifecycle (integration)', () => {
 
       const response = await remove(user.authHeader, previous.fileId);
 
-      // R-FILE-32: the previous version was valid evidence for the period it was
-      // current, and is retained for the purpose's full window. Letting its
-      // owner delete it would give a driver a way to erase the licence they were
-      // operating under.
       assert.equal(response.statusCode, 404);
       const row = await db().client.file.findUniqueOrThrow({ where: { id: previous.fileId } });
       assert.equal(row.status, 'SUPERSEDED');
@@ -234,8 +195,6 @@ describe('file lifecycle (integration)', () => {
       assert.equal(response.statusCode, 401);
     });
   });
-
-  // ── FILE-INV-5: a referenced file cannot be deleted ───────────────────────
 
   describe('when a live domain row still references the file', () => {
     it('answers 409 FILE_IN_USE and names the holding module', async () => {
@@ -262,8 +221,6 @@ describe('file lifecycle (integration)', () => {
 
       const payload = (await remove(user.authHeader, fileId)).payload;
 
-      // Doc 04 §2.2: `details.module` tells the client where to detach it. The
-      // row, its id, and the key are all internal coordinates (§5).
       assert.equal(payload.includes(storageKey), false);
       assert.equal(payload.includes('driver_documents'), false);
     });
@@ -283,10 +240,7 @@ describe('file lifecycle (integration)', () => {
     });
   });
 
-  // ── The one-live-avatar rule (doc 03 §4.4) ────────────────────────────────
-
   describe('a second live profile image', () => {
-    /** Reserve, PUT, and attempt completion — returning the completion reply. */
     async function attempt(auth: { authorization: string }) {
       const created = await createUpload(auth);
       const fileId = created.json().fileId as string;
@@ -306,12 +260,6 @@ describe('file lifecycle (integration)', () => {
 
       const { completed } = await attempt(user.authHeader);
 
-      // Until the phase-7 cutover this was a refusal, and the refusal made
-      // avatar replacement impossible: `uq_files_one_live_profile_image` would
-      // not let the new file become READY while the old one was, and
-      // `supersede` will not accept a replacement that is not READY. Neither
-      // could go first. The index was dropped in favour of R-FILE-31; which
-      // avatar is *current* is now `user_profiles.profile_image_file_id`.
       assert.equal(completed.statusCode, 200, completed.payload);
       assert.equal(completed.json().status, 'READY');
     });
@@ -321,9 +269,6 @@ describe('file lifecycle (integration)', () => {
       const { fileId: firstId } = await publish(user.authHeader);
       const { fileId: secondId } = await attempt(user.authHeader);
 
-      // Supersession is the attaching module's, in its own transaction
-      // (R-FILE-27) — `files` never demotes a version on its own, because it
-      // cannot know that anything took the new one up.
       const first = await db().client.file.findUniqueOrThrow({ where: { id: firstId } });
       const second = await db().client.file.findUniqueOrThrow({ where: { id: secondId } });
       assert.equal(first.status, 'READY');
@@ -331,8 +276,6 @@ describe('file lifecycle (integration)', () => {
       assert.equal(second.status, 'READY');
     });
   });
-
-  // ── The audit record (doc 05 §3.3) ────────────────────────────────────────
 
   describe('the file.deleted event', () => {
     it('is written in the same transaction as the row change', async () => {
@@ -374,9 +317,6 @@ describe('file lifecycle (integration)', () => {
       const [event] = await deletedEvents();
       const serialized = JSON.stringify(event?.payload);
 
-      // `fileName` is the field a reader would most expect and the one most
-      // likely to carry a personal value — `aadhaar-ayesha-1998.jpg` in an event
-      // stream is a leak no downstream care undoes.
       assert.equal(serialized.includes(storageKey), false);
       assert.equal(serialized.includes('me.png'), false);
       assert.equal(serialized.includes('X-Mock-Signature'), false);
