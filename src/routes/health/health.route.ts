@@ -1,6 +1,5 @@
 import { FastifyInstance } from 'fastify';
 import { config } from '@config';
-
 export async function healthRoute(app: FastifyInstance) {
   app.get(
     '/health',

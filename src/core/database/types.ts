@@ -1,5 +1,4 @@
 import { Prisma } from '../../generated/prisma/index.js';
-
 export type {
   User,
   Driver,
@@ -24,6 +23,5 @@ export type {
   FilePurpose,
   FileStatus,
 } from '../../generated/prisma';
-
 export type Decimal = Prisma.Decimal;
 export const Decimal = Prisma.Decimal;

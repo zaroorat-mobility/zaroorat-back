@@ -1,6 +1,5 @@
 import fp from 'fastify-plugin';
 import { FastifyInstance } from 'fastify';
-
 async function onRequestHook(app: FastifyInstance) {
   app.addHook('onRequest', async (request) => {
     request.log.info(
@@ -11,11 +10,9 @@ async function onRequestHook(app: FastifyInstance) {
       },
       'Incoming request',
     );
-
     request.startTime = process.hrtime.bigint();
   });
 }
-
 export default fp(onRequestHook, {
   name: 'on-request-hook',
 });

@@ -11,9 +11,7 @@ export const RIDE_STATUS = {
   CANCELLED_BY_SYSTEM: 'CANCELLED_BY_SYSTEM',
   NO_DRIVERS_FOUND: 'NO_DRIVERS_FOUND',
 } as const;
-
 export type RideStatusType = (typeof RIDE_STATUS)[keyof typeof RIDE_STATUS];
-
 export const RIDE_REQUEST_STATUS = {
   CREATED: 'CREATED',
   SEARCHING: 'SEARCHING',
@@ -21,15 +19,10 @@ export const RIDE_REQUEST_STATUS = {
   EXPIRED: 'EXPIRED',
   ABANDONED: 'ABANDONED',
 } as const;
-
 export type RideRequestStatusType = (typeof RIDE_REQUEST_STATUS)[keyof typeof RIDE_REQUEST_STATUS];
-
 export const RIDE_OTP_TTL_MINUTES = 15;
-
 export const RIDE_OTP_MAX_ATTEMPTS = 5;
-
 export const RIDE_OTP_LENGTH = 6;
-
 export const DISPATCH_RESPONSE = {
   PENDING: 'PENDING',
   ACCEPTED: 'ACCEPTED',
@@ -37,5 +30,4 @@ export const DISPATCH_RESPONSE = {
   TIMEOUT: 'TIMEOUT',
   CANCELLED: 'CANCELLED',
 } as const;
-
 export type DispatchResponseType = (typeof DISPATCH_RESPONSE)[keyof typeof DISPATCH_RESPONSE];

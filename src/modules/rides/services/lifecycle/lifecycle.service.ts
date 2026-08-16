@@ -21,7 +21,6 @@ import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { LedgerService } from '@modules/payments/services/ledger/ledger.service.js';
 import type { Ride, RideStatus } from '../../types';
-
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   ACCEPTED: [
     'DRIVER_ARRIVING',
@@ -49,14 +48,12 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   CANCELLED_BY_SYSTEM: [],
   NO_DRIVERS_FOUND: [],
 };
-
 function requireActor(actorId: string | undefined, cancelledBy: string): string {
   if (!actorId) {
     throw new RideActorRequiredError(cancelledBy);
   }
   return actorId;
 }
-
 export class LifecycleService {
   constructor(
     private readonly rideRepo: RideRepository,
@@ -66,56 +63,59 @@ export class LifecycleService {
     private readonly fareService: FareService,
     private readonly fareRepo: RideFareRepository,
     private readonly cancellationService: CancellationService,
-
     private readonly ledgerService: LedgerService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
   ) {}
-
   validateTransition(fromState: string, toState: string): void {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
     if (!allowed.includes(toState)) {
       throw new InvalidRideStateTransitionError(fromState, toState);
     }
   }
-
   private async lockAndValidate(
     rideId: string,
     actor:
-      | { kind: 'driver'; driverId: string }
-      | { kind: 'customer'; userId: string }
-      | { kind: 'system' },
+      | {
+          kind: 'driver';
+          driverId: string;
+        }
+      | {
+          kind: 'customer';
+          userId: string;
+        }
+      | {
+          kind: 'system';
+        },
     toStatus: RideStatus,
     tx: TransactionClient,
   ): Promise<Ride> {
     const ride = await this.rideRepo.lockForUpdate(rideId, tx);
     if (!ride) throw new RideNotFoundError(rideId);
-
     if (actor.kind === 'driver' && ride.driverId !== actor.driverId) {
       throw new RideDriverMismatchError(rideId);
     }
     if (actor.kind === 'customer' && ride.customerId !== actor.userId) {
       throw new RideCustomerMismatchError(rideId);
     }
-
     this.validateTransition(ride.status, toStatus);
     return ride;
   }
-
   async acceptRideRequest(data: {
     requestId: string;
     driverId: string;
     vehicleId: string;
-  }): Promise<{ ride: Ride; plaintextOtp: string }> {
+  }): Promise<{
+    ride: Ride;
+    plaintextOtp: string;
+  }> {
     return this.txManager.execute(async (tx) => {
       const request = await this.requestRepo.lockForUpdate(data.requestId, tx);
       if (!request) throw new RideNotFoundError(data.requestId);
-
       if (!(await this.requestRepo.claimForMatch(data.requestId, tx))) {
         throw new RideRequestAlreadyMatchedError(data.requestId);
       }
-
       const ride = await this.rideRepo.create(
         {
           requestId: request.id,
@@ -133,9 +133,7 @@ export class LifecycleService {
         },
         tx,
       );
-
       const { plaintextOtp } = await this.rideOtpService.generateStartOtp(ride.id, tx);
-
       await this.statusEventRepo.record(
         {
           rideId: ride.id,
@@ -146,7 +144,6 @@ export class LifecycleService {
         },
         tx,
       );
-
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.ACCEPTED, request.customerId, {
           rideId: ride.id,
@@ -154,11 +151,9 @@ export class LifecycleService {
         }),
         tx,
       );
-
       return { ride, plaintextOtp };
     });
   }
-
   async markDriverArrived(rideId: string, driverId: string): Promise<Ride> {
     return this.txManager.execute(async (tx) => {
       const ride = await this.lockAndValidate(
@@ -167,7 +162,6 @@ export class LifecycleService {
         'DRIVER_ARRIVED',
         tx,
       );
-
       const arrivedAt = new Date();
       if (
         !(await this.rideRepo.updateStatusIf(
@@ -180,7 +174,6 @@ export class LifecycleService {
       ) {
         throw new InvalidRideStateTransitionError(ride.status, 'DRIVER_ARRIVED');
       }
-
       await this.statusEventRepo.record(
         {
           rideId,
@@ -191,16 +184,13 @@ export class LifecycleService {
         },
         tx,
       );
-
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.DRIVER_ARRIVED, ride.customerId, { rideId, driverId }),
         tx,
       );
-
       return { ...ride, status: 'DRIVER_ARRIVED' as RideStatus, arrivedAt };
     });
   }
-
   async startRide(rideId: string, driverId: string, otpCode: string): Promise<Ride> {
     return this.txManager.execute(async (tx) => {
       const ride = await this.lockAndValidate(
@@ -209,16 +199,13 @@ export class LifecycleService {
         'IN_PROGRESS',
         tx,
       );
-
       await this.rideOtpService.verifyStartOtp(rideId, otpCode, tx);
-
       const startedAt = new Date();
       if (
         !(await this.rideRepo.updateStatusIf(rideId, ride.status, 'IN_PROGRESS', { startedAt }, tx))
       ) {
         throw new InvalidRideStateTransitionError(ride.status, 'IN_PROGRESS');
       }
-
       await this.statusEventRepo.record(
         {
           rideId,
@@ -229,18 +216,14 @@ export class LifecycleService {
         },
         tx,
       );
-
       this.rideMetrics.rideStarted({ rideId });
-
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.STARTED, ride.customerId, { rideId, driverId }),
         tx,
       );
-
       return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt };
     });
   }
-
   async completeRide(
     rideId: string,
     driverId: string,
@@ -254,7 +237,6 @@ export class LifecycleService {
         'COMPLETED',
         tx,
       );
-
       const waitingMinutes = ride.waitTimeMin ?? 0;
       const itemizedFare = await this.fareService.calculateFinalFare({
         actualDistanceKm,
@@ -262,10 +244,8 @@ export class LifecycleService {
         vehicleTypeId: ride.vehicleTypeId,
         waitingMinutes,
       });
-
       const completedAt = new Date();
       const paymentStatus = ride.paymentMethod === 'CASH' ? 'PAID' : 'PENDING';
-
       if (
         !(await this.rideRepo.updateStatusIf(
           rideId,
@@ -282,7 +262,6 @@ export class LifecycleService {
       ) {
         throw new InvalidRideStateTransitionError(ride.status, 'COMPLETED');
       }
-
       await this.fareRepo.create(
         {
           rideId,
@@ -302,7 +281,6 @@ export class LifecycleService {
         },
         tx,
       );
-
       await this.ledgerService.recordTripPayment(
         {
           totalFare: new Decimal(itemizedFare.totalFare),
@@ -315,7 +293,6 @@ export class LifecycleService {
         },
         tx,
       );
-
       await this.statusEventRepo.record(
         {
           rideId,
@@ -326,9 +303,7 @@ export class LifecycleService {
         },
         tx,
       );
-
       this.rideMetrics.rideCompleted({ rideId });
-
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.COMPLETED, ride.customerId, {
           rideId,
@@ -337,7 +312,6 @@ export class LifecycleService {
         }),
         tx,
       );
-
       return {
         ...ride,
         status: 'COMPLETED' as RideStatus,
@@ -347,7 +321,6 @@ export class LifecycleService {
       };
     });
   }
-
   async cancelRide(
     rideId: string,
     cancelledBy: 'CUSTOMER' | 'DRIVER' | 'SYSTEM',
@@ -361,7 +334,6 @@ export class LifecycleService {
         : cancelledBy === 'DRIVER'
           ? 'CANCELLED_BY_DRIVER'
           : 'CANCELLED_BY_SYSTEM';
-
     return this.txManager.execute(async (tx) => {
       const actor =
         cancelledBy === 'DRIVER'
@@ -369,16 +341,13 @@ export class LifecycleService {
           : cancelledBy === 'CUSTOMER'
             ? ({ kind: 'customer', userId: requireActor(actorId, 'CUSTOMER') } as const)
             : ({ kind: 'system' } as const);
-
       const ride = await this.lockAndValidate(rideId, actor, toStatus, tx);
-
       const cancelledAt = new Date();
       if (
         !(await this.rideRepo.updateStatusIf(rideId, ride.status, toStatus, { cancelledAt }, tx))
       ) {
         throw new InvalidRideStateTransitionError(ride.status, toStatus);
       }
-
       await this.cancellationService.processCancellation(
         {
           ride,
@@ -389,7 +358,6 @@ export class LifecycleService {
         },
         tx,
       );
-
       await this.statusEventRepo.record(
         {
           rideId,
@@ -401,14 +369,11 @@ export class LifecycleService {
         },
         tx,
       );
-
       this.rideMetrics.rideCancelled({ rideId, cancelledBy });
-
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.CANCELLED, ride.customerId, { rideId, cancelledBy, toStatus }),
         tx,
       );
-
       return { ...ride, status: toStatus, cancelledAt };
     });
   }

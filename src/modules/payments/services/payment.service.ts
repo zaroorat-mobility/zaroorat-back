@@ -7,7 +7,6 @@ import { WebhookService } from './webhook/webhook.service.js';
 import { IdempotencyRepository } from '../repositories/idempotency.repository.js';
 import { IdempotencyKeyRequiredError } from '../errors/payment.errors.js';
 import { paymentConfig } from '@config';
-
 export class PaymentService {
   constructor(
     public readonly wallet: WalletService,
@@ -18,7 +17,6 @@ export class PaymentService {
     public readonly webhook: WebhookService,
     private readonly idempotencyRepo: IdempotencyRepository,
   ) {}
-
   async withIdempotency<T>(
     userId: string,
     route: string,

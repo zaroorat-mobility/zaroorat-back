@@ -1,6 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
-
 import type { UserDevice, UserSession } from '@core/database/types';
 import { IdempotencyInFlightError } from '@core/cache';
 import { AuthService, type DeviceContext } from '../services/auth.service';
@@ -12,7 +11,6 @@ import {
   refreshSchema,
   logoutSchema,
 } from '../schemas/auth.schemas';
-
 function toDeviceContext(device: z.infer<typeof verifyOtpSchema>['device']): DeviceContext {
   if (!device) return {};
   return {
@@ -26,7 +24,6 @@ function toDeviceContext(device: z.infer<typeof verifyOtpSchema>['device']): Dev
     ...(device.osVersion != null ? { osVersion: device.osVersion } : {}),
   };
 }
-
 function toSessionDto(session: UserSession, currentSid: string) {
   return {
     id: session.id,
@@ -40,7 +37,6 @@ function toSessionDto(session: UserSession, currentSid: string) {
     current: session.id === currentSid,
   };
 }
-
 function toDeviceDto(device: UserDevice, currentDeviceId: string | null) {
   return {
     id: device.id,
@@ -56,10 +52,8 @@ function toDeviceDto(device: UserDevice, currentDeviceId: string | null) {
     current: device.id === currentDeviceId,
   };
 }
-
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
-
   sendOtp = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const parsed = sendOtpSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -82,11 +76,9 @@ export class AuthController {
       return this.handle(request, reply, err);
     }
   };
-
   verifyOtp = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const idempotencyKey = this.requireIdempotencyKey(request, reply);
     if (!idempotencyKey) return reply;
-
     const parsed = verifyOtpSchema.safeParse(request.body);
     if (!parsed.success) {
       return replyAuthError(request, reply, 'VALIDATION', 'Request validation failed', {
@@ -110,11 +102,9 @@ export class AuthController {
       return this.handle(request, reply, err);
     }
   };
-
   refresh = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const idempotencyKey = this.requireIdempotencyKey(request, reply);
     if (!idempotencyKey) return reply;
-
     const parsed = refreshSchema.safeParse(request.body);
     if (!parsed.success) {
       return replyAuthError(request, reply, 'VALIDATION', 'Request validation failed', {
@@ -128,11 +118,9 @@ export class AuthController {
       return this.handle(request, reply, err);
     }
   };
-
   logout = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
     const parsed = logoutSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return replyAuthError(request, reply, 'VALIDATION', 'Request validation failed', {
@@ -147,23 +135,22 @@ export class AuthController {
       return this.handle(request, reply, err);
     }
   };
-
   listSessions = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
     const sessions = await this.authService.listSessions(auth.userId);
     return reply.status(200).send({ sessions: sessions.map((s) => toSessionDto(s, auth.sid)) });
   };
-
   revokeSession = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-    const { id } = request.params as { id: string };
+    const { id } = request.params as {
+      id: string;
+    };
     const revoked = await this.authService.revokeSession(auth.userId, id);
     if (!revoked) return replyAuthError(request, reply, 'NOT_FOUND', 'Session not found');
     return reply.status(204).send();
   };
-
   revokeAllSessions = async (
     request: FastifyRequest,
     reply: FastifyReply,
@@ -173,23 +160,22 @@ export class AuthController {
     await this.authService.logoutAll(auth.userId);
     return reply.status(204).send();
   };
-
   listDevices = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
     const { devices, currentDeviceId } = await this.authService.listDevices(auth.userId, auth.sid);
     return reply.status(200).send({ devices: devices.map((d) => toDeviceDto(d, currentDeviceId)) });
   };
-
   revokeDevice = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-    const { id } = request.params as { id: string };
+    const { id } = request.params as {
+      id: string;
+    };
     const revoked = await this.authService.revokeDevice(auth.userId, id);
     if (revoked === null) return replyAuthError(request, reply, 'NOT_FOUND', 'Device not found');
     return reply.status(204).send();
   };
-
   private requireIdempotencyKey(request: FastifyRequest, reply: FastifyReply): string | null {
     const key = request.headers['idempotency-key'];
     if (typeof key !== 'string' || key.length === 0) {
@@ -198,7 +184,6 @@ export class AuthController {
     }
     return key;
   }
-
   private handle(request: FastifyRequest, reply: FastifyReply, err: unknown): FastifyReply {
     if (err instanceof AuthError) return replyFromAuthError(request, reply, err);
     if (err instanceof IdempotencyInFlightError) {

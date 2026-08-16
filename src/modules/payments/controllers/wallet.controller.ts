@@ -4,17 +4,13 @@ import { Decimal } from '../types/index.js';
 import { PaymentService } from '../services/payment.service.js';
 import { topupWalletSchema, holdWalletSchema } from '../schemas/payment.schemas.js';
 import type { WalletView } from '../schemas/payment.responses.js';
-
 export class WalletController {
   constructor(private readonly paymentService: PaymentService) {}
-
   async getBalance(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const userId = callerId(req);
     const wallet = await this.paymentService.wallet.getWallet(userId);
-
     const balanceNum = wallet.balance.toNumber();
     const lockedNum = wallet.lockedBalance.toNumber();
-
     const view: WalletView = {
       id: wallet.id,
       userId: wallet.userId,
@@ -23,15 +19,12 @@ export class WalletController {
       availableBalance: balanceNum - lockedNum,
       currency: wallet.currency,
     };
-
     reply.send({ data: view });
   }
-
   async topup(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const userId = callerId(req);
     const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     const body = topupWalletSchema.parse(req.body);
-
     const result = await this.paymentService.withIdempotency(
       userId,
       '/wallet/topup',
@@ -56,15 +49,12 @@ export class WalletController {
         } satisfies WalletView;
       },
     );
-
     reply.send({ data: result });
   }
-
   async hold(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const userId = callerId(req);
     const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     const body = holdWalletSchema.parse(req.body);
-
     const result = await this.paymentService.withIdempotency(
       userId,
       '/wallet/hold',
@@ -84,7 +74,6 @@ export class WalletController {
         };
       },
     );
-
     reply.send({ data: result });
   }
 }

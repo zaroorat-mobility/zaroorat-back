@@ -1,6 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AuthError } from '../errors/auth.errors';
-
 export const AUTH_ERROR_STATUS: Record<string, number> = {
   VALIDATION: 400,
   OTP_INVALID: 401,
@@ -19,16 +18,13 @@ export const AUTH_ERROR_STATUS: Record<string, number> = {
   SERVICE_UNAVAILABLE: 503,
   INTERNAL: 500,
 };
-
 export function authErrorStatus(code: string): number {
   return AUTH_ERROR_STATUS[code] ?? 401;
 }
-
 export interface AuthErrorExtra {
   retryAfterSeconds?: number;
   details?: unknown;
 }
-
 export interface AuthErrorBody {
   error: {
     code: string;
@@ -39,7 +35,6 @@ export interface AuthErrorBody {
     details?: unknown;
   };
 }
-
 export function buildAuthErrorBody(
   code: string,
   message: string,
@@ -57,7 +52,6 @@ export function buildAuthErrorBody(
     },
   };
 }
-
 export function replyAuthError(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -72,13 +66,16 @@ export function replyAuthError(
     .status(authErrorStatus(code))
     .send(buildAuthErrorBody(code, message, request.id, extra));
 }
-
 export function replyFromAuthError(
   request: FastifyRequest,
   reply: FastifyReply,
   error: AuthError,
 ): FastifyReply {
-  const retryAfterSeconds = (error as { retryAfterSeconds?: number }).retryAfterSeconds;
+  const retryAfterSeconds = (
+    error as {
+      retryAfterSeconds?: number;
+    }
+  ).retryAfterSeconds;
   return replyAuthError(
     request,
     reply,

@@ -9,8 +9,8 @@ import { png as image } from '../helpers/image-fixtures.js';
 import {
   clearFileReferences,
   registerFileReference,
-} from '../../src/modules/files/references/file-references.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+} from '../../src/modules/files/services/file-reference.service.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 function png(): Buffer {
   return image({ width: 800, height: 600 });

@@ -11,7 +11,6 @@ export interface DriverView {
   profile?: unknown;
   onlineStatus?: unknown;
 }
-
 export interface DriverShiftView {
   id: string;
   driverId: string;

@@ -11,7 +11,6 @@ import {
   updateContactSchema,
   type UpdateContactBody,
 } from '../schemas';
-
 function toContactWrite(body: UpdateContactBody): UpdateEmergencyContactInput {
   const changes: UpdateEmergencyContactInput = {};
   if (body.contactName !== undefined) changes.contactName = body.contactName;
@@ -20,20 +19,16 @@ function toContactWrite(body: UpdateContactBody): UpdateEmergencyContactInput {
   if (body.priority !== undefined) changes.priority = body.priority;
   return changes;
 }
-
 export class EmergencyContactController {
   constructor(private readonly emergencyContactService: EmergencyContactService) {}
-
   listContacts = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
     return reply.status(200).send(await this.emergencyContactService.list(auth.userId));
   };
-
   addContact = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
     const parsed = createContactSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return replyFromUserError(
@@ -42,7 +37,6 @@ export class EmergencyContactController {
         new UserValidationError(detailsFromZodIssues(parsed.error.issues)),
       );
     }
-
     const body = parsed.data;
     const input = {
       contactName: body.contactName,
@@ -52,12 +46,16 @@ export class EmergencyContactController {
     const created = await this.emergencyContactService.add(auth.userId, input, request.id);
     return reply.status(201).send(created);
   };
-
   updateContact = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
-    const idParsed = itemIdSchema.safeParse((request.params as { id?: unknown }).id);
+    const idParsed = itemIdSchema.safeParse(
+      (
+        request.params as {
+          id?: unknown;
+        }
+      ).id,
+    );
     if (!idParsed.success) {
       return replyFromUserError(
         request,
@@ -65,7 +63,6 @@ export class EmergencyContactController {
         new UserValidationError([{ field: 'id', code: 'INVALID_FORMAT' }]),
       );
     }
-
     const parsed = updateContactSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return replyFromUserError(
@@ -74,7 +71,6 @@ export class EmergencyContactController {
         new UserValidationError(detailsFromZodIssues(parsed.error.issues)),
       );
     }
-
     const updated = await this.emergencyContactService.update(
       auth.userId,
       idParsed.data,
@@ -83,12 +79,16 @@ export class EmergencyContactController {
     );
     return reply.status(200).send(updated);
   };
-
   removeContact = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
-    const idParsed = itemIdSchema.safeParse((request.params as { id?: unknown }).id);
+    const idParsed = itemIdSchema.safeParse(
+      (
+        request.params as {
+          id?: unknown;
+        }
+      ).id,
+    );
     if (!idParsed.success) {
       return replyFromUserError(
         request,
@@ -96,7 +96,6 @@ export class EmergencyContactController {
         new UserValidationError([{ field: 'id', code: 'INVALID_FORMAT' }]),
       );
     }
-
     await this.emergencyContactService.remove(auth.userId, idParsed.data, request.id);
     return reply.status(204).send();
   };

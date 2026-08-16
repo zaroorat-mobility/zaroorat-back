@@ -27,7 +27,6 @@ import {
   RideController,
 } from './controllers/index.js';
 import { DispatchTimeoutJob, RequestExpiryJob } from './jobs/index.js';
-
 export * from './controllers/index.js';
 export * from './routes/index.js';
 export * from './schemas/index.js';
@@ -41,11 +40,9 @@ export * from './errors/index.js';
 export * from './constants/index.js';
 export * from './types/index.js';
 export * from './utils/index.js';
-
 export function registerRidesModule(container: AwilixContainer): void {
   container.register({
     rideMetrics: asClass(RideMetrics).singleton(),
-
     rideRequestRepository: asClass(RideRequestRepository).singleton(),
     rideDispatchRepository: asClass(RideDispatchRepository).singleton(),
     rideRepository: asClass(RideRepository).singleton(),
@@ -54,7 +51,6 @@ export function registerRidesModule(container: AwilixContainer): void {
     rideOtpRepository: asClass(RideOtpRepository).singleton(),
     rideStatusEventRepository: asClass(RideStatusEventRepository).singleton(),
     rideReceiptRepository: asClass(RideReceiptRepository).singleton(),
-
     rideRequestService: asClass(RideRequestService).singleton(),
     fareService: asClass(FareService).singleton(),
     rideOtpService: asClass(RideOtpService).singleton(),
@@ -62,7 +58,6 @@ export function registerRidesModule(container: AwilixContainer): void {
     dispatchService: asClass(DispatchService).singleton(),
     lifecycleService: asClass(LifecycleService).singleton(),
     receiptService: asClass(ReceiptService).singleton(),
-
     rideService: asClass(RideService)
       .singleton()
       .inject((c) => ({
@@ -74,7 +69,6 @@ export function registerRidesModule(container: AwilixContainer): void {
         dispatch: c.resolve('dispatchService'),
         receipt: c.resolve('receiptService'),
       })),
-
     rideRequestController: asClass(RideRequestController).singleton(),
     rideStateController: asClass(RideStateController).singleton(),
     rideQueryController: asClass(RideQueryController).singleton(),
@@ -85,10 +79,8 @@ export function registerRidesModule(container: AwilixContainer): void {
         state: c.resolve('rideStateController'),
         query: c.resolve('rideQueryController'),
       })),
-
     dispatchTimeoutJob: asClass(DispatchTimeoutJob).singleton(),
     requestExpiryJob: asClass(RequestExpiryJob).singleton(),
-
     rideRepo: aliasTo('rideRepository'),
     requestRepo: aliasTo('rideRequestRepository'),
     statusEventRepo: aliasTo('rideStatusEventRepository'),

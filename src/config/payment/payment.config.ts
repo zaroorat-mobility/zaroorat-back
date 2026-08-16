@@ -1,13 +1,8 @@
 import { config } from '../config.js';
-
 export type PaymentGatewayName = 'mock' | 'razorpay' | 'stripe';
-
 const GATEWAYS: readonly PaymentGatewayName[] = ['mock', 'razorpay', 'stripe'];
-
 const LIVE_GATEWAYS: readonly PaymentGatewayName[] = ['razorpay', 'stripe'];
-
 export const MOCK_WEBHOOK_SECRET = 'mock-gateway-webhook-secret-not-for-live-use';
-
 export interface PaymentConfig {
   defaultCurrency: string;
   defaultGateway: PaymentGatewayName;
@@ -18,14 +13,10 @@ export interface PaymentConfig {
   webhookSecret: string;
   webhookToleranceSeconds: number;
 }
-
 function readGateway(): PaymentGatewayName {
   const raw = process.env.PAYMENT_DEFAULT_GATEWAY;
   const environment = config.app.environment;
-
   if (raw == null || raw === '') {
-    // Same defaulting rule as storage and SMS: real provider in the
-    // environments that serve real users, mock everywhere else.
     return environment === 'production' || environment === 'staging' ? 'razorpay' : 'mock';
   }
   if (!GATEWAYS.includes(raw as PaymentGatewayName)) {
@@ -33,10 +24,8 @@ function readGateway(): PaymentGatewayName {
   }
   return raw as PaymentGatewayName;
 }
-
 function readWebhookSecret(gateway: PaymentGatewayName): string {
   const secret = process.env.PAYMENT_WEBHOOK_SECRET;
-
   if (LIVE_GATEWAYS.includes(gateway)) {
     if (secret == null || secret.trim() === '') {
       throw new Error(
@@ -46,15 +35,10 @@ function readWebhookSecret(gateway: PaymentGatewayName): string {
     }
     return secret;
   }
-
-  // `mock`: an explicit secret still wins, so a developer can point the mock
-  // gateway at a real signing key when reproducing a production issue.
   return secret != null && secret.trim() !== '' ? secret : MOCK_WEBHOOK_SECRET;
 }
-
 export function getPaymentConfig(): PaymentConfig {
   const defaultGateway = readGateway();
-
   return {
     defaultCurrency: process.env.PAYMENT_DEFAULT_CURRENCY ?? 'INR',
     defaultGateway,
@@ -66,5 +50,4 @@ export function getPaymentConfig(): PaymentConfig {
     webhookToleranceSeconds: Number(process.env.PAYMENT_WEBHOOK_TOLERANCE_SEC ?? 300),
   };
 }
-
 export const paymentConfig: PaymentConfig = Object.freeze(getPaymentConfig());

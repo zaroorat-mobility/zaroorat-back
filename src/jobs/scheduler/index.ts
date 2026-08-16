@@ -8,17 +8,13 @@ import {
   type JobName,
   type QueueName,
 } from '../queues/index.js';
-
 export const SCHEDULE_TIMEZONE = 'Etc/UTC';
-
 const authRetentionCron = process.env.AUTH_RETENTION_CRON ?? '30 4 * * *';
-
 export interface JobSchedule {
   queue: QueueName;
   name: JobName;
   pattern: string;
 }
-
 export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
   {
     queue: QUEUE_NAMES.FILES_MAINTENANCE,
@@ -66,7 +62,6 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     pattern: process.env.PAYMENT_RECONCILIATION_CRON ?? '15 * * * *',
   },
 ]);
-
 export async function registerJobSchedules(): Promise<void> {
   for (const schedule of JOB_SCHEDULES) {
     const queue = maintenanceQueue(schedule.queue);

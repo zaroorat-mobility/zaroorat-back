@@ -1,10 +1,8 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { DriverDocument, DriverDocumentType, VerificationStatus } from '../types';
-
 export class DriverDocumentRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async upsertDocument(
     data: {
       driverId: string;
@@ -17,14 +15,12 @@ export class DriverDocumentRepository {
     tx?: TransactionClient,
   ): Promise<DriverDocument> {
     const client = tx ?? this.db.client;
-
     const existing = await client.driverDocument.findFirst({
       where: {
         driverId: data.driverId,
         documentType: data.documentType,
       },
     });
-
     if (existing) {
       return client.driverDocument.update({
         where: { id: existing.id },
@@ -37,7 +33,6 @@ export class DriverDocumentRepository {
         },
       });
     }
-
     return client.driverDocument.create({
       data: {
         driverId: data.driverId,
@@ -50,14 +45,12 @@ export class DriverDocumentRepository {
       },
     });
   }
-
   async findByDriverId(driverId: string, tx?: TransactionClient): Promise<DriverDocument[]> {
     const client = tx ?? this.db.client;
     return client.driverDocument.findMany({
       where: { driverId },
     });
   }
-
   async updateVerificationStatus(
     id: string,
     verificationStatus: VerificationStatus,
@@ -66,7 +59,6 @@ export class DriverDocumentRepository {
     tx?: TransactionClient,
   ): Promise<DriverDocument> {
     const client = tx ?? this.db.client;
-
     return client.driverDocument.update({
       where: { id },
       data: {
@@ -81,7 +73,6 @@ export class DriverDocumentRepository {
       },
     });
   }
-
   async findExpiredDocuments(now = new Date(), tx?: TransactionClient): Promise<DriverDocument[]> {
     const client = tx ?? this.db.client;
     return client.driverDocument.findMany({

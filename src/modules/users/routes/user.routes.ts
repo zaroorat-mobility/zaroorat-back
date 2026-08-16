@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-
 import { container } from '@core/di';
 import { UserService } from '../services/user.service';
 import { PhoneChangeService } from '../services/phone/phone-change.service';
@@ -30,11 +29,8 @@ import {
   updateProfileBodySchema,
   userErrorResponseSchema as err,
 } from '../schemas';
-
 const commonErrors = { 400: err, 401: err, 403: err, 500: err } as const;
-
 const itemErrors = { ...commonErrors, 404: err, 409: err } as const;
-
 export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   const controller = new UserController(
     container.resolve<UserService>('userService'),
@@ -43,9 +39,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     container.resolve<SavedPlaceService>('savedPlaceService'),
     container.resolve<AccountService>('accountService'),
   );
-
   const untamperedDevice = [app.authorize({ requireUntamperedDevice: true })];
-
   app.get(
     '/me',
     {
@@ -59,7 +53,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.getMe,
   );
-
   app.patch(
     '/me/profile',
     {
@@ -67,7 +60,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         tags: ['Users'],
         summary: 'Update profile details',
         description:
-          'Partial update. Identity fields (phoneNumber, status, roles, referralCode, …) are ' +
+          'Partial update. Identity fields (phoneNumber, status, roles, referralCode, \u2026) are ' +
           'rejected with 400 IMMUTABLE_FIELD.',
         security: [{ bearerAuth: [] }],
         body: updateProfileBodySchema,
@@ -76,7 +69,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.updateProfile,
   );
-
   app.post(
     '/me/phone/change',
     {
@@ -98,7 +90,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.requestPhoneChange,
   );
-
   app.post(
     '/me/phone/verify',
     {
@@ -124,7 +115,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.verifyPhoneChange,
   );
-
   app.get(
     '/me/emergency-contacts',
     {
@@ -137,7 +127,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.listContacts,
   );
-
   app.post(
     '/me/emergency-contacts',
     {
@@ -152,7 +141,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.addContact,
   );
-
   app.patch(
     '/me/emergency-contacts/:id',
     {
@@ -167,7 +155,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.updateContact,
   );
-
   app.delete(
     '/me/emergency-contacts/:id',
     {
@@ -181,7 +168,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.removeContact,
   );
-
   app.get(
     '/me/saved-places',
     {
@@ -194,7 +180,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.listPlaces,
   );
-
   app.post(
     '/me/saved-places',
     {
@@ -211,7 +196,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.addPlace,
   );
-
   app.patch(
     '/me/saved-places/:id',
     {
@@ -226,7 +210,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.updatePlace,
   );
-
   app.delete(
     '/me/saved-places/:id',
     {
@@ -240,7 +223,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.removePlace,
   );
-
   app.post(
     '/me/deactivate',
     {
@@ -259,7 +241,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.deactivate,
   );
-
   app.post(
     '/me/delete-request',
     {
@@ -268,7 +249,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         summary: 'Request account deletion',
         description:
           'Deactivates now and records an erasure date. Same obligation gate as ' +
-          '/me/deactivate. Cancelling a request is an operator action — there is no ' +
+          '/me/deactivate. Cancelling a request is an operator action \u2014 there is no ' +
           'self-service endpoint for it.',
         security: [{ bearerAuth: [] }],
         response: { 202: deletionRequestResponse, ...itemErrors },

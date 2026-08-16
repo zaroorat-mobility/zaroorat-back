@@ -1,23 +1,19 @@
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { Role, UserRoleAssignment } from '@core/database/types';
-
 export interface GrantRoleInput {
   userId: string;
   roleId: string;
   grantedBy?: string | null;
   expiresAt?: Date | null;
 }
-
 export class RoleRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async findBySlug(slug: string, tx?: TransactionClient): Promise<Role | null> {
     return (tx ?? this.client).role.findUnique({ where: { slug } });
   }
-
   async findActiveAssignment(
     userId: string,
     roleId: string,
@@ -33,7 +29,6 @@ export class RoleRepository extends BaseRepository {
       },
     });
   }
-
   async findActiveRoleSlugs(
     userId: string,
     now: Date = new Date(),
@@ -49,7 +44,6 @@ export class RoleRepository extends BaseRepository {
     });
     return assignments.map((assignment) => assignment.role.slug);
   }
-
   async grant(input: GrantRoleInput, tx?: TransactionClient): Promise<UserRoleAssignment> {
     return (tx ?? this.client).userRoleAssignment.create({
       data: {
@@ -60,7 +54,6 @@ export class RoleRepository extends BaseRepository {
       },
     });
   }
-
   async revoke(
     userId: string,
     roleId: string,

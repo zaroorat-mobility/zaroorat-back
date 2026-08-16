@@ -14,18 +14,20 @@ export const SAFE_LABELS: readonly string[] = Object.freeze([
   'route',
   'code',
 ]);
-
 type LabelValues = Record<string, string>;
-
 interface Series {
   name: string;
   help: string;
   type: 'counter' | 'gauge';
-  values: Map<string, { labels: LabelValues; value: number }>;
+  values: Map<
+    string,
+    {
+      labels: LabelValues;
+      value: number;
+    }
+  >;
 }
-
 const series = new Map<string, Series>();
-
 function safeLabels(fields?: Record<string, unknown>): LabelValues {
   if (!fields) return {};
   const out: LabelValues = {};
@@ -36,14 +38,12 @@ function safeLabels(fields?: Record<string, unknown>): LabelValues {
   }
   return out;
 }
-
 function labelKey(labels: LabelValues): string {
   return Object.keys(labels)
     .sort()
     .map((key) => `${key}=${labels[key]}`)
     .join(',');
 }
-
 function upsert(
   name: string,
   type: 'counter' | 'gauge',
@@ -56,33 +56,25 @@ function upsert(
     entry = { name, help, type, values: new Map() };
     series.set(name, entry);
   }
-
   const labels = safeLabels(fields);
   const key = labelKey(labels);
   const previous = entry.values.get(key)?.value ?? 0;
   entry.values.set(key, { labels, value: apply(previous) });
 }
-
 export function incrementCounter(name: string, fields?: Record<string, unknown>, by = 1): void {
   upsert(name, 'counter', `${name} total`, fields, (previous) => previous + by);
 }
-
 export function setGauge(name: string, value: number, fields?: Record<string, unknown>): void {
   upsert(name, 'gauge', `${name} current value`, fields, () => value);
 }
-
 export function resetMetrics(): void {
   series.clear();
 }
-
 function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/"/g, '\\"');
 }
-
-/** Render every series in the Prometheus text exposition format (v0.0.4). */
 export function renderMetrics(): string {
   const lines: string[] = [];
-
   for (const entry of [...series.values()].sort((a, b) => a.name.localeCompare(b.name))) {
     lines.push(`# HELP ${entry.name} ${entry.help}`);
     lines.push(`# TYPE ${entry.name} ${entry.type}`);
@@ -94,10 +86,8 @@ export function renderMetrics(): string {
       lines.push(rendered ? `${entry.name}{${rendered}} ${value}` : `${entry.name} ${value}`);
     }
   }
-
   return `${lines.join('\n')}\n`;
 }
-
 export function collectProcessMetrics(): void {
   const memory = process.memoryUsage();
   setGauge('process_resident_memory_bytes', memory.rss);

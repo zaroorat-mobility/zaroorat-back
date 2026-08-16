@@ -5,7 +5,6 @@ import { SidBlacklistStore } from './stores/SidBlacklistStore';
 import { RateLimitStore } from './stores/RateLimitStore';
 import { IdempotencyStore } from './stores/IdempotencyStore';
 import { LockStore } from './stores/LockStore';
-
 export class RedisService {
   public readonly provider: RedisProvider;
   public readonly otp: OtpStore;
@@ -14,7 +13,6 @@ export class RedisService {
   public readonly rateLimit: RateLimitStore;
   public readonly idempotency: IdempotencyStore;
   public readonly lock: LockStore;
-
   constructor(
     redisProvider: RedisProvider,
     otpStore: OtpStore,

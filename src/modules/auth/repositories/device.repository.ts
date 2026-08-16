@@ -1,7 +1,6 @@
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { UserDevice, DeviceTrustState, AppPlatform } from '@core/database/types';
-
 export interface CreateDeviceInput {
   userId: string;
   deviceId?: string | null;
@@ -13,16 +12,13 @@ export interface CreateDeviceInput {
   appVersion?: string | null;
   osVersion?: string | null;
 }
-
 export class DeviceRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async findById(id: string): Promise<UserDevice | null> {
     return this.client.userDevice.findUnique({ where: { id } });
   }
-
   async findBySession(sessionId: string): Promise<UserDevice | null> {
     const session = await this.client.userSession.findUnique({
       where: { id: sessionId },
@@ -30,18 +26,15 @@ export class DeviceRepository extends BaseRepository {
     });
     return session?.device ?? null;
   }
-
   async findAllByUser(userId: string): Promise<UserDevice[]> {
     return this.client.userDevice.findMany({
       where: { userId },
       orderBy: [{ lastSeenAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
     });
   }
-
   async findOwned(userId: string, id: string): Promise<UserDevice | null> {
     return this.client.userDevice.findFirst({ where: { id, userId } });
   }
-
   async findByUserAndDevice(
     userId: string,
     deviceId: string,
@@ -49,7 +42,6 @@ export class DeviceRepository extends BaseRepository {
   ): Promise<UserDevice | null> {
     return (tx ?? this.client).userDevice.findFirst({ where: { userId, deviceId } });
   }
-
   async create(input: CreateDeviceInput, tx?: TransactionClient): Promise<UserDevice> {
     return (tx ?? this.client).userDevice.create({
       data: {
@@ -65,11 +57,9 @@ export class DeviceRepository extends BaseRepository {
       },
     });
   }
-
   async touchLastSeen(id: string, at: Date = new Date(), tx?: TransactionClient): Promise<void> {
     await (tx ?? this.client).userDevice.update({ where: { id }, data: { lastSeenAt: at } });
   }
-
   async updateTrustState(
     id: string,
     trustState: DeviceTrustState,
@@ -77,7 +67,6 @@ export class DeviceRepository extends BaseRepository {
   ): Promise<UserDevice> {
     return (tx ?? this.client).userDevice.update({ where: { id }, data: { trustState } });
   }
-
   async anonymizeForUser(userId: string, tx?: TransactionClient): Promise<number> {
     const { count } = await (tx ?? this.client).userDevice.updateMany({
       where: { userId },

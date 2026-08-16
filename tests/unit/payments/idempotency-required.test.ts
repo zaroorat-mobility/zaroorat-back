@@ -10,33 +10,42 @@ import {
 
 function fakeRedis() {
   const store = new Map<string, unknown>();
+  // Mirrors RedisKeys.idempotency: the operation is part of the key, so this
+  // fake cannot accidentally pass a test that the real store would fail.
+  const scoped = (operation: string, key: string): string => `idem:${operation}:${key}`;
+
   const idempotency = {
-    async get<T>(key: string): Promise<T | null> {
-      return (store.get(key) as T) ?? null;
+    async get<T>(operation: string, key: string): Promise<T | null> {
+      return (store.get(scoped(operation, key)) as T) ?? null;
     },
-    async put(key: string, value: unknown): Promise<void> {
-      store.set(key, value);
+    async put(operation: string, key: string, value: unknown): Promise<void> {
+      store.set(scoped(operation, key), value);
     },
-    async putIfAbsent(key: string, value: unknown): Promise<boolean> {
-      if (store.has(key)) return false;
-      store.set(key, value);
+    async putIfAbsent(operation: string, key: string, value: unknown): Promise<boolean> {
+      if (store.has(scoped(operation, key))) return false;
+      store.set(scoped(operation, key), value);
       return true;
     },
-    async forget(key: string): Promise<void> {
-      store.delete(key);
+    async forget(operation: string, key: string): Promise<void> {
+      store.delete(scoped(operation, key));
     },
-    async runOnce<T>(key: string, _ttl: number, operation: () => Promise<T>): Promise<T> {
-      if (!(await idempotency.putIfAbsent(key, { state: 'in_flight' }))) {
-        const record = store.get(key) as { state: string; result?: T };
+    async runOnce<T>(
+      operation: string,
+      key: string,
+      _ttl: number,
+      action: () => Promise<T>,
+    ): Promise<T> {
+      if (!(await idempotency.putIfAbsent(operation, key, { state: 'in_flight' }))) {
+        const record = store.get(scoped(operation, key)) as { state: string; result?: T };
         if (record?.state === 'done') return record.result as T;
         throw new Error('IDEMPOTENCY_IN_PROGRESS');
       }
       try {
-        const result = await operation();
-        store.set(key, { state: 'done', result });
+        const result = await action();
+        store.set(scoped(operation, key), { state: 'done', result });
         return result;
       } catch (err) {
-        store.delete(key);
+        store.delete(scoped(operation, key));
         throw err;
       }
     },

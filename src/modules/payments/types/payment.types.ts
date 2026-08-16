@@ -1,5 +1,4 @@
 import { Prisma } from '../../../generated/prisma/index.js';
-
 import type {
   PaymentInstrument,
   CustomerWallet,
@@ -19,10 +18,8 @@ import type {
   WalletAdjustment,
   WalletReconciliation,
 } from '../../../generated/prisma/index.js';
-
 export type Decimal = Prisma.Decimal;
 export const Decimal = Prisma.Decimal;
-
 export type {
   PaymentInstrument,
   CustomerWallet,

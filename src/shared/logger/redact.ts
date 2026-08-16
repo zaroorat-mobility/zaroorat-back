@@ -1,9 +1,27 @@
-export const REDACT_PATHS = [
-  'req.headers.authorization',
-  'req.headers.cookie',
+const SENSITIVE_FIELDS = [
   'password',
   'confirmPassword',
+  'token',
   'accessToken',
   'refreshToken',
   'jwt',
+  'authorization',
+  'authkey',
+  'authKey',
+  'secret',
+  'phone',
+  'phoneNumber',
+  'mobiles',
+  'to',
+  'otp',
+  'otpCode',
+  'verificationCode',
+  'body',
+  'variables',
+];
+export const REDACT_PATHS = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  ...SENSITIVE_FIELDS,
+  ...SENSITIVE_FIELDS.map((field) => `*.${field}`),
 ];

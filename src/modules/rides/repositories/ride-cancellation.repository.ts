@@ -1,10 +1,8 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { Decimal, type RideCancellation } from '../types';
-
 export class RideCancellationRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async create(
     data: {
       rideId: string;
@@ -19,7 +17,6 @@ export class RideCancellationRepository {
     tx?: TransactionClient,
   ): Promise<RideCancellation> {
     const client = tx ?? this.db.client;
-
     return client.rideCancellation.create({
       data: {
         rideId: data.rideId,
@@ -35,7 +32,6 @@ export class RideCancellationRepository {
       },
     });
   }
-
   async findByRideId(rideId: string, tx?: TransactionClient): Promise<RideCancellation | null> {
     const client = tx ?? this.db.client;
     return client.rideCancellation.findUnique({

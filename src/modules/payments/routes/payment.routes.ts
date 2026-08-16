@@ -4,14 +4,10 @@ import { rateLimits } from '@config';
 import { registerRawJsonParser } from '../../../plugins/raw-body/raw-body.plugin.js';
 import { PaymentController } from '../controllers/payment.controller.js';
 import { handlePaymentError } from '../schemas/error-response.js';
-
 export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<PaymentController>('paymentController');
-
   fastify.setErrorHandler(handlePaymentError);
-
   fastify.get('/methods', (req, reply) => controller.paymentMethod.listUserMethods(req, reply));
-
   fastify.get('/wallet/balance', (req, reply) => controller.wallet.getBalance(req, reply));
   fastify.post(
     '/wallet/topup',
@@ -23,7 +19,6 @@ export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: fastify.rateLimit(rateLimits.payment) },
     (req, reply) => controller.wallet.hold(req, reply),
   );
-
   fastify.post('/intents', { preHandler: fastify.rateLimit(rateLimits.payment) }, (req, reply) =>
     controller.intent.createIntent(req, reply),
   );
@@ -32,11 +27,9 @@ export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: fastify.rateLimit(rateLimits.payment) },
     (req, reply) => controller.intent.confirmIntent(req, reply),
   );
-
   fastify.post('/refunds', { preHandler: fastify.rateLimit(rateLimits.payment) }, (req, reply) =>
     controller.refund.processRefund(req, reply),
   );
-
   fastify.post(
     '/payouts',
     {
@@ -47,10 +40,8 @@ export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
     },
     (req, reply) => controller.payout.executePayout(req, reply),
   );
-
   await fastify.register(async (webhookScope) => {
     registerRawJsonParser(webhookScope);
-
     webhookScope.post(
       '/webhooks/:gateway',
       {

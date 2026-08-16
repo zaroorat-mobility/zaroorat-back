@@ -24,7 +24,7 @@ import {
   createUploadResponse,
   fileMetadataResponse,
   readUrlResponse,
-} from '../../src/modules/files/http/file.responses.js';
+} from '../../src/modules/files/schemas/file.responses.js';
 
 async function serialize(schema: object, payload: unknown): Promise<unknown> {
   const app = Fastify();

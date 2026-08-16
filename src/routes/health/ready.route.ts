@@ -1,6 +1,5 @@
 import { FastifyInstance } from 'fastify';
 import { runReadinessChecks } from '@core/health/index.js';
-
 const CHECKS_SCHEMA = {
   type: 'array',
   items: {
@@ -12,7 +11,6 @@ const CHECKS_SCHEMA = {
     },
   },
 } as const;
-
 export async function readyRoute(app: FastifyInstance) {
   app.get(
     '/ready',
@@ -45,7 +43,6 @@ export async function readyRoute(app: FastifyInstance) {
     },
     async (request, reply) => {
       const report = await runReadinessChecks();
-
       return reply.status(report.ready ? 200 : 503).send({
         status: report.ready ? 'ready' : 'not_ready',
         checks: report.checks,

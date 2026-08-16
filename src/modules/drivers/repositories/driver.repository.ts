@@ -2,22 +2,22 @@ import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { generateDriverCode } from '../utils/driver-code.util.js';
 import type { Driver, DriverProfile, DriverVerificationStatus } from '../types';
-
 export class DriverRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async lockForUpdate(id: string, tx: TransactionClient): Promise<Driver | null> {
-    const locked = await tx.$queryRaw<{ id: string }[]>`
+    const locked = await tx.$queryRaw<
+      {
+        id: string;
+      }[]
+    >`
       SELECT "id" FROM "drivers" WHERE "id" = ${id}::uuid FOR UPDATE
     `;
     if (locked.length === 0) return null;
     return tx.driver.findUnique({ where: { id } });
   }
-
   async createDriver(userId: string, tx?: TransactionClient): Promise<Driver> {
     const client = tx ?? this.db.client;
     const driverCode = generateDriverCode();
-
     return client.driver.create({
       data: {
         userId,
@@ -28,7 +28,6 @@ export class DriverRepository {
       },
     });
   }
-
   async findById(id: string, tx?: TransactionClient): Promise<Driver | null> {
     const client = tx ?? this.db.client;
     return client.driver.findUnique({
@@ -40,7 +39,6 @@ export class DriverRepository {
       },
     });
   }
-
   async findByUserId(userId: string, tx?: TransactionClient): Promise<Driver | null> {
     const client = tx ?? this.db.client;
     return client.driver.findUnique({
@@ -52,7 +50,6 @@ export class DriverRepository {
       },
     });
   }
-
   async updateProfile(
     driverId: string,
     profileData: Partial<{
@@ -71,7 +68,6 @@ export class DriverRepository {
     tx?: TransactionClient,
   ): Promise<DriverProfile> {
     const client = tx ?? this.db.client;
-
     return client.driverProfile.upsert({
       where: { driverId },
       create: {
@@ -81,7 +77,6 @@ export class DriverRepository {
       update: profileData,
     });
   }
-
   async updateVerificationStatus(
     id: string,
     verificationStatus: DriverVerificationStatus,
@@ -90,7 +85,6 @@ export class DriverRepository {
     tx?: TransactionClient,
   ): Promise<Driver> {
     const client = tx ?? this.db.client;
-
     return client.driver.update({
       where: { id },
       data: {
@@ -105,17 +99,13 @@ export class DriverRepository {
       },
     });
   }
-
   async setSuspended(id: string, isSuspended: boolean, tx?: TransactionClient): Promise<Driver> {
     const client = tx ?? this.db.client;
-
     return client.driver.update({
       where: { id },
-
       data: { isSuspended, ...(isSuspended ? { isAvailable: false } : {}) },
     });
   }
-
   async updateAvailability(
     id: string,
     isAvailable: boolean,

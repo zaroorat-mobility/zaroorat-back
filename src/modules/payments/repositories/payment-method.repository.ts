@@ -1,7 +1,6 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { PaymentInstrument } from '../types';
-
 export interface CreatePaymentMethodInput {
   userId: string;
   methodType: string;
@@ -14,10 +13,8 @@ export interface CreatePaymentMethodInput {
   expiryYear?: number;
   isDefault?: boolean;
 }
-
 export class PaymentMethodRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async create(
     input: CreatePaymentMethodInput,
     tx?: TransactionClient,
@@ -44,14 +41,12 @@ export class PaymentMethodRepository {
       },
     });
   }
-
   async findById(id: string, tx?: TransactionClient): Promise<PaymentInstrument | null> {
     const client = tx ?? this.db.client;
     return client.paymentInstrument.findUnique({
       where: { id, isActive: true },
     });
   }
-
   async listByUser(userId: string, tx?: TransactionClient): Promise<PaymentInstrument[]> {
     const client = tx ?? this.db.client;
     return client.paymentInstrument.findMany({

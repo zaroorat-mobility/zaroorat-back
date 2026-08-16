@@ -1,17 +1,14 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { DriverOnlineStatus, DriverStatus } from '../types';
-
 export class DriverStatusRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async getStatus(driverId: string, tx?: TransactionClient): Promise<DriverOnlineStatus | null> {
     const client = tx ?? this.db.client;
     return client.driverOnlineStatus.findUnique({
       where: { driverId },
     });
   }
-
   async updateStatus(
     driverId: string,
     status: DriverStatus,
@@ -25,14 +22,12 @@ export class DriverStatusRepository {
   ): Promise<DriverOnlineStatus> {
     const client = tx ?? this.db.client;
     const now = new Date();
-
     const data = {
       status,
       ...extraData,
       ...(status === 'ONLINE' ? { lastOnlineAt: now } : {}),
       ...(status === 'OFFLINE' ? { lastOfflineAt: now } : {}),
     };
-
     return client.driverOnlineStatus.upsert({
       where: { driverId },
       create: {
@@ -45,7 +40,6 @@ export class DriverStatusRepository {
       update: data,
     });
   }
-
   async updateHeartbeat(
     driverId: string,
     batteryLevel?: number,
@@ -54,20 +48,21 @@ export class DriverStatusRepository {
   ): Promise<DriverOnlineStatus> {
     const client = tx ?? this.db.client;
     const now = new Date();
-
-    const data: { heartbeatAt: Date; batteryLevel?: number; networkType?: string } = {
+    const data: {
+      heartbeatAt: Date;
+      batteryLevel?: number;
+      networkType?: string;
+    } = {
       heartbeatAt: now,
       ...(batteryLevel !== undefined ? { batteryLevel } : {}),
       ...(networkType !== undefined ? { networkType } : {}),
     };
-
     return client.driverOnlineStatus.upsert({
       where: { driverId },
       update: data,
       create: { driverId, status: 'OFFLINE', ...data },
     });
   }
-
   async findStaleDrivers(
     thresholdDate: Date,
     tx?: TransactionClient,

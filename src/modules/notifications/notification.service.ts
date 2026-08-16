@@ -1,17 +1,14 @@
 import type { SmsProvider, SmsSendResult } from './providers/sms.provider';
 import type { NotificationConfig } from './notification.config';
-
 export interface SendSmsOptions {
   templateId?: string;
   variables?: Record<string, string>;
 }
-
 export class NotificationService {
   constructor(
     private readonly smsProvider: SmsProvider,
     private readonly notificationConfig: NotificationConfig,
   ) {}
-
   async sendSms(to: string, body: string, options?: SendSmsOptions): Promise<SmsSendResult> {
     return this.smsProvider.sendSms({
       to,
@@ -20,7 +17,6 @@ export class NotificationService {
       ...(options?.variables ? { variables: options.variables } : {}),
     });
   }
-
   async sendOtp(to: string, code: string): Promise<SmsSendResult> {
     const body = `Zaroorat: ${code} is your verification code. Do not share it with anyone.`;
     return this.smsProvider.sendSms({

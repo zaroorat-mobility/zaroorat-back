@@ -1,8 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-
 import { AUTH_ERROR_STATUS } from '@modules/auth/http';
 import { UserError, type ErrorDetail } from '../errors';
-
 export const USER_ERROR_STATUS: Record<string, number> = {
   ...AUTH_ERROR_STATUS,
   IMMUTABLE_FIELD: 400,
@@ -13,16 +11,13 @@ export const USER_ERROR_STATUS: Record<string, number> = {
   LIMIT_EXCEEDED: 409,
   ACCOUNT_HAS_OBLIGATIONS: 409,
 };
-
 export function userErrorStatus(code: string): number {
   return USER_ERROR_STATUS[code] ?? 500;
 }
-
 export interface UserErrorExtra {
   retryAfterSeconds?: number;
   details?: ErrorDetail[];
 }
-
 export interface UserErrorBody {
   error: {
     code: string;
@@ -33,7 +28,6 @@ export interface UserErrorBody {
     details?: ErrorDetail[];
   };
 }
-
 export function buildUserErrorBody(
   code: string,
   message: string,
@@ -51,7 +45,6 @@ export function buildUserErrorBody(
     },
   };
 }
-
 export function replyUserError(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -66,7 +59,6 @@ export function replyUserError(
     .status(userErrorStatus(code))
     .send(buildUserErrorBody(code, message, request.id, extra));
 }
-
 export function replyFromUserError(
   request: FastifyRequest,
   reply: FastifyReply,

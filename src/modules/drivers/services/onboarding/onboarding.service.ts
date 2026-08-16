@@ -12,7 +12,6 @@ import type {
   DriverVerificationStatus,
   VerificationStatus,
 } from '../../types';
-
 export class OnboardingService {
   constructor(
     private readonly driverRepo: DriverRepository,
@@ -21,15 +20,12 @@ export class OnboardingService {
     private readonly eventPublisher: EventPublisher,
     private readonly driverMetrics: DriverMetrics,
   ) {}
-
   async createOrGetDriver(userId: string): Promise<Driver> {
     const existing = await this.driverRepo.findByUserId(userId);
     if (existing) return existing;
-
     return this.txManager.execute(async (tx) => {
       const created = await this.driverRepo.createDriver(userId, tx);
       this.driverMetrics.driverRegistered({ driverId: created.id, userId });
-
       await this.eventPublisher.publish(
         driverEvent(DRIVER_EVENT_CATALOG.ONBOARDED, created.id, {
           driverId: created.id,
@@ -37,18 +33,14 @@ export class OnboardingService {
         }),
         tx,
       );
-
       return created;
     });
   }
-
   async updateProfile(driverId: string, data: Parameters<DriverRepository['updateProfile']>[1]) {
     const driver = await this.driverRepo.findById(driverId);
     if (!driver) throw new DriverNotFoundError(driverId);
-
     return this.driverRepo.updateProfile(driverId, data);
   }
-
   async submitDocument(data: {
     driverId: string;
     documentType: DriverDocumentType;
@@ -58,10 +50,8 @@ export class OnboardingService {
   }): Promise<DriverDocument> {
     const driver = await this.driverRepo.findById(data.driverId);
     if (!driver) throw new DriverNotFoundError(data.driverId);
-
     return this.txManager.execute(async (tx) => {
       const doc = await this.docRepo.upsertDocument(data, tx);
-
       if (driver.verificationStatus === 'PENDING') {
         await this.driverRepo.updateVerificationStatus(
           data.driverId,
@@ -71,11 +61,9 @@ export class OnboardingService {
           tx,
         );
       }
-
       return doc;
     });
   }
-
   async reviewDriverVerification(
     driverId: string,
     status: VerificationStatus,
@@ -84,13 +72,10 @@ export class OnboardingService {
   ): Promise<Driver> {
     const driver = await this.driverRepo.findById(driverId);
     if (!driver) throw new DriverNotFoundError(driverId);
-
     return this.txManager.execute(async (tx) => {
       await this.driverRepo.lockForUpdate(driverId, tx);
-
       const newVerificationStatus: DriverVerificationStatus =
         status === 'VERIFIED' ? 'VERIFIED' : 'REJECTED';
-
       const updated = await this.driverRepo.updateVerificationStatus(
         driverId,
         newVerificationStatus,
@@ -98,7 +83,6 @@ export class OnboardingService {
         rejectionReason,
         tx,
       );
-
       if (newVerificationStatus === 'VERIFIED') {
         this.driverMetrics.driverVerified({ driverId });
         await this.eventPublisher.publish(
@@ -109,7 +93,6 @@ export class OnboardingService {
           tx,
         );
       }
-
       return updated;
     });
   }

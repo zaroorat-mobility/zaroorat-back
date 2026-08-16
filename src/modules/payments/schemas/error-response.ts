@@ -1,7 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
 import { PaymentError } from '../errors/index.js';
-
 export function handlePaymentError(
   err: unknown,
   request: FastifyRequest,
@@ -15,11 +14,9 @@ export function handlePaymentError(
     );
     return;
   }
-
   request.log.error({ err }, '[payments] unhandled error');
   reply
     .status(500)
     .send(errorEnvelope('INTERNAL', 'An unexpected payments error occurred', request.id));
 }
-
 export { PaymentError };

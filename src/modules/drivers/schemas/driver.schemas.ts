@@ -1,5 +1,5 @@
 import { z } from 'zod';
-
+import { latitudeSchema, longitudeSchema } from '@modules/geo';
 export const updateDriverProfileSchema = z.object({
   fullLegalName: z.string().min(2).max(100).optional(),
   dateOfBirth: z.string().datetime().optional(),
@@ -13,9 +13,7 @@ export const updateDriverProfileSchema = z.object({
   alternatePhone: z.string().max(20).optional(),
   drivingExperienceYears: z.number().int().nonnegative().optional(),
 });
-
 export type UpdateDriverProfileBody = z.infer<typeof updateDriverProfileSchema>;
-
 export const submitDriverDocumentSchema = z.object({
   documentType: z.enum([
     'DRIVING_LICENSE',
@@ -31,12 +29,10 @@ export const submitDriverDocumentSchema = z.object({
   documentNumber: z.string().max(100).optional(),
   expiresAt: z.string().datetime().optional(),
 });
-
 export type SubmitDriverDocumentBody = z.infer<typeof submitDriverDocumentSchema>;
-
 export const updateLocationSchema = z.object({
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
+  latitude: latitudeSchema,
+  longitude: longitudeSchema,
   heading: z.number().min(0).max(360).optional(),
   bearing: z.number().min(0).max(360).optional(),
   speedKmh: z.number().nonnegative().optional(),
@@ -44,19 +40,14 @@ export const updateLocationSchema = z.object({
   isMockLocation: z.boolean().optional(),
   rideId: z.string().uuid().optional(),
 });
-
 export type UpdateLocationBody = z.infer<typeof updateLocationSchema>;
-
 export const heartbeatSchema = z.object({
   batteryLevel: z.number().int().min(0).max(100).optional(),
   networkType: z.string().max(50).optional(),
 });
-
 export type HeartbeatBody = z.infer<typeof heartbeatSchema>;
-
 export const reviewVerificationSchema = z.object({
   status: z.enum(['VERIFIED', 'REJECTED']),
   rejectionReason: z.string().max(255).optional(),
 });
-
 export type ReviewVerificationBody = z.infer<typeof reviewVerificationSchema>;

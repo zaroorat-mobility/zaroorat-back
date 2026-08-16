@@ -1,5 +1,4 @@
 import { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
-
 interface ErrorEnvelope {
   error: {
     code: string;
@@ -9,7 +8,6 @@ interface ErrorEnvelope {
     details?: unknown;
   };
 }
-
 function envelope(
   code: string,
   message: string,
@@ -26,7 +24,6 @@ function envelope(
     },
   };
 }
-
 function codeFor(error: FastifyError, statusCode: number): string {
   if (error.validation) return 'VALIDATION';
   if (statusCode === 404) return 'NOT_FOUND';
@@ -37,7 +34,6 @@ function codeFor(error: FastifyError, statusCode: number): string {
   if (statusCode >= 500) return 'INTERNAL';
   return (error.code as string | undefined) ?? 'BAD_REQUEST';
 }
-
 export async function errorHandler(
   error: FastifyError,
   request: FastifyRequest,
@@ -48,16 +44,12 @@ export async function errorHandler(
       .status(400)
       .send(envelope('VALIDATION', 'Validation failed', request.id, error.validation));
   }
-
   const statusCode = error.statusCode ?? 500;
-
   if (statusCode < 500) {
     return reply
       .status(statusCode)
       .send(envelope(codeFor(error, statusCode), error.message, request.id));
   }
-
   request.log.error({ err: error }, 'Unhandled server error');
-
   return reply.status(500).send(envelope('INTERNAL', 'Internal Server Error', request.id));
 }

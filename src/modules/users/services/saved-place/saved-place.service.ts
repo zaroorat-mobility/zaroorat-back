@@ -12,9 +12,7 @@ import { userEvent } from '../../events';
 import { LabelConflictError, LimitExceededError, UserNotFoundError } from '../../errors';
 import type { SavedPlace } from '../../types';
 import type { SavedPlaceView } from '../../schemas';
-
 export type AddSavedPlaceInput = Omit<CreateSavedPlaceInput, 'userId'>;
-
 export function toSavedPlaceView(place: SavedPlace): SavedPlaceView {
   return {
     id: place.id,
@@ -29,7 +27,6 @@ export function toSavedPlaceView(place: SavedPlace): SavedPlaceView {
     createdAt: place.createdAt,
   };
 }
-
 export class SavedPlaceService {
   constructor(
     private readonly savedPlaceRepository: SavedPlaceRepository,
@@ -37,12 +34,10 @@ export class SavedPlaceService {
     private readonly transactionManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
   ) {}
-
   async list(userId: string): Promise<SavedPlaceView[]> {
     const places = await this.savedPlaceRepository.findAllByUser(userId);
     return places.map(toSavedPlaceView);
   }
-
   async add(
     userId: string,
     input: AddSavedPlaceInput,
@@ -54,7 +49,6 @@ export class SavedPlaceService {
       if (count >= userConfig.maxSavedPlaces) {
         throw new LimitExceededError('savedPlaces', userConfig.maxSavedPlaces);
       }
-
       const created = await this.savedPlaceRepository.create({ userId, ...input }, tx);
       await this.eventPublisher.publish(
         userEvent('user.saved_place.added', {
@@ -66,10 +60,8 @@ export class SavedPlaceService {
       );
       return created;
     });
-
     return toSavedPlaceView(place);
   }
-
   async update(
     userId: string,
     id: string,
@@ -77,13 +69,11 @@ export class SavedPlaceService {
     requestId: string | null = null,
   ): Promise<SavedPlaceView> {
     const changedFields = Object.keys(changes);
-
     if (changedFields.length === 0) {
       const existing = await this.savedPlaceRepository.findOwned(userId, id);
       if (!existing) throw new UserNotFoundError('Saved place not found');
       return toSavedPlaceView(existing);
     }
-
     const place = await this.write(async (tx) => {
       const updated = await this.savedPlaceRepository.updateOwned(userId, id, changes, tx);
       if (!updated) throw new UserNotFoundError('Saved place not found');
@@ -97,10 +87,8 @@ export class SavedPlaceService {
       );
       return updated;
     });
-
     return toSavedPlaceView(place);
   }
-
   async remove(userId: string, id: string, requestId: string | null = null): Promise<void> {
     await this.transactionManager.execute(async (tx) => {
       const deleted = await this.savedPlaceRepository.deleteOwned(userId, id, tx);
@@ -115,7 +103,6 @@ export class SavedPlaceService {
       );
     });
   }
-
   private async write<T>(callback: (tx: TransactionClient) => Promise<T>): Promise<T> {
     try {
       return await this.transactionManager.execute(callback);

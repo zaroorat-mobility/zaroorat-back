@@ -191,6 +191,8 @@ model DriverLocation {
 
   driver Driver @relation(fields: [driverId], references: [id])
 
+  // The GiST index on `location` that backs nearby-driver search lives in raw
+  // SQL (migration 20260815000000) — Prisma cannot index an `Unsupported` column.
   @@map("driver_locations")
 }
 

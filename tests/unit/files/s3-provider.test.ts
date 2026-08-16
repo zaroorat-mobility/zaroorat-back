@@ -4,13 +4,15 @@ import { describe, it } from 'node:test';
 import {
   CopyObjectCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
   ListObjectVersionsCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
 
-import { S3StorageProvider } from '../../../src/modules/files/providers/s3.provider.js';
-import { StorageError } from '../../../src/modules/files/providers/storage.provider.js';
-import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
+import { S3StorageProvider } from '../../../src/modules/files/utils/storage/s3.provider.js';
+import { StorageError } from '../../../src/modules/files/utils/storage/storage.provider.js';
+import { MockStorageProvider } from '../../../src/modules/files/utils/storage/mock.provider.js';
 import { createStorageProvider } from '../../../src/modules/files/config/storage.config.js';
 import type { StorageConfig } from '../../../src/modules/files/config/storage.config.js';
 
@@ -18,7 +20,7 @@ function configFor(overrides: Partial<StorageConfig> = {}): StorageConfig {
   return {
     provider: 's3',
     bucket: 'zaroorat-private',
-    quarantineBucket: null,
+    quarantineBucket: 'zaroorat-quarantine',
     scanner: 'disabled',
     region: 'ap-south-1',
     endpoint: null,
@@ -81,13 +83,14 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 10 * 1024 * 1024,
+        contentLength: 10 * 1024 * 1024,
         ttlSeconds: 900,
       });
       const url = new URL(signed.url);
 
       assert.equal(signed.method, 'PUT');
-      assert.equal(url.hostname, 'zaroorat-private.s3.ap-south-1.amazonaws.com');
+      // Quarantine, not the read bucket: an upload is unscanned by definition.
+      assert.equal(url.hostname, 'zaroorat-quarantine.s3.ap-south-1.amazonaws.com');
       assert.equal(url.pathname, '/dd/2026/08/abc.jpg');
       assert.equal(url.searchParams.get('X-Amz-Expires'), '900');
       assert.ok(url.searchParams.get('X-Amz-Signature'), 'it is actually signed');
@@ -100,7 +103,7 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
       });
       const signedHeaders = new URL(signed.url).searchParams.get('X-Amz-SignedHeaders') ?? '';
@@ -122,7 +125,7 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
       });
       const signedHeaders = new URL(signed.url).searchParams.get('X-Amz-SignedHeaders') ?? '';
@@ -143,7 +146,7 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
         checksumSha256: hex,
       });
@@ -168,13 +171,13 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'pi/2026/08/abc.png',
         contentType: 'image/png',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
       });
       const url = new URL(signed.url);
 
       assert.equal(url.host, 'localhost:9000');
-      assert.equal(url.pathname, '/zaroorat-private/pi/2026/08/abc.png');
+      assert.equal(url.pathname, '/zaroorat-quarantine/pi/2026/08/abc.png');
     });
   });
 
@@ -223,40 +226,92 @@ describe('S3 storage provider (unit)', () => {
   });
 
   describe('head', () => {
-    it('reads the total size from Content-Range, not from the range it fetched', async () => {
-      const { provider } = withFakeClient(async () => ({
-        ContentRange: 'bytes 0-511/842114',
+    /**
+     * `head` issues HeadObject for the metadata and one bounded ranged GET for
+     * the inspection window. The stub answers each command separately so the
+     * two cannot be conflated.
+     */
+    function headClient(
+      metadata: Record<string, unknown>,
+      peek: number[] = [0xff, 0xd8, 0xff],
+    ): { provider: S3StorageProvider; sent: unknown[] } {
+      return withFakeClient(async (command) => {
+        if (command instanceof HeadObjectCommand) return metadata;
+        return { Body: { transformToByteArray: async () => new Uint8Array(peek) } };
+      });
+    }
+
+    it('takes the size from object metadata, never from the bytes it fetched', async () => {
+      const { provider } = headClient({
+        ContentLength: 842114,
         ContentType: 'image/jpeg',
-        Body: { transformToByteArray: async () => new Uint8Array([0xff, 0xd8, 0xff]) },
-      }));
+      });
 
       const head = await provider.head('dd/2026/08/abc.jpg', 512);
 
+      // 842114 bytes exist; three were transferred.
       assert.equal(head?.sizeBytes, 842114);
       assert.deepEqual([...(head?.peek ?? [])], [0xff, 0xd8, 0xff]);
       assert.equal(head?.contentType, 'image/jpeg');
     });
 
-    it('re-encodes the checksum from S3’s base64 into the hex the client declared', async () => {
+    it('never asks storage for the whole object — the only GET is bounded (R-FILE-1)', async () => {
+      const { provider, sent } = headClient({ ContentLength: 842114 });
+
+      await provider.head('dd/2026/08/abc.jpg', 512);
+
+      const gets = sent.filter((command) => command instanceof GetObjectCommand);
+      assert.equal(gets.length, 1, 'exactly one ranged read');
+      assert.equal((gets[0] as GetObjectCommand).input.Range, 'bytes=0-511');
+      for (const get of gets) {
+        assert.ok(
+          (get as GetObjectCommand).input.Range,
+          'an unranged GET would stream the object through this process',
+        );
+      }
+    });
+
+    it('asks for the stored checksum, and re-encodes S3’s base64 into hex', async () => {
       const hex = 'b'.repeat(64);
-      const { provider } = withFakeClient(async () => ({
-        ContentRange: 'bytes 0-2/3',
+      const { provider, sent } = headClient({
+        ContentLength: 3,
         ChecksumSHA256: Buffer.from(hex, 'hex').toString('base64'),
-        Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
-      }));
+      });
 
       const head = await provider.head('k', 512);
 
       assert.equal(head?.checksumSha256, hex);
+      const heads = sent.filter((command) => command instanceof HeadObjectCommand);
+      assert.equal(
+        (heads[0] as HeadObjectCommand).input.ChecksumMode,
+        'ENABLED',
+        'without this S3 omits the digest it is holding',
+      );
     });
 
     it('reports no checksum when S3 holds none', async () => {
-      const { provider } = withFakeClient(async () => ({
-        ContentRange: 'bytes 0-2/3',
-        Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
-      }));
+      const { provider } = headClient({ ContentLength: 3 });
 
       assert.equal((await provider.head('k', 512))?.checksumSha256, null);
+    });
+
+    it('carries the version the metadata reports, for erasure to prove itself', async () => {
+      const { provider } = headClient({ ContentLength: 3, VersionId: 'v-42' });
+
+      assert.equal((await provider.head('k', 512))?.versionId, 'v-42');
+    });
+
+    it('skips the ranged read entirely for a zero-length object', async () => {
+      const { provider, sent } = headClient({ ContentLength: 0 });
+
+      const head = await provider.head('k', 512);
+
+      assert.equal(head?.sizeBytes, 0);
+      assert.equal(
+        sent.filter((command) => command instanceof GetObjectCommand).length,
+        0,
+        'there is nothing to peek at',
+      );
     });
 
     it('returns null for an absent object — that is an answer, not a failure', async () => {
@@ -488,10 +543,24 @@ describe('S3 storage provider (unit)', () => {
         /STORAGE_BUCKET is required/,
       );
     });
+
+    it('refuses s3 without a quarantine bucket — unscanned objects must not be readable', () => {
+      assert.throws(
+        () => createStorageProvider(configFor({ quarantineBucket: null })),
+        /STORAGE_QUARANTINE_BUCKET is required/,
+      );
+    });
+
+    it('refuses a quarantine bucket equal to the read bucket', () => {
+      assert.throws(
+        () => createStorageProvider(configFor({ quarantineBucket: 'zaroorat-private' })),
+        /must differ from STORAGE_BUCKET/,
+      );
+    });
   });
 
   it('logs nothing at all — FILE-INV-2 applies inside the provider', () => {
-    const source = readFileSync('src/modules/files/providers/s3.provider.ts', 'utf8');
+    const source = readFileSync('src/modules/files/utils/storage/s3.provider.ts', 'utf8');
 
     assert.equal(source.includes('logger'), false);
     assert.equal(source.includes('console.'), false);

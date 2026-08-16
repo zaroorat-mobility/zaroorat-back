@@ -1,11 +1,9 @@
 import { z } from 'zod';
-
 export const sendOtpResponseSchema = z.object({
   challengeId: z.string(),
   expiresInSec: z.number(),
   resendAvailableInSec: z.number(),
 });
-
 export const verifyOtpResponseSchema = z.object({
   accessToken: z.string(),
   accessTokenExpiresInSec: z.number(),
@@ -18,10 +16,8 @@ export const verifyOtpResponseSchema = z.object({
     isNew: z.boolean(),
   }),
 });
-
 export type SendOtpResponse = z.infer<typeof sendOtpResponseSchema>;
 export type VerifyOtpResponse = z.infer<typeof verifyOtpResponseSchema>;
-
 export const errorResponseSchema = {
   type: 'object',
   properties: {
@@ -49,7 +45,6 @@ export const errorResponseSchema = {
   },
   required: ['error'],
 } as const;
-
 const deviceBodySchema = {
   type: 'object',
   properties: {
@@ -67,7 +62,6 @@ const deviceBodySchema = {
     fcmToken: { type: 'string', maxLength: 512, description: 'Firebase Cloud Messaging token' },
   },
 } as const;
-
 export const sendOtpBodySchema = {
   type: 'object',
   properties: {
@@ -78,7 +72,6 @@ export const sendOtpBodySchema = {
     device: deviceBodySchema,
   },
 } as const;
-
 export const verifyOtpBodySchema = {
   type: 'object',
   properties: {
@@ -94,14 +87,12 @@ export const verifyOtpBodySchema = {
     device: deviceBodySchema,
   },
 } as const;
-
 export const refreshBodySchema = {
   type: 'object',
   properties: {
     refreshToken: { type: 'string', description: 'Opaque refresh token, required' },
   },
 } as const;
-
 export const logoutBodySchema = {
   type: ['object', 'null'],
   properties: {
@@ -111,7 +102,6 @@ export const logoutBodySchema = {
     },
   },
 } as const;
-
 export const idempotencyHeaderSchema = {
   type: 'object',
   properties: {
@@ -121,13 +111,11 @@ export const idempotencyHeaderSchema = {
     },
   },
 } as const;
-
 export const idParamSchema = {
   type: 'object',
   properties: { id: { type: 'string', format: 'uuid' } },
   required: ['id'],
 } as const;
-
 export const sendOtpResponse = {
   type: 'object',
   properties: {
@@ -137,20 +125,17 @@ export const sendOtpResponse = {
   },
   required: ['challengeId', 'expiresInSec', 'resendAvailableInSec'],
 } as const;
-
 const tokenPairProperties = {
   accessToken: { type: 'string' },
   accessTokenExpiresInSec: { type: 'integer' },
   refreshToken: { type: 'string' },
   refreshTokenExpiresInSec: { type: 'integer' },
 } as const;
-
 export const tokenPairResponse = {
   type: 'object',
   properties: tokenPairProperties,
   required: ['accessToken', 'accessTokenExpiresInSec', 'refreshToken', 'refreshTokenExpiresInSec'],
 } as const;
-
 export const verifyOtpResponse = {
   type: 'object',
   properties: {
@@ -174,7 +159,6 @@ export const verifyOtpResponse = {
     'user',
   ],
 } as const;
-
 export const sessionListResponse = {
   type: 'object',
   properties: {
@@ -196,7 +180,7 @@ export const sessionListResponse = {
               'Last authenticated request on this session, to the nearest throttle window',
           },
           expiresAt: { type: 'string', format: 'date-time' },
-          current: { type: 'boolean', description: 'True for the caller’s own session' },
+          current: { type: 'boolean', description: 'True for the caller\u2019s own session' },
         },
         required: ['id', 'createdAt', 'expiresAt', 'current'],
       },
@@ -204,7 +188,6 @@ export const sessionListResponse = {
   },
   required: ['sessions'],
 } as const;
-
 export const deviceListResponse = {
   type: 'object',
   properties: {

@@ -5,8 +5,8 @@ import {
   assertDeclaredUploadAllowed,
   assertStoredObjectAllowed,
   peekBudgetFor,
-  sanitizeFileName,
-} from '../../../src/modules/files/policies/file.policy.js';
+} from '../../../src/modules/files/services/file-validation.service.js';
+import { sanitizeFileName } from '../../../src/modules/files/utils/filename.js';
 import {
   FileTooLargeError,
   UnsupportedMediaTypeError,

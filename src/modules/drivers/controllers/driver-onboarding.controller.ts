@@ -8,22 +8,18 @@ import {
   reviewVerificationSchema,
 } from '../schemas/driver.schemas.js';
 import { actingDriverId } from './driver-identity.js';
-
 export class DriverOnboardingController {
   constructor(
     private readonly driverService: DriverService,
     private readonly driverRepository: DriverRepository,
   ) {}
-
   async getMe(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driver = await this.driverService.onboarding.createOrGetDriver(callerId(req));
     reply.send({ data: driver });
   }
-
   async updateProfile(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await actingDriverId(req, this.driverRepository);
     const body = updateDriverProfileSchema.parse(req.body);
-
     const updateParams: Record<string, unknown> = {};
     if (body.fullLegalName !== undefined) updateParams.fullLegalName = body.fullLegalName;
     if (body.dateOfBirth !== undefined) updateParams.dateOfBirth = new Date(body.dateOfBirth);
@@ -40,15 +36,12 @@ export class DriverOnboardingController {
     if (body.drivingExperienceYears !== undefined) {
       updateParams.drivingExperienceYears = body.drivingExperienceYears;
     }
-
     const profile = await this.driverService.onboarding.updateProfile(driverId, updateParams);
     reply.send({ data: profile });
   }
-
   async submitDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await actingDriverId(req, this.driverRepository);
     const body = submitDriverDocumentSchema.parse(req.body);
-
     const doc = await this.driverService.onboarding.submitDocument({
       driverId,
       documentType: body.documentType,
@@ -58,19 +51,18 @@ export class DriverOnboardingController {
     });
     reply.send({ data: doc });
   }
-
   async reviewVerification(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = req.params as {
+      id: string;
+    };
     const approvedBy = callerId(req);
     const body = reviewVerificationSchema.parse(req.body);
-
     const driver = await this.driverService.onboarding.reviewDriverVerification(
       id,
       body.status,
       approvedBy,
       body.rejectionReason,
     );
-
     req.log.warn(
       { driverId: id, status: body.status, reviewerUserId: approvedBy },
       '[drivers] verification decision recorded',

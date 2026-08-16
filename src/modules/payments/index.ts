@@ -37,7 +37,6 @@ import {
   PaymentController,
 } from './controllers/index.js';
 import { SettlementJob, ReconciliationJob } from './jobs/index.js';
-
 export * from './controllers/index.js';
 export * from './routes/index.js';
 export * from './schemas/index.js';
@@ -51,11 +50,9 @@ export * from './errors/index.js';
 export * from './constants/index.js';
 export * from './types/index.js';
 export * from './utils/index.js';
-
 export function registerPaymentsModule(container: AwilixContainer): void {
   container.register({
     paymentMetrics: asClass(PaymentMetrics).singleton(),
-
     paymentMethodRepository: asClass(PaymentMethodRepository).singleton(),
     walletRepository: asClass(WalletRepository).singleton(),
     intentRepository: asClass(IntentRepository).singleton(),
@@ -66,7 +63,6 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     chargebackRepository: asClass(ChargebackRepository).singleton(),
     webhookRepository: asClass(WebhookRepository).singleton(),
     idempotencyRepository: asClass(IdempotencyRepository).singleton(),
-
     paymentGatewayProvider: asFunction((): PaymentGatewayProvider => {
       const mode = paymentConfig.defaultGateway;
       if (mode === 'razorpay') {
@@ -80,7 +76,6 @@ export function registerPaymentsModule(container: AwilixContainer): void {
       }
       return new MockGatewayProvider();
     }).singleton(),
-
     ledgerService: asClass(LedgerService).singleton(),
     walletService: asClass(WalletService).singleton(),
     intentService: asClass(IntentService).singleton(),
@@ -88,7 +83,6 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     settlementService: asClass(SettlementService).singleton(),
     payoutService: asClass(PayoutService).singleton(),
     webhookService: asClass(WebhookService).singleton(),
-
     paymentService: asClass(PaymentService)
       .singleton()
       .inject((c) => ({
@@ -100,7 +94,6 @@ export function registerPaymentsModule(container: AwilixContainer): void {
         webhook: c.resolve('webhookService'),
         idempotencyRepo: c.resolve('idempotencyRepository'),
       })),
-
     paymentMethodController: asClass(PaymentMethodController).singleton(),
     walletController: asClass(WalletController).singleton(),
     intentController: asClass(IntentController).singleton(),
@@ -117,10 +110,8 @@ export function registerPaymentsModule(container: AwilixContainer): void {
         refund: c.resolve('refundController'),
         webhook: c.resolve('webhookController'),
       })),
-
     settlementJob: asClass(SettlementJob).singleton(),
     reconciliationJob: asClass(ReconciliationJob).singleton(),
-
     gateway: aliasTo('paymentGatewayProvider'),
     intentRepo: aliasTo('intentRepository'),
     ledgerRepo: aliasTo('ledgerRepository'),

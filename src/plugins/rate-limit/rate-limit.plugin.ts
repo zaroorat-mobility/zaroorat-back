@@ -1,9 +1,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-
 import { RedisService } from '@core/cache';
 import { container } from '@core/di';
-
 export interface RateLimitOptions {
   scope: string;
   limit: number;
@@ -11,7 +9,6 @@ export interface RateLimitOptions {
   keyBy?: 'ip' | 'user' | 'both';
   onStoreError?: 'closed' | 'open';
 }
-
 declare module 'fastify' {
   interface FastifyInstance {
     rateLimit: (
@@ -19,7 +16,6 @@ declare module 'fastify' {
     ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
-
 function errorBody(
   code: string,
   message: string,
@@ -36,7 +32,6 @@ function errorBody(
     },
   };
 }
-
 async function send429(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -51,23 +46,18 @@ async function send429(
       }),
     );
 }
-
 export async function rateLimitPlugin(app: FastifyInstance): Promise<void> {
   const redisService = container.resolve<RedisService>('redisService');
-
   app.decorate('rateLimit', function rateLimit(options: RateLimitOptions) {
     const keyBy = options.keyBy ?? 'ip';
     const onStoreError = options.onStoreError ?? 'closed';
-
     return async function rateLimitHandler(request: FastifyRequest, reply: FastifyReply) {
       const identifiers: string[] = [];
       if (keyBy === 'ip' || keyBy === 'both') identifiers.push(`ip:${request.ip}`);
       if (keyBy === 'user' || keyBy === 'both') {
         const userId = request.auth?.userId;
-
         identifiers.push(userId ? `user:${userId}` : `ip:${request.ip}`);
       }
-
       for (const identifier of identifiers) {
         let result;
         try {
@@ -91,7 +81,6 @@ export async function rateLimitPlugin(app: FastifyInstance): Promise<void> {
             );
           return;
         }
-
         if (!result.allowed) {
           request.log.warn(
             { scope: options.scope, identifier, limit: options.limit },
@@ -104,5 +93,4 @@ export async function rateLimitPlugin(app: FastifyInstance): Promise<void> {
     };
   });
 }
-
 export default fp(rateLimitPlugin, { name: 'rate-limit' });

@@ -13,9 +13,8 @@ import { registerFileModule, registerFileRepositories } from '@modules/files';
 import { registerPaymentsModule } from '@modules/payments';
 import { registerRidesModule } from '@modules/rides';
 import { registerDriversModule } from '@modules/drivers';
-
+import { registerGeoModule } from '@modules/geo';
 export const container = createContainer({ injectionMode: InjectionMode.CLASSIC });
-
 registerDatabaseModule(container);
 registerRedisModule(container);
 registerEventsModule(container);
@@ -30,9 +29,9 @@ registerAuthService(container);
 registerUserService(container);
 registerFileModule(container);
 registerPaymentsModule(container);
+registerGeoModule(container);
 registerRidesModule(container);
 registerDriversModule(container);
-
 container.register({
   db: aliasTo('databaseService'),
   redis: aliasTo('redisService'),

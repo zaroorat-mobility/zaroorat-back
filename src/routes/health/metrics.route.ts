@@ -1,7 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-
 import { collectProcessMetrics, renderMetrics } from '@core/metrics';
-
 export async function metricsRoute(app: FastifyInstance): Promise<void> {
   app.get(
     '/metrics',

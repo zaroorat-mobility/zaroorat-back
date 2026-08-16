@@ -2,10 +2,8 @@ import { Decimal } from '../types/index.js';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { DriverSettlement } from '../types';
-
 export class SettlementRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async create(
     data: {
       driverId: string;
@@ -32,7 +30,6 @@ export class SettlementRepository {
       },
     });
   }
-
   async findByDriverAndPeriod(
     driverId: string,
     periodStart: Date,
@@ -50,7 +47,6 @@ export class SettlementRepository {
       },
     });
   }
-
   async aggregateEarnings(
     driverId: string,
     periodStart: Date,
@@ -63,7 +59,6 @@ export class SettlementRepository {
     rideCount: number;
   }> {
     const client = tx ?? this.db.client;
-
     const rows = await client.$queryRaw<
       {
         collected_fare: Decimal | null;
@@ -85,7 +80,6 @@ export class SettlementRepository {
         AND r."completed_at" >= ${periodStart}
         AND r."completed_at" <  ${periodEnd}
     `;
-
     const row = rows[0];
     return {
       collectedFare: new Decimal(row?.collected_fare ?? 0),
@@ -94,16 +88,17 @@ export class SettlementRepository {
       rideCount: Number(row?.ride_count ?? 0),
     };
   }
-
   async lockForUpdate(id: string, tx: TransactionClient): Promise<DriverSettlement | null> {
-    const locked = await tx.$queryRaw<{ id: string }[]>`
+    const locked = await tx.$queryRaw<
+      {
+        id: string;
+      }[]
+    >`
       SELECT "id" FROM "driver_settlements" WHERE "id" = ${id}::uuid FOR UPDATE
     `;
     if (locked.length === 0) return null;
-
     return tx.driverSettlement.findUnique({ where: { id } });
   }
-
   async updateStatus(
     id: string,
     status: string,

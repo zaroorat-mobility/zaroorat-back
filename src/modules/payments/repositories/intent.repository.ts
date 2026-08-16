@@ -2,7 +2,6 @@ import { Decimal } from '../types/index.js';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { PaymentIntent, PaymentTransaction } from '../types';
-
 export interface CreateIntentInput {
   userId: string;
   rideId?: string | null;
@@ -13,10 +12,8 @@ export interface CreateIntentInput {
   gateway?: string | null;
   gatewayIntentId?: string | null;
 }
-
 export class IntentRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async create(input: CreateIntentInput, tx?: TransactionClient): Promise<PaymentIntent> {
     const client = tx ?? this.db.client;
     return client.paymentIntent.create({
@@ -34,7 +31,6 @@ export class IntentRepository {
       },
     });
   }
-
   async findById(id: string, tx?: TransactionClient): Promise<PaymentIntent | null> {
     const client = tx ?? this.db.client;
     return client.paymentIntent.findUnique({
@@ -42,15 +38,17 @@ export class IntentRepository {
       include: { transactions: true },
     });
   }
-
   async lockForUpdate(id: string, tx: TransactionClient): Promise<PaymentIntent | null> {
-    const locked = await tx.$queryRaw<{ id: string }[]>`
+    const locked = await tx.$queryRaw<
+      {
+        id: string;
+      }[]
+    >`
       SELECT "id" FROM "payment_intents" WHERE "id" = ${id}::uuid FOR UPDATE
     `;
     if (locked.length === 0) return null;
     return tx.paymentIntent.findUnique({ where: { id } });
   }
-
   async findByGatewayIntentId(
     gatewayIntentId: string,
     tx?: TransactionClient,
@@ -58,14 +56,12 @@ export class IntentRepository {
     const client = tx ?? this.db.client;
     return client.paymentIntent.findFirst({ where: { gatewayIntentId } });
   }
-
   async findByIdempotencyKey(key: string, tx?: TransactionClient): Promise<PaymentIntent | null> {
     const client = tx ?? this.db.client;
     return client.paymentIntent.findUnique({
       where: { idempotencyKey: key },
     });
   }
-
   async updateStatus(
     id: string,
     status: string,
@@ -81,7 +77,6 @@ export class IntentRepository {
       },
     });
   }
-
   async recordTransaction(
     data: {
       intentId: string;

@@ -10,6 +10,7 @@ describe('Mock Location Spoofing Rejection Tests', () => {
       {} as never,
       {} as never,
       { mockLocationRejected: () => {} } as never,
+      {} as never,
     );
 
     await assert.rejects(

@@ -152,12 +152,17 @@ function makeService(opts: Options = {}) {
 
     idempotency: {
       get: async () => opts.cached ?? null,
-      put: async (_key: string, value: unknown) => {
+      put: async (_operation: string, _key: string, value: unknown) => {
         seen.idempotencyPuts.push(value);
       },
-      runOnce: async <T>(_key: string, _ttl: number, operation: () => Promise<T>): Promise<T> => {
+      runOnce: async <T>(
+        _operation: string,
+        _key: string,
+        _ttl: number,
+        action: () => Promise<T>,
+      ): Promise<T> => {
         if (opts.cached) return opts.cached as T;
-        const result = await operation();
+        const result = await action();
         seen.idempotencyPuts.push(result);
         return result;
       },

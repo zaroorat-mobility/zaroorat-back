@@ -1,5 +1,4 @@
 import { config } from '@config';
-
 export const transport =
   config.app.environment === 'development'
     ? {

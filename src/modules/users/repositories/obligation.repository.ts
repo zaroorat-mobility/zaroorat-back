@@ -1,6 +1,5 @@
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
-
 const ACTIVE_RIDE_STATES = [
   'REQUESTED',
   'SEARCHING',
@@ -9,19 +8,15 @@ const ACTIVE_RIDE_STATES = [
   'DRIVER_ARRIVED',
   'IN_PROGRESS',
 ] as const;
-
 const OPEN_TICKET_STATES = ['OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'REOPENED'] as const;
-
 export interface Obligation {
   module: string;
   code: string;
 }
-
 export class ObligationRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async findOpenObligations(userId: string, tx?: TransactionClient): Promise<Obligation[]> {
     const client = tx ?? this.client;
     const [ride, wallet, ticket] = await Promise.all([
@@ -38,7 +33,6 @@ export class ObligationRepository extends BaseRepository {
         select: { id: true },
       }),
     ]);
-
     const obligations: Obligation[] = [];
     if (ride) obligations.push({ module: 'rides', code: 'RIDE_IN_PROGRESS' });
     if (wallet) obligations.push({ module: 'wallet', code: 'BALANCE_UNSETTLED' });
@@ -46,6 +40,5 @@ export class ObligationRepository extends BaseRepository {
     return obligations;
   }
 }
-
 export const ObligationsRepository = ObligationRepository;
 export type ObligationsRepository = ObligationRepository;

@@ -7,7 +7,6 @@ import { InsufficientBalanceError } from '../../errors/payment.errors.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import { PaymentMetrics } from '../../metrics/payment.metrics.js';
 import type { CustomerWallet, WalletHold } from '../../types';
-
 export class WalletService {
   constructor(
     private readonly walletRepository: WalletRepository,
@@ -16,11 +15,9 @@ export class WalletService {
     private readonly eventPublisher: EventPublisher,
     private readonly paymentMetrics: PaymentMetrics,
   ) {}
-
   async getWallet(userId: string): Promise<CustomerWallet> {
     return this.walletRepository.getOrCreateWallet(userId);
   }
-
   async topup(
     userId: string,
     amount: Decimal,
@@ -30,22 +27,18 @@ export class WalletService {
     if (amount.lte(0)) {
       throw new Error('Top-up amount must be greater than zero');
     }
-
     return this.txManager.execute(async (tx) => {
       const wallet = await this.walletRepository.getOrCreateWallet(userId, tx);
       const lockedWallet = await this.walletRepository.lockForUpdate(userId, tx);
-
       const currentBalance = lockedWallet ? lockedWallet.balance : wallet.balance;
       const currentLocked = lockedWallet ? lockedWallet.lockedBalance : wallet.lockedBalance;
       const newBalance = currentBalance.add(amount);
-
       const updated = await this.walletRepository.updateBalances(
         wallet.id,
         newBalance,
         currentLocked,
         tx,
       );
-
       await this.walletRepository.recordTransaction(
         {
           walletId: wallet.id,
@@ -59,7 +52,6 @@ export class WalletService {
         },
         tx,
       );
-
       await this.ledgerService.postTransactionGroup(
         [
           {
@@ -82,7 +74,6 @@ export class WalletService {
         ],
         tx,
       );
-
       await this.eventPublisher.publish(
         paymentEvent(PAYMENT_EVENT_CATALOG.WALLET_CREDITED, userId, {
           walletId: wallet.id,
@@ -92,11 +83,9 @@ export class WalletService {
         }),
         tx,
       );
-
       return updated;
     });
   }
-
   async hold(
     userId: string,
     amount: Decimal,
@@ -106,19 +95,15 @@ export class WalletService {
     if (amount.lte(0)) {
       throw new Error('Hold amount must be greater than zero');
     }
-
     return this.txManager.execute(async (tx) => {
       const wallet = await this.walletRepository.getOrCreateWallet(userId, tx);
       const locked = await this.walletRepository.lockForUpdate(userId, tx);
-
       const activeWallet = locked ?? wallet;
       const availableBalance = activeWallet.balance.sub(activeWallet.lockedBalance);
-
       if (availableBalance.lt(amount)) {
         this.paymentMetrics.insufficientBalance({ userId });
         throw new InsufficientBalanceError();
       }
-
       const newLockedBalance = activeWallet.lockedBalance.add(amount);
       await this.walletRepository.updateBalances(
         wallet.id,
@@ -126,7 +111,6 @@ export class WalletService {
         newLockedBalance,
         tx,
       );
-
       const holdParams = {
         walletType: 'CUSTOMER',
         walletId: wallet.id,
@@ -136,9 +120,7 @@ export class WalletService {
         ...(reason !== undefined ? { reason } : {}),
         ...(referenceId !== undefined ? { referenceId } : {}),
       };
-
       const holdRecord = await this.walletRepository.createHold(holdParams, tx);
-
       await this.eventPublisher.publish(
         paymentEvent(PAYMENT_EVENT_CATALOG.WALLET_HOLD_CREATED, userId, {
           holdId: holdRecord.id,
@@ -147,23 +129,18 @@ export class WalletService {
         }),
         tx,
       );
-
       return holdRecord;
     });
   }
-
   async releaseHold(userId: string, holdId: string): Promise<WalletHold> {
     return this.txManager.execute(async (tx) => {
       const wallet = await this.walletRepository.getOrCreateWallet(userId, tx);
       const locked = await this.walletRepository.lockForUpdate(userId, tx);
-
       const activeWallet = locked ?? wallet;
-
       const holdRecord = await tx.walletHold.findUnique({ where: { id: holdId } });
       if (!holdRecord || holdRecord.status !== 'ACTIVE') {
         throw new Error('Hold record not found or not active');
       }
-
       const newLockedBalance = Decimal.max(0, activeWallet.lockedBalance.sub(holdRecord.amount));
       await this.walletRepository.updateBalances(
         wallet.id,
@@ -171,9 +148,7 @@ export class WalletService {
         newLockedBalance,
         tx,
       );
-
       const released = await this.walletRepository.releaseHold(holdId, tx);
-
       await this.eventPublisher.publish(
         paymentEvent(PAYMENT_EVENT_CATALOG.WALLET_HOLD_RELEASED, userId, {
           holdId,
@@ -182,7 +157,6 @@ export class WalletService {
         }),
         tx,
       );
-
       return released;
     });
   }

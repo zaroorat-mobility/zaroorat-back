@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto';
-
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { EventEnvelope } from './types';
-
 export interface OutboxRecord {
   eventId: string;
   aggregateType: string;
@@ -11,7 +9,6 @@ export interface OutboxRecord {
   eventType: string;
   payload: EventEnvelope;
 }
-
 export interface ClaimedOutboxEvent {
   id: string;
   eventType: string;
@@ -19,18 +16,15 @@ export interface ClaimedOutboxEvent {
   payload: EventEnvelope;
   claimToken: string;
 }
-
 export interface OutboxStats {
   pending: number;
   dead: number;
   oldestPendingAgeMs: number;
 }
-
 export class OutboxRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async enqueue(record: OutboxRecord, tx?: TransactionClient): Promise<void> {
     const db = tx ?? this.client;
     await db.outboxEvent.create({
@@ -43,7 +37,6 @@ export class OutboxRepository extends BaseRepository {
       },
     });
   }
-
   async claimBatch(limit: number, now: Date = new Date()): Promise<ClaimedOutboxEvent[]> {
     const claimToken = randomUUID();
     return this.client.$queryRaw<ClaimedOutboxEvent[]>`
@@ -59,7 +52,6 @@ export class OutboxRepository extends BaseRepository {
       RETURNING id, event_type AS "eventType", retries, payload, claim_token AS "claimToken"
     `;
   }
-
   async markPublished(ids: string[], claimToken: string): Promise<number> {
     if (ids.length === 0) return 0;
     const { count } = await this.client.outboxEvent.updateMany({
@@ -74,7 +66,6 @@ export class OutboxRepository extends BaseRepository {
     });
     return count;
   }
-
   async releaseUnprocessed(ids: string[], claimToken: string): Promise<number> {
     if (ids.length === 0) return 0;
     const { count } = await this.client.outboxEvent.updateMany({
@@ -83,7 +74,6 @@ export class OutboxRepository extends BaseRepository {
     });
     return count;
   }
-
   async releaseForRetry(
     id: string,
     claimToken: string,
@@ -103,7 +93,6 @@ export class OutboxRepository extends BaseRepository {
     });
     return count;
   }
-
   async markDead(id: string, claimToken: string, error: string): Promise<number> {
     const { count } = await this.client.outboxEvent.updateMany({
       where: { id, claimToken },
@@ -117,16 +106,13 @@ export class OutboxRepository extends BaseRepository {
     });
     return count;
   }
-
   async reclaimStale(claimedBefore: Date): Promise<number> {
     const { count } = await this.client.outboxEvent.updateMany({
       where: { status: 'PROCESSING', claimedAt: { lt: claimedBefore } },
-
       data: { status: 'PENDING', claimedAt: null, claimToken: null },
     });
     return count;
   }
-
   async prunePublished(publishedBefore: Date, limit: number): Promise<number> {
     const deleted = await this.client.$executeRaw`
       DELETE FROM outbox_events
@@ -138,7 +124,6 @@ export class OutboxRepository extends BaseRepository {
     `;
     return deleted;
   }
-
   async stats(now: Date = new Date()): Promise<OutboxStats> {
     const [pending, dead, oldest] = await Promise.all([
       this.client.outboxEvent.count({ where: { status: 'PENDING' } }),
@@ -149,7 +134,6 @@ export class OutboxRepository extends BaseRepository {
         select: { createdAt: true },
       }),
     ]);
-
     return {
       pending,
       dead,

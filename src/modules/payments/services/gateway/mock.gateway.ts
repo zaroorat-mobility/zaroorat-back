@@ -7,10 +7,8 @@ import type {
   GatewayRefundResult,
   GatewayPayoutResult,
 } from './gateway.provider.js';
-
 export class MockGatewayProvider implements PaymentGatewayProvider {
   readonly gatewayName = 'mock';
-
   async createIntent(_input: CreateGatewayIntentInput): Promise<GatewayIntentResult> {
     return {
       gatewayIntentId: `mock_pi_${randomUUID()}`,
@@ -18,14 +16,12 @@ export class MockGatewayProvider implements PaymentGatewayProvider {
       status: 'PENDING',
     };
   }
-
   async confirmIntent(gatewayIntentId: string): Promise<GatewayIntentResult> {
     return {
       gatewayIntentId,
       status: 'SUCCEEDED',
     };
   }
-
   async createRefund(
     _transactionId: string,
     _amount: Decimal,
@@ -36,7 +32,6 @@ export class MockGatewayProvider implements PaymentGatewayProvider {
       status: 'SUCCEEDED',
     };
   }
-
   async createPayout(
     _driverId: string,
     _bankAccountId: string,

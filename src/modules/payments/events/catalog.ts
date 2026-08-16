@@ -1,7 +1,5 @@
 import type { PublishInput } from '@core/events/types.js';
-
 export const PAYMENT_PRODUCER = 'payments';
-
 export const PAYMENT_EVENT_CATALOG = {
   INTENT_CREATED: 'payment.intent.created',
   PAYMENT_SUCCEEDED: 'payment.succeeded',
@@ -16,7 +14,6 @@ export const PAYMENT_EVENT_CATALOG = {
   PAYOUT_COMPLETED: 'payment.payout.completed',
   RECONCILIATION_MISMATCH: 'payment.reconciliation.mismatch',
 } as const;
-
 export function paymentEvent(
   name: (typeof PAYMENT_EVENT_CATALOG)[keyof typeof PAYMENT_EVENT_CATALOG],
   aggregateId: string,

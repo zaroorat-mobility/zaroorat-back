@@ -1,10 +1,8 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { RideDispatch, DispatchResponse } from '../types';
-
 export class RideDispatchRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async createOffer(
     data: {
       requestId: string;
@@ -18,7 +16,6 @@ export class RideDispatchRepository {
     tx?: TransactionClient,
   ): Promise<RideDispatch> {
     const client = tx ?? this.db.client;
-
     return client.rideDispatch.create({
       data: {
         requestId: data.requestId,
@@ -32,7 +29,6 @@ export class RideDispatchRepository {
       },
     });
   }
-
   async findByRequestAndDriver(
     requestId: string,
     driverId: string,
@@ -45,7 +41,6 @@ export class RideDispatchRepository {
       },
     });
   }
-
   async updateResponse(
     id: string,
     response: DispatchResponse,
@@ -53,7 +48,6 @@ export class RideDispatchRepository {
     tx?: TransactionClient,
   ): Promise<RideDispatch> {
     const client = tx ?? this.db.client;
-
     return client.rideDispatch.update({
       where: { id },
       data: {

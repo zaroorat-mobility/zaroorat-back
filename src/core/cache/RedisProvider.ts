@@ -1,20 +1,16 @@
 import type { Redis } from 'ioredis';
 import { redis } from './client';
 import { logger } from '@shared/logger/index.js';
-
 export interface RedisHealth {
   healthy: boolean;
   latency: number;
   timestamp: Date;
 }
-
 export class RedisProvider {
   private readonly _client: Redis = redis;
-
   get client(): Redis {
     return this._client;
   }
-
   async health(): Promise<RedisHealth> {
     const start = performance.now();
     try {

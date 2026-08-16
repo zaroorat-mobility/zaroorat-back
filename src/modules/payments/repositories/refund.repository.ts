@@ -2,10 +2,8 @@ import { Decimal } from '../types/index.js';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { Refund } from '../types';
-
 export class RefundRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async create(
     data: {
       transactionId: string;
@@ -30,18 +28,21 @@ export class RefundRepository {
       },
     });
   }
-
   async findByIdempotencyKey(key: string, tx?: TransactionClient): Promise<Refund | null> {
     const client = tx ?? this.db.client;
     return client.refund.findUnique({
       where: { idempotencyKey: key },
     });
   }
-
   async findTransactionForRefund(
     transactionId: string,
     tx?: TransactionClient,
-  ): Promise<{ id: string; userId: string; amount: Decimal; status: string } | null> {
+  ): Promise<{
+    id: string;
+    userId: string;
+    amount: Decimal;
+    status: string;
+  } | null> {
     const client = tx ?? this.db.client;
     const txn = await client.paymentTransaction.findUnique({
       where: { id: transactionId },
@@ -49,7 +50,6 @@ export class RefundRepository {
     });
     return txn ?? null;
   }
-
   async getTotalRefundedForTransaction(
     transactionId: string,
     tx?: TransactionClient,
@@ -61,7 +61,6 @@ export class RefundRepository {
     });
     return aggregate._sum.amount ?? new Decimal(0);
   }
-
   async updateStatus(
     id: string,
     status: string,

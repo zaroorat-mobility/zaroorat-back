@@ -1,10 +1,8 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { DriverBankAccount } from '../types';
-
 export class DriverBankRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async createAccount(
     data: {
       driverId: string;
@@ -18,14 +16,12 @@ export class DriverBankRepository {
     tx?: TransactionClient,
   ): Promise<DriverBankAccount> {
     const client = tx ?? this.db.client;
-
     if (data.isDefault) {
       await client.driverBankAccount.updateMany({
         where: { driverId: data.driverId },
         data: { isDefault: false },
       });
     }
-
     return client.driverBankAccount.create({
       data: {
         driverId: data.driverId,
@@ -40,7 +36,6 @@ export class DriverBankRepository {
       },
     });
   }
-
   async findByDriverId(driverId: string, tx?: TransactionClient): Promise<DriverBankAccount[]> {
     const client = tx ?? this.db.client;
     return client.driverBankAccount.findMany({

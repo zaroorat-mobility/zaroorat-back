@@ -5,7 +5,7 @@ import {
   hasEnforceableDimensions,
   inspect,
   matchesSignature,
-} from '../../../src/modules/files/utils/content-inspector.js';
+} from '../../../src/modules/files/utils/inspection/content-inspector.js';
 
 function png(width: number, height: number): Buffer {
   const buffer = Buffer.alloc(24);

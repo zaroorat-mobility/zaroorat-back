@@ -10,10 +10,10 @@ import { fileConfig } from '../../src/config/file/file.config.js';
 import {
   clearFileReferences,
   registerFileReference,
-} from '../../src/modules/files/references/file-references.js';
+} from '../../src/modules/files/services/file-reference.service.js';
 import type { FileRetentionJob } from '../../src/modules/files/jobs/retention.job.js';
 import type { FileSweeperJob } from '../../src/modules/files/jobs/sweeper.job.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -117,13 +117,22 @@ describe('file jobs (integration)', () => {
     it('collects an EXPIRED row too — the state doc 01 §7 ends here', async () => {
       const user = await loginAs(app, '+919876590004');
       const { fileId, storageKey } = await reserve(user.authHeader);
+      provider.putObject(storageKey, png(), 'image/png');
 
-      provider.putObject(storageKey, Buffer.from('not a png at all'), 'image/png');
-      await app.inject({
+      // A client that comes back after its write permission lapsed. The bytes
+      // are never inspected, so this is an expiry rather than a refusal — the
+      // row has to reach EXPIRED for the sweeper to have anything to collect.
+      await db().client.file.update({
+        where: { id: fileId },
+        data: { uploadExpiresAt: new Date(Date.now() - 1000) },
+      });
+      const late = await app.inject({
         method: 'POST',
         url: `/api/v1/files/${fileId}/complete`,
         headers: user.authHeader,
       });
+      assert.equal(late.statusCode, 410, late.payload);
+      assert.equal(late.json().error.code, 'UPLOAD_EXPIRED');
       assert.equal(
         (await db().client.file.findUniqueOrThrow({ where: { id: fileId } })).status,
         'EXPIRED',
@@ -132,6 +141,30 @@ describe('file jobs (integration)', () => {
       await sweeper.run(afterUploadWindow());
 
       assert.equal(await db().client.file.findUnique({ where: { id: fileId } }), null);
+    });
+
+    it('leaves a REJECTED row alone — the refusal is the record', async () => {
+      const user = await loginAs(app, '+919876590005');
+      const { fileId, storageKey } = await reserve(user.authHeader);
+
+      provider.putObject(storageKey, Buffer.from('not a png at all'), 'image/png');
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/files/${fileId}/complete`,
+        headers: user.authHeader,
+      });
+      const refused = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
+      assert.equal(refused.status, 'REJECTED');
+      assert.equal(refused.rejectedReason, 'CONTENT_MISMATCH');
+
+      await sweeper.run(afterUploadWindow());
+
+      // Retention destroys refused objects on the purpose's schedule; the
+      // sweeper reclaims abandoned reservations, and a refusal is neither.
+      assert.ok(
+        await db().client.file.findUnique({ where: { id: fileId } }),
+        'the durable trace of the refusal survives the sweeper',
+      );
     });
 
     it('deletes the object before the row, so a failure is retriable', async () => {

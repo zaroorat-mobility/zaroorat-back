@@ -5,7 +5,6 @@ import { DeviceRepository, type CreateDeviceInput } from '../../repositories/dev
 import { authEvent } from '../../events';
 import { SessionService } from './session.service';
 import { SessionMetrics } from '../../metrics';
-
 export class DeviceService {
   constructor(
     private readonly deviceRepository: DeviceRepository,
@@ -14,7 +13,6 @@ export class DeviceService {
     private readonly eventPublisher: EventPublisher,
     private readonly transactionManager: TransactionManager,
   ) {}
-
   async register(input: CreateDeviceInput, tx?: TransactionClient): Promise<UserDevice> {
     if (input.deviceId) {
       const existing = await this.deviceRepository.findByUserAndDevice(
@@ -34,25 +32,20 @@ export class DeviceService {
     this.sessionMetrics.deviceRegistered({ userId: input.userId });
     return device;
   }
-
   async listDevices(userId: string): Promise<UserDevice[]> {
     return this.deviceRepository.findAllByUser(userId);
   }
-
   async revokeForUser(userId: string, deviceId: string): Promise<number | null> {
     const device = await this.deviceRepository.findOwned(userId, deviceId);
     if (!device) return null;
     return this.revoke(deviceId, 'self');
   }
-
   async touchLastSeen(deviceId: string, at: Date = new Date()): Promise<void> {
     await this.deviceRepository.touchLastSeen(deviceId, at);
   }
-
   async markTrusted(deviceId: string): Promise<UserDevice> {
     return this.deviceRepository.updateTrustState(deviceId, 'TRUSTED');
   }
-
   async markSuspicious(deviceId: string): Promise<UserDevice> {
     return this.transactionManager.execute(async (tx) => {
       const device = await this.deviceRepository.updateTrustState(deviceId, 'SUSPICIOUS', tx);
@@ -67,7 +60,6 @@ export class DeviceService {
       return device;
     });
   }
-
   async revoke(deviceId: string, actor: string = 'system'): Promise<number> {
     await this.transactionManager.execute(async (tx) => {
       const device = await this.deviceRepository.updateTrustState(deviceId, 'REVOKED', tx);

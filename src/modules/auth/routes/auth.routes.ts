@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-
 import { container } from '@core/di';
 import { rateLimits } from '@config';
 import { AuthService } from '../services/auth.service';
@@ -18,17 +17,13 @@ import {
   verifyOtpBodySchema,
   verifyOtpResponse,
 } from '../schemas/auth.responses';
-
 const noContent = { type: 'null', description: 'No content' } as const;
-
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   const controller = new AuthController(container.resolve<AuthService>('authService'));
-
   app.post(
     '/otp/send',
     {
       config: { public: true },
-
       preHandler: app.rateLimit(rateLimits.otpSend),
       schema: {
         tags: ['Auth'],
@@ -47,12 +42,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.sendOtp,
   );
-
   app.post(
     '/otp/verify',
     {
       config: { public: true },
-
       preHandler: app.rateLimit(rateLimits.otpVerify),
       schema: {
         tags: ['Auth'],
@@ -76,7 +69,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.verifyOtp,
   );
-
   app.post(
     '/token/refresh',
     {
@@ -101,7 +93,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.refresh,
   );
-
   app.post(
     '/logout',
     {
@@ -121,7 +112,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.logout,
   );
-
   app.get(
     '/me/sessions',
     {
@@ -138,7 +128,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.listSessions,
   );
-
   app.delete(
     '/me/sessions',
     {
@@ -155,7 +144,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.revokeAllSessions,
   );
-
   app.delete(
     '/me/sessions/:id',
     {
@@ -174,7 +162,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.revokeSession,
   );
-
   app.get(
     '/me/devices',
     {
@@ -191,7 +178,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.listDevices,
   );
-
   app.delete(
     '/me/devices/:id',
     {
@@ -200,7 +186,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         summary: 'Revoke registered device',
         description:
           'Marks the device REVOKED and terminates every session bound to it. The device may ' +
-          'register again on a future login (see module README §Device lifecycle).',
+          'register again on a future login (see module README \u00A7Device lifecycle).',
         security: [{ bearerAuth: [] }],
         params: idParamSchema,
         response: {

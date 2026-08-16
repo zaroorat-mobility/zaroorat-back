@@ -2,30 +2,29 @@ import { Decimal } from '../types/index.js';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { CustomerWallet, CustomerWalletTransaction, WalletHold, WalletTopup } from '../types';
-
 export class WalletRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async findByUserId(userId: string, tx?: TransactionClient): Promise<CustomerWallet | null> {
     const client = tx ?? this.db.client;
     return client.customerWallet.findUnique({
       where: { userId },
     });
   }
-
   async lockForUpdate(userId: string, tx: TransactionClient): Promise<CustomerWallet | null> {
-    const locked = await tx.$queryRaw<{ id: string }[]>`
+    const locked = await tx.$queryRaw<
+      {
+        id: string;
+      }[]
+    >`
       SELECT "id" FROM "customer_wallets" WHERE "user_id" = ${userId}::uuid FOR UPDATE
     `;
     if (locked.length === 0) return null;
     return tx.customerWallet.findUnique({ where: { userId } });
   }
-
   async getOrCreateWallet(userId: string, tx?: TransactionClient): Promise<CustomerWallet> {
     const client = tx ?? this.db.client;
     const existing = await client.customerWallet.findUnique({ where: { userId } });
     if (existing) return existing;
-
     return client.customerWallet.create({
       data: {
         userId,
@@ -35,7 +34,6 @@ export class WalletRepository {
       },
     });
   }
-
   async updateBalances(
     walletId: string,
     balance: Decimal,
@@ -51,7 +49,6 @@ export class WalletRepository {
       },
     });
   }
-
   async recordTransaction(
     data: {
       walletId: string;
@@ -78,7 +75,6 @@ export class WalletRepository {
       },
     });
   }
-
   async listTransactions(
     walletId: string,
     limit = 50,
@@ -91,7 +87,6 @@ export class WalletRepository {
       take: limit,
     });
   }
-
   async createHold(
     data: {
       walletType: string;
@@ -117,7 +112,6 @@ export class WalletRepository {
       },
     });
   }
-
   async releaseHold(holdId: string, tx: TransactionClient): Promise<WalletHold> {
     return tx.walletHold.update({
       where: { id: holdId },
@@ -127,7 +121,6 @@ export class WalletRepository {
       },
     });
   }
-
   async createTopupRecord(
     data: {
       userId: string;

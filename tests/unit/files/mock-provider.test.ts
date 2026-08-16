@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
-import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
-import { StorageError } from '../../../src/modules/files/providers/storage.provider.js';
+import { MockStorageProvider } from '../../../src/modules/files/utils/storage/mock.provider.js';
+import { StorageError } from '../../../src/modules/files/utils/storage/storage.provider.js';
 
 describe('MockStorageProvider', () => {
   const KEY = 'dd/2026/08/c9f0f895fb98ab9159f51fd0297e236d.pdf';
@@ -88,14 +88,14 @@ describe('MockStorageProvider', () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
       const verdict = provider.verifyUrl(signed.url, {
         method: 'PUT',
         contentType: 'application/pdf',
-        sizeBytes: 999,
+        sizeBytes: 1000,
       });
       assert.deepEqual(verdict, { ok: true, key: KEY });
     });
@@ -104,7 +104,7 @@ describe('MockStorageProvider', () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -116,7 +116,7 @@ describe('MockStorageProvider', () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -127,11 +127,15 @@ describe('MockStorageProvider', () => {
       assert.deepEqual(verdict, { ok: false, reason: 'wrong-content-type' });
     });
 
-    it('binds the size ceiling, rather than merely checking it afterwards (R-FILE-2)', async () => {
+    // S3's signed Content-Length is an exact match, not a ceiling: verified
+    // against the real bucket, a body one byte over AND one byte under a
+    // 1024-byte signature both fail with SignatureDoesNotMatch. The mock binds
+    // the same way so a passing test here means a passing upload there.
+    it('refuses a body larger than the signed length (R-FILE-2)', async () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -140,14 +144,30 @@ describe('MockStorageProvider', () => {
         contentType: 'application/pdf',
         sizeBytes: 1001,
       });
-      assert.deepEqual(verdict, { ok: false, reason: 'too-large' });
+      assert.deepEqual(verdict, { ok: false, reason: 'wrong-length' });
+    });
+
+    it('refuses a body smaller than the signed length, as S3 does', async () => {
+      const signed = await provider.signUpload({
+        key: KEY,
+        contentType: 'application/pdf',
+        contentLength: 1000,
+        ttlSeconds: 900,
+      });
+
+      const verdict = provider.verifyUrl(signed.url, {
+        method: 'PUT',
+        contentType: 'application/pdf',
+        sizeBytes: 999,
+      });
+      assert.deepEqual(verdict, { ok: false, reason: 'wrong-length' });
     });
 
     it('cannot be edited to point at another key', async () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -191,7 +211,7 @@ describe('MockStorageProvider', () => {
           provider.signUpload({
             key: KEY,
             contentType: 'application/pdf',
-            maxBytes: 1000,
+            contentLength: 1000,
             ttlSeconds: 900,
           }),
         (error: unknown) => {
@@ -225,7 +245,7 @@ describe('MockStorageProvider', () => {
       await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 10,
+        contentLength: 10,
         ttlSeconds: 60,
       });
       await provider.head(KEY, 512);

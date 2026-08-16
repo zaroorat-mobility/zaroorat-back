@@ -5,7 +5,6 @@ import { SettlementRepository } from '../../repositories/settlement.repository.j
 import { LedgerService } from '../ledger/ledger.service.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import type { DriverSettlement } from '../../types';
-
 export class SettlementService {
   constructor(
     private readonly settlementRepo: SettlementRepository,
@@ -13,7 +12,6 @@ export class SettlementService {
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
   ) {}
-
   async calculateSettlement(data: {
     driverId: string;
     periodStart: Date;
@@ -26,18 +24,15 @@ export class SettlementService {
       data.periodEnd,
     );
     if (existing) return existing;
-
     const earned = await this.settlementRepo.aggregateEarnings(
       data.driverId,
       data.periodStart,
       data.periodEnd,
     );
-
     const grossEarnings = earned.collectedFare;
     const commission = earned.commission;
     const adjustments = data.adjustments ?? new Decimal(0);
     const netPayable = grossEarnings.sub(commission).add(adjustments);
-
     return this.txManager.execute(async (tx) => {
       const settlement = await this.settlementRepo.create(
         {
@@ -51,7 +46,6 @@ export class SettlementService {
         },
         tx,
       );
-
       await this.eventPublisher.publish(
         paymentEvent(PAYMENT_EVENT_CATALOG.SETTLEMENT_COMPLETED, data.driverId, {
           settlementId: settlement.id,
@@ -60,7 +54,6 @@ export class SettlementService {
         }),
         tx,
       );
-
       return settlement;
     });
   }

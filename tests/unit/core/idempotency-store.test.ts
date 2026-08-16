@@ -5,6 +5,7 @@ import {
   IdempotencyInFlightError,
   IdempotencyStore,
 } from '../../../src/core/cache/stores/IdempotencyStore.js';
+import { IDEMPOTENCY_OPERATIONS } from '../../../src/core/cache/keys.js';
 
 function makeStore() {
   const keys = new Map<string, string>();
@@ -32,12 +33,14 @@ function makeStore() {
   return { store, keys, calls };
 }
 
+const OP = IDEMPOTENCY_OPERATIONS.OTP_VERIFY;
+
 describe('IdempotencyStore.runOnce', () => {
   it('executes the operation once and returns its result', async () => {
     const { store } = makeStore();
     let runs = 0;
 
-    const result = await store.runOnce('k1', 60, async () => {
+    const result = await store.runOnce(OP, 'k1', 60, async () => {
       runs += 1;
       return { token: 'abc' };
     });
@@ -57,7 +60,7 @@ describe('IdempotencyStore.runOnce', () => {
     };
 
     const settled = await Promise.allSettled(
-      Array.from({ length: 8 }, () => store.runOnce('k2', 60, operation)),
+      Array.from({ length: 8 }, () => store.runOnce(OP, 'k2', 60, operation)),
     );
 
     assert.equal(runs, 1, 'the business operation must not run twice');
@@ -79,8 +82,8 @@ describe('IdempotencyStore.runOnce', () => {
       return { pair: runs };
     };
 
-    const first = await store.runOnce('k3', 60, operation);
-    const second = await store.runOnce('k3', 60, operation);
+    const first = await store.runOnce(OP, 'k3', 60, operation);
+    const second = await store.runOnce(OP, 'k3', 60, operation);
 
     assert.deepEqual(second, first, 'the retry gets the original answer');
     assert.equal(runs, 1, 'and the operation still ran only once');
@@ -93,13 +96,13 @@ describe('IdempotencyStore.runOnce', () => {
       release = resolve;
     });
 
-    const first = store.runOnce('k4', 60, async () => {
+    const first = store.runOnce(OP, 'k4', 60, async () => {
       await blocked;
       return 'done';
     });
 
     await assert.rejects(
-      () => store.runOnce('k4', 60, async () => 'second'),
+      () => store.runOnce(OP, 'k4', 60, async () => 'second'),
       IdempotencyInFlightError,
     );
 
@@ -117,7 +120,7 @@ describe('IdempotencyStore.runOnce', () => {
 
     await assert.rejects(
       () =>
-        store.runOnce('k5', 60, async () => {
+        store.runOnce(OP, 'k5', 60, async () => {
           attempts += 1;
           throw new Error('database is down');
         }),
@@ -125,7 +128,7 @@ describe('IdempotencyStore.runOnce', () => {
     );
     assert.equal(keys.size, 0, 'the claim was dropped');
 
-    const recovered = await store.runOnce('k5', 60, async () => {
+    const recovered = await store.runOnce(OP, 'k5', 60, async () => {
       attempts += 1;
       return 'ok';
     });
@@ -135,7 +138,7 @@ describe('IdempotencyStore.runOnce', () => {
 
   it('claims with a single SET NX rather than a read followed by a write', async () => {
     const { store, calls } = makeStore();
-    await store.runOnce('k6', 60, async () => 'v');
+    await store.runOnce(OP, 'k6', 60, async () => 'v');
 
     assert.equal(calls.get, 0, 'the happy path never reads before claiming');
     assert.equal(calls.set, 2, 'one claim, one result write');
@@ -149,8 +152,8 @@ describe('IdempotencyStore.runOnce', () => {
       return runs;
     };
 
-    await store.runOnce('a', 60, operation);
-    await store.runOnce('b', 60, operation);
+    await store.runOnce(OP, 'a', 60, operation);
+    await store.runOnce(OP, 'b', 60, operation);
 
     assert.equal(runs, 2, 'a claim on one key must not block another');
   });

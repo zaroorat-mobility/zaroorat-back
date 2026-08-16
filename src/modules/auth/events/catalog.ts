@@ -1,13 +1,10 @@
 import type { EventClassification, PublishInput } from '@core/events';
-
 interface CatalogEntry {
   classification: EventClassification;
   aggregateType: string;
   version?: number;
 }
-
 export const AUTH_PRODUCER = 'auth';
-
 export const AUTH_EVENT_CATALOG = {
   'auth.otp.requested': { classification: 'observability', aggregateType: 'phone' },
   'auth.otp.sent': { classification: 'observability', aggregateType: 'phone' },
@@ -26,9 +23,7 @@ export const AUTH_EVENT_CATALOG = {
   'account.reactivated': { classification: 'audit', aggregateType: 'user' },
   'account.recovery.completed': { classification: 'audit', aggregateType: 'user' },
 } satisfies Record<string, CatalogEntry>;
-
 export type AuthEventType = keyof typeof AUTH_EVENT_CATALOG;
-
 export interface AuthEventFields {
   aggregateId?: string | null;
   subjectUserId?: string | null;
@@ -36,7 +31,6 @@ export interface AuthEventFields {
   requestId?: string | null;
   data?: Record<string, unknown>;
 }
-
 export function authEvent(type: AuthEventType, fields: AuthEventFields): PublishInput {
   const entry: CatalogEntry | undefined = AUTH_EVENT_CATALOG[type];
   if (!entry) throw new Error(`Unknown AUTH event type: ${type}`);

@@ -19,13 +19,9 @@ import {
 } from '../repositories';
 import { userEvent } from '../events';
 import { UserMetrics } from '../metrics';
-
 const ERASURE_LOCK = 'user:erasure';
-
 const ERASURE_LOCK_TTL_MS = 15 * 60 * 1000;
-
 const AVATAR_DEAD_LETTER_KEY = 'user:erasure:avatar:deadletter';
-
 export interface ErasureResult {
   ran: boolean;
   scanned: number;
@@ -34,7 +30,6 @@ export interface ErasureResult {
   failed: number;
   avatarsStranded: number;
 }
-
 interface ErasureCounts {
   emergencyContacts: number;
   savedPlaces: number;
@@ -43,16 +38,13 @@ interface ErasureCounts {
   devices: number;
   otpAttempts: number;
 }
-
 export interface StrandedAvatar {
   userId: string;
   fileId: string;
   error: string;
   at: string;
 }
-
 type Skip = 'CANCELLED' | 'BLOCKED' | 'ALREADY_ERASED' | 'NOT_DEACTIVATED' | 'GONE';
-
 export class AccountErasureJob {
   constructor(
     private readonly deletionRequestRepository: DeletionRequestRepository,
@@ -70,20 +62,17 @@ export class AccountErasureJob {
     private readonly redisService: RedisService,
     private readonly userMetrics: UserMetrics,
   ) {}
-
   async run(now: Date = new Date()): Promise<ErasureResult> {
     const token = await this.redisService.lock.acquire(ERASURE_LOCK, ERASURE_LOCK_TTL_MS);
     if (!token) {
       return { ran: false, scanned: 0, erased: 0, blocked: 0, failed: 0, avatarsStranded: 0 };
     }
-
     try {
       const due = await this.deletionRequestRepository.findDue(now, userConfig.erasureBatchSize);
       let erased = 0;
       let blocked = 0;
       let failed = 0;
       let avatarsStranded = 0;
-
       for (const request of due) {
         try {
           const outcome = await this.eraseAccount(request.id, request.userId, now);
@@ -101,56 +90,54 @@ export class AccountErasureJob {
           );
         }
       }
-
       this.userMetrics.accountsErased({ count: erased, blocked, failed, avatarsStranded });
       return { ran: true, scanned: due.length, erased, blocked, failed, avatarsStranded };
     } finally {
       await this.redisService.lock.release(ERASURE_LOCK, token);
     }
   }
-
   async strandedAvatars(): Promise<StrandedAvatar[]> {
     const entries = await this.redisService.provider.client.hgetall(AVATAR_DEAD_LETTER_KEY);
     return Object.values(entries).map((value) => JSON.parse(value) as StrandedAvatar);
   }
-
   private async eraseAccount(
     requestId: string,
     userId: string,
     now: Date,
-  ): Promise<{ kind: 'SKIPPED'; reason: Skip } | { kind: 'ERASED'; avatarStranded: boolean }> {
+  ): Promise<
+    | {
+        kind: 'SKIPPED';
+        reason: Skip;
+      }
+    | {
+        kind: 'ERASED';
+        avatarStranded: boolean;
+      }
+  > {
     const decided = await this.transactionManager.execute(async (tx) => {
       await this.userRepository.lockForUpdate(userId, tx);
-
       const skip = (reason: Skip) => ({ kind: 'SKIPPED' as const, reason });
-
       const request = await this.deletionRequestRepository.findById(requestId, tx);
       if (!request || request.status !== 'PENDING') return skip('CANCELLED');
-
       const user = await this.userRepository.findById(userId, tx);
       if (!user) return skip('GONE');
       if (user.deletedAt !== null) return skip('ALREADY_ERASED');
       if (user.status !== 'DEACTIVATED') return skip('NOT_DEACTIVATED');
-
       const obligations = await this.obligationsRepository.findOpenObligations(userId, tx);
       if (obligations.length > 0) {
         this.userMetrics.erasureBlocked({ modules: obligations.map((o) => o.module).join(',') });
         return skip('BLOCKED');
       }
-
       const avatarFileId =
         (await this.userProfileRepository.findByUserId(userId, tx))?.profileImageFileId ?? null;
       const phoneNumber = user.phoneNumber;
-
       const counts = await this.scrub(userId, phoneNumber, now, tx);
-
       const marked = await this.deletionRequestRepository.markErased(requestId, now, tx);
       if (!marked) {
         throw new Error(
           `Deletion request ${requestId} changed state while its user row was locked`,
         );
       }
-
       await this.eventPublisher.publish(
         userEvent('user.account.erased', {
           subjectUserId: userId,
@@ -158,19 +145,14 @@ export class AccountErasureJob {
         }),
         tx,
       );
-
       return { kind: 'ERASED' as const, avatarFileId };
     });
-
     if (decided.kind === 'SKIPPED') return decided;
-
     const avatarStranded = decided.avatarFileId
       ? !(await this.releaseAvatar(decided.avatarFileId, userId))
       : false;
-
     return { kind: 'ERASED', avatarStranded };
   }
-
   private async scrub(
     userId: string,
     phoneNumber: string,
@@ -183,12 +165,9 @@ export class AccountErasureJob {
     const otpAttempts = await this.otpRepository.deleteForUser(userId, phoneNumber, tx);
     const sessions = await this.sessionRepository.anonymizeForUser(userId, tx);
     const devices = await this.deviceRepository.anonymizeForUser(userId, tx);
-
     await this.userRepository.anonymize(userId, at, tx);
-
     return { emergencyContacts, savedPlaces, profile, sessions, devices, otpAttempts };
   }
-
   private async releaseAvatar(fileId: string, userId: string): Promise<boolean> {
     try {
       await this.fileService.remove(fileId, userId);

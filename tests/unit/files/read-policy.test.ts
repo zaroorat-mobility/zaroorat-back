@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { decideRead } from '../../../src/modules/files/policies/read-policy.js';
+import { decideRead } from '../../../src/modules/files/services/file-access.service.js';
 import type { FilePurposeName } from '../../../src/config/file/file.config.js';
 
 const OWNER = 'user-owner';

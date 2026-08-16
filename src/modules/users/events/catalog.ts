@@ -1,13 +1,10 @@
 import type { EventClassification, PublishInput } from '@core/events';
-
 interface CatalogEntry {
   classification: EventClassification;
   aggregateType: string;
   version?: number;
 }
-
 export const USER_PRODUCER = 'users';
-
 export const USER_EVENT_CATALOG = {
   'user.profile.created': { classification: 'domain', aggregateType: 'user' },
   'user.profile.updated': { classification: 'domain', aggregateType: 'user' },
@@ -24,9 +21,7 @@ export const USER_EVENT_CATALOG = {
   'user.saved_place.updated': { classification: 'domain', aggregateType: 'user' },
   'user.saved_place.removed': { classification: 'domain', aggregateType: 'user' },
 } satisfies Record<string, CatalogEntry>;
-
 export type UserEventType = keyof typeof USER_EVENT_CATALOG;
-
 export interface UserEventFields {
   aggregateId?: string | null;
   subjectUserId?: string | null;
@@ -34,7 +29,6 @@ export interface UserEventFields {
   requestId?: string | null;
   data?: Record<string, unknown>;
 }
-
 export function userEvent(type: UserEventType, fields: UserEventFields): PublishInput {
   const entry: CatalogEntry | undefined = USER_EVENT_CATALOG[type];
   if (!entry) throw new Error(`Unknown USER event type: ${type}`);

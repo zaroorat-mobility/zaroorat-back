@@ -25,7 +25,6 @@ import {
   DriverController,
 } from './controllers/index.js';
 import { HeartbeatTimeoutJob, DocExpirationJob } from './jobs/index.js';
-
 export * from './controllers/index.js';
 export * from './routes/index.js';
 export * from './schemas/index.js';
@@ -39,11 +38,9 @@ export * from './errors/index.js';
 export * from './constants/index.js';
 export * from './types/index.js';
 export * from './utils/index.js';
-
 export function registerDriversModule(container: AwilixContainer): void {
   container.register({
     driverMetrics: asClass(DriverMetrics).singleton(),
-
     driverRepository: asClass(DriverRepository).singleton(),
     driverDocumentRepository: asClass(DriverDocumentRepository).singleton(),
     driverBankRepository: asClass(DriverBankRepository).singleton(),
@@ -51,13 +48,11 @@ export function registerDriversModule(container: AwilixContainer): void {
     driverStatusRepository: asClass(DriverStatusRepository).singleton(),
     driverLocationRepository: asClass(DriverLocationRepository).singleton(),
     driverShiftRepository: asClass(DriverShiftRepository).singleton(),
-
     onboardingService: asClass(OnboardingService).singleton(),
     statusService: asClass(StatusService).singleton(),
     locationService: asClass(LocationService).singleton(),
     driverWalletViewService: asClass(DriverWalletViewService).singleton(),
     shiftService: asClass(ShiftService).singleton(),
-
     driverService: asClass(DriverService)
       .singleton()
       .inject((c) => ({
@@ -67,7 +62,6 @@ export function registerDriversModule(container: AwilixContainer): void {
         wallet: c.resolve('driverWalletViewService'),
         shift: c.resolve('shiftService'),
       })),
-
     driverOnboardingController: asClass(DriverOnboardingController).singleton(),
     driverStatusController: asClass(DriverStatusController).singleton(),
     driverLocationController: asClass(DriverLocationController).singleton(),
@@ -80,9 +74,7 @@ export function registerDriversModule(container: AwilixContainer): void {
         location: c.resolve('driverLocationController'),
         wallet: c.resolve('driverWalletController'),
       })),
-
     heartbeatTimeoutJob: asClass(HeartbeatTimeoutJob).singleton(),
-
     driverRepo: aliasTo('driverRepository'),
     docRepo: aliasTo('driverDocumentRepository'),
     locationRepo: aliasTo('driverLocationRepository'),

@@ -8,7 +8,6 @@ export interface RideRateCard {
   taxRate: number;
   minimumFare: number;
 }
-
 export interface RideConfig {
   defaultSearchRadiusKm: number;
   dispatchTimeoutSeconds: number;
@@ -19,7 +18,6 @@ export interface RideConfig {
   defaultRateCard: RideRateCard;
   rateCardsByVehicleType: Readonly<Record<string, RideRateCard>>;
 }
-
 const defaultRateCard: RideRateCard = Object.freeze({
   baseFare: Number(process.env.RIDE_BASE_FARE ?? 50),
   perKm: Number(process.env.RIDE_RATE_PER_KM ?? 12),
@@ -30,11 +28,9 @@ const defaultRateCard: RideRateCard = Object.freeze({
   taxRate: Number(process.env.RIDE_TAX_RATE ?? 0.05),
   minimumFare: Number(process.env.RIDE_MINIMUM_FARE ?? 50),
 });
-
 function parseRateCards(): Readonly<Record<string, RideRateCard>> {
   const raw = process.env.RIDE_RATE_CARDS_JSON;
   if (raw == null || raw.trim() === '') return Object.freeze({});
-
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -44,7 +40,6 @@ function parseRateCards(): Readonly<Record<string, RideRateCard>> {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error('RIDE_RATE_CARDS_JSON must be a JSON object keyed by vehicle type');
   }
-
   const cards: Record<string, RideRateCard> = {};
   for (const [vehicleType, override] of Object.entries(parsed as Record<string, unknown>)) {
     if (typeof override !== 'object' || override === null) {
@@ -57,7 +52,6 @@ function parseRateCards(): Readonly<Record<string, RideRateCard>> {
   }
   return Object.freeze(cards);
 }
-
 export const rideConfig: RideConfig = Object.freeze({
   defaultSearchRadiusKm: Number(process.env.RIDE_SEARCH_RADIUS_KM ?? 5),
   dispatchTimeoutSeconds: Number(process.env.RIDE_DISPATCH_TIMEOUT_SEC ?? 30),

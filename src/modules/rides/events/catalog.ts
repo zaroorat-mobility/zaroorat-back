@@ -1,7 +1,5 @@
 import type { PublishInput } from '@core/events/types.js';
-
 export const RIDE_PRODUCER = 'rides';
-
 export const RIDE_EVENT_CATALOG = {
   REQUESTED: 'ride.requested',
   DISPATCH_OFFERED: 'ride.dispatch.offered',
@@ -13,7 +11,6 @@ export const RIDE_EVENT_CATALOG = {
   COMPLETED: 'ride.completed',
   CANCELLED: 'ride.cancelled',
 } as const;
-
 export function rideEvent(
   name: (typeof RIDE_EVENT_CATALOG)[keyof typeof RIDE_EVENT_CATALOG],
   aggregateId: string,

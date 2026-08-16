@@ -9,7 +9,7 @@ import { userConfig } from '../../src/config/user/index.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { AccountService } from '../../src/modules/users/services/account/account.service.js';
 import type { AccountErasureJob } from '../../src/modules/users/jobs/account-erasure.job.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 let issued = 8000;
 const phone = (): string => `+91987651${(issued += 1)}`;

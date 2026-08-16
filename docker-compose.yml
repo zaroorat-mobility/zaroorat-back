@@ -1,12 +1,23 @@
-# Local development stack: API + Postgres + Redis.
-# The worker service is intentionally absent until src/jobs/workers is implemented
-# and Dockerfile.worker exists (see docs/04_Architecture/05_deployment-architecture.md "Production topology").
+# Local development stack: API + Worker + Postgres + Redis.
+# API and worker run the same image with different entrypoints — the worker owns
+# every queue, including OTP SMS delivery, so an API-only stack sends no SMS.
 #
 #   make up      start everything
 #   make logs    tail the api
 #   make down    stop and remove volumes
 
 name: zaroorat-backend
+
+x-app-env: &app-env
+  APP_NAME: zaroorat-backend
+  APP_ENV: development
+  NODE_ENV: development
+  DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_dev
+  REDIS_URL: redis://redis:6379
+  JWT_ACCESS_SECRET: local_dev_access_secret_do_not_use_in_prod
+  JWT_REFRESH_SECRET: local_dev_refresh_secret_do_not_use_in_prod
+  JWT_ACCESS_EXPIRES_IN: 15m
+  JWT_REFRESH_EXPIRES_IN: 30d
 
 services:
   api:
@@ -15,17 +26,9 @@ services:
       target: runner
     # Override the production default so local runs get readable logs.
     environment:
-      APP_NAME: zaroorat-backend
-      APP_ENV: development
-      NODE_ENV: development
+      <<: *app-env
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_dev
-      REDIS_URL: redis://redis:6379
-      JWT_ACCESS_SECRET: local_dev_access_secret_do_not_use_in_prod
-      JWT_REFRESH_SECRET: local_dev_refresh_secret_do_not_use_in_prod
-      JWT_ACCESS_EXPIRES_IN: 15m
-      JWT_REFRESH_EXPIRES_IN: 30d
     ports:
       - '3000:3000'
     depends_on:
@@ -33,6 +36,37 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: runner
+    command: ['node', 'dist/worker.js']
+    environment:
+      <<: *app-env
+      WORKER_HEALTH_PORT: 3001
+    # Not published: the health server exists for orchestrator probes, not for
+    # callers. Reach it from inside the network if you need it.
+    expose:
+      - '3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   postgres:

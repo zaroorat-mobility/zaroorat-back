@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { inspect } from '../../../src/modules/files/utils/content-inspector.js';
+import { inspect } from '../../../src/modules/files/utils/inspection/content-inspector.js';
 import { jpeg, png, tiffBlock, webp, webpLossy } from '../../helpers/image-fixtures.js';
 
 function locationOf(contentType: string, header: Buffer): string {

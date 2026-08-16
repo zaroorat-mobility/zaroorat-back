@@ -1,5 +1,4 @@
 import type { AppPlatform } from '@core/database/types';
-
 export interface DeviceContext {
   deviceId?: string | null;
   platform?: AppPlatform | null;

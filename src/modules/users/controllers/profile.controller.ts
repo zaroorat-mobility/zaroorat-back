@@ -11,7 +11,6 @@ import {
   type UpdateProfileBody,
 } from '../schemas';
 import { parseDateOnly } from '../utils';
-
 function toProfileUpdate(body: UpdateProfileBody): UpdateUserProfileInput {
   const changes: UpdateUserProfileInput = {};
   if (Object.hasOwn(body, 'firstName')) changes.firstName = body.firstName ?? null;
@@ -26,27 +25,21 @@ function toProfileUpdate(body: UpdateProfileBody): UpdateUserProfileInput {
   if (Object.hasOwn(body, 'languageCode')) changes.languageCode = body.languageCode ?? null;
   return changes;
 }
-
 export class ProfileController {
   constructor(private readonly userService: UserService) {}
-
   getMe = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
     return reply.status(200).send(await this.userService.getMe(auth.userId));
   };
-
   updateProfile = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
     const body = request.body ?? {};
-
     const immutable = findImmutableFields(body);
     if (immutable.length > 0) {
       return replyFromUserError(request, reply, new ImmutableFieldError(immutable));
     }
-
     const parsed = updateProfileSchema.safeParse(body);
     if (!parsed.success) {
       return replyFromUserError(
@@ -55,7 +48,6 @@ export class ProfileController {
         new UserValidationError(detailsFromZodIssues(parsed.error.issues)),
       );
     }
-
     const profile = await this.userService.updateProfile(
       auth.userId,
       toProfileUpdate(parsed.data),

@@ -1,10 +1,15 @@
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { OtpVerification, OtpPurpose } from '@core/database/types';
-
-export type OtpOutcome = 'sent' | 'verified' | 'failed' | 'expired' | 'locked';
-
+export type OtpOutcome = 'queued' | 'sent' | 'verified' | 'failed' | 'expired' | 'locked';
+export interface RecordDeliveryOptions {
+  provider?: string;
+  providerRef?: string;
+  latencyMs?: number;
+  failureReason?: string;
+}
 export interface CreateOtpAttemptInput {
+  id?: string;
   phoneNumber: string;
   purpose: OtpPurpose;
   userId?: string | null;
@@ -19,20 +24,18 @@ export interface CreateOtpAttemptInput {
   outcome?: OtpOutcome | null;
   expiresAt: Date;
 }
-
 export interface UpdateOutcomeOptions {
   verifiedAt?: Date;
   failureReason?: string;
 }
-
 export class OtpRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async create(input: CreateOtpAttemptInput): Promise<OtpVerification> {
     return this.client.otpVerification.create({
       data: {
+        ...(input.id != null ? { id: input.id } : {}),
         phoneNumber: input.phoneNumber,
         purpose: input.purpose,
         expiresAt: input.expiresAt,
@@ -49,11 +52,9 @@ export class OtpRepository extends BaseRepository {
       },
     });
   }
-
   async findById(id: string): Promise<OtpVerification | null> {
     return this.client.otpVerification.findUnique({ where: { id } });
   }
-
   async updateOutcome(
     id: string,
     outcome: OtpOutcome,
@@ -69,13 +70,28 @@ export class OtpRepository extends BaseRepository {
     });
     return count === 1;
   }
-
+  async recordDelivery(
+    id: string,
+    outcome: Extract<OtpOutcome, 'sent' | 'failed'>,
+    options: RecordDeliveryOptions = {},
+  ): Promise<boolean> {
+    const { count } = await this.client.otpVerification.updateMany({
+      where: { id, verifiedAt: null },
+      data: {
+        outcome,
+        ...(options.provider != null ? { provider: options.provider } : {}),
+        ...(options.providerRef != null ? { providerRef: options.providerRef } : {}),
+        ...(options.latencyMs != null ? { latencyMs: options.latencyMs } : {}),
+        ...(options.failureReason != null ? { failureReason: options.failureReason } : {}),
+      },
+    });
+    return count === 1;
+  }
   async countByPhoneSince(phoneNumber: string, since: Date): Promise<number> {
     return this.client.otpVerification.count({
       where: { phoneNumber, createdAt: { gte: since } },
     });
   }
-
   async deleteForUser(
     userId: string,
     phoneNumber: string,
@@ -86,7 +102,6 @@ export class OtpRepository extends BaseRepository {
     });
     return count;
   }
-
   async purgeExpired(before: Date, limit: number): Promise<number> {
     return this.client.$executeRaw`
       DELETE FROM "otp_verifications"

@@ -2,7 +2,6 @@ import type { TokenPair } from '@modules/auth/services/token';
 import { errorResponseSchema } from '@modules/auth/schemas/auth.responses';
 import { userConfig } from '../config';
 export type { DeactivationReason } from '../services/account';
-
 export interface UserProfileView {
   firstName: string | null;
   lastName: string | null;
@@ -12,7 +11,6 @@ export interface UserProfileView {
   languageCode: string | null;
   referralCode: string | null;
 }
-
 export interface UserAccountView {
   id: string;
   phoneNumber: string;
@@ -25,7 +23,6 @@ export interface UserAccountView {
   lastLoginAt: Date | null;
   profile: UserProfileView;
 }
-
 export interface EmergencyContactView {
   id: string;
   contactName: string;
@@ -34,7 +31,6 @@ export interface EmergencyContactView {
   priority: number;
   createdAt: Date;
 }
-
 export interface SavedPlaceView {
   id: string;
   label: string;
@@ -47,31 +43,28 @@ export interface SavedPlaceView {
   longitude: number | null;
   createdAt: Date;
 }
-
 export interface DeletionRequestResult {
   scheduledFor: string;
 }
-
 export interface PhoneChangeChallenge {
   challengeId: string;
   expiresInSec: number;
   resendAvailableInSec: number;
 }
-
 export interface PhoneChangeResult extends TokenPair {
-  user: { id: string; phoneNumber: string; status: string };
+  user: {
+    id: string;
+    phoneNumber: string;
+    status: string;
+  };
 }
-
 export const userErrorResponseSchema = errorResponseSchema;
-
 export const noContentResponse = { type: 'null', description: 'No content' } as const;
-
 export const itemIdParamSchema = {
   type: 'object',
   properties: { id: { type: 'string', description: 'Item UUID' } },
   required: ['id'],
 } as const;
-
 export const idempotencyHeaderSchema = {
   type: 'object',
   properties: {
@@ -81,7 +74,6 @@ export const idempotencyHeaderSchema = {
     },
   },
 } as const;
-
 const profileViewProperties = {
   firstName: { type: ['string', 'null'] },
   lastName: { type: ['string', 'null'] },
@@ -91,13 +83,11 @@ const profileViewProperties = {
   languageCode: { type: ['string', 'null'] },
   referralCode: { type: ['string', 'null'] },
 } as const;
-
 export const profileResponse = {
   type: 'object',
   properties: profileViewProperties,
   required: Object.keys(profileViewProperties),
 } as const;
-
 export const accountResponse = {
   type: 'object',
   properties: {
@@ -125,7 +115,6 @@ export const accountResponse = {
     'profile',
   ],
 } as const;
-
 export const updateProfileBodySchema = {
   type: 'object',
   properties: {
@@ -146,14 +135,12 @@ export const updateProfileBodySchema = {
     },
   },
 } as const;
-
 export const phoneChangeBodySchema = {
   type: 'object',
   properties: {
     newPhoneNumber: { type: 'string', description: 'E.164 phone number, required' },
   },
 } as const;
-
 export const phoneChangeChallengeResponse = {
   type: 'object',
   properties: {
@@ -163,7 +150,6 @@ export const phoneChangeChallengeResponse = {
   },
   required: ['challengeId', 'expiresInSec', 'resendAvailableInSec'],
 } as const;
-
 export const phoneVerifyBodySchema = {
   type: 'object',
   properties: {
@@ -171,7 +157,6 @@ export const phoneVerifyBodySchema = {
     code: { type: 'string', description: '6-digit OTP code, required' },
   },
 } as const;
-
 export const phoneChangeResultResponse = {
   type: 'object',
   properties: {
@@ -197,7 +182,6 @@ export const phoneChangeResultResponse = {
     'user',
   ],
 } as const;
-
 const contactProperties = {
   id: { type: 'string', format: 'uuid' },
   contactName: { type: 'string' },
@@ -206,15 +190,12 @@ const contactProperties = {
   priority: { type: 'integer' },
   createdAt: { type: 'string', format: 'date-time' },
 } as const;
-
 export const contactResponse = {
   type: 'object',
   properties: contactProperties,
   required: Object.keys(contactProperties),
 } as const;
-
 export const contactListResponse = { type: 'array', items: contactResponse } as const;
-
 export const createContactBodySchema = {
   type: 'object',
   properties: {
@@ -224,12 +205,10 @@ export const createContactBodySchema = {
     priority: { type: 'integer', minimum: 1 },
   },
 } as const;
-
 export const updateContactBodySchema = {
   type: 'object',
   properties: createContactBodySchema.properties,
 } as const;
-
 const placeProperties = {
   id: { type: 'string', format: 'uuid' },
   label: { type: 'string' },
@@ -242,15 +221,12 @@ const placeProperties = {
   longitude: { type: ['number', 'null'] },
   createdAt: { type: 'string', format: 'date-time' },
 } as const;
-
 export const placeResponse = {
   type: 'object',
   properties: placeProperties,
   required: Object.keys(placeProperties),
 } as const;
-
 export const placeListResponse = { type: 'array', items: placeResponse } as const;
-
 export const createPlaceBodySchema = {
   type: 'object',
   properties: {
@@ -264,12 +240,10 @@ export const createPlaceBodySchema = {
     longitude: { type: ['number', 'null'], minimum: -180, maximum: 180 },
   },
 } as const;
-
 export const updatePlaceBodySchema = {
   type: 'object',
   properties: createPlaceBodySchema.properties,
 } as const;
-
 export const deactivateBodySchema = {
   type: ['object', 'null'],
   properties: {
@@ -283,7 +257,6 @@ export const deactivateBodySchema = {
     },
   },
 } as const;
-
 export const deletionRequestResponse = {
   type: 'object',
   properties: {

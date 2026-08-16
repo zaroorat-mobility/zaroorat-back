@@ -1,4 +1,4 @@
-import { RedisService } from '@core/cache';
+import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
 import { EventPublisher } from '@core/events';
 import { TransactionManager, UniqueConstraintError } from '@core/database';
 import type { JwtConfig } from '@config/jwt/jwt.config';
@@ -14,7 +14,6 @@ import { SessionService } from '@modules/auth/services/session';
 import { TokenService, EpochService } from '@modules/auth/services/token';
 import { AccountSuspendedError, OtpInvalidError, RateLimitedError } from '@modules/auth/errors';
 import { authEvent } from '@modules/auth/events';
-
 import {
   IDEMPOTENCY_TTL_SECONDS,
   PHONE_CHANGE_PURPOSE,
@@ -26,7 +25,6 @@ import { userEvent } from '../../events';
 import type { PhoneChangeChallenge, PhoneChangeResult } from '../../schemas';
 import { UserMetrics } from '../../metrics';
 import { maskPhone } from '../../utils';
-
 export interface RequestPhoneChangeInput {
   userId: string;
   newPhoneNumber: string;
@@ -34,7 +32,6 @@ export interface RequestPhoneChangeInput {
   userAgent?: string | null;
   requestId?: string | null;
 }
-
 export interface VerifyPhoneChangeInput {
   userId: string;
   sessionId: string;
@@ -44,9 +41,7 @@ export interface VerifyPhoneChangeInput {
   userAgent?: string | null;
   requestId?: string | null;
 }
-
 export { maskPhone };
-
 export class PhoneChangeService {
   constructor(
     private readonly userRepository: UserRepository,
@@ -63,10 +58,8 @@ export class PhoneChangeService {
     private readonly userMetrics: UserMetrics,
     private readonly jwtConfig: JwtConfig,
   ) {}
-
   async requestPhoneChange(input: RequestPhoneChangeInput): Promise<PhoneChangeChallenge> {
     const { userId, newPhoneNumber } = input;
-
     const decision = await this.redisService.rateLimit.hit(
       RATE_LIMIT_SCOPE,
       userId,
@@ -77,15 +70,12 @@ export class PhoneChangeService {
       this.userMetrics.phoneRateLimited({ userId });
       throw new RateLimitedError(decision.retryAfterSeconds);
     }
-
     const user = await this.userRepository.findById(userId);
     if (!user || user.deletedAt !== null) throw new UserNotFoundError('Account not found');
     if (user.status !== 'ACTIVE') throw new AccountSuspendedError();
     if (user.phoneNumber === newPhoneNumber) throw new PhoneUnchangedError();
-
     const holder = await this.userRepository.findActiveByPhone(newPhoneNumber);
     if (holder && holder.id !== userId) throw new PhoneInUseError();
-
     const challenge = await this.otpService.send({
       phoneNumber: newPhoneNumber,
       purpose: PHONE_CHANGE_PURPOSE,
@@ -93,7 +83,6 @@ export class PhoneChangeService {
       ...(input.ip != null ? { ip: input.ip } : {}),
       ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
     });
-
     await this.eventPublisher.publish(
       userEvent('user.phone.change_requested', {
         subjectUserId: userId,
@@ -106,29 +95,26 @@ export class PhoneChangeService {
       }),
     );
     this.userMetrics.phoneChangeRequested({ userId });
-
     return challenge;
   }
-
   async verifyPhoneChange(
     input: VerifyPhoneChangeInput,
     idempotencyKey: string,
   ): Promise<PhoneChangeResult> {
-    return this.redisService.idempotency.runOnce(idempotencyKey, IDEMPOTENCY_TTL_SECONDS, () =>
-      this.runVerifyPhoneChange(input),
+    return this.redisService.idempotency.runOnce(
+      IDEMPOTENCY_OPERATIONS.PHONE_CHANGE_VERIFY,
+      idempotencyKey,
+      IDEMPOTENCY_TTL_SECONDS,
+      () => this.runVerifyPhoneChange(input),
     );
   }
-
   private async runVerifyPhoneChange(input: VerifyPhoneChangeInput): Promise<PhoneChangeResult> {
     const { userId } = input;
     const newPhoneNumber = await this.resolveChallengePhone(input);
-
     const user = await this.userRepository.findById(userId);
     if (!user || user.deletedAt !== null) throw new UserNotFoundError('Account not found');
     const oldPhoneNumber = user.phoneNumber;
-
     const current = await this.sessionRepository.findById(input.sessionId);
-
     try {
       await this.otpService.verify({
         phoneNumber: newPhoneNumber,
@@ -140,11 +126,8 @@ export class PhoneChangeService {
       this.userMetrics.phoneChangeFailed({ userId, reason: 'otp' });
       throw err;
     }
-
     const sessionsRevoked = await this.commitChange(input, oldPhoneNumber, newPhoneNumber);
-
     await this.epochService.bump(userId);
-
     const session = await this.sessionService.create({
       userId,
       loginMethod: 'phone_change',
@@ -158,15 +141,12 @@ export class PhoneChangeService {
       sessionId: session.id,
       roles: await this.roleRepository.findActiveRoleSlugs(userId),
     });
-
     this.userMetrics.phoneChangeSucceeded({ userId, sessionsRevoked });
-
     return {
       ...pair,
       user: { id: userId, phoneNumber: newPhoneNumber, status: user.status },
     };
   }
-
   private async commitChange(
     input: VerifyPhoneChangeInput,
     oldPhoneNumber: string,
@@ -177,14 +157,12 @@ export class PhoneChangeService {
       return await this.transactionManager.execute(async (tx) => {
         const holder = await this.userRepository.findActiveByPhone(newPhoneNumber, tx);
         if (holder && holder.id !== userId) throw new PhoneInUseError();
-
         await this.userRepository.updatePhoneNumber(userId, newPhoneNumber, tx);
         const sessionsRevoked = await this.sessionService.revokeAllInTransaction(
           userId,
           REVOKE_REASON,
           tx,
         );
-
         await this.eventPublisher.publish(
           userEvent('user.phone.changed', {
             subjectUserId: userId,
@@ -206,7 +184,6 @@ export class PhoneChangeService {
           }),
           tx,
         );
-
         return sessionsRevoked;
       });
     } catch (err) {
@@ -221,7 +198,6 @@ export class PhoneChangeService {
       throw err;
     }
   }
-
   private async resolveChallengePhone(input: VerifyPhoneChangeInput): Promise<string> {
     const challenge = await this.otpRepository.findById(input.challengeId);
     if (

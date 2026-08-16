@@ -11,9 +11,7 @@ import { userEvent } from '../../events';
 import { LimitExceededError, UserNotFoundError } from '../../errors';
 import type { EmergencyContact } from '../../types';
 import type { EmergencyContactView } from '../../schemas';
-
 export type AddEmergencyContactInput = Omit<CreateEmergencyContactInput, 'userId'>;
-
 export function toEmergencyContactView(contact: EmergencyContact): EmergencyContactView {
   return {
     id: contact.id,
@@ -24,7 +22,6 @@ export function toEmergencyContactView(contact: EmergencyContact): EmergencyCont
     createdAt: contact.createdAt,
   };
 }
-
 export class EmergencyContactService {
   constructor(
     private readonly emergencyContactRepository: EmergencyContactRepository,
@@ -32,12 +29,10 @@ export class EmergencyContactService {
     private readonly transactionManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
   ) {}
-
   async list(userId: string): Promise<EmergencyContactView[]> {
     const contacts = await this.emergencyContactRepository.findAllByUser(userId);
     return contacts.map(toEmergencyContactView);
   }
-
   async add(
     userId: string,
     input: AddEmergencyContactInput,
@@ -49,7 +44,6 @@ export class EmergencyContactService {
       if (count >= userConfig.maxEmergencyContacts) {
         throw new LimitExceededError('emergencyContacts', userConfig.maxEmergencyContacts);
       }
-
       const created = await this.emergencyContactRepository.create({ userId, ...input }, tx);
       await this.eventPublisher.publish(
         userEvent('user.emergency_contact.added', {
@@ -61,10 +55,8 @@ export class EmergencyContactService {
       );
       return created;
     });
-
     return toEmergencyContactView(contact);
   }
-
   async update(
     userId: string,
     id: string,
@@ -72,13 +64,11 @@ export class EmergencyContactService {
     requestId: string | null = null,
   ): Promise<EmergencyContactView> {
     const changedFields = Object.keys(changes);
-
     if (changedFields.length === 0) {
       const existing = await this.emergencyContactRepository.findOwned(userId, id);
       if (!existing) throw new UserNotFoundError('Emergency contact not found');
       return toEmergencyContactView(existing);
     }
-
     const contact = await this.transactionManager.execute(async (tx) => {
       const updated = await this.emergencyContactRepository.updateOwned(userId, id, changes, tx);
       if (!updated) throw new UserNotFoundError('Emergency contact not found');
@@ -92,10 +82,8 @@ export class EmergencyContactService {
       );
       return updated;
     });
-
     return toEmergencyContactView(contact);
   }
-
   async remove(userId: string, id: string, requestId: string | null = null): Promise<void> {
     await this.transactionManager.execute(async (tx) => {
       const deleted = await this.emergencyContactRepository.deleteOwned(userId, id, tx);

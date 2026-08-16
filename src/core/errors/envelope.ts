@@ -9,7 +9,6 @@ export interface ErrorEnvelope {
     [key: string]: unknown;
   };
 }
-
 export function errorEnvelope(
   code: string,
   message: string,
@@ -26,14 +25,12 @@ export function errorEnvelope(
     },
   };
 }
-
 export interface CodedError {
   code: string;
   statusCode: number;
   message: string;
   details?: unknown;
 }
-
 export function isCodedError(err: unknown): err is CodedError {
   if (typeof err !== 'object' || err === null) return false;
   const candidate = err as Partial<CodedError>;

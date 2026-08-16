@@ -10,7 +10,6 @@ import { UserRepository } from '../../repositories/user.repository';
 import { EpochService } from '../token/epoch.service';
 import { authEvent } from '../../events';
 import { SessionMetrics } from '../../metrics';
-
 export interface CreateSessionInput {
   userId: string;
   deviceId?: string | null;
@@ -20,7 +19,6 @@ export interface CreateSessionInput {
   expiresAt: Date;
   maxConcurrentSessions?: number;
 }
-
 export class SessionService {
   constructor(
     private readonly sessionRepository: SessionRepository,
@@ -33,13 +31,11 @@ export class SessionService {
     private readonly transactionManager: TransactionManager,
     private readonly sessionConfig: SessionConfig,
   ) {}
-
   async create(input: CreateSessionInput): Promise<UserSession> {
     const session = await this.createInTransaction(input);
     await this.enforceCap(input.userId, this.capFor(input), session.id);
     return session;
   }
-
   async createInTransaction(
     input: CreateSessionInput,
     tx?: TransactionClient,
@@ -58,37 +54,30 @@ export class SessionService {
     this.sessionMetrics.created({ userId: input.userId });
     return session;
   }
-
   private capFor(input: CreateSessionInput): number {
     return input.maxConcurrentSessions ?? this.sessionConfig.maxConcurrentSessions;
   }
-
   async listSessions(userId: string): Promise<UserSession[]> {
     return this.sessionRepository.findActiveByUser({ userId });
   }
-
   async deviceIdFor(sessionId: string): Promise<string | null> {
     const session = await this.sessionRepository.findById(sessionId);
     return session?.deviceId ?? null;
   }
-
   async revokeForUser(userId: string, sessionId: string): Promise<boolean> {
     const session = await this.sessionRepository.findById(sessionId);
     if (!session || session.userId !== userId) return false;
     await this.revokeSession(sessionId, 'logout');
     return true;
   }
-
   async logout(sessionId: string): Promise<void> {
     await this.revokeSession(sessionId, 'logout');
   }
-
   async logoutAll(userId: string, reason: string = 'logout'): Promise<void> {
     await this.transactionManager.execute((tx) => this.revokeAllInTransaction(userId, reason, tx));
     await this.epochService.bump(userId);
     this.sessionMetrics.logoutAll({ userId, reason });
   }
-
   async revokeAllInTransaction(
     userId: string,
     reason: string,
@@ -110,7 +99,6 @@ export class SessionService {
     }
     return active.length;
   }
-
   async revokeDeviceSessions(deviceId: string): Promise<number> {
     const active = await this.sessionRepository.findActiveByDevice(deviceId);
     let revoked = 0;
@@ -119,11 +107,9 @@ export class SessionService {
     }
     return revoked;
   }
-
   async touchLastSeen(sessionId: string, at: Date = new Date()): Promise<void> {
     await this.sessionRepository.touchLastSeen(sessionId, at);
   }
-
   async touchLastSeenThrottled(sessionId: string, at: Date = new Date()): Promise<boolean> {
     try {
       const window = this.sessionConfig.lastSeenThrottleSeconds;
@@ -143,17 +129,14 @@ export class SessionService {
       return false;
     }
   }
-
   private async revokeSession(sessionId: string, reason: string): Promise<boolean> {
     const won = await this.transactionManager.execute((tx) =>
       this.revokeInTransaction(sessionId, reason, tx),
     );
     if (!won) return false;
-
     await this.afterRevoke(sessionId, reason);
     return true;
   }
-
   private async revokeInTransaction(
     sessionId: string,
     reason: string,
@@ -161,7 +144,6 @@ export class SessionService {
   ): Promise<boolean> {
     const acquired = await this.sessionRepository.revoke(sessionId, reason, undefined, tx);
     if (!acquired) return false;
-
     await this.refreshTokenRepository.revokeBySession(sessionId, reason, undefined, tx);
     const owner = (await this.sessionRepository.findById(sessionId, tx))?.userId ?? null;
     await this.eventPublisher.publish(
@@ -175,24 +157,19 @@ export class SessionService {
     );
     return true;
   }
-
   private async afterRevoke(sessionId: string, reason: string): Promise<void> {
     await this.redisService.sidBlacklist.revoke(sessionId, this.sessionConfig.denylistTtlSeconds);
     if (reason === 'cap_evicted') this.sessionMetrics.capEvicted({ reason });
     this.sessionMetrics.revoked({ reason });
   }
-
   async enforceCap(userId: string, cap: number, keepSessionId: string): Promise<void> {
     const evicted = await this.transactionManager.execute(async (tx) => {
       await this.userRepository.lockForUpdate(userId, tx);
-
       const active = await this.sessionRepository.findActiveByUser({ userId, tx });
       if (active.length <= cap) return [];
-
       const toEvict = active
         .filter((session) => session.id !== keepSessionId)
         .slice(0, active.length - cap);
-
       const revoked: string[] = [];
       for (const session of toEvict) {
         if (await this.revokeInTransaction(session.id, 'cap_evicted', tx)) {
@@ -201,7 +178,6 @@ export class SessionService {
       }
       return revoked;
     });
-
     for (const sessionId of evicted) await this.afterRevoke(sessionId, 'cap_evicted');
   }
 }

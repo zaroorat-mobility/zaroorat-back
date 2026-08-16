@@ -7,7 +7,7 @@ import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { FileRetentionJob } from '../../src/modules/files/jobs/retention.job.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

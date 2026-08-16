@@ -4,7 +4,6 @@ import { IntentController } from './intent.controller.js';
 import { PayoutController } from './payout.controller.js';
 import { RefundController } from './refund.controller.js';
 import { WebhookController } from './webhook.controller.js';
-
 export class PaymentController {
   constructor(
     public readonly paymentMethod: PaymentMethodController,

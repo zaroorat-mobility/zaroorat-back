@@ -8,7 +8,6 @@ import { RefundNotAllowedError } from '../../errors/payment.errors.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import { PaymentMetrics } from '../../metrics/payment.metrics.js';
 import type { Refund } from '../../types';
-
 export class RefundService {
   constructor(
     private readonly refundRepo: RefundRepository,
@@ -18,7 +17,6 @@ export class RefundService {
     private readonly eventPublisher: EventPublisher,
     private readonly paymentMetrics: PaymentMetrics,
   ) {}
-
   async processRefund(data: {
     transactionId: string;
     userId: string;
@@ -30,10 +28,8 @@ export class RefundService {
     if (data.amount.lte(0)) {
       throw new RefundNotAllowedError('Refund amount must be strictly greater than zero');
     }
-
     const existing = await this.refundRepo.findByIdempotencyKey(data.idempotencyKey);
     if (existing) return existing;
-
     const transaction = await this.refundRepo.findTransactionForRefund(data.transactionId);
     if (!transaction) {
       throw new RefundNotAllowedError('This transaction cannot be refunded');
@@ -41,21 +37,18 @@ export class RefundService {
     if (transaction.userId !== data.userId && data.actorIsStaff !== true) {
       throw new RefundNotAllowedError('This transaction cannot be refunded');
     }
-
     return this.txManager.execute(async (tx) => {
       const totalAlreadyRefunded = await this.refundRepo.getTotalRefundedForTransaction(
         data.transactionId,
         tx,
       );
       const remainingRefundable = transaction.amount.sub(totalAlreadyRefunded);
-
       if (data.amount.gt(remainingRefundable)) {
         this.paymentMetrics.refundFailure({ transactionId: data.transactionId });
         throw new RefundNotAllowedError(
           `Refund amount (${data.amount}) exceeds remaining captured amount (${remainingRefundable})`,
         );
       }
-
       const refundRecord = await this.refundRepo.create(
         {
           transactionId: data.transactionId,
@@ -66,20 +59,17 @@ export class RefundService {
         },
         tx,
       );
-
       const gatewayRes = await this.gateway.createRefund(
         data.transactionId,
         data.amount,
         data.idempotencyKey,
       );
-
       const updated = await this.refundRepo.updateStatus(
         refundRecord.id,
         'SUCCEEDED',
         gatewayRes.gatewayRefundId,
         tx,
       );
-
       await this.ledgerService.postTransactionGroup(
         [
           {
@@ -102,9 +92,7 @@ export class RefundService {
         ],
         tx,
       );
-
       this.paymentMetrics.refundProcessed({ refundId: refundRecord.id });
-
       await this.eventPublisher.publish(
         paymentEvent(PAYMENT_EVENT_CATALOG.REFUND_PROCESSED, data.userId, {
           refundId: refundRecord.id,
@@ -112,7 +100,6 @@ export class RefundService {
         }),
         tx,
       );
-
       return updated;
     });
   }

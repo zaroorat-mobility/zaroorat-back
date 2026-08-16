@@ -12,26 +12,24 @@ import {
   MockLocationRejectedError,
 } from '../../errors/driver.errors.js';
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
+import { GeoService } from '@modules/geo';
 import { assessPlausibility } from './location-plausibility.js';
 import type { DriverLocation } from '../../types';
-
 export class LocationService {
   constructor(
     private readonly locationRepo: DriverLocationRepository,
     private readonly driverRepo: DriverRepository,
     private readonly statusRepo: DriverStatusRepository,
     private readonly driverMetrics: DriverMetrics,
+    private readonly geoService: GeoService,
   ) {}
-
   async updateLocation(input: UpdateDriverLocationInput): Promise<DriverLocation> {
     if (input.isMockLocation === true && driverConfig.rejectMockLocation) {
       this.driverMetrics.mockLocationRejected({ driverId: input.driverId });
       throw new MockLocationRejectedError();
     }
-
     const driver = await this.driverRepo.findById(input.driverId);
     if (!driver) throw new DriverNotFoundError(input.driverId);
-
     const previous = await this.locationRepo.getLocation(input.driverId);
     const verdict = assessPlausibility(
       { latitude: input.latitude, longitude: input.longitude },
@@ -43,7 +41,6 @@ export class LocationService {
           }
         : null,
     );
-
     if (!verdict.plausible) {
       this.driverMetrics.implausibleLocationRejected({
         driverId: input.driverId,
@@ -55,15 +52,17 @@ export class LocationService {
       );
       throw new ImplausibleLocationError(verdict.reason, verdict.detail);
     }
-
     const location = await this.locationRepo.updateLocation(input);
     this.driverMetrics.locationUpdated({ driverId: input.driverId });
-
+    await this.geoService.recordDriverPosition({
+      driverId: input.driverId,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      recordedAt: location.recordedAt,
+    });
     await this.statusRepo.updateHeartbeat(input.driverId);
-
     return location;
   }
-
   async getLocation(driverId: string): Promise<DriverLocation | null> {
     return this.locationRepo.getLocation(driverId);
   }

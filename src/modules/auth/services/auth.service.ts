@@ -1,4 +1,4 @@
-import { RedisService } from '@core/cache';
+import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
 import { EventPublisher } from '@core/events';
 import { TransactionManager } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
@@ -22,12 +22,20 @@ import {
   IDEMPOTENCY_TTL_SECONDS,
   DEFAULT_ROLE_SLUG,
 } from '../constants/auth.constants';
-
 function isPhoneAlreadyTakenError(err: unknown): boolean {
-  const code = (err as { code?: unknown })?.code;
-  const target = (err as { meta?: { target?: unknown } })?.meta?.target;
+  const code = (
+    err as {
+      code?: unknown;
+    }
+  )?.code;
+  const target = (
+    err as {
+      meta?: {
+        target?: unknown;
+      };
+    }
+  )?.meta?.target;
   const targetText = Array.isArray(target) ? target.join(',') : String(target ?? '');
-
   if (code === 'P2002') {
     return targetText === '' || /phone|uq_users_phone_active/i.test(targetText);
   }
@@ -36,7 +44,6 @@ function isPhoneAlreadyTakenError(err: unknown): boolean {
     /phone/i.test((err as Error)?.message ?? '')
   );
 }
-
 export interface DeviceContext {
   deviceId?: string | null;
   platform?: AppPlatform | null;
@@ -47,7 +54,6 @@ export interface DeviceContext {
   appVersion?: string | null;
   osVersion?: string | null;
 }
-
 export interface SendOtpInput {
   phoneNumber: string;
   deviceId?: string | null;
@@ -55,7 +61,6 @@ export interface SendOtpInput {
   userAgent?: string | null;
   deviceFingerprint?: string | null;
 }
-
 export interface VerifyOtpInput {
   phoneNumber: string;
   code: string;
@@ -64,11 +69,14 @@ export interface VerifyOtpInput {
   ip?: string | null;
   userAgent?: string | null;
 }
-
 export interface AuthLoginResult extends TokenPair {
-  user: { id: string; status: string; roles: string[]; isNew: boolean };
+  user: {
+    id: string;
+    status: string;
+    roles: string[];
+    isNew: boolean;
+  };
 }
-
 export class AuthService {
   constructor(
     private readonly otpService: OtpService,
@@ -85,7 +93,6 @@ export class AuthService {
     private readonly jwtConfig: JwtConfig,
     private readonly sessionConfig: SessionConfig,
   ) {}
-
   async sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
     return this.otpService.send({
       phoneNumber: input.phoneNumber,
@@ -96,14 +103,15 @@ export class AuthService {
       ...(input.deviceFingerprint != null ? { deviceFingerprint: input.deviceFingerprint } : {}),
     });
   }
-
   async verifyOtp(input: VerifyOtpInput, idempotencyKey?: string): Promise<AuthLoginResult> {
     if (!idempotencyKey) return this.runVerifyOtp(input);
-    return this.redisService.idempotency.runOnce(idempotencyKey, IDEMPOTENCY_TTL_SECONDS, () =>
-      this.runVerifyOtp(input),
+    return this.redisService.idempotency.runOnce(
+      IDEMPOTENCY_OPERATIONS.OTP_VERIFY,
+      idempotencyKey,
+      IDEMPOTENCY_TTL_SECONDS,
+      () => this.runVerifyOtp(input),
     );
   }
-
   private async runVerifyOtp(input: VerifyOtpInput): Promise<AuthLoginResult> {
     await this.otpService.verify({
       phoneNumber: input.phoneNumber,
@@ -111,11 +119,9 @@ export class AuthService {
       code: input.code,
       ...(input.challengeId ? { challengeId: input.challengeId } : {}),
     });
-
     const outcome = await this.transactionManager.execute(async (tx) => {
       const { user, isNew } = await this.resolveAccount(input.phoneNumber, tx);
       this.assertAuthenticatable(user);
-
       if (await this.userProfileRepository.ensureExists(user.id, tx)) {
         await this.eventPublisher.publish(
           userEvent('user.profile.created', {
@@ -125,10 +131,8 @@ export class AuthService {
           tx,
         );
       }
-
       const device = await this.deviceService.register({ userId: user.id, ...input.device }, tx);
       const roles = await this.roleRepository.findActiveRoleSlugs(user.id, undefined, tx);
-
       const session = await this.sessionService.createInTransaction(
         {
           userId: user.id,
@@ -140,13 +144,11 @@ export class AuthService {
         },
         tx,
       );
-
       await this.userRepository.updateLastLoginAt(user.id, new Date(), tx);
       const pair = await this.tokenService.issuePair(
         { userId: user.id, sessionId: session.id, roles },
         tx,
       );
-
       await this.eventPublisher.publish(
         authEvent('auth.otp.verified', {
           subjectUserId: user.id,
@@ -194,16 +196,13 @@ export class AuthService {
           tx,
         );
       }
-
       return { user, isNew, roles, session, pair };
     });
-
     await this.sessionService.enforceCap(
       outcome.user.id,
       this.capForRoles(outcome.roles),
       outcome.session.id,
     );
-
     const result: AuthLoginResult = {
       ...outcome.pair,
       user: {
@@ -215,58 +214,58 @@ export class AuthService {
     };
     return result;
   }
-
   async refresh(refreshToken: string, idempotencyKey?: string): Promise<TokenPair> {
     const rotate = (): Promise<TokenPair> =>
       this.tokenService.rotate(refreshToken, (userId) => this.resolveActiveRoles(userId));
-
     if (!idempotencyKey) return rotate();
-    return this.redisService.idempotency.runOnce(idempotencyKey, IDEMPOTENCY_TTL_SECONDS, rotate);
+    return this.redisService.idempotency.runOnce(
+      IDEMPOTENCY_OPERATIONS.TOKEN_REFRESH,
+      idempotencyKey,
+      IDEMPOTENCY_TTL_SECONDS,
+      rotate,
+    );
   }
-
   async logout(sessionId: string): Promise<void> {
     await this.sessionService.logout(sessionId);
   }
-
   async logoutAll(userId: string): Promise<void> {
     await this.sessionService.logoutAll(userId);
   }
-
   async listSessions(userId: string): Promise<UserSession[]> {
     return this.sessionService.listSessions(userId);
   }
-
   async revokeSession(userId: string, sessionId: string): Promise<boolean> {
     return this.sessionService.revokeForUser(userId, sessionId);
   }
-
   async listDevices(
     userId: string,
     sessionId: string,
-  ): Promise<{ devices: UserDevice[]; currentDeviceId: string | null }> {
+  ): Promise<{
+    devices: UserDevice[];
+    currentDeviceId: string | null;
+  }> {
     const [devices, currentDeviceId] = await Promise.all([
       this.deviceService.listDevices(userId),
       this.sessionService.deviceIdFor(sessionId),
     ]);
     return { devices, currentDeviceId };
   }
-
   async revokeDevice(userId: string, deviceId: string): Promise<number | null> {
     return this.deviceService.revokeForUser(userId, deviceId);
   }
-
   async grantRole(
     userId: string,
     roleSlug: string,
-    options: { grantedBy?: string | null; expiresAt?: Date | null } = {},
+    options: {
+      grantedBy?: string | null;
+      expiresAt?: Date | null;
+    } = {},
   ): Promise<boolean> {
     const role = await this.roleRepository.findBySlug(roleSlug);
     if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
-
     const granted = await this.transactionManager.execute(async (tx) => {
       const active = await this.roleRepository.findActiveAssignment(userId, role.id, undefined, tx);
       if (active) return false;
-
       await this.roleRepository.grant(
         {
           userId,
@@ -290,23 +289,22 @@ export class AuthService {
       );
       return true;
     });
-
     if (granted) await this.epochService.bump(userId);
     return granted;
   }
-
   async revokeRole(
     userId: string,
     roleSlug: string,
-    options: { revokedBy?: string | null; reason?: string | null } = {},
+    options: {
+      revokedBy?: string | null;
+      reason?: string | null;
+    } = {},
   ): Promise<boolean> {
     const role = await this.roleRepository.findBySlug(roleSlug);
     if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
-
     const revoked = await this.transactionManager.execute(async (tx) => {
       const count = await this.roleRepository.revoke(userId, role.id, undefined, tx);
       if (count === 0) return false;
-
       await this.eventPublisher.publish(
         authEvent('account.role.revoked', {
           subjectUserId: userId,
@@ -321,11 +319,9 @@ export class AuthService {
       );
       return true;
     });
-
     if (revoked) await this.epochService.bump(userId);
     return revoked;
   }
-
   async activate(userId: string): Promise<void> {
     await this.transactionManager.execute(async (tx) => {
       await this.activateInTransaction(userId, tx);
@@ -338,15 +334,16 @@ export class AuthService {
       );
     });
   }
-
   async activateInTransaction(userId: string, tx: TransactionClient): Promise<void> {
     await this.userRepository.updateStatus(userId, 'ACTIVE', tx);
   }
-
   async deactivateInTransaction(
     userId: string,
     tx: TransactionClient,
-  ): Promise<{ alreadyDeactivated: boolean; sessionsRevoked: number }> {
+  ): Promise<{
+    alreadyDeactivated: boolean;
+    sessionsRevoked: number;
+  }> {
     const user = await this.userRepository.findById(userId, tx);
     if (user?.status === 'DEACTIVATED') {
       return { alreadyDeactivated: true, sessionsRevoked: 0 };
@@ -359,7 +356,6 @@ export class AuthService {
     );
     return { alreadyDeactivated: false, sessionsRevoked };
   }
-
   async suspend(userId: string): Promise<void> {
     await this.transactionManager.execute(async (tx) => {
       await this.userRepository.updateStatus(userId, 'SUSPENDED', tx);
@@ -373,11 +369,13 @@ export class AuthService {
     });
     await this.sessionService.logoutAll(userId, 'suspension');
   }
-
   private async resolveAccount(
     phoneNumber: string,
     tx: TransactionClient,
-  ): Promise<{ user: User; isNew: boolean }> {
+  ): Promise<{
+    user: User;
+    isNew: boolean;
+  }> {
     const existing = await this.userRepository.findActiveByPhone(phoneNumber, tx);
     if (existing) {
       let user = existing;
@@ -388,7 +386,6 @@ export class AuthService {
       await this.ensureDefaultRole(user.id, tx);
       return { user, isNew: false };
     }
-
     try {
       const created = await this.userRepository.create(
         { phoneNumber, status: 'ACTIVE', isPhoneVerified: true },
@@ -398,35 +395,29 @@ export class AuthService {
       return { user: created, isNew: true };
     } catch (err) {
       if (!isPhoneAlreadyTakenError(err)) throw err;
-
       const winner = await this.userRepository.findActiveByPhone(phoneNumber, tx);
       if (!winner) throw err;
-
       await this.ensureDefaultRole(winner.id, tx);
       return { user: winner, isNew: false };
     }
   }
-
   private assertAuthenticatable(user: Pick<User, 'status' | 'deletedAt'>): void {
     if (user.deletedAt !== null) throw new AccountSuspendedError('This account no longer exists');
     if (user.status === 'DEACTIVATED') throw new AccountDeactivatedError();
     if (user.status !== 'ACTIVE') throw new AccountSuspendedError();
   }
-
   private async ensureDefaultRole(userId: string, tx: TransactionClient): Promise<void> {
     const role = await this.roleRepository.findBySlug(DEFAULT_ROLE_SLUG, tx);
     if (!role) throw new Error(`Default role "${DEFAULT_ROLE_SLUG}" is not seeded`);
     const active = await this.roleRepository.findActiveAssignment(userId, role.id, undefined, tx);
     if (!active) await this.roleRepository.grant({ userId, roleId: role.id }, tx);
   }
-
   private async resolveActiveRoles(userId: string): Promise<string[]> {
     const user = await this.userRepository.findById(userId);
     if (!user) throw new AccountSuspendedError();
     this.assertAuthenticatable(user);
     return this.roleRepository.findActiveRoleSlugs(userId);
   }
-
   private capForRoles(roles: string[]): number {
     const privileged = roles.includes('admin') || roles.includes('support');
     return privileged

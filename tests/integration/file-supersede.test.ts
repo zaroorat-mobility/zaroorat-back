@@ -9,10 +9,10 @@ import { png as image } from '../helpers/image-fixtures.js';
 import {
   clearFileReferences,
   registerFileReference,
-} from '../../src/modules/files/references/file-references.js';
+} from '../../src/modules/files/services/file-reference.service.js';
 import type { TransactionManager } from '../../src/core/database/TransactionManager.js';
 import type { FileService } from '../../src/modules/files/services/file.service.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 function png(): Buffer {
   return image({ width: 800, height: 600 });

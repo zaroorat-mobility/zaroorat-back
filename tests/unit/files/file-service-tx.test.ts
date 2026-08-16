@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { FileService } from '../../../src/modules/files/services/file.service.js';
+import { FileAccessService } from '../../../src/modules/files/services/file-access.service.js';
+import { FileLifecycleService } from '../../../src/modules/files/services/file-lifecycle.service.js';
+import { FileStorageService } from '../../../src/modules/files/services/file-storage.service.js';
+import { FileUploadService } from '../../../src/modules/files/services/file-upload.service.js';
+import { FileValidationService } from '../../../src/modules/files/services/file-validation.service.js';
 import { FileMetrics } from '../../../src/modules/files/metrics/file.metrics.js';
-import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
+import { MockStorageProvider } from '../../../src/modules/files/utils/storage/mock.provider.js';
 import { STORAGE_KEY_PATTERN } from '../../../src/modules/files/utils/storage-key.js';
 import { png } from '../../helpers/image-fixtures.js';
 import type { StorageConfig } from '../../../src/modules/files/config/storage.config.js';
@@ -73,14 +78,38 @@ function makeService(overrides: {
       (async (fn: (tx: unknown) => Promise<unknown>) => fn({ marker: 'the-tx' })),
   };
 
+  // Same collaborators as before the service split; FileService is now a
+  // facade over the three services that carry the work.
+  const metrics = new FileMetrics();
+  const redis = permissiveRedis();
+  const storage = new FileStorageService(provider, storageConfig);
+  const validation = new FileValidationService();
+
   const service = new FileService(
-    repository as never,
-    provider,
-    storageConfig,
-    transactionManager as never,
-    eventPublisher as never,
-    permissiveRedis(),
-    new FileMetrics(),
+    new FileUploadService(
+      repository as never,
+      storage,
+      validation,
+      storageConfig,
+      transactionManager as never,
+      eventPublisher as never,
+      redis,
+      metrics,
+    ),
+    new FileAccessService(
+      repository as never,
+      storage,
+      validation,
+      transactionManager as never,
+      eventPublisher as never,
+      redis,
+      metrics,
+    ),
+    new FileLifecycleService(
+      repository as never,
+      transactionManager as never,
+      eventPublisher as never,
+    ),
   );
 
   return { service, provider, created, published };
@@ -132,12 +161,16 @@ describe('FileService.createUpload — ordering (R-FILE-26)', () => {
     assert.equal(row.fileName, 'passwd.pdf', 'but it is kept, sanitized, for display');
   });
 
-  it('binds the purpose ceiling into the signature, not the declared size', async () => {
+  // The grant binds the DECLARED size, because S3's signed Content-Length is an
+  // exact match rather than a ceiling — binding 5 MB would make every avatar
+  // under 5 MB fail. "At most the ceiling" is still guaranteed, one step
+  // earlier: a declaration above it never reaches signUpload at all.
+  it('binds the declared size into the signature, so the object must be exactly that long', async () => {
     const provider = new MockStorageProvider();
-    let boundMax = 0;
+    let boundLength = 0;
     const originalSign = provider.signUpload.bind(provider);
     provider.signUpload = async (input) => {
-      boundMax = input.maxBytes;
+      boundLength = input.contentLength;
       return originalSign(input);
     };
 
@@ -150,7 +183,29 @@ describe('FileService.createUpload — ordering (R-FILE-26)', () => {
       sizeBytes: 10,
     });
 
-    assert.equal(boundMax, 5 * 1024 * 1024);
+    assert.equal(boundLength, 10);
+  });
+
+  it('never signs a grant for a declaration above the purpose ceiling', async () => {
+    const provider = new MockStorageProvider();
+    let signed = false;
+    provider.signUpload = async () => {
+      signed = true;
+      throw new Error('should never be reached');
+    };
+
+    const { service } = makeService({ provider });
+    await assert.rejects(
+      service.createUpload({
+        ownerUserId: OWNER,
+        purpose: 'PROFILE_IMAGE',
+        fileName: 'huge.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 5 * 1024 * 1024 + 1,
+      }),
+      /larger than this upload allows/,
+    );
+    assert.equal(signed, false, 'an oversized declaration reached the signer');
   });
 });
 

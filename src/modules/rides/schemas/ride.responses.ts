@@ -8,7 +8,6 @@ export interface RideRequestView {
   status: string;
   createdAt: Date;
 }
-
 export interface RideView {
   id: string;
   rideCode: string;

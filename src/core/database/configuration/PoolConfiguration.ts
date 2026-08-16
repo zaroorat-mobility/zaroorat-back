@@ -4,7 +4,6 @@ export interface PoolConfiguration {
   connectionTimeoutMillis: number;
   idleTimeoutMillis: number;
 }
-
 export function getPoolConfiguration(): PoolConfiguration {
   return {
     max: parseInt(process.env.DB_POOL_MAX || '10', 10),

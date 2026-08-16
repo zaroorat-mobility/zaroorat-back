@@ -11,7 +11,6 @@ import { ActiveRideExistsError } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import type { RideRequest } from '../../types';
-
 export class RideRequestService {
   constructor(
     private readonly requestRepo: RideRequestRepository,
@@ -21,7 +20,6 @@ export class RideRequestService {
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
   ) {}
-
   async createQuote(params: {
     pickupLat: number;
     pickupLng: number;
@@ -31,7 +29,6 @@ export class RideRequestService {
   }) {
     return this.fareService.calculateFareQuote(params);
   }
-
   async createRequest(input: {
     customerId: string;
     vehicleTypeId: string;
@@ -48,12 +45,10 @@ export class RideRequestService {
     if (activeRide) {
       throw new ActiveRideExistsError();
     }
-
     const activeRequest = await this.requestRepo.findActiveByCustomer(input.customerId);
     if (activeRequest) {
       throw new ActiveRideExistsError('Customer already has an active ride request');
     }
-
     const quoteParams = {
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
@@ -61,9 +56,7 @@ export class RideRequestService {
       ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
       ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
     };
-
     const fareQuote = await this.createQuote(quoteParams);
-
     return this.txManager.execute(async (tx) => {
       const createInput: CreateRideRequestInput = {
         customerId: input.customerId,
@@ -76,18 +69,14 @@ export class RideRequestService {
         surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
         expiresAt: new Date(Date.now() + 5 * 60 * 1000),
       };
-
       if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
       if (input.dropLat !== undefined) createInput.dropLat = new Decimal(input.dropLat);
       if (input.dropLng !== undefined) createInput.dropLng = new Decimal(input.dropLng);
       if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
       if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
       if (input.promoCode !== undefined) createInput.promoCode = input.promoCode;
-
       const request = await this.requestRepo.create(createInput, tx);
-
       this.rideMetrics.requestCreated({ requestId: request.id });
-
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
           requestId: request.id,
@@ -97,7 +86,6 @@ export class RideRequestService {
         }),
         tx,
       );
-
       return request;
     });
   }

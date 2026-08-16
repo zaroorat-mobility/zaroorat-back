@@ -13,11 +13,27 @@ model File {
   storageKey      String      @map("storage_key")
   // Which provider wrote it. A vendor change must not repoint historical keys.
   storageProvider String      @map("storage_provider")
+  /// Which bucket holds it. Nullable because rows written before this column
+  /// existed cannot be back-filled reliably — the bucket at the time is not
+  /// recoverable. Without it a bucket rename orphans every historical row.
+  storageBucket   String?     @map("storage_bucket")
+  /// The S3 version the validated bytes live at, when the bucket is versioned.
+  /// Null on unversioned buckets and on providers that do not report one.
+  /// Erasure needs this to prove it destroyed the object it validated.
+  storageVersionId String?    @map("storage_version_id")
   // The client's name, kept for display only. Never part of the key, never trusted.
   fileName        String      @map("file_name")
+  /// What the client SAID the bytes are. Never authoritative.
   contentType     String      @map("content_type")
+  /// What the bytes ACTUALLY are, decided server-side from the stored object's
+  /// magic bytes. Null until validation has run.
+  detectedContentType String? @map("detected_content_type")
   // Declared at creation; overwritten with the verified value at completion (R-FILE-5).
   sizeBytes       Int         @map("size_bytes")
+  /// SHA-256 of the stored object as recorded by object storage, which was made
+  /// to validate it on PUT by binding the declared digest into the upload
+  /// signature. Null when no digest was declared: the API never reads the object
+  /// back to compute one, because bytes do not transit this process (R-FILE-1).
   checksumSha256  String?     @map("checksum_sha256")
   /// Malware verdict. A file is never READY without `CLEAN` (or `SKIPPED`,
   /// which only exists outside production).
@@ -31,6 +47,13 @@ model File {
   rejectedReason  String?        @map("rejected_reason")
   // When the write permission lapses. The sweeper reads this (R-FILE-22).
   uploadExpiresAt DateTime    @map("upload_expires_at")
+  /// When the object was first observed in storage. Distinct from completedAt:
+  /// reconciliation can observe an object long before the row settles, and the
+  /// gap between the two is what tells you a client abandoned the handshake.
+  uploadedAt      DateTime?   @map("uploaded_at")
+  /// When server-side content validation passed. Distinct from completedAt,
+  /// which is when the row reached its terminal state.
+  verifiedAt      DateTime?   @map("verified_at")
   completedAt     DateTime?   @map("completed_at")
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")

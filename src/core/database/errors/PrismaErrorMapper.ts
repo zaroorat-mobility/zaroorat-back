@@ -5,7 +5,6 @@ import {
   RecordNotFoundError,
   UniqueConstraintError,
 } from './DatabaseError';
-
 export class PrismaErrorMapper {
   public static isPrismaError(error: unknown): boolean {
     return (
@@ -16,7 +15,6 @@ export class PrismaErrorMapper {
       error instanceof Prisma.PrismaClientValidationError
     );
   }
-
   public static mapError(error: unknown, context?: string): Error {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       switch (error.code) {
@@ -43,18 +41,15 @@ export class PrismaErrorMapper {
           return new DatabaseError('Transaction failed due to write conflict/deadlock', error);
       }
     }
-
     if (error instanceof Prisma.PrismaClientInitializationError) {
       return new ConnectionError(
         'Failed to initialize Prisma client / Cannot reach database server',
         error,
       );
     }
-
     if (error instanceof Error) {
       return new DatabaseError(error.message, error);
     }
-
     return new DatabaseError('An unknown database error occurred', error);
   }
 }

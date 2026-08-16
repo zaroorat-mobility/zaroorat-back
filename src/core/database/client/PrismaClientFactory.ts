@@ -11,22 +11,18 @@ import {
   paymentExtension,
   pricingExtension,
 } from '../extensions';
-
 interface PrismaQueryEvent {
   query: string;
   params: string;
   duration: number;
   target: string;
 }
-
 interface PrismaErrorEvent {
   message: string;
   target: string;
 }
-
 export class PrismaClientFactory {
   constructor(private readonly databaseMetrics: DatabaseMetrics) {}
-
   public create(dbConfig: DatabaseConfiguration, poolConfig: PoolConfiguration) {
     const pool = new Pool({
       connectionString: dbConfig.url,
@@ -37,13 +33,10 @@ export class PrismaClientFactory {
       idleTimeoutMillis: poolConfig.idleTimeoutMillis,
       ssl: dbConfig.sslMode === 'require' || dbConfig.sslMode === 'verify-full',
     });
-
     pool.on('connect', () => {
       this.databaseMetrics.recordConnectionEstablished();
     });
-
     const adapter = new PrismaPg(pool);
-
     const prisma = new PrismaClient({
       adapter,
       log: [
@@ -52,9 +45,7 @@ export class PrismaClientFactory {
         { emit: 'event', level: 'warn' },
       ],
     });
-
     this.attachObservability(prisma);
-
     return prisma
       .$extends(userExtension)
       .$extends(driverExtension)
@@ -62,7 +53,6 @@ export class PrismaClientFactory {
       .$extends(paymentExtension)
       .$extends(pricingExtension);
   }
-
   private attachObservability(prisma: PrismaClient): void {
     (prisma.$on as (event: 'query', cb: (e: PrismaQueryEvent) => void) => void)(
       'query',
@@ -72,7 +62,6 @@ export class PrismaClientFactory {
         }
       },
     );
-
     (prisma.$on as (event: 'error', cb: (e: PrismaErrorEvent) => void) => void)(
       'error',
       (e: PrismaErrorEvent) => {

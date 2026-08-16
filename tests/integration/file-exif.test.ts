@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
 import { jpeg, png, tiffBlock, webp } from '../helpers/image-fixtures.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 describe('file exif policy (integration)', () => {
   let app: FastifyInstance;
@@ -63,7 +63,7 @@ describe('file exif policy (integration)', () => {
       assert.equal(completed.json().error.code, 'EXIF_LOCATION_PRESENT');
     });
 
-    it('takes the object with it, and retires the reservation', async () => {
+    it('takes the object with it, and records the refusal', async () => {
       const user = await loginAs(app, '+919876620002');
 
       const { fileId, storageKey } = await upload(
@@ -73,7 +73,11 @@ describe('file exif policy (integration)', () => {
 
       assert.equal(await provider.head(storageKey, 8), null);
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
-      assert.equal(row.status, 'EXPIRED');
+      // REJECTED, not EXPIRED: an image refused for carrying GPS data and a
+      // reservation nobody ever uploaded to are different events, and the row is
+      // the only durable trace of which one happened.
+      assert.equal(row.status, 'REJECTED');
+      assert.equal(row.rejectedReason, 'EXIF_LOCATION_PRESENT');
     });
 
     it('never becomes readable', async () => {

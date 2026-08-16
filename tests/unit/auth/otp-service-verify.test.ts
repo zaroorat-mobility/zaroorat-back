@@ -94,6 +94,12 @@ function makeService(opts: {
     otpMetrics as never,
     eventPublisher as never,
     makeOtpConfig(),
+    // verify() never enqueues; a throwing stub proves it stays that way.
+    {
+      enqueue: async () => {
+        throw new Error('verify must not enqueue an SMS delivery');
+      },
+    } as never,
   );
 
   return { service, published, calls };

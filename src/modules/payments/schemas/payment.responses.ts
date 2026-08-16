@@ -6,7 +6,6 @@ export interface WalletView {
   availableBalance: number;
   currency: string;
 }
-
 export interface IntentView {
   id: string;
   userId: string;
@@ -18,7 +17,6 @@ export interface IntentView {
   gatewayIntentId: string | null;
   createdAt: Date;
 }
-
 export interface PaymentMethodView {
   id: string;
   methodType: string;

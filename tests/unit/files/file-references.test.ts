@@ -5,7 +5,7 @@ import {
   clearFileReferences,
   findLiveReference,
   registerFileReference,
-} from '../../../src/modules/files/references/file-references.js';
+} from '../../../src/modules/files/services/file-reference.service.js';
 
 describe('file reference guard', () => {
   afterEach(() => {

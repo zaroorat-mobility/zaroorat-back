@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 function png(): Buffer {
   return image({ width: 800, height: 600 });

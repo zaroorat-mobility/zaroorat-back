@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { container } from '../../../src/core/di.js';
 import { createApp } from '../../../src/app/app.js';
 import { redis } from '../../../src/core/cache/client.js';
+import { closeQueues } from '../../../src/jobs/queues/index.js';
 import type { DatabaseService } from '../../../src/core/database/DatabaseService.js';
 import type { PrismaClientProvider } from '../../../src/core/database/client/PrismaClientProvider.js';
 import type { OtpGenerator } from '../../../src/modules/auth/services/otp/otp.generator.js';
@@ -20,6 +21,10 @@ function patchOtp(): void {
 patchOtp();
 
 after(async () => {
+  // otp/send now enqueues, which opens a BullMQ connection of its own. No worker
+  // runs in these tests: the jobs simply sit in the queue and resetState's
+  // flushdb clears them.
+  await closeQueues();
   await container.resolve<PrismaClientProvider>('provider').disconnect();
   await redis.quit();
 });

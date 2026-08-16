@@ -2,7 +2,6 @@ import type { UserProfile } from '../../types';
 import type { UserProfileView } from '../../schemas';
 import { userConfig } from '../../config';
 import { toDateOnly } from '../../utils';
-
 export function toProfileView(profile: UserProfile | null): UserProfileView {
   return {
     firstName: profile?.firstName ?? null,

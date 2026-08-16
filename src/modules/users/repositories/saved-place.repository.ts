@@ -1,12 +1,10 @@
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { SavedPlace } from '../types';
-
 export interface Coordinates {
   latitude: number;
   longitude: number;
 }
-
 export interface CreateSavedPlaceInput {
   userId: string;
   label: string;
@@ -17,7 +15,6 @@ export interface CreateSavedPlaceInput {
   instructions?: string | null;
   coordinates?: Coordinates | null;
 }
-
 export interface UpdateSavedPlaceInput {
   label?: string;
   address?: string | null;
@@ -27,12 +24,10 @@ export interface UpdateSavedPlaceInput {
   instructions?: string | null;
   coordinates?: Coordinates | null;
 }
-
 type PlaceColumns = Omit<UpdateSavedPlaceInput, 'coordinates'> & {
   latitude?: number | null;
   longitude?: number | null;
 };
-
 function toColumns(input: UpdateSavedPlaceInput): PlaceColumns {
   const data: PlaceColumns = {};
   if ('label' in input) data.label = input.label;
@@ -47,27 +42,22 @@ function toColumns(input: UpdateSavedPlaceInput): PlaceColumns {
   }
   return data;
 }
-
 export class SavedPlaceRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async findAllByUser(userId: string): Promise<SavedPlace[]> {
     const places = await this.client.savedPlace.findMany({ where: { userId } });
     return places.sort((a, b) =>
       a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }),
     );
   }
-
   async findOwned(userId: string, id: string, tx?: TransactionClient): Promise<SavedPlace | null> {
     return (tx ?? this.client).savedPlace.findFirst({ where: { id, userId } });
   }
-
   async countByUser(userId: string, tx?: TransactionClient): Promise<number> {
     return (tx ?? this.client).savedPlace.count({ where: { userId } });
   }
-
   async create(input: CreateSavedPlaceInput, tx?: TransactionClient): Promise<SavedPlace> {
     const client = tx ?? this.client;
     const place = await client.savedPlace.create({
@@ -89,7 +79,6 @@ export class SavedPlaceRepository extends BaseRepository {
     }
     return place;
   }
-
   async updateOwned(
     userId: string,
     id: string,
@@ -107,17 +96,14 @@ export class SavedPlaceRepository extends BaseRepository {
     }
     return client.savedPlace.findFirst({ where: { id, userId } });
   }
-
   async deleteOwned(userId: string, id: string, tx?: TransactionClient): Promise<boolean> {
     const { count } = await (tx ?? this.client).savedPlace.deleteMany({ where: { id, userId } });
     return count === 1;
   }
-
   async deleteAllForUser(userId: string, tx?: TransactionClient): Promise<number> {
     const { count } = await (tx ?? this.client).savedPlace.deleteMany({ where: { userId } });
     return count;
   }
-
   private async writeLocation(
     userId: string,
     id: string,

@@ -42,8 +42,13 @@ for (const source of sources.values()) {
 
 const explicitlyInjected = new Map<string, Set<string>>();
 for (const source of sources.values()) {
+  // The gap between `asClass(X)` and its `.inject(` may only contain further
+  // links of the same call chain — `.singleton()`, `.scoped()`. Matching any
+  // characters there let an earlier registration pair with a LATER class's
+  // `.inject(`, so the class that actually declared it was recorded as having
+  // none and was reported unresolvable.
   const re =
-    /asClass\(\s*([A-Z][a-zA-Z0-9]*)\s*\)[\s\S]{0,200}?\.inject\(\s*\([^)]*\)\s*=>\s*\(\{([\s\S]*?)\}\)\s*\)/g;
+    /asClass\(\s*([A-Z][a-zA-Z0-9]*)\s*\)(?:\s*\.[a-zA-Z]+\([^()]*\))*?\s*\.inject\(\s*\([^)]*\)\s*=>\s*\(\{([\s\S]*?)\}\)\s*\)/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(source)) !== null) {
     const [, className, body] = match;

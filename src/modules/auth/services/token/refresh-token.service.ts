@@ -6,23 +6,19 @@ import { RefreshTokenRepository } from '../../repositories/refresh-token.reposit
 import { TokenInvalidError, TokenReuseError } from '../../errors/auth.errors';
 import { authEvent } from '../../events';
 import { EpochService } from './epoch.service';
-
 export interface IssuedRefreshToken {
   token: string;
   id: string;
   expiresAt: Date;
 }
-
 export interface RotationResult {
   userId: string;
   sessionId: string;
   refresh: IssuedRefreshToken;
 }
-
 export class RefreshTokenService {
   private readonly pepper: string;
   private readonly ttlSeconds: number;
-
   constructor(
     private readonly refreshTokenRepository: RefreshTokenRepository,
     private readonly epochService: EpochService,
@@ -33,7 +29,6 @@ export class RefreshTokenService {
     this.pepper = jwtConfig.refreshSecret;
     this.ttlSeconds = jwtConfig.refreshTtlSeconds;
   }
-
   async issue(
     userId: string,
     sessionId: string,
@@ -52,18 +47,15 @@ export class RefreshTokenService {
     );
     return { token: raw, id: row.id, expiresAt };
   }
-
   async rotate(presentedToken: string): Promise<RotationResult> {
     const outcome = await this.transactionManager.execute(async (tx) => {
       const existing = await this.refreshTokenRepository.findByHash(this.hash(presentedToken), tx);
       if (!existing) return { kind: 'unknown' } as const;
-
       if (existing.revokedAt) return { kind: 'reuse', token: existing } as const;
       if (existing.expiresAt.getTime() <= Date.now()) return { kind: 'expired' } as const;
       if (!(await this.refreshTokenRepository.claimForRotation(existing.id, tx))) {
         return { kind: 'reuse', token: existing } as const;
       }
-
       const raw = this.generateRawToken();
       const created = await this.refreshTokenRepository.create(
         {
@@ -76,10 +68,8 @@ export class RefreshTokenService {
         tx,
       );
       await this.refreshTokenRepository.linkRotation(existing.id, created.id, tx);
-
       return { kind: 'rotated', existing, created, raw } as const;
     });
-
     if (outcome.kind === 'unknown') throw new TokenInvalidError();
     if (outcome.kind === 'expired') {
       throw new TokenInvalidError('The refresh token has expired');
@@ -88,7 +78,6 @@ export class RefreshTokenService {
       await this.handleReuse(outcome.token.sessionId, outcome.token.userId);
       throw new TokenReuseError();
     }
-
     const { existing, created, raw } = outcome;
     await this.eventPublisher.publish(
       authEvent('auth.token.refreshed', {
@@ -103,14 +92,12 @@ export class RefreshTokenService {
         },
       }),
     );
-
     return {
       userId: existing.userId,
       sessionId: existing.sessionId,
       refresh: { token: raw, id: created.id, expiresAt: created.expiresAt },
     };
   }
-
   private async handleReuse(sessionId: string, userId: string): Promise<void> {
     await this.transactionManager.execute(async (tx) => {
       await this.refreshTokenRepository.revokeBySession(sessionId, 'reuse_detected', undefined, tx);
@@ -126,16 +113,13 @@ export class RefreshTokenService {
     });
     await this.epochService.bump(userId);
   }
-
   async revokeFamily(sessionId: string, userId: string, reason: string): Promise<void> {
     await this.refreshTokenRepository.revokeBySession(sessionId, reason);
     await this.epochService.bump(userId);
   }
-
   private generateRawToken(): string {
     return randomBytes(32).toString('base64url');
   }
-
   private hash(token: string): string {
     return createHmac('sha256', this.pepper).update(token).digest('hex');
   }

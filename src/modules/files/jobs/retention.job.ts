@@ -6,21 +6,14 @@ import { fileConfig, filePurposePolicy, type FilePurposeName } from '@config/fil
 import { FileRepository } from '../repositories/file.repository.js';
 import { FileMetrics } from '../metrics/file.metrics.js';
 import { fileEvent } from '../events/catalog.js';
-import { findLiveReference, hasFileReferenceOwner } from '../references/file-references.js';
-import type { StorageProvider } from '../providers/storage.provider.js';
-
+import { findLiveReference, hasFileReferenceOwner } from '../services/file-reference.service.js';
+import type { StorageProvider } from '../utils/storage/storage.provider.js';
 const DEAD_LETTER_KEY = 'file:retention:deadletter';
-
 const RETENTION_LOCK = 'file:retention';
-
 const RETENTION_LOCK_TTL_MS = 15 * 60 * 1000;
-
 const ATTEMPTS_PREFIX = 'file:retention:attempts:';
-
 const ATTEMPTS_TTL_SECONDS = 30 * 24 * 3600;
-
 const DAY_MS = 24 * 60 * 60 * 1000;
-
 export interface RetentionResult {
   scanned: number;
   archived: number;
@@ -29,7 +22,6 @@ export interface RetentionResult {
   unclaimed: number;
   failed: number;
 }
-
 export interface DeadLetteredFile {
   fileId: string;
   purpose: string;
@@ -37,7 +29,6 @@ export interface DeadLetteredFile {
   error: string;
   at: string;
 }
-
 export class FileRetentionJob {
   constructor(
     private readonly fileRepository: FileRepository,
@@ -47,26 +38,22 @@ export class FileRetentionJob {
     private readonly redisService: RedisService,
     private readonly fileMetrics: FileMetrics,
   ) {}
-
   async run(now: Date = new Date()): Promise<RetentionResult> {
     const token = await this.redisService.lock.acquire(RETENTION_LOCK, RETENTION_LOCK_TTL_MS);
     if (!token) {
       return { scanned: 0, archived: 0, erased: 0, blocked: 0, unclaimed: 0, failed: 0 };
     }
-
     try {
       return await this.sweep(now);
     } finally {
       await this.redisService.lock.release(RETENTION_LOCK, token);
     }
   }
-
   private async sweep(now: Date): Promise<RetentionResult> {
     const candidates = await this.fileRepository.findRetainable(
       this.cutoffs(now),
       fileConfig.retentionBatchSize,
     );
-
     const result: RetentionResult = {
       scanned: candidates.length,
       archived: 0,
@@ -75,22 +62,18 @@ export class FileRetentionJob {
       unclaimed: 0,
       failed: 0,
     };
-
     for (const file of candidates) {
       const purpose = file.purpose as FilePurposeName;
-
       if (!hasFileReferenceOwner(purpose)) {
         result.unclaimed += 1;
         continue;
       }
-
       const holder = await findLiveReference(purpose, file.id);
       if (holder) {
         result.blocked += 1;
         this.fileMetrics.retentionBlocked({ purpose, reason: 'REFERENCED' });
         continue;
       }
-
       const outcome =
         filePurposePolicy[purpose].retention.action === 'ARCHIVE' ? 'ARCHIVED' : 'ERASED';
       try {
@@ -107,16 +90,13 @@ export class FileRetentionJob {
         await this.recordFailure(file.id, purpose, err);
       }
     }
-
     await this.emitGauges();
     return result;
   }
-
   async deadLettered(): Promise<DeadLetteredFile[]> {
     const entries = await this.redisService.provider.client.hgetall(DEAD_LETTER_KEY);
     return Object.values(entries).map((value) => JSON.parse(value) as DeadLetteredFile);
   }
-
   private async retire(
     fileId: string,
     storageKey: string,
@@ -128,12 +108,10 @@ export class FileRetentionJob {
     } else {
       await this.storageProvider.erase(storageKey);
     }
-
     const policy = filePurposePolicy[purpose].retention;
     await this.transactionManager.execute(async (tx) => {
       const recorded = await this.fileRepository.markRetired(fileId, outcome, new Date(), tx);
       if (!recorded) return;
-
       await this.eventPublisher.publish(
         fileEvent('file.erased', {
           aggregateId: fileId,
@@ -148,10 +126,8 @@ export class FileRetentionJob {
         tx,
       );
     });
-
     await this.redisService.provider.client.del(`${ATTEMPTS_PREFIX}${fileId}`);
   }
-
   private async recordFailure(
     fileId: string,
     purpose: FilePurposeName,
@@ -161,10 +137,8 @@ export class FileRetentionJob {
     const key = `${ATTEMPTS_PREFIX}${fileId}`;
     const attempts = await client.incr(key);
     await client.expire(key, ATTEMPTS_TTL_SECONDS);
-
     logger.warn({ err, fileId, attempts }, '[Files] retention failed');
     if (attempts < fileConfig.jobMaxAttempts) return;
-
     const entry: DeadLetteredFile = {
       fileId,
       purpose,
@@ -175,8 +149,10 @@ export class FileRetentionJob {
     await client.hset(DEAD_LETTER_KEY, fileId, JSON.stringify(entry));
     this.fileMetrics.retentionBlocked({ purpose, reason: 'DEAD_LETTERED' });
   }
-
-  private cutoffs(now: Date): { purpose: FilePurposeName; closedBefore: Date }[] {
+  private cutoffs(now: Date): {
+    purpose: FilePurposeName;
+    closedBefore: Date;
+  }[] {
     return (Object.keys(filePurposePolicy) as FilePurposeName[]).map((purpose) => ({
       purpose,
       closedBefore: new Date(
@@ -184,7 +160,6 @@ export class FileRetentionJob {
       ),
     }));
   }
-
   private async emitGauges(): Promise<void> {
     this.fileMetrics.storageGauge('objects.deleted_pending_erasure', {
       value: await this.fileRepository.countAwaitingRetention(),

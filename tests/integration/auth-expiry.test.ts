@@ -193,7 +193,7 @@ describe('expiry paths (integration)', () => {
         }),
       );
 
-      const attempts = await redis.get(RedisKeys.otpAttempts(PHONE));
+      const attempts = await redis.get(RedisKeys.otpAttempts('LOGIN', PHONE));
       assert.equal(attempts, null, 'no failed-attempt counter was started');
     });
   });

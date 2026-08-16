@@ -1,10 +1,8 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { RideOtp } from '../types';
-
 export class RideOtpRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async create(
     data: {
       rideId: string;
@@ -15,7 +13,6 @@ export class RideOtpRepository {
     tx?: TransactionClient,
   ): Promise<RideOtp> {
     const client = tx ?? this.db.client;
-
     return client.rideOtp.create({
       data: {
         rideId: data.rideId,
@@ -27,7 +24,6 @@ export class RideOtpRepository {
       },
     });
   }
-
   async findLatestByRideId(rideId: string, tx?: TransactionClient): Promise<RideOtp | null> {
     const client = tx ?? this.db.client;
     return client.rideOtp.findFirst({
@@ -35,7 +31,6 @@ export class RideOtpRepository {
       orderBy: { createdAt: 'desc' },
     });
   }
-
   async markVerified(id: string, tx?: TransactionClient): Promise<RideOtp> {
     const client = tx ?? this.db.client;
     return client.rideOtp.update({
@@ -46,7 +41,6 @@ export class RideOtpRepository {
       },
     });
   }
-
   async incrementAttempts(id: string, tx?: TransactionClient): Promise<RideOtp> {
     const client = tx ?? this.db.client;
     return client.rideOtp.update({
@@ -56,7 +50,6 @@ export class RideOtpRepository {
       },
     });
   }
-
   async claimAttempt(id: string, maxAttempts: number, tx?: TransactionClient): Promise<boolean> {
     const client = tx ?? this.db.client;
     const { count } = await client.rideOtp.updateMany({
@@ -65,7 +58,6 @@ export class RideOtpRepository {
     });
     return count === 1;
   }
-
   async claimVerification(id: string, tx?: TransactionClient): Promise<boolean> {
     const client = tx ?? this.db.client;
     const { count } = await client.rideOtp.updateMany({

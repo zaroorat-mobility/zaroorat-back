@@ -2,10 +2,8 @@ import { Decimal } from '../../types/index.js';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { LedgerRepository, type LedgerItemInput } from '../../repositories/ledger.repository.js';
 import type { PaymentLedgerEntry } from '../../types';
-
 export class LedgerService {
   constructor(private readonly ledgerRepo: LedgerRepository) {}
-
   async postTransactionGroup(
     items: LedgerItemInput[],
     tx: TransactionClient,
@@ -16,10 +14,8 @@ export class LedgerService {
         throw new Error(`Ledger entry amount must be strictly positive: ${item.amount}`);
       }
     }
-
     return this.ledgerRepo.postGroup(items, tx, customGroupUuid);
   }
-
   async recordTripPayment(
     data: {
       totalFare: Decimal;
@@ -34,7 +30,6 @@ export class LedgerService {
   ): Promise<PaymentLedgerEntry[]> {
     if (data.paymentMethod === 'CASH') {
       if (data.platformCommission.lte(0)) return [];
-
       return this.postTransactionGroup(
         [
           {
@@ -58,7 +53,6 @@ export class LedgerService {
         tx,
       );
     }
-
     const items: LedgerItemInput[] = [
       {
         account: 'CUSTOMER_WALLET',
@@ -70,7 +64,6 @@ export class LedgerService {
         description: `Fare payment for ride ${data.rideId}`,
       },
     ];
-
     if (data.driverPayable.gt(0)) {
       items.push({
         account: 'DRIVER_PAYABLE',
@@ -92,7 +85,6 @@ export class LedgerService {
         description: `Platform commission for ride ${data.rideId}`,
       });
     }
-
     return this.postTransactionGroup(items, tx);
   }
 }

@@ -1,7 +1,5 @@
 import type { PublishInput } from '@core/events/types.js';
-
 export const DRIVER_PRODUCER = 'drivers';
-
 export const DRIVER_EVENT_CATALOG = {
   ONBOARDED: 'driver.onboarded',
   VERIFIED: 'driver.verified',
@@ -12,7 +10,6 @@ export const DRIVER_EVENT_CATALOG = {
   DOCUMENT_EXPIRED: 'driver.document_expired',
   SUSPENDED: 'driver.suspended',
 } as const;
-
 export function driverEvent(
   name: (typeof DRIVER_EVENT_CATALOG)[keyof typeof DRIVER_EVENT_CATALOG],
   aggregateId: string,

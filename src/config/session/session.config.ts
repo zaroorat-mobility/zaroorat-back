@@ -4,5 +4,4 @@ export const sessionConfig = Object.freeze({
   denylistTtlSeconds: Number(process.env.SESSION_DENYLIST_TTL ?? 900),
   lastSeenThrottleSeconds: Number(process.env.SESSION_LAST_SEEN_THROTTLE ?? 60),
 });
-
 export type SessionConfig = typeof sessionConfig;

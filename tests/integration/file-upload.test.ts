@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 function png(width: number, height: number, padTo = 0): Buffer {
   const base = image({ width, height });
@@ -203,7 +203,10 @@ describe('file upload (integration)', () => {
       assert.equal(await provider.head(row.storageKey, 32), null);
 
       const after = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
-      assert.equal(after.status, 'EXPIRED', 'the reservation is retired, not left retriable');
+      // Terminal and retired, but recorded as a refusal rather than a lapsed
+      // window — the reason is what makes the row worth keeping.
+      assert.equal(after.status, 'REJECTED', 'the reservation is retired, not left retriable');
+      assert.equal(after.rejectedReason, 'CONTENT_MISMATCH');
     });
 
     it('refuses a decompression bomb on pixel count, not bytes', async () => {
@@ -309,7 +312,15 @@ describe('file upload (integration)', () => {
       await complete(user.authHeader, fileId);
 
       assert.ok(provider.calls.signUpload >= before.signUpload);
+      // `head` only: metadata plus a capped inspection window. There is no
+      // whole-object read on the provider at all, so completion cannot pull the
+      // bytes through this process even by accident.
       assert.ok(provider.calls.head > before.head);
+      assert.equal(
+        'read' in provider.calls,
+        false,
+        'the storage interface exposes no whole-object read (R-FILE-1, doc 07 §2.2)',
+      );
       assert.ok(provider.versionIds(key).length > 0, 'the object exists — the client wrote it');
     });
 

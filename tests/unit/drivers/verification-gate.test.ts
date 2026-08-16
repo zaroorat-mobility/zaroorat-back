@@ -24,6 +24,7 @@ describe('Driver Operational Verification Gate Tests', () => {
       { execute: async (cb: (tx: unknown) => unknown) => cb({}) } as never,
       {} as never,
       { driverOnline: () => {} } as never,
+      {} as never,
     );
 
     await assert.rejects(async () => service.setOnline('driver-1'), DriverNotVerifiedError);
@@ -46,6 +47,7 @@ describe('Driver Operational Verification Gate Tests', () => {
       { execute: async (cb: (tx: unknown) => unknown) => cb({}) } as never,
       {} as never,
       { driverOnline: () => {} } as never,
+      {} as never,
     );
 
     await assert.rejects(async () => service.setOnline('driver-2'), DriverSuspendedError);

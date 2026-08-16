@@ -4,7 +4,6 @@ import { DriverDocumentRepository } from '../repositories/driver-document.reposi
 import { DriverRepository } from '../repositories/driver.repository.js';
 import { DriverMetrics } from '../metrics/driver.metrics.js';
 import { logger } from '@shared/logger/index.js';
-
 export class DocExpirationJob {
   constructor(
     private readonly db: DatabaseService,
@@ -13,17 +12,13 @@ export class DocExpirationJob {
     private readonly driverRepo: DriverRepository,
     private readonly driverMetrics: DriverMetrics,
   ) {}
-
   async run(): Promise<number> {
     const lockToken = await this.redis.lock.acquire('job:driver_doc_expiration', 15000);
     if (!lockToken) return 0;
-
     let expiredCount = 0;
-
     try {
       const now = new Date();
       const expiredDocs = await this.docRepo.findExpiredDocuments(now);
-
       for (const doc of expiredDocs) {
         await this.docRepo.updateVerificationStatus(
           doc.id,
@@ -32,14 +27,12 @@ export class DocExpirationJob {
           'Document expired',
         );
         this.driverMetrics.documentExpired({ driverId: doc.driverId, docType: doc.documentType });
-
         await this.driverRepo.updateVerificationStatus(
           doc.driverId,
           'DOCUMENT_REVIEW',
           undefined,
           'Required document expired',
         );
-
         expiredCount++;
       }
     } catch (err) {
@@ -47,7 +40,6 @@ export class DocExpirationJob {
     } finally {
       await this.redis.lock.release('job:driver_doc_expiration', lockToken);
     }
-
     return expiredCount;
   }
 }

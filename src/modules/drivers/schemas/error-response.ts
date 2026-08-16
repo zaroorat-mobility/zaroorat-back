@@ -1,7 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
 import { DriverError } from '../errors/index.js';
-
 export function handleDriverError(
   err: unknown,
   request: FastifyRequest,
@@ -15,11 +14,9 @@ export function handleDriverError(
     );
     return;
   }
-
   request.log.error({ err }, '[drivers] unhandled error');
   reply
     .status(500)
     .send(errorEnvelope('INTERNAL', 'An unexpected drivers error occurred', request.id));
 }
-
 export { DriverError };

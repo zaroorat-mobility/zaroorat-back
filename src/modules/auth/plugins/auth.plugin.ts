@@ -1,6 +1,5 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-
 import { RedisService } from '@core/cache';
 import { container } from '@core/di';
 import { JwtService } from '../services/token/jwt.service';
@@ -10,13 +9,11 @@ import { DriverAccessRepository } from '../repositories/driver-access.repository
 import { DeviceRepository } from '../repositories/device.repository';
 import { AuthError, TokenInvalidError } from '../errors/auth.errors';
 import { replyAuthError } from '../schemas/error-response';
-
 export interface AuthorizeOptions {
   roles?: string[];
   requireOperableDriver?: boolean;
   requireUntamperedDevice?: boolean;
 }
-
 function extractBearerToken(request: FastifyRequest): string {
   const header = request.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
@@ -24,7 +21,6 @@ function extractBearerToken(request: FastifyRequest): string {
   }
   return header.slice('Bearer '.length).trim();
 }
-
 export async function authPlugin(app: FastifyInstance): Promise<void> {
   const jwtService = container.resolve<JwtService>('jwtService');
   const epochService = container.resolve<EpochService>('epochService');
@@ -32,9 +28,7 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
   const sessionService = container.resolve<SessionService>('sessionService');
   const driverAccess = container.resolve<DriverAccessRepository>('driverAccessRepository');
   const deviceRepository = container.resolve<DeviceRepository>('deviceRepository');
-
   app.decorateRequest('auth', null);
-
   app.decorate(
     'authenticate',
     async function authenticate(request: FastifyRequest, reply: FastifyReply) {
@@ -45,7 +39,6 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
         const code = err instanceof AuthError ? err.code : 'TOKEN_INVALID';
         return replyAuthError(request, reply, code, 'Invalid or expired access token');
       }
-
       try {
         if (claims.epoch !== (await epochService.current(claims.sub))) {
           return replyAuthError(request, reply, 'TOKEN_STALE', 'The access token is stale');
@@ -54,7 +47,7 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
           return replyAuthError(request, reply, 'SESSION_REVOKED', 'This session has been revoked');
         }
       } catch (err) {
-        request.log.error({ err }, '[auth] revocation store unavailable — failing closed');
+        request.log.error({ err }, '[auth] revocation store unavailable \u2014 failing closed');
         return replyAuthError(
           request,
           reply,
@@ -62,25 +55,20 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
           'Authentication is temporarily unavailable',
         );
       }
-
       request.auth = { userId: claims.sub, sid: claims.sid, roles: claims.roles };
-
       await sessionService.touchLastSeenThrottled(claims.sid);
     },
   );
-
   app.decorate('authorize', function authorize(options: AuthorizeOptions = {}) {
     return async function authorizeHandler(request: FastifyRequest, reply: FastifyReply) {
       const auth = request.auth;
       if (!auth) {
         return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
       }
-
       const required = options.roles ?? [];
       if (required.length > 0 && !required.some((role) => auth.roles.includes(role))) {
         return replyAuthError(request, reply, 'FORBIDDEN', 'Insufficient role');
       }
-
       if (options.requireUntamperedDevice) {
         try {
           const device = await deviceRepository.findBySession(auth.sid);
@@ -93,7 +81,7 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
             );
           }
         } catch (err) {
-          request.log.error({ err }, '[auth] device check failed — failing closed');
+          request.log.error({ err }, '[auth] device check failed \u2014 failing closed');
           return replyAuthError(
             request,
             reply,
@@ -102,14 +90,16 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
           );
         }
       }
-
       if (options.requireOperableDriver) {
         try {
           if (!(await driverAccess.isOperableDriver(auth.userId))) {
             return replyAuthError(request, reply, 'FORBIDDEN', 'Driver is not operable');
           }
         } catch (err) {
-          request.log.error({ err }, '[auth] driver operability check failed — failing closed');
+          request.log.error(
+            { err },
+            '[auth] driver operability check failed \u2014 failing closed',
+          );
           return replyAuthError(
             request,
             reply,
@@ -120,7 +110,6 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
       }
     };
   });
-
   const runAuthenticate = app.authenticate as (
     request: FastifyRequest,
     reply: FastifyReply,
@@ -133,5 +122,4 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
     return runAuthenticate(request, reply);
   });
 }
-
 export default fp(authPlugin, { name: 'auth-guard' });

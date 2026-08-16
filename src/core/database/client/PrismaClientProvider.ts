@@ -4,25 +4,20 @@ import { PoolConfiguration } from '../configuration/PoolConfiguration';
 import { PrismaErrorMapper } from '../errors/PrismaErrorMapper';
 import { ProviderState } from './ProviderState';
 import { logger } from '@shared/logger/index.js';
-
 export type ProviderClient = ReturnType<PrismaClientFactory['create']>;
-
 export interface DatabaseHealth {
   healthy: boolean;
   latency: number;
   timestamp: Date;
 }
-
 export class PrismaClientProvider {
   private _client: ProviderClient | null = null;
   private _state: ProviderState = ProviderState.UNINITIALIZED;
-
   constructor(
     private readonly factory: PrismaClientFactory,
     private readonly dbConfig: DatabaseConfiguration,
     private readonly poolConfig: PoolConfiguration,
   ) {}
-
   public get client(): ProviderClient {
     if (!this._client) {
       this._state = ProviderState.INITIALIZING;
@@ -31,11 +26,9 @@ export class PrismaClientProvider {
     }
     return this._client;
   }
-
   public get state(): ProviderState {
     return this._state;
   }
-
   public async verifyConnection(): Promise<void> {
     try {
       await this.client.$queryRaw`SELECT 1`;
@@ -43,7 +36,6 @@ export class PrismaClientProvider {
       throw PrismaErrorMapper.mapError(error, 'Database Verification');
     }
   }
-
   public async health(): Promise<DatabaseHealth> {
     const start = performance.now();
     try {
@@ -62,7 +54,6 @@ export class PrismaClientProvider {
       };
     }
   }
-
   public async disconnect(): Promise<void> {
     if (this._client && this._state !== ProviderState.DISCONNECTING) {
       try {

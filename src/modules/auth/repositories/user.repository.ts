@@ -1,27 +1,22 @@
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { User, UserStatus } from '@core/database/types';
-
 export interface CreateUserInput {
   phoneNumber: string;
   status?: UserStatus;
   isPhoneVerified?: boolean;
   email?: string | null;
 }
-
 export class UserRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async findById(id: string, tx?: TransactionClient): Promise<User | null> {
     return (tx ?? this.client).user.findUnique({ where: { id } });
   }
-
   async findActiveByPhone(phoneNumber: string, tx?: TransactionClient): Promise<User | null> {
     return (tx ?? this.client).user.findFirst({ where: { phoneNumber, deletedAt: null } });
   }
-
   async create(input: CreateUserInput, tx?: TransactionClient): Promise<User> {
     return (tx ?? this.client).user.create({
       data: {
@@ -32,31 +27,24 @@ export class UserRepository extends BaseRepository {
       },
     });
   }
-
   async updateStatus(id: string, status: UserStatus, tx?: TransactionClient): Promise<User> {
     return (tx ?? this.client).user.update({ where: { id }, data: { status } });
   }
-
   async updateLastLoginAt(id: string, at: Date, tx?: TransactionClient): Promise<void> {
     await (tx ?? this.client).user.update({ where: { id }, data: { lastLoginAt: at } });
   }
-
   async lockForUpdate(id: string, tx: TransactionClient): Promise<void> {
     await tx.$queryRaw`SELECT 1 FROM users WHERE id = ${id}::uuid FOR UPDATE`;
   }
-
   async updatePhoneNumber(id: string, phoneNumber: string, tx?: TransactionClient): Promise<User> {
     return (tx ?? this.client).user.update({ where: { id }, data: { phoneNumber } });
   }
-
   async markPhoneVerified(id: string, tx?: TransactionClient): Promise<void> {
     await (tx ?? this.client).user.update({ where: { id }, data: { isPhoneVerified: true } });
   }
-
   async softDelete(id: string, at: Date = new Date()): Promise<void> {
     await this.client.user.update({ where: { id }, data: { deletedAt: at } });
   }
-
   async anonymize(id: string, at: Date, tx?: TransactionClient): Promise<void> {
     await (tx ?? this.client).user.update({
       where: { id },

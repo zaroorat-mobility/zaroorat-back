@@ -1,1 +1,1 @@
-export { E164_PATTERN, isValidE164 } from './phone';
+export { E164_PATTERN, isValidE164, maskPhone } from './phone';

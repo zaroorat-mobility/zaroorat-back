@@ -1,7 +1,6 @@
 import { BaseRepository, DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { File, FilePurpose } from '@core/database/types';
-
 export interface CreateFileInput {
   ownerUserId: string;
   purpose: FilePurpose;
@@ -12,19 +11,22 @@ export interface CreateFileInput {
   sizeBytes: number;
   uploadExpiresAt: Date;
   checksumSha256?: string | null;
+  storageBucket?: string | null;
 }
-
 export interface CompleteFileInput {
   sizeBytes: number;
   completedAt: Date;
-  checksumSha256?: string | null;
+  checksumSha256: string | null;
+  detectedContentType: string;
+  uploadedAt: Date;
+  verifiedAt: Date;
+  storageBucket?: string | null;
+  storageVersionId?: string | null;
 }
-
 export class FileRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
   async create(input: CreateFileInput, tx?: TransactionClient): Promise<File> {
     return (tx ?? this.client).file.create({
       data: {
@@ -32,6 +34,7 @@ export class FileRepository extends BaseRepository {
         purpose: input.purpose,
         storageKey: input.storageKey,
         storageProvider: input.storageProvider,
+        ...(input.storageBucket != null ? { storageBucket: input.storageBucket } : {}),
         fileName: input.fileName,
         contentType: input.contentType,
         sizeBytes: input.sizeBytes,
@@ -40,40 +43,58 @@ export class FileRepository extends BaseRepository {
       },
     });
   }
-
   async findOwned(id: string, ownerUserId: string, tx?: TransactionClient): Promise<File | null> {
     return (tx ?? this.client).file.findFirst({ where: { id, ownerUserId } });
   }
-
   async findReadable(id: string): Promise<File | null> {
     return this.client.file.findFirst({ where: { id, status: 'READY', deletedAt: null } });
   }
-
   async findById(id: string, tx?: TransactionClient): Promise<File | null> {
     return (tx ?? this.client).file.findUnique({ where: { id } });
   }
-
   async markReady(id: string, input: CompleteFileInput, tx: TransactionClient): Promise<boolean> {
     const { count } = await tx.file.updateMany({
-      where: { id, status: 'PENDING' },
+      where: { id, status: { in: ['PENDING', 'UPLOADED'] } },
       data: {
         status: 'READY',
         sizeBytes: input.sizeBytes,
+        checksumSha256: input.checksumSha256,
+        detectedContentType: input.detectedContentType,
+        uploadedAt: input.uploadedAt,
+        verifiedAt: input.verifiedAt,
         completedAt: input.completedAt,
-        ...(input.checksumSha256 != null ? { checksumSha256: input.checksumSha256 } : {}),
+        ...(input.storageBucket != null ? { storageBucket: input.storageBucket } : {}),
+        ...(input.storageVersionId != null ? { storageVersionId: input.storageVersionId } : {}),
       },
     });
     return count === 1;
   }
-
+  async markRejected(
+    id: string,
+    reason: string,
+    at: Date,
+    tx?: TransactionClient,
+  ): Promise<boolean> {
+    const { count } = await (tx ?? this.client).file.updateMany({
+      where: { id, status: { in: ['PENDING', 'UPLOADED'] } },
+      data: { status: 'REJECTED', rejectedReason: reason, completedAt: at },
+    });
+    return count === 1;
+  }
+  async findReconcilable(olderThan: Date, limit: number): Promise<File[]> {
+    return this.client.file.findMany({
+      where: { status: { in: ['PENDING', 'UPLOADED'] }, createdAt: { lt: olderThan } },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+  }
   async markExpired(id: string): Promise<boolean> {
     const { count } = await this.client.file.updateMany({
-      where: { id, status: 'PENDING' },
+      where: { id, status: { in: ['PENDING', 'UPLOADED'] } },
       data: { status: 'EXPIRED' },
     });
     return count === 1;
   }
-
   async softDelete(id: string, deletedAt: Date, tx: TransactionClient): Promise<boolean> {
     const { count } = await tx.file.updateMany({
       where: { id, status: 'READY' },
@@ -81,7 +102,6 @@ export class FileRepository extends BaseRepository {
     });
     return count === 1;
   }
-
   async markSuperseded(id: string, replacementId: string, tx: TransactionClient): Promise<boolean> {
     const { count } = await tx.file.updateMany({
       where: { id, status: 'READY' },
@@ -89,24 +109,24 @@ export class FileRepository extends BaseRepository {
     });
     return count === 1;
   }
-
   async findSweepable(now: Date, limit: number): Promise<File[]> {
     return this.client.file.findMany({
-      where: { status: { in: ['PENDING', 'EXPIRED'] }, uploadExpiresAt: { lt: now } },
+      where: { status: { in: ['PENDING', 'UPLOADED', 'EXPIRED'] }, uploadExpiresAt: { lt: now } },
       orderBy: { uploadExpiresAt: 'asc' },
       take: limit,
     });
   }
-
   async deleteReservation(id: string): Promise<boolean> {
     const { count } = await this.client.file.deleteMany({
-      where: { id, status: { in: ['PENDING', 'EXPIRED'] } },
+      where: { id, status: { in: ['PENDING', 'UPLOADED', 'EXPIRED'] } },
     });
     return count === 1;
   }
-
   async findRetainable(
-    due: readonly { purpose: FilePurpose; closedBefore: Date }[],
+    due: readonly {
+      purpose: FilePurpose;
+      closedBefore: Date;
+    }[],
     limit: number,
   ): Promise<File[]> {
     if (due.length === 0) return [];
@@ -126,7 +146,6 @@ export class FileRepository extends BaseRepository {
       take: limit,
     });
   }
-
   async markRetired(
     id: string,
     outcome: 'ARCHIVED' | 'ERASED',
@@ -139,11 +158,9 @@ export class FileRepository extends BaseRepository {
     });
     return count === 1;
   }
-
   async countPending(): Promise<number> {
     return this.client.file.count({ where: { status: 'PENDING' } });
   }
-
   async countAwaitingRetention(): Promise<number> {
     return this.client.file.count({
       where: {
@@ -153,8 +170,13 @@ export class FileRepository extends BaseRepository {
       },
     });
   }
-
-  async storageByPurpose(): Promise<{ purpose: FilePurpose; files: number; bytes: number }[]> {
+  async storageByPurpose(): Promise<
+    {
+      purpose: FilePurpose;
+      files: number;
+      bytes: number;
+    }[]
+  > {
     const grouped = await this.client.file.groupBy({
       by: ['purpose'],
       where: { status: 'READY', deletedAt: null },
@@ -167,7 +189,6 @@ export class FileRepository extends BaseRepository {
       bytes: row._sum.sizeBytes ?? 0,
     }));
   }
-
   async totalBytesForUser(ownerUserId: string, purpose?: FilePurpose): Promise<number> {
     const result = await this.client.file.aggregate({
       where: {

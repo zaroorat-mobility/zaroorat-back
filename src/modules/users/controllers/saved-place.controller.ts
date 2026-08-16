@@ -11,7 +11,6 @@ import {
   updatePlaceSchema,
   type UpdatePlaceBody,
 } from '../schemas';
-
 function toPlaceWrite(body: UpdatePlaceBody): UpdateSavedPlaceInput {
   const changes: UpdateSavedPlaceInput = {};
   if (body.label !== undefined) changes.label = body.label;
@@ -28,20 +27,16 @@ function toPlaceWrite(body: UpdatePlaceBody): UpdateSavedPlaceInput {
   }
   return changes;
 }
-
 export class SavedPlaceController {
   constructor(private readonly savedPlaceService: SavedPlaceService) {}
-
   listPlaces = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
     return reply.status(200).send(await this.savedPlaceService.list(auth.userId));
   };
-
   addPlace = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
     const parsed = createPlaceSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return replyFromUserError(
@@ -50,18 +45,21 @@ export class SavedPlaceController {
         new UserValidationError(detailsFromZodIssues(parsed.error.issues)),
       );
     }
-
     const body = parsed.data;
     const input = { ...toPlaceWrite(body), label: body.label };
     const created = await this.savedPlaceService.add(auth.userId, input, request.id);
     return reply.status(201).send(created);
   };
-
   updatePlace = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
-    const idParsed = itemIdSchema.safeParse((request.params as { id?: unknown }).id);
+    const idParsed = itemIdSchema.safeParse(
+      (
+        request.params as {
+          id?: unknown;
+        }
+      ).id,
+    );
     if (!idParsed.success) {
       return replyFromUserError(
         request,
@@ -69,7 +67,6 @@ export class SavedPlaceController {
         new UserValidationError([{ field: 'id', code: 'INVALID_FORMAT' }]),
       );
     }
-
     const parsed = updatePlaceSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return replyFromUserError(
@@ -78,7 +75,6 @@ export class SavedPlaceController {
         new UserValidationError(detailsFromZodIssues(parsed.error.issues)),
       );
     }
-
     const updated = await this.savedPlaceService.update(
       auth.userId,
       idParsed.data,
@@ -87,12 +83,16 @@ export class SavedPlaceController {
     );
     return reply.status(200).send(updated);
   };
-
   removePlace = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;
     if (!auth) return replyUserError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
-
-    const idParsed = itemIdSchema.safeParse((request.params as { id?: unknown }).id);
+    const idParsed = itemIdSchema.safeParse(
+      (
+        request.params as {
+          id?: unknown;
+        }
+      ).id,
+    );
     if (!idParsed.success) {
       return replyFromUserError(
         request,
@@ -100,7 +100,6 @@ export class SavedPlaceController {
         new UserValidationError([{ field: 'id', code: 'INVALID_FORMAT' }]),
       );
     }
-
     await this.savedPlaceService.remove(auth.userId, idParsed.data, request.id);
     return reply.status(204).send();
   };

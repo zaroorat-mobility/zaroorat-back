@@ -3,7 +3,6 @@ import { DatabaseService } from '@core/database';
 import { Prisma } from '../../../generated/prisma';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { Decimal, type Ride, type RideStatus } from '../types';
-
 export interface CreateRideInput {
   requestId: string;
   customerId: string;
@@ -19,25 +18,24 @@ export interface CreateRideInput {
   dropAddress?: string | null;
   isScheduled?: boolean;
 }
-
 export class RideRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async lockForUpdate(id: string, tx: TransactionClient): Promise<Ride | null> {
-    const locked = await tx.$queryRaw<{ id: string }[]>`
+    const locked = await tx.$queryRaw<
+      {
+        id: string;
+      }[]
+    >`
       SELECT "id" FROM "rides" WHERE "id" = ${id}::uuid FOR UPDATE
     `;
     if (locked.length === 0) return null;
     return tx.ride.findUnique({ where: { id } });
   }
-
   async create(input: CreateRideInput, tx?: TransactionClient): Promise<Ride> {
     const client = tx ?? this.db.client;
     const rideCode = `RIDE_${Date.now().toString(36).toUpperCase()}_${randomUUID().substring(0, 4).toUpperCase()}`;
-
     const id = randomUUID();
     const hasDrop = input.dropLat != null && input.dropLng != null;
-
     await client.$executeRaw`
       INSERT INTO "rides" (
         "id", "ride_code", "request_id", "customer_id", "driver_id",
@@ -61,10 +59,8 @@ export class RideRepository {
         0, ${input.isScheduled ?? false}, now(), now()
       )
     `;
-
     return client.ride.findUniqueOrThrow({ where: { id } });
   }
-
   async findById(id: string, tx?: TransactionClient): Promise<Ride | null> {
     const client = tx ?? this.db.client;
     return client.ride.findUnique({
@@ -73,14 +69,10 @@ export class RideRepository {
         fare: true,
         cancellation: true,
         statusEvents: true,
-        // The driver's *user* id, so a read can be authorized against the
-        // caller. `ride.driverId` is the Driver PK and never equals a user id,
-
         driver: { select: { userId: true } },
       },
     });
   }
-
   async findActiveByCustomer(customerId: string, tx?: TransactionClient): Promise<Ride | null> {
     const client = tx ?? this.db.client;
     return client.ride.findFirst({
@@ -90,7 +82,6 @@ export class RideRepository {
       },
     });
   }
-
   async findActiveByDriver(driverId: string, tx?: TransactionClient): Promise<Ride | null> {
     const client = tx ?? this.db.client;
     return client.ride.findFirst({
@@ -100,7 +91,6 @@ export class RideRepository {
       },
     });
   }
-
   async findActiveByDriverUserId(userId: string, tx?: TransactionClient): Promise<Ride | null> {
     const client = tx ?? this.db.client;
     return client.ride.findFirst({
@@ -110,7 +100,6 @@ export class RideRepository {
       },
     });
   }
-
   async updateStatus(
     id: string,
     status: RideStatus,
@@ -126,15 +115,12 @@ export class RideRepository {
     tx?: TransactionClient,
   ): Promise<Ride> {
     const client = tx ?? this.db.client;
-
     const data = { status, ...extraData };
-
     return client.ride.update({
       where: { id },
       data,
     });
   }
-
   async updateStatusIf(
     id: string,
     expectedStatus: RideStatus,
@@ -157,7 +143,6 @@ export class RideRepository {
     });
     return count === 1;
   }
-
   async listCustomerRides(customerId: string, limit = 20, tx?: TransactionClient): Promise<Ride[]> {
     const client = tx ?? this.db.client;
     return client.ride.findMany({

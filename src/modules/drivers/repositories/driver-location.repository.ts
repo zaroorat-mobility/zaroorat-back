@@ -1,7 +1,6 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { Decimal, type DriverLocation } from '../types';
-
 export interface UpdateDriverLocationInput {
   driverId: string;
   latitude: number;
@@ -13,16 +12,13 @@ export interface UpdateDriverLocationInput {
   isMockLocation?: boolean;
   rideId?: string;
 }
-
 export class DriverLocationRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async updateLocation(
     input: UpdateDriverLocationInput,
     tx?: TransactionClient,
   ): Promise<DriverLocation> {
     const client = tx ?? this.db.client;
-
     await client.$executeRaw`
       INSERT INTO "driver_locations" (
         "driver_id", "latitude", "longitude", "location", "heading", "bearing",
@@ -51,10 +47,8 @@ export class DriverLocationRepository {
         "ride_id" = EXCLUDED."ride_id",
         "recorded_at" = EXCLUDED."recorded_at"
     `;
-
     return client.driverLocation.findUniqueOrThrow({ where: { driverId: input.driverId } });
   }
-
   async getLocation(driverId: string, tx?: TransactionClient): Promise<DriverLocation | null> {
     const client = tx ?? this.db.client;
     return client.driverLocation.findUnique({

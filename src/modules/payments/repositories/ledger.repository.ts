@@ -4,7 +4,6 @@ import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { LedgerImbalanceError } from '../errors/payment.errors.js';
 import type { PaymentLedgerEntry } from '../types';
-
 export interface LedgerItemInput {
   account: string;
   accountRefId?: string | null;
@@ -14,10 +13,8 @@ export interface LedgerItemInput {
   referenceId?: string | null;
   description?: string | null;
 }
-
 export class LedgerRepository {
   constructor(private readonly db: DatabaseService) {}
-
   async postGroup(
     items: LedgerItemInput[],
     tx: TransactionClient,
@@ -25,7 +22,6 @@ export class LedgerRepository {
   ): Promise<PaymentLedgerEntry[]> {
     let debitSum = new Decimal(0);
     let creditSum = new Decimal(0);
-
     for (const item of items) {
       if (item.direction === 'DEBIT') {
         debitSum = debitSum.add(item.amount);
@@ -33,14 +29,11 @@ export class LedgerRepository {
         creditSum = creditSum.add(item.amount);
       }
     }
-
     if (!debitSum.equals(creditSum)) {
       throw new LedgerImbalanceError(debitSum.toNumber(), creditSum.toNumber());
     }
-
     const groupUuid = customGroupUuid ?? randomUUID();
     const created: PaymentLedgerEntry[] = [];
-
     for (const item of items) {
       const entry = await tx.paymentLedgerEntry.create({
         data: {
@@ -57,10 +50,8 @@ export class LedgerRepository {
       });
       created.push(entry);
     }
-
     return created;
   }
-
   async findByGroup(entryGroup: string, tx?: TransactionClient): Promise<PaymentLedgerEntry[]> {
     const client = tx ?? this.db.client;
     return client.paymentLedgerEntry.findMany({

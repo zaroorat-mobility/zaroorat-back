@@ -9,7 +9,6 @@ import { UserNotFoundError } from '../errors';
 import type { UserProfile } from '../types';
 import type { UserAccountView, UserProfileView } from '../schemas';
 import { toProfileView } from './profile';
-
 function toAccountView(user: User, profile: UserProfile | null, roles: string[]): UserAccountView {
   return {
     id: user.id,
@@ -24,7 +23,6 @@ function toAccountView(user: User, profile: UserProfile | null, roles: string[])
     profile: toProfileView(profile),
   };
 }
-
 export class UserService {
   constructor(
     private readonly userRepository: UserRepository,
@@ -34,7 +32,6 @@ export class UserService {
     private readonly eventPublisher: EventPublisher,
     private readonly fileService: FileService,
   ) {}
-
   async getMe(userId: string): Promise<UserAccountView> {
     const [user, profile, roles] = await Promise.all([
       this.userRepository.findById(userId),
@@ -46,30 +43,24 @@ export class UserService {
     }
     return toAccountView(user, profile, roles);
   }
-
   async updateProfile(
     userId: string,
     changes: UpdateUserProfileInput,
     requestId: string | null = null,
   ): Promise<UserProfileView> {
     const changedFields = Object.keys(changes);
-
     if (changedFields.length === 0) {
       return toProfileView(await this.userProfileRepository.findByUserId(userId));
     }
-
     const profile = await this.transactionManager.execute(async (tx) => {
       const outgoing =
         'profileImageFileId' in changes
           ? await this.attachProfileImage(userId, changes.profileImageFileId ?? null, tx, requestId)
           : null;
-
       const updated = await this.userProfileRepository.update(userId, changes, tx);
-
       if (outgoing !== null) {
         await this.fileService.releaseInTransaction(outgoing, userId, tx, requestId);
       }
-
       await this.eventPublisher.publish(
         userEvent('user.profile.updated', {
           subjectUserId: userId,
@@ -80,10 +71,8 @@ export class UserService {
       );
       return updated;
     });
-
     return toProfileView(profile);
   }
-
   private async attachProfileImage(
     userId: string,
     nextFileId: string | null,
@@ -92,9 +81,7 @@ export class UserService {
   ): Promise<string | null> {
     const current = (await this.userProfileRepository.findByUserId(userId, tx))?.profileImageFileId;
     if ((current ?? null) === nextFileId) return null;
-
     if (nextFileId === null) return current ?? null;
-
     await this.fileService.assertReferenceable(nextFileId, userId, 'PROFILE_IMAGE', tx);
     if (current != null) {
       await this.fileService.supersede(current, nextFileId, tx, requestId);

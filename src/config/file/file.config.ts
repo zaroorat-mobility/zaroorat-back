@@ -1,18 +1,18 @@
 import { jwtConfig } from '../jwt/jwt.config.js';
-
 export type RetentionTrigger =
   | 'REPLACED'
   | 'DRIVER_RELATIONSHIP_ENDED'
   | 'VEHICLE_RETIRED'
   | 'INCIDENT_CLOSED'
   | 'DISPUTE_CLOSED';
-
 export type RetentionAction = 'ARCHIVE' | 'ERASE';
-
 export interface FilePurposePolicy {
   readonly mimeTypes: readonly string[];
   readonly maxBytes: number;
-  readonly maxPixels: { readonly width: number; readonly height: number } | null;
+  readonly maxPixels: {
+    readonly width: number;
+    readonly height: number;
+  } | null;
   readonly readTtlSeconds: number;
   readonly rejectExifLocation: boolean;
   readonly retention: {
@@ -21,15 +21,12 @@ export interface FilePurposePolicy {
     readonly action: RetentionAction;
   };
 }
-
 function bounded(value: string | undefined, fallback: number, max: number): number {
   const parsed = Number(value ?? fallback);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.min(parsed, max);
 }
-
 const MB = 1024 * 1024;
-
 export const filePurposePolicy = Object.freeze({
   PROFILE_IMAGE: {
     mimeTypes: Object.freeze(['image/jpeg', 'image/png', 'image/webp']),
@@ -80,9 +77,7 @@ export const filePurposePolicy = Object.freeze({
     retention: { afterDays: 1825, trigger: 'DISPUTE_CLOSED', action: 'ARCHIVE' },
   },
 } as const satisfies Record<string, FilePurposePolicy>);
-
 export type FilePurposeName = keyof typeof filePurposePolicy;
-
 export const CONTENT_TYPE_EXTENSION: Readonly<Record<string, string>> = Object.freeze({
   'image/jpeg': '.jpg',
   'image/png': '.png',
@@ -90,7 +85,6 @@ export const CONTENT_TYPE_EXTENSION: Readonly<Record<string, string>> = Object.f
   'application/pdf': '.pdf',
   'video/mp4': '.mp4',
 });
-
 export const PURPOSE_KEY_PREFIX: Readonly<Record<FilePurposeName, string>> = Object.freeze({
   PROFILE_IMAGE: 'pi',
   DRIVER_DOCUMENT: 'dd',
@@ -99,7 +93,6 @@ export const PURPOSE_KEY_PREFIX: Readonly<Record<FilePurposeName, string>> = Obj
   SOS_EVIDENCE: 'se',
   DISPUTE_EVIDENCE: 'de',
 });
-
 export const fileConfig = Object.freeze({
   purposes: filePurposePolicy,
   uploadsPerUserPerHour: Number(process.env.FILE_UPLOADS_PER_HOUR ?? 30),
@@ -114,9 +107,7 @@ export const fileConfig = Object.freeze({
   retentionBatchSize: Number(process.env.FILE_RETENTION_BATCH ?? 200),
   jobMaxAttempts: Number(process.env.FILE_JOB_MAX_ATTEMPTS ?? 5),
 });
-
 export type FileConfig = typeof fileConfig;
-
 export function assertReadTtlsWithinAccessToken(): void {
   const longest = Math.max(
     ...Object.values(filePurposePolicy).map((policy) => policy.readTtlSeconds),
@@ -129,5 +120,4 @@ export function assertReadTtlsWithinAccessToken(): void {
     );
   }
 }
-
 assertReadTtlsWithinAccessToken();

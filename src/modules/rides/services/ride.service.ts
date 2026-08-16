@@ -5,7 +5,6 @@ import { RideOtpService } from './otp/ride-otp.service.js';
 import { CancellationService } from './cancellation/cancellation.service.js';
 import { DispatchService } from './dispatch/dispatch.service.js';
 import { ReceiptService } from './receipt/receipt.service.js';
-
 export class RideService {
   constructor(
     public readonly request: RideRequestService,

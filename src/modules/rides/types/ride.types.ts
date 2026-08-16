@@ -1,5 +1,4 @@
 import { Prisma } from '../../../generated/prisma/index.js';
-
 import type {
   RideRequest,
   RideDispatch,
@@ -19,10 +18,8 @@ import type {
   RideRequestStatus,
   DispatchResponse,
 } from '../../../generated/prisma/index.js';
-
 export type Decimal = Prisma.Decimal;
 export const Decimal = Prisma.Decimal;
-
 export type {
   RideRequest,
   RideDispatch,
