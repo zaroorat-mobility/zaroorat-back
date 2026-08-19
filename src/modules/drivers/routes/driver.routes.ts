@@ -7,6 +7,7 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<DriverController>('driverController');
   fastify.setErrorHandler(handleDriverError);
   fastify.get('/me', (req, reply) => controller.onboarding.getMe(req, reply));
+  fastify.post('/me/onboard', (req, reply) => controller.onboarding.onboard(req, reply));
   fastify.patch('/:driverId/profile', (req, reply) =>
     controller.onboarding.updateProfile(req, reply),
   );
