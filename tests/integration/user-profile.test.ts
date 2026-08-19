@@ -159,7 +159,7 @@ describe('user profile (integration)', () => {
 
     it('rejects each immutable field individually', async () => {
       const user = await loginAs(app, phoneA);
-      for (const field of ['id', 'userId', 'email', 'isPhoneVerified', 'referralCode']) {
+      for (const field of ['id', 'userId', 'isPhoneVerified', 'referralCode']) {
         const res = await patch(user.accessToken, { [field]: 'x' });
         assert.equal(res.statusCode, 400, `${field}: ${res.payload}`);
         assert.equal(res.json().error.code, 'IMMUTABLE_FIELD');

@@ -6,7 +6,6 @@ export const IMMUTABLE_PROFILE_FIELDS = Object.freeze([
   'id',
   'userId',
   'phoneNumber',
-  'email',
   'isPhoneVerified',
   'isEmailVerified',
   'status',
