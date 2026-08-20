@@ -478,7 +478,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       const admin = await loginWithRole(ADMIN, 'admin');
       const driverUser = await loginWithRole(DRIVER_A, 'driver');
       const driverId = await makeDriver(driverUser.userId, { verified: false });
-      for (const documentType of ['DRIVING_LICENSE', 'RC', 'INSURANCE']) {
+      for (const documentType of ['DRIVING_LICENSE', 'RC', 'INSURANCE'] as const) {
         await db().client.driverDocument.create({
           data: {
             driverId,
