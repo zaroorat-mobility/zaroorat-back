@@ -17,8 +17,13 @@ export async function authorizedDriverId(
   requestedDriverId?: string | undefined,
   staffRoles: string[] = ['admin', 'support'],
 ): Promise<string> {
+  // A staff caller acting on an explicit :driverId does not need a Driver row
+  // of their own — requiring one would make every staff-only endpoint 404 for
+  // any admin/support user who never onboarded as a driver themselves.
+  if (requestedDriverId && callerHasRole(request, ...staffRoles)) {
+    return requestedDriverId;
+  }
   const own = await actingDriverId(request, driverRepository);
   if (!requestedDriverId || requestedDriverId === own) return own;
-  if (callerHasRole(request, ...staffRoles)) return requestedDriverId;
   throw new ForbiddenResourceError('You may only act on your own driver profile');
 }

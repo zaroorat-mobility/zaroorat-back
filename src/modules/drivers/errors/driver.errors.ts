@@ -1,11 +1,13 @@
 export class DriverError extends Error {
   readonly code: string;
   readonly statusCode: number;
-  constructor(message: string, code = 'DRIVER_ERROR', statusCode = 400) {
+  readonly details?: unknown;
+  constructor(message: string, code = 'DRIVER_ERROR', statusCode = 400, details?: unknown) {
     super(message);
     this.name = 'DriverError';
     this.code = code;
     this.statusCode = statusCode;
+    this.details = details;
   }
 }
 export class DriverNotFoundError extends DriverError {
@@ -17,8 +19,9 @@ export class DriverNotFoundError extends DriverError {
 export class DriverNotVerifiedError extends DriverError {
   constructor(
     message = 'Driver verification status is not VERIFIED or required documents are missing',
+    details?: unknown,
   ) {
-    super(message, 'DRIVER_NOT_VERIFIED', 403);
+    super(message, 'DRIVER_NOT_VERIFIED', 403, details);
     this.name = 'DriverNotVerifiedError';
   }
 }
@@ -59,8 +62,16 @@ export class DriverOnTripError extends DriverError {
   }
 }
 export class DocumentValidationError extends DriverError {
-  constructor(message: string) {
-    super(message, 'DOCUMENT_VALIDATION_ERROR', 422);
+  constructor(message: string, details?: unknown) {
+    super(message, 'DOCUMENT_VALIDATION_ERROR', 422, details);
     this.name = 'DocumentValidationError';
+  }
+}
+export class SelfReviewForbiddenError extends DriverError {
+  constructor(
+    message = 'You cannot review your own driver documents or approve your own driver record',
+  ) {
+    super(message, 'SELF_REVIEW_FORBIDDEN', 403);
+    this.name = 'SelfReviewForbiddenError';
   }
 }

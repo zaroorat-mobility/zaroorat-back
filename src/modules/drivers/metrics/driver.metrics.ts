@@ -35,6 +35,12 @@ export class DriverMetrics {
   documentExpired(fields?: DriverMetricFields): void {
     this.emit('document_expired_total', fields);
   }
+  documentVerified(fields?: DriverMetricFields): void {
+    this.emit('document_verified_total', fields);
+  }
+  documentRejected(fields?: DriverMetricFields): void {
+    this.emit('document_rejected_total', fields);
+  }
   private emit(event: string, fields?: DriverMetricFields): void {
     incrementCounter(`driver_${event}`, fields);
     logger.info({ metric: `driver.${event}`, ...fields }, `[metric] driver.${event}`);

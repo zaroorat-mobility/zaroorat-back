@@ -3,7 +3,7 @@ import { EventPublisher } from '@core/events';
 import { DriverRepository } from '../../repositories/driver.repository.js';
 import { DriverStatusRepository } from '../../repositories/driver-status.repository.js';
 import { DriverShiftRepository } from '../../repositories/driver-shift.repository.js';
-import { DriverDocumentRepository } from '../../repositories/driver-document.repository.js';
+import { DriverEligibilityService } from '../eligibility/eligibility.service.js';
 import {
   DriverNotFoundError,
   DriverNotVerifiedError,
@@ -19,7 +19,7 @@ export class StatusService {
     private readonly driverRepo: DriverRepository,
     private readonly statusRepo: DriverStatusRepository,
     private readonly shiftRepo: DriverShiftRepository,
-    private readonly docRepo: DriverDocumentRepository,
+    private readonly eligibilityService: DriverEligibilityService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly driverMetrics: DriverMetrics,
@@ -43,12 +43,12 @@ export class StatusService {
       if (driver.isSuspended) {
         throw new DriverSuspendedError('Driver is suspended and cannot go ONLINE');
       }
-      const docs = await this.docRepo.findByDriverId(driverId, tx);
-      const hasValidLicense = docs.some(
-        (d) => d.documentType === 'DRIVING_LICENSE' && d.verificationStatus === 'VERIFIED',
-      );
-      if (!hasValidLicense) {
-        throw new DriverNotVerifiedError('Driver does not have a verified Driving License');
+      const eligibility = await this.eligibilityService.checkRequiredDocuments(driverId, tx);
+      if (!eligibility.eligible) {
+        throw new DriverNotVerifiedError(
+          'Driver does not meet required-document eligibility to go ONLINE',
+          eligibility,
+        );
       }
       const shift = await this.shiftRepo.startShift(driverId, tx);
       await this.driverRepo.updateAvailability(driverId, true, tx);

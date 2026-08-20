@@ -7,7 +7,7 @@ export class DriverDocumentRepository {
     data: {
       driverId: string;
       documentType: DriverDocumentType;
-      fileUrl: string;
+      fileId: string;
       documentNumber?: string;
       issuedAt?: Date;
       expiresAt?: Date;
@@ -15,33 +15,32 @@ export class DriverDocumentRepository {
     tx?: TransactionClient,
   ): Promise<DriverDocument> {
     const client = tx ?? this.db.client;
-    const existing = await client.driverDocument.findFirst({
+    return client.driverDocument.upsert({
       where: {
-        driverId: data.driverId,
-        documentType: data.documentType,
-      },
-    });
-    if (existing) {
-      return client.driverDocument.update({
-        where: { id: existing.id },
-        data: {
-          fileUrl: data.fileUrl,
-          documentNumber: data.documentNumber ?? null,
-          issuedAt: data.issuedAt ?? null,
-          expiresAt: data.expiresAt ?? null,
-          verificationStatus: 'PENDING',
+        driverId_documentType: {
+          driverId: data.driverId,
+          documentType: data.documentType,
         },
-      });
-    }
-    return client.driverDocument.create({
-      data: {
+      },
+      create: {
         driverId: data.driverId,
         documentType: data.documentType,
-        fileUrl: data.fileUrl,
+        fileId: data.fileId,
         documentNumber: data.documentNumber ?? null,
         issuedAt: data.issuedAt ?? null,
         expiresAt: data.expiresAt ?? null,
         verificationStatus: 'PENDING',
+      },
+      update: {
+        fileId: data.fileId,
+        documentNumber: data.documentNumber ?? null,
+        issuedAt: data.issuedAt ?? null,
+        expiresAt: data.expiresAt ?? null,
+        verificationStatus: 'PENDING',
+        verifiedBy: null,
+        verifiedAt: null,
+        verificationNotes: null,
+        rejectionReason: null,
       },
     });
   }
@@ -50,6 +49,15 @@ export class DriverDocumentRepository {
     return client.driverDocument.findMany({
       where: { driverId },
     });
+  }
+  async findById(id: string, tx?: TransactionClient): Promise<DriverDocument | null> {
+    const client = tx ?? this.db.client;
+    return client.driverDocument.findUnique({ where: { id } });
+  }
+  async isDocumentFile(fileId: string, tx?: TransactionClient): Promise<boolean> {
+    const client = tx ?? this.db.client;
+    const count = await client.driverDocument.count({ where: { fileId } });
+    return count > 0;
   }
   async updateVerificationStatus(
     id: string,

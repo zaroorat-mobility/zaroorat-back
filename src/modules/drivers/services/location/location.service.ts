@@ -54,12 +54,18 @@ export class LocationService {
     }
     const location = await this.locationRepo.updateLocation(input);
     this.driverMetrics.locationUpdated({ driverId: input.driverId });
-    await this.geoService.recordDriverPosition({
-      driverId: input.driverId,
-      latitude: input.latitude,
-      longitude: input.longitude,
-      recordedAt: location.recordedAt,
-    });
+    if (
+      driver.verificationStatus === 'VERIFIED' &&
+      !driver.isSuspended &&
+      driver.isAvailable === true
+    ) {
+      await this.geoService.recordDriverPosition({
+        driverId: input.driverId,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        recordedAt: location.recordedAt,
+      });
+    }
     await this.statusRepo.updateHeartbeat(input.driverId);
     return location;
   }
