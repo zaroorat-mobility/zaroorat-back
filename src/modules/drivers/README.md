@@ -9,7 +9,7 @@ The **Drivers Module** (`src/modules/drivers/`) owns driver identity, profile on
 1. **Driver Operational Verification Gate**: A driver cannot transition from `OFFLINE` to `ONLINE` unless:
    - `verificationStatus === 'VERIFIED'`
    - `isSuspended === false`
-   - Required documents (e.g. `DRIVING_LICENSE`) are verified.
+   - Every document type in `driverConfig.requiredDocumentTypes` (default `DRIVING_LICENSE, RC, INSURANCE`) has a submitted `DriverDocument` row that is `VERIFIED` and unexpired — computed by the single authoritative `DriverEligibilityService.checkRequiredDocuments(driverId, tx)`, the same function that gates admin driver-approval (`POST /:id/verify`). This is an actually-reachable gate: documents are submitted via `POST /:driverId/documents {documentType, fileId}` (Files-module-validated), reviewed per-document by an admin via `POST /:driverId/documents/:documentId/review`, and only once every required type is verified does the eligibility gate — and therefore `setOnline` — pass.
      Verification checks execute under database row locks (`SELECT ... FOR UPDATE`) via `driverRepo.lockForUpdate(driverId, tx)` to prevent verification/suspension race conditions.
 2. **Single Active Shift Constraint**: Guarantees that concurrent `ONLINE` requests create exactly one active `DriverShiftLog` record per driver within database transactions (`tx`).
 3. **Server-Side Heartbeat Timeout Worker**: Automated background job (`HeartbeatTimeoutJob`) scans drivers missing heartbeats (`heartbeatAt < T - timeout`), re-verifies staleness under row lock (`SELECT ... FOR UPDATE`), marks driver `OFFLINE`, and closes active shift.

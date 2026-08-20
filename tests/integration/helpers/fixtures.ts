@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { driverConfig } from '../../../src/config/driver/driver.config.js';
 import { db } from './harness.js';
 
 export async function grantRole(userId: string, slug: string): Promise<void> {
@@ -28,14 +29,16 @@ export async function makeDriver(
   });
 
   if (verified) {
-    await db().client.driverDocument.create({
-      data: {
-        driverId: driver.id,
-        documentType: 'DRIVING_LICENSE',
-        verificationStatus: 'VERIFIED',
-        fileUrl: 'https://example.invalid/licence.jpg',
-      },
-    });
+    for (const documentType of driverConfig.requiredDocumentTypes) {
+      await db().client.driverDocument.create({
+        data: {
+          driverId: driver.id,
+          documentType,
+          verificationStatus: 'VERIFIED',
+          fileUrl: `https://example.invalid/${documentType.toLowerCase()}.jpg`,
+        },
+      });
+    }
   }
 
   return driver.id;

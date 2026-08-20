@@ -25,11 +25,21 @@ export const submitDriverDocumentSchema = z.object({
     'POLICE_VERIFICATION',
     'PROFILE_PHOTO',
   ]),
-  fileUrl: z.string().url(),
+  fileId: z.string().uuid(),
   documentNumber: z.string().max(100).optional(),
   expiresAt: z.string().datetime().optional(),
 });
 export type SubmitDriverDocumentBody = z.infer<typeof submitDriverDocumentSchema>;
+export const reviewDriverDocumentSchema = z
+  .object({
+    status: z.enum(['VERIFIED', 'REJECTED']),
+    rejectionReason: z.string().min(1).max(255).optional(),
+  })
+  .refine((v) => v.status !== 'REJECTED' || !!v.rejectionReason, {
+    message: 'rejectionReason is required when rejecting',
+    path: ['rejectionReason'],
+  });
+export type ReviewDriverDocumentBody = z.infer<typeof reviewDriverDocumentSchema>;
 export const updateLocationSchema = z.object({
   latitude: latitudeSchema,
   longitude: longitudeSchema,
