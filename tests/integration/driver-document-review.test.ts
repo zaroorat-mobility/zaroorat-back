@@ -59,8 +59,8 @@ describe('driver document review (integration)', () => {
   ): Promise<{ user: LoggedInUser; driverId: string; documentId: string }> {
     const user = await loginAs(app, phone);
     const me = await app.inject({
-      method: 'GET',
-      url: '/api/v1/drivers/me',
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
       headers: user.authHeader,
     });
     const driverId = me.json().data.id as string;

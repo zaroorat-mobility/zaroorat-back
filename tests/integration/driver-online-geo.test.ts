@@ -67,8 +67,8 @@ describe('driver online activation and geo safety (integration)', () => {
   async function fullyVerifiedDriver(phone: string, adminPhone: string): Promise<LoggedInUser> {
     const user = await loginAs(app, phone);
     const me = await app.inject({
-      method: 'GET',
-      url: '/api/v1/drivers/me',
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
       headers: user.authHeader,
     });
     const driverId = me.json().data.id as string;
@@ -128,7 +128,11 @@ describe('driver online activation and geo safety (integration)', () => {
 
   it('refuses online before any document has been verified', async () => {
     const user = await loginAs(app, '+919876680001');
-    await app.inject({ method: 'GET', url: '/api/v1/drivers/me', headers: user.authHeader });
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
+      headers: user.authHeader,
+    });
 
     const response = await goOnline(user);
 
@@ -146,8 +150,8 @@ describe('driver online activation and geo safety (integration)', () => {
   it('stores location for an unverified driver but never publishes it to the live geo index', async () => {
     const user = await loginAs(app, '+919876680004');
     const me = await app.inject({
-      method: 'GET',
-      url: '/api/v1/drivers/me',
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
       headers: user.authHeader,
     });
     const driverId = me.json().data.id as string;
