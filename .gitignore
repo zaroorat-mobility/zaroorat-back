@@ -10,6 +10,10 @@ dist/
 # reviewed, linted, or committed.
 src/generated/
 
+# Demo Frontend
+
+ride-demo-frontend/
+
 # Environment files
 .env
 .env.*
