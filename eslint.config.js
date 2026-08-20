@@ -14,6 +14,10 @@ module.exports = defineConfig([
     // Generated Prisma client — machine-written, lives under src/ so it would
     // otherwise be linted. Produced ~6900 no-undef errors before being ignored.
     'src/generated/',
+    // Separate browser app with its own toolchain and its own build output.
+    // `dist/` above is anchored to this config's directory, so it does not
+    // cover the bundle inside this folder.
+    'ride-demo-frontend/',
   ]),
 
   js.configs.recommended,

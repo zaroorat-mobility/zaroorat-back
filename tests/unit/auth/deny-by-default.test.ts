@@ -4,19 +4,14 @@ import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../../../src/app/app.js';
 
-// Proves the deny-by-default auth gate (auth doc 02 §6, doc 07 §3 row 5): a route
-// with no explicit posture is protected, `config: { public: true }` opts out, and
-// unmatched paths still 404. The deny path rejects on the missing bearer token
-// before any Redis work, so this runs without live infra.
 describe('deny-by-default auth gate', () => {
   let app: FastifyInstance;
 
   before(async () => {
     app = await createApp();
 
-    // An ordinary route that forgets to declare a posture — must be protected.
     app.get('/test-guarded', async () => ({ ok: true }));
-    // An explicitly public route — must be reachable without a token.
+
     app.get('/test-public', { config: { public: true } }, async () => ({ ok: true }));
 
     await app.ready();

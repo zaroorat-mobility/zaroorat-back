@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import {
@@ -7,23 +8,18 @@ import {
   findImmutableFields,
   parseDateOnly,
   updateProfileSchema,
-} from '../../../src/modules/users/http/user.schemas.js';
+} from '../../../src/modules/users/schemas/user.schemas.js';
 
-/** Parse and return the doc 04 §6 details for a failing body. */
 function detailsFor(body: unknown) {
   const parsed = updateProfileSchema.safeParse(body);
   assert.equal(parsed.success, false, 'expected the body to be rejected');
   return detailsFromZodIssues(parsed.error!.issues);
 }
 
-/** The `code` reported for a single-field failure. */
 function codeFor(body: unknown, field: string): string | undefined {
   return detailsFor(body).find((d) => d.field === field)?.code;
 }
 
-// Validation rules for PATCH /me/profile (doc 02 §2.2) and the details
-// vocabulary (doc 04 §6). The privacy assertion — details never carry the
-// submitted value (doc 04 §5) — is the one that matters most here.
 describe('user profile schema (unit)', () => {
   describe('partial-update semantics (R-USER-5)', () => {
     it('accepts an empty body — nothing present means nothing changes', () => {
@@ -83,9 +79,6 @@ describe('user profile schema (unit)', () => {
     });
 
     it('answers one bad date with exactly one code', () => {
-      // Every rule on this field runs independently, so a future date used to
-      // come back as MUST_BE_PAST *and* AGE_BELOW_MINIMUM — two contradictory
-      // pieces of copy for one mistake. Each date has exactly one reason.
       for (const value of ['11-03-1994', '2026-02-30', '2999-01-01']) {
         assert.equal(detailsFor({ dateOfBirth: value }).length, 1, value);
       }
@@ -101,17 +94,22 @@ describe('user profile schema (unit)', () => {
       assert.equal(codeFor({ languageCode: 'kl' }, 'languageCode'), 'NOT_ALLOWED');
     });
 
-    it('rejects a profile image on an unvouched host, fail-closed', () => {
-      // No hosts are configured in test, so every URL is untrusted — that is the
-      // documented default while the `files` module is deferred (doc 01 §2.3).
-      assert.equal(codeFor({ profileImage: 'not-a-url' }, 'profileImage'), 'INVALID_FORMAT');
+    it('takes an avatar as a file id, and rejects anything that is not one', () => {
       assert.equal(
-        codeFor({ profileImage: 'http://cdn.zaroorat.com/a.png' }, 'profileImage'),
+        updateProfileSchema.safeParse({ profileImageFileId: randomUUID() }).success,
+        true,
+      );
+      assert.equal(updateProfileSchema.safeParse({ profileImageFileId: null }).success, true);
+      assert.equal(
+        codeFor({ profileImageFileId: 'not-a-uuid' }, 'profileImageFileId'),
         'INVALID_FORMAT',
       );
+    });
+
+    it('refuses the old profileImage URL outright, rather than ignoring it', () => {
       assert.equal(
-        codeFor({ profileImage: 'https://evil.example/a.png' }, 'profileImage'),
-        'UNTRUSTED_HOST',
+        codeFor({ profileImage: 'https://cdn.zaroorat.com/a.png' }, 'profileImage'),
+        'NOT_ALLOWED',
       );
     });
   });
@@ -154,7 +152,7 @@ describe('user profile schema (unit)', () => {
         firstName: `${secret}9`,
         dateOfBirth: secret,
         gender: secret,
-        profileImage: `https://evil.example/${secret}`,
+        profileImageFileId: secret,
         languageCode: secret,
       });
       assert.ok(details.length > 0);

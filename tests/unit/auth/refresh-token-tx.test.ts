@@ -1,17 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { RefreshTokenService } from '../../../src/modules/auth/services/refresh-token.service.js';
-import { TokenReuseError } from '../../../src/modules/auth/errors.js';
+import { RefreshTokenService } from '../../../src/modules/auth/services/token/refresh-token.service.js';
+import { TokenReuseError } from '../../../src/modules/auth/errors/auth.errors.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 import { makeJwtConfig } from '../../helpers/config.js';
 
 const TX = { __tx: true } as unknown as TransactionClient;
 
-// Proves the UoW guarantee for refresh-token reuse: the family revoke and the
-// auth.refresh.reuse_detected audit event commit in one transaction, the epoch
-// bump follows after commit, and TokenReuseError is thrown (AUTH-INV-5).
 describe('RefreshTokenService reuse — unit of work', () => {
   function makeService() {
     const seen = {
@@ -26,7 +23,6 @@ describe('RefreshTokenService reuse — unit of work', () => {
       execute: async <T>(cb: (tx: TransactionClient) => Promise<T>): Promise<T> => cb(TX),
     };
     const refreshTokenRepository = {
-      // A revoked row → this presented token is a replay of a consumed token.
       findByHash: async () => ({
         id: 't-old',
         userId: 'u1',
@@ -78,7 +74,7 @@ describe('RefreshTokenService reuse — unit of work', () => {
     assert.equal(seen.publishTx, TX, 'reuse_detected must enqueue in the same tx');
     assert.equal(seen.published[0]?.type, 'auth.refresh.reuse_detected');
     assert.equal(seen.epochBumped, 1);
-    // Family + event are transactional; the epoch bump (Redis) is strictly after.
+
     assert.deepEqual(seen.order, ['family', 'publish', 'epoch']);
   });
 });

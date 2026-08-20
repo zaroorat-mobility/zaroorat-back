@@ -4,21 +4,24 @@ import { describe, it } from 'node:test';
 import {
   CopyObjectCommand,
   DeleteObjectsCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
   ListObjectVersionsCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
 
-import { S3StorageProvider } from '../../../src/modules/files/providers/s3.provider.js';
-import { StorageError } from '../../../src/modules/files/providers/storage.provider.js';
-import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
-import { createStorageProvider } from '../../../src/modules/files/storage.config.js';
-import type { StorageConfig } from '../../../src/modules/files/storage.config.js';
+import { S3StorageProvider } from '../../../src/modules/files/utils/storage/s3.provider.js';
+import { StorageError } from '../../../src/modules/files/utils/storage/storage.provider.js';
+import { MockStorageProvider } from '../../../src/modules/files/utils/storage/mock.provider.js';
+import { createStorageProvider } from '../../../src/modules/files/config/storage.config.js';
+import type { StorageConfig } from '../../../src/modules/files/config/storage.config.js';
 
-/** A complete config, overridable per test. Credentials are fake and unused. */
 function configFor(overrides: Partial<StorageConfig> = {}): StorageConfig {
   return {
     provider: 's3',
     bucket: 'zaroorat-private',
+    quarantineBucket: 'zaroorat-quarantine',
+    scanner: 'disabled',
     region: 'ap-south-1',
     endpoint: null,
     forcePathStyle: false,
@@ -34,10 +37,8 @@ function configFor(overrides: Partial<StorageConfig> = {}): StorageConfig {
   };
 }
 
-/** A fixed clock, so expiry arithmetic is asserted rather than approximated. */
 const FIXED_NOW = new Date('2026-08-03T10:00:00.000Z');
 
-/** A provider whose SDK client is a stub — for everything that would do I/O. */
 function withFakeClient(
   send: (command: unknown) => Promise<unknown>,
   overrides: Partial<StorageConfig> = {},
@@ -55,7 +56,6 @@ function withFakeClient(
   };
 }
 
-/** An error shaped the way the AWS SDK shapes them. */
 function sdkError(name: string, httpStatusCode?: number): Error {
   return Object.assign(new Error(name), {
     name,
@@ -63,15 +63,6 @@ function sdkError(name: string, httpStatusCode?: number): Error {
   });
 }
 
-/**
- * The S3 provider (files doc 01 §12 phase 5, doc 07).
- *
- * **Every test here runs with no bucket and no network.** Presigning is local
- * crypto, so the signature tests exercise the real signer; everything that would
- * perform I/O runs against a stubbed client. What is deliberately *not* covered
- * is that AWS honours the signatures we produce — that is AWS's contract, and
- * testing it in CI would be testing AWS (doc 06 §8).
- */
 describe('S3 storage provider (unit)', () => {
   it('is named "s3" — the value persisted in files.storage_provider', () => {
     const { provider } = withFakeClient(async () => ({}));
@@ -79,15 +70,11 @@ describe('S3 storage provider (unit)', () => {
   });
 
   it('refuses to construct without a bucket', () => {
-    // Doc 08 §7: a files module with no bucket has no work it can do, and
-    // failing at boot turns a subtle production outage into a deploy failure.
     assert.throws(
       () => new S3StorageProvider(configFor({ bucket: null })),
       /STORAGE_BUCKET is required/,
     );
   });
-
-  // ── Signing (R-FILE-2, R-FILE-12) ──────────────────────────────────────────
 
   describe('signUpload', () => {
     it('binds the key, the method, and an explicit expiry', async () => {
@@ -96,13 +83,14 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 10 * 1024 * 1024,
+        contentLength: 10 * 1024 * 1024,
         ttlSeconds: 900,
       });
       const url = new URL(signed.url);
 
       assert.equal(signed.method, 'PUT');
-      assert.equal(url.hostname, 'zaroorat-private.s3.ap-south-1.amazonaws.com');
+      // Quarantine, not the read bucket: an upload is unscanned by definition.
+      assert.equal(url.hostname, 'zaroorat-quarantine.s3.ap-south-1.amazonaws.com');
       assert.equal(url.pathname, '/dd/2026/08/abc.jpg');
       assert.equal(url.searchParams.get('X-Amz-Expires'), '900');
       assert.ok(url.searchParams.get('X-Amz-Signature'), 'it is actually signed');
@@ -115,7 +103,7 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
       });
       const signedHeaders = new URL(signed.url).searchParams.get('X-Amz-SignedHeaders') ?? '';
@@ -137,7 +125,7 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
       });
       const signedHeaders = new URL(signed.url).searchParams.get('X-Amz-SignedHeaders') ?? '';
@@ -158,7 +146,7 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'dd/2026/08/abc.jpg',
         contentType: 'image/jpeg',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
         checksumSha256: hex,
       });
@@ -167,8 +155,7 @@ describe('S3 storage provider (unit)', () => {
         signed.headers['x-amz-checksum-sha256'],
         Buffer.from(hex, 'hex').toString('base64'),
       );
-      // Kept out of the query string on purpose: as a parameter S3 would not
-      // enforce it, and a binding that is not enforced is worse than none.
+
       const signedHeaders = new URL(signed.url).searchParams.get('X-Amz-SignedHeaders') ?? '';
       assert.ok(signedHeaders.includes('x-amz-checksum-sha256'), signedHeaders);
       assert.equal(new URL(signed.url).searchParams.has('x-amz-checksum-sha256'), false);
@@ -184,15 +171,13 @@ describe('S3 storage provider (unit)', () => {
       const signed = await provider.signUpload({
         key: 'pi/2026/08/abc.png',
         contentType: 'image/png',
-        maxBytes: 1024,
+        contentLength: 1024,
         ttlSeconds: 300,
       });
       const url = new URL(signed.url);
 
-      // FILES-OD-12: MinIO, R2, Spaces, and Ceph are this class with a different
-      // endpoint. Four vendors, one implementation.
       assert.equal(url.host, 'localhost:9000');
-      assert.equal(url.pathname, '/zaroorat-private/pi/2026/08/abc.png');
+      assert.equal(url.pathname, '/zaroorat-quarantine/pi/2026/08/abc.png');
     });
   });
 
@@ -209,8 +194,6 @@ describe('S3 storage provider (unit)', () => {
       });
       const url = new URL(signed.url);
 
-      // A holder cannot re-point the response headers: changing either
-      // parameter invalidates the signature.
       assert.equal(
         url.searchParams.get('response-content-disposition'),
         'attachment; filename="licence.jpg"',
@@ -242,47 +225,93 @@ describe('S3 storage provider (unit)', () => {
     });
   });
 
-  // ── head: one round trip (doc 07 §2) ───────────────────────────────────────
-
   describe('head', () => {
-    it('reads the total size from Content-Range, not from the range it fetched', async () => {
-      const { provider } = withFakeClient(async () => ({
-        ContentRange: 'bytes 0-511/842114',
+    /**
+     * `head` issues HeadObject for the metadata and one bounded ranged GET for
+     * the inspection window. The stub answers each command separately so the
+     * two cannot be conflated.
+     */
+    function headClient(
+      metadata: Record<string, unknown>,
+      peek: number[] = [0xff, 0xd8, 0xff],
+    ): { provider: S3StorageProvider; sent: unknown[] } {
+      return withFakeClient(async (command) => {
+        if (command instanceof HeadObjectCommand) return metadata;
+        return { Body: { transformToByteArray: async () => new Uint8Array(peek) } };
+      });
+    }
+
+    it('takes the size from object metadata, never from the bytes it fetched', async () => {
+      const { provider } = headClient({
+        ContentLength: 842114,
         ContentType: 'image/jpeg',
-        Body: { transformToByteArray: async () => new Uint8Array([0xff, 0xd8, 0xff]) },
-      }));
+      });
 
       const head = await provider.head('dd/2026/08/abc.jpg', 512);
 
-      // The whole reason this is one call and not two: a ranged GET already
-      // carries the full length, so HeadObject would buy only latency.
+      // 842114 bytes exist; three were transferred.
       assert.equal(head?.sizeBytes, 842114);
       assert.deepEqual([...(head?.peek ?? [])], [0xff, 0xd8, 0xff]);
       assert.equal(head?.contentType, 'image/jpeg');
     });
 
-    it('re-encodes the checksum from S3’s base64 into the hex the client declared', async () => {
+    it('never asks storage for the whole object — the only GET is bounded (R-FILE-1)', async () => {
+      const { provider, sent } = headClient({ ContentLength: 842114 });
+
+      await provider.head('dd/2026/08/abc.jpg', 512);
+
+      const gets = sent.filter((command) => command instanceof GetObjectCommand);
+      assert.equal(gets.length, 1, 'exactly one ranged read');
+      assert.equal((gets[0] as GetObjectCommand).input.Range, 'bytes=0-511');
+      for (const get of gets) {
+        assert.ok(
+          (get as GetObjectCommand).input.Range,
+          'an unranged GET would stream the object through this process',
+        );
+      }
+    });
+
+    it('asks for the stored checksum, and re-encodes S3’s base64 into hex', async () => {
       const hex = 'b'.repeat(64);
-      const { provider } = withFakeClient(async () => ({
-        ContentRange: 'bytes 0-2/3',
+      const { provider, sent } = headClient({
+        ContentLength: 3,
         ChecksumSHA256: Buffer.from(hex, 'hex').toString('base64'),
-        Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
-      }));
+      });
 
       const head = await provider.head('k', 512);
 
-      // Without this every checksum would mismatch, and CHECKSUM_MISMATCH would
-      // tell users to re-upload a file that was never corrupt.
       assert.equal(head?.checksumSha256, hex);
+      const heads = sent.filter((command) => command instanceof HeadObjectCommand);
+      assert.equal(
+        (heads[0] as HeadObjectCommand).input.ChecksumMode,
+        'ENABLED',
+        'without this S3 omits the digest it is holding',
+      );
     });
 
     it('reports no checksum when S3 holds none', async () => {
-      const { provider } = withFakeClient(async () => ({
-        ContentRange: 'bytes 0-2/3',
-        Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
-      }));
+      const { provider } = headClient({ ContentLength: 3 });
 
       assert.equal((await provider.head('k', 512))?.checksumSha256, null);
+    });
+
+    it('carries the version the metadata reports, for erasure to prove itself', async () => {
+      const { provider } = headClient({ ContentLength: 3, VersionId: 'v-42' });
+
+      assert.equal((await provider.head('k', 512))?.versionId, 'v-42');
+    });
+
+    it('skips the ranged read entirely for a zero-length object', async () => {
+      const { provider, sent } = headClient({ ContentLength: 0 });
+
+      const head = await provider.head('k', 512);
+
+      assert.equal(head?.sizeBytes, 0);
+      assert.equal(
+        sent.filter((command) => command instanceof GetObjectCommand).length,
+        0,
+        'there is nothing to peek at',
+      );
     });
 
     it('returns null for an absent object — that is an answer, not a failure', async () => {
@@ -290,8 +319,6 @@ describe('S3 storage provider (unit)', () => {
         throw sdkError('NoSuchKey', 404);
       });
 
-      // It becomes `409 UPLOAD_NOT_FOUND` and the row stays PENDING so the
-      // client can re-PUT and retry (doc 07 §4).
       assert.equal(await provider.head('k', 512), null);
     });
 
@@ -307,8 +334,6 @@ describe('S3 storage provider (unit)', () => {
       );
     });
   });
-
-  // ── delete vs erase — the versioning trap (doc 08 §2.2) ────────────────────
 
   describe('delete', () => {
     it('treats an absent object as success (R-FILE-23)', async () => {
@@ -350,9 +375,6 @@ describe('S3 storage provider (unit)', () => {
 
       await provider.erase('k');
 
-      // A plain delete would leave the bytes retrievable by anyone who can name
-      // a version id, while `file.erased` recorded that they were gone — an
-      // erasure obligation logged as honoured and not performed.
       const deletion = sent.find((c) => c instanceof DeleteObjectsCommand) as DeleteObjectsCommand;
       assert.deepEqual(deletion.input.Delete?.Objects?.map((o) => o.VersionId).sort(), [
         'm1',
@@ -377,8 +399,6 @@ describe('S3 storage provider (unit)', () => {
 
       await provider.erase('k');
 
-      // ListObjectVersions takes a prefix, not a key. Erasing what it returns
-      // unfiltered would destroy unrelated files.
       const deletion = sent.find((c) => c instanceof DeleteObjectsCommand) as DeleteObjectsCommand;
       assert.deepEqual(deletion.input.Delete?.Objects, [{ Key: 'k', VersionId: 'v1' }]);
     });
@@ -402,8 +422,6 @@ describe('S3 storage provider (unit)', () => {
 
       await provider.erase('k');
 
-      // Stopping at the first page would leave older versions alive on any
-      // object written more than a thousand times.
       assert.equal(sent.filter((c) => c instanceof ListObjectVersionsCommand).length, 2);
       assert.equal(sent.filter((c) => c instanceof DeleteObjectsCommand).length, 2);
     });
@@ -431,8 +449,6 @@ describe('S3 storage provider (unit)', () => {
     });
   });
 
-  // ── Health, which must never throw (doc 07 §2) ─────────────────────────────
-
   describe('health', () => {
     it('reports a reachable bucket', async () => {
       const { provider } = withFakeClient(async () => ({}));
@@ -456,8 +472,6 @@ describe('S3 storage provider (unit)', () => {
       const denied = await forbidden.provider.health();
       const absent = await missing.provider.health();
 
-      // The flags exist so an operator can tell "the key was rotated" from "the
-      // bucket name is wrong" without reading a stack trace.
       assert.deepEqual(
         [denied.reachable, denied.credentialsValid, denied.bucketExists],
         [true, false, true],
@@ -473,13 +487,10 @@ describe('S3 storage provider (unit)', () => {
         throw sdkError('TimeoutError');
       });
 
-      // A probe that raised could not report degradation at all.
       const health = await provider.health();
       assert.equal(health.reachable, false);
     });
   });
-
-  // ── Error classification (doc 07 §4) ───────────────────────────────────────
 
   describe('retryability', () => {
     const cases: [string, number | undefined, boolean][] = [
@@ -496,8 +507,6 @@ describe('S3 storage provider (unit)', () => {
           throw sdkError('Whatever', status);
         });
 
-        // `retryable` decides the log level and the alert, not the status — both
-        // reach the client as `503` (doc 04 §6, doc 09 §2.5).
         await assert.rejects(
           () => provider.archive('k'),
           (err: unknown) => err instanceof StorageError && err.retryable === retryable,
@@ -517,8 +526,6 @@ describe('S3 storage provider (unit)', () => {
     });
   });
 
-  // ── Criterion #10: the swap is configuration ───────────────────────────────
-
   describe('the provider factory', () => {
     it('selects s3 from configuration alone', () => {
       assert.ok(createStorageProvider(configFor()) instanceof S3StorageProvider);
@@ -531,20 +538,30 @@ describe('S3 storage provider (unit)', () => {
     });
 
     it('refuses s3 without a bucket rather than falling back to the mock', () => {
-      // Falling back would put a production deploy on an in-memory store and
-      // lose every uploaded object at the next restart (doc 08 §7).
       assert.throws(
         () => createStorageProvider(configFor({ bucket: null })),
         /STORAGE_BUCKET is required/,
       );
     });
+
+    it('refuses s3 without a quarantine bucket — unscanned objects must not be readable', () => {
+      assert.throws(
+        () => createStorageProvider(configFor({ quarantineBucket: null })),
+        /STORAGE_QUARANTINE_BUCKET is required/,
+      );
+    });
+
+    it('refuses a quarantine bucket equal to the read bucket', () => {
+      assert.throws(
+        () => createStorageProvider(configFor({ quarantineBucket: 'zaroorat-private' })),
+        /must differ from STORAGE_BUCKET/,
+      );
+    });
   });
 
   it('logs nothing at all — FILE-INV-2 applies inside the provider', () => {
-    const source = readFileSync('src/modules/files/providers/s3.provider.ts', 'utf8');
+    const source = readFileSync('src/modules/files/utils/storage/s3.provider.ts', 'utf8');
 
-    // Doc 07 §3 rule 4. A key or a signed URL in a debug line is the same
-    // disclosure as one in a response body, and harder to notice.
     assert.equal(source.includes('logger'), false);
     assert.equal(source.includes('console.'), false);
   });

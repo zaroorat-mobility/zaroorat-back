@@ -1,16 +1,17 @@
 import fp from 'fastify-plugin';
 import { FastifyInstance } from 'fastify';
-
+import { incrementCounter } from '@core/metrics';
 async function onResponseHook(app: FastifyInstance) {
   app.addHook('onResponse', async (request, reply) => {
-    // `startTime` is set by the on-request hook, but a request rejected earlier in
-    // the onRequest phase (e.g. by the deny-by-default auth gate) never reaches it.
-    // Fall back to Fastify's own elapsed-time measurement so timing is always safe.
     const duration =
       request.startTime !== undefined
-        ? Number(process.hrtime.bigint() - request.startTime) / 1_000_000
+        ? Number(process.hrtime.bigint() - request.startTime) / 1000000
         : reply.elapsedTime;
-
+    incrementCounter('http_requests_total', {
+      method: request.method,
+      route: request.routeOptions?.url ?? 'unmatched',
+      code: String(reply.statusCode),
+    });
     request.log.info(
       {
         statusCode: reply.statusCode,
@@ -20,7 +21,6 @@ async function onResponseHook(app: FastifyInstance) {
     );
   });
 }
-
 export default fp(onResponseHook, {
   name: 'on-response-hook',
 });

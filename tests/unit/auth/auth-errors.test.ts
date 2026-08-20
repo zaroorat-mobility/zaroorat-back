@@ -14,15 +14,15 @@ import {
   OtpLockedError,
   RateLimitedError,
   AccountSuspendedError,
-} from '../../../src/modules/auth/errors.js';
+  AccountDeactivatedError,
+  NotFoundError,
+} from '../../../src/modules/auth/errors/auth.errors.js';
 import {
   AUTH_ERROR_STATUS,
   authErrorStatus,
   buildAuthErrorBody,
-} from '../../../src/modules/auth/http/error-response.js';
+} from '../../../src/modules/auth/schemas/error-response.js';
 
-// Locks the doc 05 error contract: stable codes, doc 05 §2 status mapping, the
-// distinct 401-family branching (doc 05 §4), and a leak-free envelope (§5).
 describe('auth errors — stable codes', () => {
   const cases: Array<[AuthError, string]> = [
     [new TokenInvalidError(), 'TOKEN_INVALID'],
@@ -36,6 +36,8 @@ describe('auth errors — stable codes', () => {
     [new OtpLockedError(900), 'OTP_LOCKED'],
     [new RateLimitedError(60), 'RATE_LIMITED'],
     [new AccountSuspendedError(), 'ACCOUNT_SUSPENDED'],
+    [new AccountDeactivatedError(), 'ACCOUNT_DEACTIVATED'],
+    [new NotFoundError(), 'NOT_FOUND'],
   ];
 
   for (const [error, code] of cases) {
@@ -64,6 +66,38 @@ describe('auth error status mapping (doc 05 §2)', () => {
 
   it('defaults unknown auth codes to 401 (fail-closed, never a success status)', () => {
     assert.equal(authErrorStatus('SOMETHING_NEW'), 401);
+  });
+
+  it('gives "not found" its own status instead of borrowing VALIDATION\'s 400', () => {
+    assert.equal(authErrorStatus('NOT_FOUND'), 404);
+    assert.equal(authErrorStatus('VALIDATION'), 400, 'and real validation keeps its 400');
+  });
+
+  it('separates the two closed-account codes while sharing 403', () => {
+    assert.equal(authErrorStatus('ACCOUNT_SUSPENDED'), 403);
+    assert.equal(authErrorStatus('ACCOUNT_DEACTIVATED'), 403);
+    assert.notEqual(
+      new AccountSuspendedError().message,
+      new AccountDeactivatedError().message,
+      'a user who closed their own account must not be told they were suspended',
+    );
+  });
+
+  it('maps every status to the documented semantic band', () => {
+    const bands: Record<number, string> = {
+      400: 'malformed request',
+      401: 'authentication failure',
+      403: 'authenticated but forbidden',
+      404: 'resource does not exist',
+      409: 'state conflict',
+      410: 'gone',
+      429: 'rate limited',
+      500: 'server fault',
+      503: 'dependency unavailable',
+    };
+    for (const [code, status] of Object.entries(AUTH_ERROR_STATUS)) {
+      assert.ok(bands[status], `${code} maps to unbanded status ${status}`);
+    }
   });
 
   it('the whole 401-family shares status 401 but keeps distinct codes (doc 05 §4)', () => {

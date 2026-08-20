@@ -1,3 +1,6 @@
+import { logger } from '@shared/logger/index.js';
+import { registerJobSchedules } from '../jobs/scheduler/index.js';
 export async function bootstrapQueue(): Promise<void> {
-  // Placeholder for Milestone 2
+  await registerJobSchedules();
+  logger.info('Job schedules registered');
 }

@@ -1,0 +1,30 @@
+export const PAYMENT_INTENT_STATUS = {
+  CREATED: 'CREATED',
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  SUCCEEDED: 'SUCCEEDED',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type PaymentIntentStatus =
+  (typeof PAYMENT_INTENT_STATUS)[keyof typeof PAYMENT_INTENT_STATUS];
+export const REFUND_STATUS = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  SUCCEEDED: 'SUCCEEDED',
+  FAILED: 'FAILED',
+} as const;
+export type RefundStatus = (typeof REFUND_STATUS)[keyof typeof REFUND_STATUS];
+export const LEDGER_ACCOUNTS = {
+  CUSTOMER_WALLET: 'CUSTOMER_WALLET',
+  DRIVER_PAYABLE: 'DRIVER_PAYABLE',
+  PLATFORM_COMMISSION: 'PLATFORM_COMMISSION',
+  GATEWAY_CLEARING: 'GATEWAY_CLEARING',
+  TAX_PAYABLE: 'TAX_PAYABLE',
+} as const;
+export type LedgerAccount = (typeof LEDGER_ACCOUNTS)[keyof typeof LEDGER_ACCOUNTS];
+export const LEDGER_DIRECTION = {
+  DEBIT: 'DEBIT',
+  CREDIT: 'CREDIT',
+} as const;
+export type LedgerDirection = (typeof LEDGER_DIRECTION)[keyof typeof LEDGER_DIRECTION];

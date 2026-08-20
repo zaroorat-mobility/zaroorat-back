@@ -1,5 +1,4 @@
 import { Prisma } from '../../../generated/prisma';
-
 export const rideExtension = Prisma.defineExtension({
   name: 'RideExtension',
   model: {

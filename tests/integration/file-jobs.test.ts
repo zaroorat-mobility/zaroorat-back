@@ -5,35 +5,22 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
+import { png as image } from '../helpers/image-fixtures.js';
 import { fileConfig } from '../../src/config/file/file.config.js';
 import {
   clearFileReferences,
   registerFileReference,
-} from '../../src/modules/files/file-references.js';
+} from '../../src/modules/files/services/file-reference.service.js';
 import type { FileRetentionJob } from '../../src/modules/files/jobs/retention.job.js';
 import type { FileSweeperJob } from '../../src/modules/files/jobs/sweeper.job.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A valid 800x600 PNG header. */
 function png(): Buffer {
-  const header = Buffer.alloc(24);
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
-  header.write('IHDR', 12, 'ascii');
-  header.writeUInt32BE(800, 16);
-  header.writeUInt32BE(600, 20);
-  return header;
+  return image({ width: 800, height: 600 });
 }
 
-/**
- * The two background jobs (files doc 09 §4, doc 06 §3 #9).
- *
- * **Invoked directly, because no scheduler exists** (doc 01 §13.4). That is the
- * limit doc 06 §8 states rather than fakes: what is covered is what the jobs do,
- * what is not is that anything calls them — and that gap closes with the job
- * runtime, not with this module.
- */
 describe('file jobs (integration)', () => {
   let app: FastifyInstance;
   let provider: MockStorageProvider;
@@ -55,7 +42,6 @@ describe('file jobs (integration)', () => {
     clearFileReferences();
   });
 
-  /** Reserve a PENDING file, returning its id and key. */
   async function reserve(
     auth: { authorization: string },
     purpose = 'PROFILE_IMAGE',
@@ -72,7 +58,6 @@ describe('file jobs (integration)', () => {
     return { fileId, storageKey: row.storageKey };
   }
 
-  /** Reserve, PUT, and complete — a READY file. */
   async function publish(
     auth: { authorization: string },
     purpose = 'PROFILE_IMAGE',
@@ -88,12 +73,9 @@ describe('file jobs (integration)', () => {
     return file;
   }
 
-  /** A time far enough ahead that every reservation window has closed. */
   function afterUploadWindow(): Date {
     return new Date(Date.now() + 3600_000);
   }
-
-  // ── The sweeper (R-FILE-22, doc 09 §4.1) ──────────────────────────────────
 
   describe('the sweeper', () => {
     it('reclaims a reservation whose window closed, object and row', async () => {
@@ -127,8 +109,6 @@ describe('file jobs (integration)', () => {
 
       await sweeper.run(new Date(Date.now() + 365 * DAY_MS));
 
-      // The sweeper reclaims intentions, not files. A READY row is referenceable
-      // and its bytes were verified — only retention may end it.
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.equal(row.status, 'READY');
       assert.notEqual(await provider.head(storageKey, 8), null);
@@ -137,13 +117,22 @@ describe('file jobs (integration)', () => {
     it('collects an EXPIRED row too — the state doc 01 §7 ends here', async () => {
       const user = await loginAs(app, '+919876590004');
       const { fileId, storageKey } = await reserve(user.authHeader);
-      // What a refused completion leaves behind: bytes that failed validation.
-      provider.putObject(storageKey, Buffer.from('not a png at all'), 'image/png');
-      await app.inject({
+      provider.putObject(storageKey, png(), 'image/png');
+
+      // A client that comes back after its write permission lapsed. The bytes
+      // are never inspected, so this is an expiry rather than a refusal — the
+      // row has to reach EXPIRED for the sweeper to have anything to collect.
+      await db().client.file.update({
+        where: { id: fileId },
+        data: { uploadExpiresAt: new Date(Date.now() - 1000) },
+      });
+      const late = await app.inject({
         method: 'POST',
         url: `/api/v1/files/${fileId}/complete`,
         headers: user.authHeader,
       });
+      assert.equal(late.statusCode, 410, late.payload);
+      assert.equal(late.json().error.code, 'UPLOAD_EXPIRED');
       assert.equal(
         (await db().client.file.findUniqueOrThrow({ where: { id: fileId } })).status,
         'EXPIRED',
@@ -151,9 +140,31 @@ describe('file jobs (integration)', () => {
 
       await sweeper.run(afterUploadWindow());
 
-      // Doc 09 §4.1's query names only PENDING, which would leave these forever;
-      // doc 01 §7 says the sweeper ends EXPIRED. See the phase-6 report.
       assert.equal(await db().client.file.findUnique({ where: { id: fileId } }), null);
+    });
+
+    it('leaves a REJECTED row alone — the refusal is the record', async () => {
+      const user = await loginAs(app, '+919876590005');
+      const { fileId, storageKey } = await reserve(user.authHeader);
+
+      provider.putObject(storageKey, Buffer.from('not a png at all'), 'image/png');
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/files/${fileId}/complete`,
+        headers: user.authHeader,
+      });
+      const refused = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
+      assert.equal(refused.status, 'REJECTED');
+      assert.equal(refused.rejectedReason, 'CONTENT_MISMATCH');
+
+      await sweeper.run(afterUploadWindow());
+
+      // Retention destroys refused objects on the purpose's schedule; the
+      // sweeper reclaims abandoned reservations, and a refusal is neither.
+      assert.ok(
+        await db().client.file.findUnique({ where: { id: fileId } }),
+        'the durable trace of the refusal survives the sweeper',
+      );
     });
 
     it('deletes the object before the row, so a failure is retriable', async () => {
@@ -164,9 +175,6 @@ describe('file jobs (integration)', () => {
 
       const result = await sweeper.run(afterUploadWindow());
 
-      // The ordering is the whole design: a deleted row with a live object is an
-      // orphan nobody can ever find, name, or bill for. The reverse is retried
-      // next pass — which is exactly what this asserts.
       assert.equal(result.failed, 1);
       assert.ok(await db().client.file.findUnique({ where: { id: fileId } }), 'row survives');
       assert.equal((await sweeper.run(afterUploadWindow())).reclaimed, 1, 'the retry succeeds');
@@ -195,8 +203,6 @@ describe('file jobs (integration)', () => {
 
       const blocked = await sweeper.run(afterUploadWindow());
 
-      // Two sweepers deleting the same keys is harmless — every operation is
-      // idempotent — but it is wasted remote calls and it makes the metrics lie.
       assert.equal(blocked.ran, false);
     });
 
@@ -206,15 +212,11 @@ describe('file jobs (integration)', () => {
     });
   });
 
-  // ── Retention (R-FILE-18/19/20/21/23, doc 09 §4.2) ────────────────────────
-
   describe('retention', () => {
-    /** A time past the given purpose's window. */
     function afterWindow(purpose: 'PROFILE_IMAGE' | 'DRIVER_DOCUMENT'): Date {
       return new Date(Date.now() + (fileConfig.purposes[purpose].retention.afterDays + 1) * DAY_MS);
     }
 
-    /** Register an owning module that holds nothing. */
     function claim(purpose: 'PROFILE_IMAGE' | 'DRIVER_DOCUMENT', referenced = false): void {
       registerFileReference(purpose, {
         module: purpose === 'PROFILE_IMAGE' ? 'users' : 'documents',
@@ -222,7 +224,6 @@ describe('file jobs (integration)', () => {
       });
     }
 
-    /** Publish and soft-delete a file, starting its retention clock. */
     async function closed(
       auth: { authorization: string },
       purpose: 'PROFILE_IMAGE' | 'DRIVER_DOCUMENT' = 'PROFILE_IMAGE',
@@ -243,10 +244,6 @@ describe('file jobs (integration)', () => {
 
       const result = await retention.run(afterWindow('PROFILE_IMAGE'));
 
-      // R-FILE-19 says retention asks the owning module before erasing, and a
-      // purpose nobody has claimed cannot be asked. "Nobody answered" must never
-      // be read as consent to destroy bytes — this is doc 03 §6's "the only
-      // erasable purpose is PROFILE_IMAGE" holding by construction.
       assert.equal(result.unclaimed, 1);
       assert.equal(result.erased, 0);
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
@@ -265,9 +262,7 @@ describe('file jobs (integration)', () => {
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.notEqual(row.erasedAt, null);
       assert.equal(row.archivedAt, null, 'never both (FILE-INV-9)');
-      // Not a delete marker — every version, gone. On the versioned bucket this
-      // platform mandates, a plain delete would leave the bytes retrievable
-      // while `file.erased` announced they were gone (doc 08 §2.2).
+
       assert.deepEqual(provider.versionIds(storageKey), []);
     });
 
@@ -281,8 +276,7 @@ describe('file jobs (integration)', () => {
       assert.equal(result.archived, 1);
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.notEqual(row.archivedAt, null);
-      // R-FILE-21: `erased_at` stays null because the bytes still exist. That
-      // difference is what makes `action` in `file.erased` worth carrying.
+
       assert.equal(row.erasedAt, null);
       assert.equal(provider.isArchived(storageKey), true);
       assert.ok(provider.versionIds(storageKey).length > 0, 'the bytes survive');
@@ -295,8 +289,6 @@ describe('file jobs (integration)', () => {
 
       const result = await retention.run(afterWindow('PROFILE_IMAGE'));
 
-      // FILE-INV-5, and the doc 09 §2.5 alert: a consumer that never releases a
-      // reference means a compliance window closes with the bytes still there.
       assert.equal(result.blocked, 1);
       assert.equal(result.erased, 0);
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
@@ -330,9 +322,6 @@ describe('file jobs (integration)', () => {
 
       const result = await retention.run(afterWindow('DRIVER_DOCUMENT'));
 
-      // R-FILE-32: a superseded licence is kept for the purpose's full window
-      // because it *was* valid for the period it was current — not discarded
-      // because it no longer is.
       assert.equal(result.archived, 1);
       assert.notEqual(
         (await db().client.file.findUniqueOrThrow({ where: { id: previous.fileId } })).archivedAt,
@@ -349,15 +338,11 @@ describe('file jobs (integration)', () => {
 
       const second = await retention.run(afterWindow('DRIVER_DOCUMENT'));
 
-      // An archived file picked up again would be erased on the next pass, and
-      // "we archive, we don't shred" would last exactly one night.
       assert.equal(second.scanned, 0);
       const after = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
       assert.deepEqual([after.archivedAt, after.erasedAt], [first.archivedAt, null]);
     });
   });
-
-  // ── The audit record (doc 05 §3.5) ────────────────────────────────────────
 
   describe('the file.erased event', () => {
     async function erasedEvents() {
@@ -389,9 +374,7 @@ describe('file jobs (integration)', () => {
           (event.payload as { data: { action: string } }).data.action,
         ]),
       );
-      // R-FILE-21 turns on this difference: for KYC and safety files, "we
-      // archive, we don't shred." A consumer that conflated them would report a
-      // retained document as destroyed.
+
       assert.equal(byFile.get(avatar.fileId), 'ERASED');
       assert.equal(byFile.get(licence.fileId), 'ARCHIVED');
     });
@@ -410,8 +393,7 @@ describe('file jobs (integration)', () => {
 
       const [event] = await erasedEvents();
       const serialized = JSON.stringify(event?.payload);
-      // Doc 05 §3.5: re-stating whose data it was, in a durable event, would
-      // undercut the erasure it records.
+
       assert.equal(serialized.includes(user.userId), false);
       assert.equal(serialized.includes(file.storageKey), false);
       assert.deepEqual((event?.payload as { data: Record<string, unknown> }).data, {
@@ -422,8 +404,6 @@ describe('file jobs (integration)', () => {
       });
     });
   });
-
-  // ── The dead-letter queue (doc 09 §4.3) ───────────────────────────────────
 
   describe('when retention keeps failing', () => {
     it('retries, then dead-letters with the last error', async () => {
@@ -443,9 +423,6 @@ describe('file jobs (integration)', () => {
         assert.equal(await retention.deadLettered().then((d) => d.length), attempt === 4 ? 1 : 0);
       }
 
-      // Retention gets a dead-letter queue and the sweeper does not, because an
-      // unswept orphan costs a row while a file that should have been erased and
-      // was not is a compliance finding. After five attempts a human decides.
       const [entry] = await retention.deadLettered();
       assert.equal(entry?.fileId, file.fileId);
       assert.equal(entry?.attempts, fileConfig.jobMaxAttempts);
@@ -468,8 +445,6 @@ describe('file jobs (integration)', () => {
       await retention.run(due);
       await retention.run(due);
 
-      // Otherwise a file that failed twice a year apart would dead-letter on its
-      // fifth transient blip, years later, having succeeded every time between.
       assert.deepEqual(await retention.deadLettered(), []);
       assert.notEqual(
         (await db().client.file.findUniqueOrThrow({ where: { id: file.fileId } })).erasedAt,

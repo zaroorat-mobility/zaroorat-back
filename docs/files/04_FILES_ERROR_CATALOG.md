@@ -53,25 +53,26 @@ No new meanings. Listed with their FILES trigger so the client's existing handli
 
 ### 2.2 FILES-specific codes
 
-| `code`                   | HTTP | Meaning                                                      | Client should                                     |
-| ------------------------ | ---- | ------------------------------------------------------------ | ------------------------------------------------- |
-| `UNSUPPORTED_MEDIA_TYPE` | 415  | `contentType` not permitted for this `purpose`               | Show the allowed types from `details.allowed`     |
-| `FILE_TOO_LARGE`         | 413  | Declared or actual size exceeds the purpose ceiling          | Downscale and retry; show `details[].limit`       |
-| `UPLOAD_NOT_FOUND`       | 409  | Completion called, but no object is at the key               | Re-PUT the bytes, then retry completion           |
-| `CONTENT_MISMATCH`       | 422  | The stored bytes are not the declared type (magic-byte fail) | **Do not retry.** Re-pick the file                |
-| `CHECKSUM_MISMATCH`      | 422  | Declared checksum ≠ stored object's                          | Re-upload; the transfer corrupted                 |
-| `UPLOAD_EXPIRED`         | 410  | The permission window closed before completion               | Start over at `POST /files`                       |
-| `FILE_IN_USE`            | 409  | A live domain row still references this file                 | Detach it first; `details.module` names the owner |
+| `code`                   | HTTP | Meaning                                                      | Client should                                      |
+| ------------------------ | ---- | ------------------------------------------------------------ | -------------------------------------------------- |
+| `UNSUPPORTED_MEDIA_TYPE` | 415  | `contentType` not permitted for this `purpose`               | Show the allowed types from `details.allowed`      |
+| `FILE_TOO_LARGE`         | 413  | Declared or actual size exceeds the purpose ceiling          | Downscale and retry; show `details[].limit`        |
+| `UPLOAD_NOT_FOUND`       | 409  | Completion called, but no object is at the key               | Re-PUT the bytes, then retry completion            |
+| `CONTENT_MISMATCH`       | 422  | The stored bytes are not the declared type (magic-byte fail) | **Do not retry.** Re-pick the file                 |
+| `CHECKSUM_MISMATCH`      | 422  | Declared checksum ≠ stored object's                          | Re-upload; the transfer corrupted                  |
+| `UPLOAD_EXPIRED`         | 410  | The permission window closed before completion               | Start over at `POST /files`                        |
+| `EXIF_LOCATION_PRESENT`  | 422  | The image carries EXIF GPS and this purpose forbids it       | Re-encode without metadata and retry (FILES-OD-16) |
+| `FILE_IN_USE`            | 409  | A live domain row still references this file                 | Detach it first; `details.module` names the owner  |
 
 ### 2.3 Where each one fires
 
-| Endpoint                    | Can return                                                                                                                                      |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /files`               | `VALIDATION`, `UNSUPPORTED_MEDIA_TYPE`, `FILE_TOO_LARGE`, `RATE_LIMITED`, `SERVICE_UNAVAILABLE`                                                 |
-| `POST /files/{id}/complete` | `NOT_FOUND`, `CONFLICT`, `UPLOAD_NOT_FOUND`, `UPLOAD_EXPIRED`, `FILE_TOO_LARGE`, `CONTENT_MISMATCH`, `CHECKSUM_MISMATCH`, `SERVICE_UNAVAILABLE` |
-| `GET /files/{id}/url`       | `NOT_FOUND`, `RATE_LIMITED`, `SERVICE_UNAVAILABLE`                                                                                              |
-| `GET /files/{id}`           | `NOT_FOUND`                                                                                                                                     |
-| `DELETE /files/{id}`        | `NOT_FOUND`, `FILE_IN_USE`                                                                                                                      |
+| Endpoint                    | Can return                                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /files`               | `VALIDATION`, `UNSUPPORTED_MEDIA_TYPE`, `FILE_TOO_LARGE`, `RATE_LIMITED`, `SERVICE_UNAVAILABLE`                                                                          |
+| `POST /files/{id}/complete` | `NOT_FOUND`, `CONFLICT`, `UPLOAD_NOT_FOUND`, `UPLOAD_EXPIRED`, `FILE_TOO_LARGE`, `CONTENT_MISMATCH`, `CHECKSUM_MISMATCH`, `EXIF_LOCATION_PRESENT`, `SERVICE_UNAVAILABLE` |
+| `GET /files/{id}/url`       | `NOT_FOUND`, `RATE_LIMITED`, `SERVICE_UNAVAILABLE`                                                                                                                       |
+| `GET /files/{id}`           | `NOT_FOUND`                                                                                                                                                              |
+| `DELETE /files/{id}`        | `NOT_FOUND`, `FILE_IN_USE`                                                                                                                                               |
 
 ---
 
@@ -85,6 +86,10 @@ same one, which here would loop forever.
 
 The same reasoning applies to `CHECKSUM_MISMATCH` — except that one _is_ worth retrying, because a
 corrupt transfer is transient. The two codes differ so the client can tell those apart.
+
+`EXIF_LOCATION_PRESENT` is the third of that family and the only one with a **remedy the client can
+apply itself**: re-encode the image without its metadata and upload again. It carries no coordinates
+and no tag names — echoing them back would publish the very thing the rule exists to suppress (§5).
 
 ---
 
@@ -120,6 +125,7 @@ ownership, so there is nothing left to disclose.
 | The provider's error text   | Vendor prose leaks topology and confuses clients (§6)     |
 | Another user's `fileName`   | A filename is user-authored and frequently identifying    |
 | Byte offsets or magic bytes | Tells an attacker exactly how to shape a file that passes |
+| EXIF values or coordinates  | The refusal exists to suppress them (R-FILE-29)           |
 
 `details` carries only: the offending **field name**, a machine `code`, and where useful a numeric
 `limit` or an `allowed` list — the same discipline USER's `LIMIT_EXCEEDED` follows.
@@ -156,4 +162,5 @@ permission (AUTH 02 §7).
 | `CONTENT_MISMATCH`                | R-FILE-5, acceptance #2   | §5             |
 | `NOT_FOUND` merge                 | R-FILE-14, FILE-INV-4     | §4, §5         |
 | `FILE_IN_USE`                     | R-FILE-19, FILE-INV-5     | §6             |
+| `EXIF_LOCATION_PRESENT`           | R-FILE-29, FILES-OD-16    | §5             |
 | §6 fail-closed                    | NFR-7, AUTH 02 §7         | §5             |

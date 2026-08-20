@@ -2,11 +2,9 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { OtpHasher } from '../../../src/modules/auth/otp/otp.hasher.js';
+import { OtpHasher } from '../../../src/modules/auth/services/otp/otp.hasher.js';
 import { makeOtpConfig } from '../../helpers/config.js';
 
-// Proves the OTP-at-rest properties from doc 02 §4.1/§4.5: only a keyed digest is
-// ever produced, it is deterministic for compare, and it never equals plaintext.
 describe('OtpHasher', () => {
   const pepper = 'unit-pepper-value';
   const hasher = new OtpHasher(makeOtpConfig({ pepper }));

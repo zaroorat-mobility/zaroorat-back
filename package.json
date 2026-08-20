@@ -9,9 +9,11 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "worker:dev": "tsx watch src/worker.ts",
     "clean": "rimraf dist tsconfig.tsbuildinfo",
     "build": "npm run clean && tsc --project tsconfig.json && tsc-alias --project tsconfig.json && node scripts/copy-generated.js",
     "start": "node dist/server.js",
+    "worker": "node dist/worker.js",
     "test": "cross-env APP_ENV=test tsx --test --test-concurrency=1 --test-force-exit \"tests/**/*.test.ts\"",
     "test:watch": "cross-env APP_ENV=test tsx --test --watch \"tests/**/*.test.ts\"",
     "test:unit": "cross-env APP_ENV=test tsx --test \"tests/unit/**/*.test.ts\"",
@@ -40,12 +42,16 @@
     "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.1.0",
     "@fastify/sensible": "^6.0.4",
+    "@fastify/swagger": "^9.8.1",
+    "@fastify/swagger-ui": "^6.1.1",
     "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
     "awilix": "^13.0.5",
+    "bullmq": "^6.0.7",
     "dotenv": "^17.4.2",
     "fastify": "^5.10.0",
     "fastify-plugin": "^6.0.0",
+    "h3-js": "^4.5.0",
     "ioredis": "^5.11.1",
     "pg": "^8.22.0",
     "pino": "^10.3.1",
@@ -76,7 +82,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [
-      "eslint --fix --max-warnings=0",
+      "eslint --fix --max-warnings=0 --no-warn-ignored",
       "prettier --write"
     ],
     "*.{json,yml,yaml,md}": [

@@ -1,5 +1,4 @@
 import { Prisma } from '../../../generated/prisma';
-
 export const paymentExtension = Prisma.defineExtension({
   name: 'PaymentExtension',
   model: {

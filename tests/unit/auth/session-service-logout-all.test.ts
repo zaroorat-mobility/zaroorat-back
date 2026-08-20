@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { SessionService } from '../../../src/modules/auth/session/session.service.js';
+import { SessionService } from '../../../src/modules/auth/services/session/session.service.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 
@@ -53,6 +53,8 @@ function makeService(activeSessionIds: string[]) {
   const service = new SessionService(
     sessionRepository as never,
     refreshTokenRepository as never,
+
+    { lockForUpdate: async () => undefined } as never,
     redisService as never,
     epochService as never,
     sessionMetrics as never,
@@ -63,8 +65,6 @@ function makeService(activeSessionIds: string[]) {
   return { service, seen };
 }
 
-// Proves logout-all emits one auth.session.revoked per active sid, all inside the
-// same transaction as the bulk revoke, with the epoch bump strictly after commit.
 describe('SessionService.logoutAll — per-sid events', () => {
   it('emits one session.revoked per active session, all in the revoke transaction', async () => {
     const { service, seen } = makeService(['s1', 's2', 's3']);

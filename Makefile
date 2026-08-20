@@ -54,7 +54,7 @@ verify: lint typecheck test build ## Run everything CI runs
 # ── Docker ────────────────────────────────────────────────────
 
 .PHONY: up
-up: ## Start API + Postgres + Redis
+up: ## Start API + Worker + Postgres + Redis
 	$(COMPOSE) up -d --build
 
 .PHONY: down
@@ -64,6 +64,10 @@ down: ## Stop the stack and delete its volumes
 .PHONY: logs
 logs: ## Tail the API logs
 	$(COMPOSE) logs -f api
+
+.PHONY: worker-logs
+worker-logs: ## Tail the worker logs (queues, incl. OTP SMS delivery)
+	$(COMPOSE) logs -f worker
 
 .PHONY: ps
 ps: ## Show container status

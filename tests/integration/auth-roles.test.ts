@@ -5,19 +5,10 @@ import type { FastifyInstance } from 'fastify';
 
 import { FIXED_OTP, bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
-import type { AuthService } from '../../src/modules/auth/auth.service.js';
+import type { AuthService } from '../../src/modules/auth/services/auth.service.js';
 
 const PHONE = '+919876519001';
 
-/**
- * Role grant and revocation (R-ACCOUNT-7, R-AUTH-17, doc 06 §5.4) and the
- * partial-index proof doc 07 §4 attaches to them.
- *
- * There is no route and there must not be one: `admin` and `support` are
- * provisioned **out of band**, never self-granted through the public flow
- * (R-AUTH-17). These exercise the seam ops tooling calls, the same way
- * `suspend`/`activate` are reached.
- */
 describe('role grant and revocation (integration)', () => {
   let app: FastifyInstance;
 
@@ -35,7 +26,6 @@ describe('role grant and revocation (integration)', () => {
     return container.resolve<AuthService>('authService');
   }
 
-  /** `GET /me` with a raw token — does this credential still work, and as whom? */
   function probe(accessToken: string) {
     return app.inject({
       method: 'GET',
@@ -44,12 +34,6 @@ describe('role grant and revocation (integration)', () => {
     });
   }
 
-  /**
-   * Outbox payloads of one event type, in write order.
-   *
-   * Registration already emits `account.role.granted` for `customer`, so a test
-   * about a later grant must select by slug rather than take the first row.
-   */
   async function events(eventType: string, roleSlug?: string) {
     const rows = await db().client.outboxEvent.findMany({
       where: { eventType },
@@ -59,7 +43,6 @@ describe('role grant and revocation (integration)', () => {
     return roleSlug ? payloads.filter((p) => p.data.roleSlug === roleSlug) : payloads;
   }
 
-  /** Live assignments a user holds. */
   function activeAssignments(userId: string) {
     return db().client.userRoleAssignment.findMany({ where: { userId, revokedAt: null } });
   }
@@ -71,8 +54,6 @@ describe('role grant and revocation (integration)', () => {
 
       assert.equal(await auth().grantRole(user.userId, 'driver'), true);
 
-      // The token carries a `roles` snapshot that is now wrong, so the epoch bump
-      // retires it (doc 02 §3.3) rather than letting it run to expiry.
       const stale = await probe(user.accessToken);
       assert.equal(stale.statusCode, 401);
       assert.equal(stale.json().error.code, 'TOKEN_STALE');
@@ -94,7 +75,6 @@ describe('role grant and revocation (integration)', () => {
     it('is idempotent — a role already held is not re-granted or re-announced', async () => {
       const user = await loginAs(app, PHONE);
 
-      // `customer` is granted at registration, so this is the second attempt.
       assert.equal(await auth().grantRole(user.userId, 'customer'), false);
       assert.equal((await activeAssignments(user.userId)).length, 1);
       assert.equal(
@@ -108,7 +88,6 @@ describe('role grant and revocation (integration)', () => {
       const user = await loginAs(app, PHONE);
       await auth().grantRole(user.userId, 'customer');
 
-      // No change, no epoch bump — a no-op must not cost every device its session.
       assert.equal((await probe(user.accessToken)).statusCode, 200);
     });
 
@@ -137,7 +116,7 @@ describe('role grant and revocation (integration)', () => {
 
     it('refuses a slug that is not seeded', async () => {
       const user = await loginAs(app, PHONE);
-      // A deployment fault, not a runtime condition to absorb quietly.
+
       await assert.rejects(auth().grantRole(user.userId, 'wizard'), /not seeded/);
     });
   });
@@ -156,7 +135,6 @@ describe('role grant and revocation (integration)', () => {
       const [revoked] = await events('account.role.revoked');
       assert.deepEqual(revoked?.data, { userId: user.userId, roleSlug: 'driver' });
 
-      // Revocation is a timestamp, never a row delete — the history stays.
       const rows = await db().client.userRoleAssignment.findMany({
         where: { userId: user.userId },
       });
@@ -199,7 +177,6 @@ describe('role grant and revocation (integration)', () => {
     });
   });
 
-  // doc 07 §4, the partial-index proof attached to the invariant table.
   describe('uq_user_role_active', () => {
     it('allows a re-grant once the previous assignment is revoked', async () => {
       const user = await loginAs(app, PHONE);
@@ -220,9 +197,6 @@ describe('role grant and revocation (integration)', () => {
       const role = await db().client.role.findUniqueOrThrow({ where: { slug: 'driver' } });
       await auth().grantRole(user.userId, 'driver');
 
-      // Bypassing the service: the partial index is the enforcement, and the
-      // service's active-assignment check is a courtesy that a concurrent caller
-      // can always overtake (doc 03 §4, OD-2).
       await assert.rejects(
         db().client.userRoleAssignment.create({ data: { userId: user.userId, roleId: role.id } }),
         /Unique constraint|uq_user_role_active/i,
@@ -249,8 +223,6 @@ describe('role grant and revocation (integration)', () => {
     const user = await loginAs(app, PHONE);
     await auth().grantRole(user.userId, 'driver');
 
-    // USER doc 02 §2.1: `GET /me` reads `user_roles`, not the claim. The refreshed
-    // pair shows the grant one epoch before a stale token would have.
     const refreshed = await app.inject({
       method: 'POST',
       url: '/api/v1/auth/token/refresh',

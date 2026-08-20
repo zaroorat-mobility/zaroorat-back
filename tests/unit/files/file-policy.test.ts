@@ -11,11 +11,6 @@ import {
 } from '../../../src/config/file/file.config.js';
 import { jwtConfig } from '../../../src/config/jwt/jwt.config.js';
 
-/**
- * The per-purpose policy (files doc 02 §5). These assertions guard the shape of
- * the table rather than restating its values a third time — the table is
- * authoritative in doc 02 §5 and lives in code exactly once.
- */
 describe('file purpose policy', () => {
   const purposes = Object.keys(filePurposePolicy) as FilePurposeName[];
 
@@ -31,15 +26,12 @@ describe('file purpose policy', () => {
   });
 
   it('gives every purpose a non-empty MIME allow-list', () => {
-    // There is no `*/*` and no purpose without a list: a MIME type absent from
-    // every list cannot be uploaded at all (doc 02 §5).
     for (const purpose of purposes) {
       assert.ok(filePurposePolicy[purpose].mimeTypes.length > 0, purpose);
     }
   });
 
   it('never permits a content-type with no mapped extension', () => {
-    // The mapping is total in one direction: everything acceptable is storable.
     for (const purpose of purposes) {
       for (const mime of filePurposePolicy[purpose].mimeTypes) {
         assert.ok(CONTENT_TYPE_EXTENSION[mime], `${purpose} permits unmappable ${mime}`);
@@ -57,8 +49,6 @@ describe('file purpose policy', () => {
   });
 
   it('accepts image/webp everywhere images are accepted', () => {
-    // Current Android screenshots and share sheets are WebP by default; omitting
-    // it refuses a user photographing their own licence (doc 02 §5).
     for (const purpose of purposes) {
       const { mimeTypes } = filePurposePolicy[purpose];
       if (mimeTypes.some((mime) => mime.startsWith('image/'))) {
@@ -68,7 +58,6 @@ describe('file purpose policy', () => {
   });
 
   it('bounds decoded pixels wherever an image is accepted (R-FILE-35)', () => {
-    // A byte ceiling does not bound decoded size, and R-FILE-29 makes us decode.
     for (const purpose of purposes) {
       const policy = filePurposePolicy[purpose];
       if (policy.mimeTypes.some((mime) => mime.startsWith('image/'))) {
@@ -84,8 +73,8 @@ describe('file purpose policy', () => {
     }
   });
 
-  it('preserves EXIF only where the metadata is the evidence (FILES-OD-10)', () => {
-    const preserved = purposes.filter((purpose) => !filePurposePolicy[purpose].stripExif);
+  it('permits EXIF location only where the metadata is the evidence (FILES-OD-10)', () => {
+    const preserved = purposes.filter((purpose) => !filePurposePolicy[purpose].rejectExifLocation);
     assert.deepEqual(preserved.sort(), ['DISPUTE_EVIDENCE', 'SOS_EVIDENCE']);
   });
 
@@ -102,8 +91,6 @@ describe('file purpose policy', () => {
   });
 
   it('starts only the profile-image clock at something FILES can see (doc 03 §6)', () => {
-    // Every other trigger is a fact owned by another module, which is why
-    // retention has to ask rather than compute.
     assert.equal(filePurposePolicy.PROFILE_IMAGE.retention.trigger, 'REPLACED');
     for (const purpose of purposes.filter((name) => name !== 'PROFILE_IMAGE')) {
       assert.notEqual(filePurposePolicy[purpose].retention.trigger, 'REPLACED', purpose);
@@ -117,11 +104,6 @@ describe('file purpose policy', () => {
   });
 });
 
-/**
- * R-FILE-36 — the constraint that spans two modules' configuration, and was
- * violated the moment it existed as prose in one document and a number in
- * another (doc 08 §3.0).
- */
 describe('read TTL vs access-token lifetime (R-FILE-36)', () => {
   it('holds for every purpose as configured', () => {
     for (const purpose of Object.keys(filePurposePolicy) as FilePurposeName[]) {
@@ -146,8 +128,6 @@ describe('read TTL vs access-token lifetime (R-FILE-36)', () => {
 
 describe('quotas and rate limits', () => {
   it('bounds bytes as well as requests (R-FILE-30)', () => {
-    // A rate limit bounds requests, not bytes: thirty 50 MB clips an hour is
-    // inside the rate limit and is 1.5 GB (FILES-OD-11).
     assert.ok(fileConfig.maxTotalBytesPerUser > 0);
     assert.ok(fileConfig.maxDailyBytesPerUser > 0);
     assert.ok(fileConfig.uploadsPerUserPerHour > 0);

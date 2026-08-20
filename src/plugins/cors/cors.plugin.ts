@@ -1,9 +1,7 @@
 import fp from 'fastify-plugin';
 import cors from '@fastify/cors';
 import { FastifyInstance } from 'fastify';
-
 import { config } from '@config';
-
 async function corsPlugin(app: FastifyInstance) {
   await app.register(cors, {
     origin:
@@ -11,9 +9,9 @@ async function corsPlugin(app: FastifyInstance) {
         ? true
         : ['https://zaroorat.com', 'https://admin.zaroorat.com'],
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
   });
 }
-
 export default fp(corsPlugin, {
   name: 'cors',
 });

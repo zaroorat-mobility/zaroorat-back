@@ -322,14 +322,24 @@ four endpoints where nine now ship.
 
 Each of these is reported, not silently carried.
 
-### 8.1 The concurrent-session cap is implemented but untested ⚠️
+### 8.1 The concurrent-session cap is implemented but untested — ✅ closed
 
 `docs/auth/07` §3 criterion 7 and §5's fraud matrix require that a 6th login evicts session #1 and
-emits `auth.session.revoked`. The eviction logic exists (`src/modules/auth/session/session.service.ts:253`,
-`SessionRepository.findOldestActive`) and the cap is configured per role
-(`src/config/session/session.config.ts`), but **no test asserts it**. This is the only acceptance
-criterion in either module without coverage. It is a small integration test — 6 logins, assert the
-first `sid` returns `SESSION_REVOKED` and the event fired.
+emits `auth.session.revoked`. The eviction logic existed and the cap was configured per role, but
+nothing asserted either — the only acceptance criterion in either module without coverage.
+
+`tests/integration/auth-session-cap.test.ts` closes it: 12 tests over both caps. The standard cap
+(5) evicting exactly one on the 6th login, oldest first, the evicted `sid` returning
+`SESSION_REVOKED`, every survivor still working, the refresh family revoked with it, and the audit
+event emitted once. The privileged cap (2) is covered too, because `capForRoles` picking the wrong
+number **fails open and looks like nothing**: an operator account silently getting five sessions
+instead of two is the account where that matters most.
+
+**It found a real defect.** All three `auth.session.revoked` emissions omitted `userId` from the
+payload and left the envelope subject null, though `docs/auth/06` §5.2 specifies
+`{ userId, sessionId, reason }` and every neighbouring event carries it. A session-revocation audit
+record that cannot name the user forces every consumer to join back to a row that erasure may one
+day remove. Fixed in `SessionService`, and asserted in both the payload and the envelope.
 
 ### 8.2 The lockout's 15-minute lift is unverified
 
@@ -339,14 +349,27 @@ restricted to `Date` here, because ioredis and Prisma need real timers. The test
 gone delete it, which is precisely what the TTL does, and say so. Closing this properly needs a fake
 Redis or a clock-aware wrapper around the lock.
 
-### 8.3 There is no deletion-request ledger
+### 8.3 There is no deletion-request ledger — ✅ closed
 
-`docs/user/02` §2.8 says the endpoint "records the request", but **no table exists** for a retention
-job to query. The only durable record is the `user.account.deletion_requested` outbox event — which
-is a dispatch queue, not a ledger; the relay deletes rows once dispatched. The endpoint is correct
-and audited today, but the erasure job that `docs/user/01` R-USER-18/19 implies **cannot be written
-until a `deletion_requests` table exists**. This is the one structural gap rather than an incremental
-one.
+`docs/user/02` §2.8 said the endpoint "records the request" and **no table existed** for a retention
+job to query. The only durable record was the `user.account.deletion_requested` outbox event — a
+dispatch queue, not a ledger: append-only by platform policy, with no "erased yet?" state to set and
+nothing to index a due-date scan on. (The relay marks rows `PUBLISHED` rather than deleting them, as
+the earlier wording here claimed; either way it is not a ledger.) The endpoint was correct and
+audited and still accepted an obligation nothing could discharge.
+
+`account_deletion_requests` now records it, in the same transaction as the audit event, and
+`AccountErasureJob` discharges it on the `users-maintenance` queue. **Restoring an account cancels
+its pending request in the restore transaction** — without that the account comes back, the user uses
+it, and the job erases them on the original date anyway, which is the one failure in this module that
+would be silent, dated, and irreversible.
+
+Erasure follows `docs/15_Security/03`'s resolution of R-DATA-1 versus the DPDP right to erasure:
+personal identifiers are erased or anonymized, the immutable financial and safety record is retained.
+The profile, the emergency contacts, and the saved places are removed; the avatar is released to
+FILES' retention; the `users` row is kept and anonymized, because ~50 tables reference it. The
+obligation check is re-run at erasure — a dispute opened after the account closed must not have its
+counterparty erased mid-investigation.
 
 ### 8.4 The admin module is two stub files
 
@@ -356,12 +379,15 @@ is implemented, audited, and covered by 5 integration tests, but nothing calls i
 the operator authentication, the `users:suspend` scope check, and the `admin_activity_logs` row all
 belong to `admin`. That module is the natural next body of work.
 
-### 8.5 The profile-image host allow-list rejects everything
+### 8.5 The profile-image host allow-list rejects everything — ✅ obsolete
 
-`userConfig.profileImageHosts` defaults to empty, and empty means **reject every URL** as
-`UNTRUSTED_HOST`. This is deliberate and fail-closed: the `files` module that would issue trusted
-URLs is deferred, so there is no host the platform can vouch for, and accepting an arbitrary one
-would let a profile embed a third-party tracker. It becomes a real feature the day `files` ships.
+`userConfig.profileImageHosts` defaulted to empty, and empty meant **reject every URL** as
+`UNTRUSTED_HOST` — deliberate and fail-closed, because no host the platform could vouch for existed
+while `files` was deferred.
+
+`files` shipped, and the allow-list did not become a feature: it was deleted. A profile now holds a
+**file id**, not a URL (`user_profiles.profile_image_file_id`), so there is no host to trust and no
+third-party tracker to embed. The column, the config key, and the error code are all gone.
 
 ---
 
@@ -394,7 +420,7 @@ OTP delivery requires and nothing more.
 
 | Path                 | Lines | What it is meant to hold                                                                       |
 | -------------------- | ----- | ---------------------------------------------------------------------------------------------- |
-| `src/jobs`           | 10    | Workers, queues, schedulers, producers, consumers — **all empty**                              |
+| `src/jobs`           | ~300  | Queue, scheduler, worker — **real**; `producers`/`consumers` still empty                       |
 | `src/infrastructure` | 14    | Database, maps, notification, payment, queue, redis, storage adapters                          |
 | `src/integrations`   | 0     | `aws-s3`, `google-maps`, `msg91`, `razorpay`, `sendgrid`, `stripe` — **all empty directories** |
 | `src/middleware`     | 6     | `auth.ts`, `idempotency.ts`, `role.ts` — the real versions live in `core`/`modules` instead    |
@@ -402,11 +428,15 @@ OTP delivery requires and nothing more.
 
 Two consequences worth naming:
 
-- **There is no background-job runtime.** `bootstrapQueue()` and `bootstrapStorage()` are literal
-  `// Placeholder for Milestone 2` bodies. The one exception is the **outbox relay**, which is real,
-  wired in `events.bootstrap.ts`, and stopped cleanly on shutdown. Everything else asynchronous —
-  notification delivery, the deletion-retention job, matching timeouts, document-expiry sweeps — has
-  nowhere to run yet.
+- **The background-job runtime exists, with one queue on it.** `src/worker.ts` is a second entry
+  point sharing the API's composition root: BullMQ, one `files-maintenance` queue, an idempotent
+  schedule table, and a graceful-drain shutdown. FILES' sweeper and retention job run on it. The
+  **outbox relay** stays separate and API-side — it is a single-instance poller, and a second copy in
+  the worker would dispatch every event twice. What still has nowhere to run is everything with no
+  queue declared yet: notification delivery, matching timeouts, document-expiry sweeps. Those are now
+  a schedule-table entry each, not a missing runtime. `bootstrapStorage()` is still a literal
+  `// Placeholder for Milestone 2` body, so the readiness `storage` contributor 09 §3 specifies does
+  not exist.
 - **The only live third-party integration is MSG91.** Maps, object storage, and both payment
   providers are empty directories, so FR-GEO, FR-FILES, and FR-PAYMENTS have no external edge at all.
 
@@ -430,8 +460,10 @@ Not everything unbuilt is unprepared:
 
 **To close out what is already built** (small, and worth doing before moving on):
 
-1. **Close §8.1** — one integration test for the concurrent-session cap; the last uncovered acceptance criterion.
-2. **`deletion_requests` table + retention job** (§8.3) — the only structural gap in shipped code, and a compliance obligation.
+1. ~~**Close §8.1**~~ — ✅ done. 12 integration tests over both caps, plus the `auth.session.revoked`
+   payload defect they surfaced.
+2. ~~**`deletion_requests` table + retention job**~~ (§8.3) — ✅ done. `account_deletion_requests`,
+   `AccountErasureJob`, and a `users-maintenance` schedule entry; 36 tests.
 
 **To make the product exist** — the MVP order the release plan implies, each blocked on the one before it:
 
@@ -443,8 +475,9 @@ Not everything unbuilt is unprepared:
 5. **`geo`** — presence and location fixes; PostGIS is already installed and in use.
 6. **`pricing`** → **`matching`** → **`dispatch`/`rides`** — the core loop, in dependency order.
 7. **`payments` (cash)** — settles the loop.
-8. **A job runtime** — needed by (4)–(7) and by the retention job from (2). The outbox relay is the
-   working precedent to copy.
+8. ~~**A job runtime**~~ — ✅ **shipped**. BullMQ on the existing Redis, one queue, a schedule table,
+   and `src/worker.ts` as a second entry point (handbook volume 08). Adding a job to (2) or (4)–(7)
+   is now a row in `JOB_SCHEDULES` plus a handler registration, not a runtime.
 
 **`admin`** sits outside this chain: it unblocks USER phase 6's caller and every ops surface, and it
 is M3 in the release plan — but its absence blocks nothing in the MVP path.

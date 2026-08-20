@@ -5,12 +5,9 @@ import {
   USER_EVENT_CATALOG,
   USER_PRODUCER,
   userEvent,
+  type UserEventType,
 } from '../../../src/modules/users/events/catalog.js';
 
-/**
- * The catalog is the wire contract consumers integrate against (doc 05 §1), so
- * these assertions are transcribed from doc 05 §3–§4 rather than from the code.
- */
 describe('USER event catalog (unit)', () => {
   it('classifies the audit subset exactly as doc 05 §4 lists it', () => {
     const audit = Object.entries(USER_EVENT_CATALOG)
@@ -21,6 +18,8 @@ describe('USER event catalog (unit)', () => {
     assert.deepEqual(audit, [
       'user.account.deactivated',
       'user.account.deletion_requested',
+
+      'user.account.erased',
       'user.account.restored',
       'user.phone.changed',
     ]);
@@ -40,7 +39,7 @@ describe('USER event catalog (unit)', () => {
 
   it('stamps every event with this module as the producer (doc 05 §2)', () => {
     assert.equal(USER_PRODUCER, 'users');
-    for (const type of Object.keys(USER_EVENT_CATALOG)) {
+    for (const type of Object.keys(USER_EVENT_CATALOG) as UserEventType[]) {
       assert.equal(userEvent(type, { subjectUserId: 'u1' }).producer, 'users', type);
     }
   });
@@ -58,6 +57,9 @@ describe('USER event catalog (unit)', () => {
   });
 
   it('refuses an event type it does not define — an unlisted event is a contract breach', () => {
-    assert.throws(() => userEvent('user.profile.deleted', {}), /Unknown USER event type/);
+    assert.throws(
+      () => userEvent('user.profile.deleted' as UserEventType, {}),
+      /Unknown USER event type/,
+    );
   });
 });

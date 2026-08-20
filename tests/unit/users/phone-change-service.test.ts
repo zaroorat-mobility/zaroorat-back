@@ -1,18 +1,23 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { PhoneChangeService, maskPhone } from '../../../src/modules/users/phone-change.service.js';
-import { PhoneInUseError, PhoneUnchangedError } from '../../../src/modules/users/errors.js';
+import {
+  PhoneChangeService,
+  maskPhone,
+} from '../../../src/modules/users/services/phone/phone-change.service.js';
+import {
+  PhoneInUseError,
+  PhoneUnchangedError,
+} from '../../../src/modules/users/errors/user.errors.js';
 import {
   AccountSuspendedError,
   OtpInvalidError,
   RateLimitedError,
-} from '../../../src/modules/auth/errors.js';
+} from '../../../src/modules/auth/errors/auth.errors.js';
 import { UniqueConstraintError } from '../../../src/core/database/errors/DatabaseError.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 
-/** The sentinel the fake TransactionManager hands to the change callback. */
 const TX = { __tx: true } as unknown as TransactionClient;
 
 const USER_ID = '00000000-0000-7000-8000-000000000001';
@@ -23,30 +28,16 @@ const OLD_PHONE = '+919876543210';
 const NEW_PHONE = '+919876500099';
 
 interface Options {
-  /** Who, if anyone, already holds the target number. */
   holderId?: string | null;
-  /** Overrides applied to the OTP challenge row `findById` returns. */
   challenge?: Record<string, unknown> | null;
-  /** Rate-limit verdict for step 1. */
   allowed?: boolean;
-  /** A cached step-2 response, i.e. a retry with a used key. */
   cached?: unknown;
-  /** Account status, for the R-USER-9 gate. */
   status?: string;
-  /** Make the `UPDATE` lose the uniqueness race the way Postgres would. */
   updateConflicts?: boolean;
-  /** Sessions the user has open when the change commits. */
   activeSessions?: number;
-  /** Make AUTH's OTP verification reject, as it would on a wrong code. */
   otpFails?: boolean;
 }
 
-/**
- * Wire a PhoneChangeService whose collaborators record the transaction they were
- * handed and the order they ran in, so a test can prove the number update, the
- * revocation, and their events are one unit of work (R-USER-29) and that the
- * epoch bump and token issuance happen strictly after it (R-USER-30).
- */
 function makeService(opts: Options = {}) {
   const seen = {
     order: [] as string[],
@@ -158,10 +149,22 @@ function makeService(opts: Options = {}) {
         retryAfterSeconds: 3600,
       }),
     },
+
     idempotency: {
       get: async () => opts.cached ?? null,
-      put: async (_key: string, value: unknown) => {
+      put: async (_operation: string, _key: string, value: unknown) => {
         seen.idempotencyPuts.push(value);
+      },
+      runOnce: async <T>(
+        _operation: string,
+        _key: string,
+        _ttl: number,
+        action: () => Promise<T>,
+      ): Promise<T> => {
+        if (opts.cached) return opts.cached as T;
+        const result = await action();
+        seen.idempotencyPuts.push(result);
+        return result;
       },
     },
   };
@@ -207,7 +210,6 @@ function makeService(opts: Options = {}) {
   return { service, seen };
 }
 
-/** Run step 2 with the standard inputs. */
 function verify(service: PhoneChangeService, key = 'idem-key-1') {
   return service.verifyPhoneChange(
     { userId: USER_ID, sessionId: SESSION_ID, challengeId: CHALLENGE_ID, code: '482913' },
@@ -221,8 +223,6 @@ describe('maskPhone', () => {
   });
 
   it('never returns the whole number, however short it is', () => {
-    // The leading and trailing runs must not overlap into the full number on a
-    // short E.164 value — the mask has to hold for every country, not just +91.
     for (const number of ['+12345678', '+441632960099', '+919876500099']) {
       assert.ok(!maskPhone(number).includes(number.slice(1)), number);
       assert.ok(maskPhone(number).includes('•••'), number);
@@ -231,8 +231,6 @@ describe('maskPhone', () => {
   });
 });
 
-// Step 1 (user doc 02 §2.4.1, FLOW §4). The per-account limit, the two refusals,
-// and the promise that USER never talks to the SMS provider itself.
 describe('PhoneChangeService — request (unit)', () => {
   it('sends the OTP to the NEW number, with the phone-change purpose', async () => {
     const { service, seen } = makeService();
@@ -246,7 +244,7 @@ describe('PhoneChangeService — request (unit)', () => {
       expiresInSec: 300,
       resendAvailableInSec: 60,
     });
-    // R-USER-10: proving control of the old number is never sufficient.
+
     assert.deepEqual(seen.sent, [
       { phoneNumber: NEW_PHONE, purpose: 'PHONE_CHANGE', userId: USER_ID },
     ]);
@@ -276,8 +274,7 @@ describe('PhoneChangeService — request (unit)', () => {
       service.requestPhoneChange({ userId: USER_ID, newPhoneNumber: NEW_PHONE }),
       (err: unknown) => err instanceof RateLimitedError && err.retryAfterSeconds === 3600,
     );
-    // A limit that only applies to requests which reached the database is not a
-    // limit on the enumeration this endpoint deliberately allows.
+
     assert.deepEqual(seen.order, [], 'nothing was looked up and no code was sent');
     assert.deepEqual(seen.metrics, ['rate_limited']);
   });
@@ -309,9 +306,6 @@ describe('PhoneChangeService — request (unit)', () => {
   });
 });
 
-// Step 2 (user doc 02 §2.4.2). The unit of work and the ordering around it are
-// the whole point of these assertions; the database half lives in
-// tests/integration/user-phone-change.test.ts.
 describe('PhoneChangeService — verify (unit)', () => {
   it('commits the number, the revocation, and both events as one transaction', async () => {
     const { service, seen } = makeService();
@@ -348,8 +342,6 @@ describe('PhoneChangeService — verify (unit)', () => {
     const { service, seen } = makeService();
     await verify(service);
 
-    // The bump is what makes every earlier token stale (USER-INV-4). A pair signed
-    // before it would carry the old epoch and be dead on arrival.
     assert.ok(
       seen.order.indexOf('epoch:bump') < seen.order.indexOf('issue'),
       'the new token carries the new epoch',
@@ -385,7 +377,6 @@ describe('PhoneChangeService — verify (unit)', () => {
       sessionsRevoked: 3,
     });
 
-    // doc 05 §3.2 / USER-OD-4: AUTH's event, not a USER near-duplicate.
     const recovery = seen.published.find(
       (p) => p.input.type === 'account.recovery.completed',
     )!.input;
@@ -400,8 +391,6 @@ describe('PhoneChangeService — verify (unit)', () => {
     const { service, seen } = makeService();
     await verify(service);
 
-    // The verify body has no phone field (doc 02 §2.4.2): a code minted for one
-    // number can therefore never be presented against another.
     assert.deepEqual(seen.verified, [
       {
         phoneNumber: NEW_PHONE,
@@ -421,15 +410,13 @@ describe('PhoneChangeService — verify (unit)', () => {
     ]) {
       const { service, seen } = makeService({ challenge });
       await assert.rejects(verify(service), OtpInvalidError, JSON.stringify(challenge));
-      // Every rejection is the same code AUTH uses, so nothing here is an oracle.
+
       assert.equal(seen.verified.length, 0, 'no code was consumed');
       assert.equal(seen.order.includes('update'), false, 'nothing was written');
     }
   });
 
   it('answers a lost uniqueness race with PHONE_IN_USE, not a 500', async () => {
-    // The loser reaches the UPDATE before the winner commits, so its own re-check
-    // saw nothing and the partial index rejected the write instead (doc 03 §4.2).
     const { service, seen } = makeService({ updateConflicts: true });
     await assert.rejects(verify(service), PhoneInUseError);
     assert.deepEqual(seen.metrics, ['failed']);
@@ -461,7 +448,6 @@ describe('PhoneChangeService — verify (unit)', () => {
   it('leaves the account untouched when the code is wrong', async () => {
     const { service, seen } = makeService({ otpFails: true });
 
-    // AUTH's error surfaces as itself — USER adds no 401 of its own (doc 04 §2.2).
     await assert.rejects(verify(service), OtpInvalidError);
     assert.deepEqual(seen.metrics, ['failed']);
     assert.deepEqual(seen.order, ['otp:verify'], 'no transaction, no revocation, no bump');

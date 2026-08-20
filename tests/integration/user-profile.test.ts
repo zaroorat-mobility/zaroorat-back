@@ -6,13 +6,6 @@ import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 
 const BASE = '/api/v1/users';
 
-/**
- * `GET /me` and `PATCH /me/profile` against live Postgres + Redis.
- *
- * Covers doc 06 §3 criteria 2 and 3, USER-INV-2 (no cross-account read/write),
- * USER-INV-5 (immutable fields), and the §6 assertion that a mutation's event
- * lands in the outbox in the same transaction as the change.
- */
 describe('user profile (integration)', () => {
   let app: FastifyInstance;
 
@@ -156,8 +149,6 @@ describe('user profile (integration)', () => {
         'every offending field is named',
       );
 
-      // The underlying columns are untouched — and so is the writable field that
-      // rode along in the same body: the request is rejected, not partly applied.
       const stored = await db().client.user.findUnique({ where: { id: user.userId } });
       assert.equal(stored?.phoneNumber, phoneA);
       assert.equal(stored?.status, 'ACTIVE');
@@ -229,7 +220,6 @@ describe('user profile (integration)', () => {
       assert.equal(envelope.subject.userId, user.userId);
       assert.deepEqual(envelope.data.changedFields, ['firstName', 'dateOfBirth']);
 
-      // Nothing personal rides along in the payload (doc 05 §5).
       const serialized = JSON.stringify(envelope);
       assert.ok(!serialized.includes('Aarav'), 'no name in the event');
       assert.ok(!serialized.includes('1994-03-11'), 'no date of birth in the event');

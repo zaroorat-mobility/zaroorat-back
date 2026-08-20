@@ -262,9 +262,13 @@ returns `501` is worse than a `404`, because clients write code against it.
 
 **Response `202`** `{ "scheduledFor": "2026-08-28T00:00:00.000Z" }`
 
-- Performs the §2.7 deactivation **and** records the request. Erasure itself is a retention job, never
-  this endpoint (R-USER-19).
-- **Events:** `user.account.deletion_requested`.
+- Performs the §2.7 deactivation **and** records the request as a row in `account_deletion_requests`
+  (03 §3.4), in the same transaction as the audit event — so a promise is never recorded without the
+  shutdown, or the other way round. Erasure itself is a retention job, never this endpoint
+  (R-USER-19).
+- **A repeat returns the original date.** The user was told when their data would be gone; asking
+  again is not consent to move it.
+- **Events:** `user.account.deletion_requested`, and later `user.account.erased` from the job.
 
 ---
 

@@ -9,9 +9,6 @@ import type { UserRepository } from '../../src/modules/auth/repositories/user.re
 
 const BASE = '/api/v1/auth';
 
-// Full phone + OTP login/register flow against live Postgres + Redis (doc 07 §3
-// criteria 1 & 9): first verify registers, returning verify reuses the account,
-// and idempotent verify replays the stored result.
 describe('auth login flow (integration)', () => {
   let app: FastifyInstance;
 
@@ -66,7 +63,6 @@ describe('auth login flow (integration)', () => {
     const refresh = await db().client.refreshToken.findMany();
     assert.equal(refresh.length, 1);
 
-    // The audit events landed in the outbox (durable, at-least-once).
     const types = (await db().client.outboxEvent.findMany()).map((o) => o.eventType);
     for (const expected of [
       'auth.otp.verified',
@@ -118,9 +114,6 @@ describe('auth login flow (integration)', () => {
   });
 
   it('rolls the whole login back when a write inside the transaction fails (atomicity)', async () => {
-    // Inject a failure late in the login transaction, after the user, session,
-    // refresh token, and outbox events have been written. If the unit of work is
-    // real, the rollback leaves zero rows in every one of those tables.
     const repo = container.resolve<UserRepository>('userRepository');
     const original = repo.updateLastLoginAt.bind(repo);
     repo.updateLastLoginAt = async () => {

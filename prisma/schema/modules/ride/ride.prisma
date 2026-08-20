@@ -61,7 +61,10 @@ model RideDispatch {
 model Ride {
   id                String                                @id @default(uuid(7)) @db.Uuid
   rideCode          String                                @unique @map("ride_code")
-  requestId         String                                @map("request_id") @db.Uuid
+  /// One ride per request. The application selects a winner with a row lock
+  /// plus a conditional claim on the request; this is the database backstop
+  /// that makes a double-accept fail loudly rather than double-book a customer.
+  requestId         String                                @unique @map("request_id") @db.Uuid
   customerId        String                                @map("customer_id") @db.Uuid
   driverId          String                                @map("driver_id") @db.Uuid
   vehicleId         String                                @map("vehicle_id") @db.Uuid

@@ -122,21 +122,21 @@ export const filePurposePolicy = Object.freeze({
     maxBytes: 5 * 1024 * 1024,
     maxPixels: { width: 4096, height: 4096 },
     readTtlSeconds: 600,
-    stripExif: true,
+    rejectExifLocation: true,
     retention: { afterDays: 365, trigger: 'REPLACED', action: 'ERASE' },
   },
   // … one entry per purpose, exactly matching 02 §5
 } as const);
 ```
 
-| Field            | Env-overridable? | Why                                                                                                  |
-| ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------- |
-| `mimeTypes`      | ❌               | Security control — §8.2                                                                              |
-| `maxPixels`      | ❌               | Security control (R-FILE-35); a raised ceiling is a decompression budget                             |
-| `stripExif`      | ❌               | Privacy control (R-FILE-29)                                                                          |
-| `retention`      | ❌               | Compliance; changing it needs the review in §3.1, not a deploy                                       |
-| `maxBytes`       | ✅ per purpose   | The one value with a legitimate operational reason to differ — a staging bucket with a smaller quota |
-| `readTtlSeconds` | ✅ globally down | May be tightened, never past the R-FILE-36 assertion (§8.1)                                          |
+| Field                | Env-overridable? | Why                                                                                                  |
+| -------------------- | ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `mimeTypes`          | ❌               | Security control — §8.2                                                                              |
+| `maxPixels`          | ❌               | Security control (R-FILE-35); a raised ceiling is a decompression budget                             |
+| `rejectExifLocation` | ❌               | Privacy control (R-FILE-29, FILES-OD-16)                                                             |
+| `retention`          | ❌               | Compliance; changing it needs the review in §3.1, not a deploy                                       |
+| `maxBytes`           | ✅ per purpose   | The one value with a legitimate operational reason to differ — a staging bucket with a smaller quota |
+| `readTtlSeconds`     | ✅ globally down | May be tightened, never past the R-FILE-36 assertion (§8.1)                                          |
 
 **Two of six are overridable, and both only in the safe direction.** A knob that can loosen a
 security control is not configuration, it is a bypass with a `.env` file for a key.
@@ -228,8 +228,9 @@ encode the same fact twice and drift.
 
 ## 6. Job schedules
 
-Consumed by 09 §4. Present here so every tunable lives in one document; **inert until a job runtime
-exists** (01 §13.4).
+Consumed by 09 §4, and now live: `src/jobs/scheduler` reads `sweeperCron` and `retentionCron` and
+upserts one BullMQ schedule each (01 §13.4). Both patterns are interpreted in `Etc/UTC`, pinned so
+the schedule does not mean a different hour on a laptop than on a cluster node.
 
 | Key                  | Env                     | Default        |
 | -------------------- | ----------------------- | -------------- |

@@ -1,25 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { AuthService } from '../../../src/modules/auth/auth.service.js';
+import { AuthService } from '../../../src/modules/auth/services/auth.service.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 
-/** The sentinel the fake TransactionManager hands to the login callback. */
 const TX = { __tx: true } as unknown as TransactionClient;
 
 const USER_ID = '00000000-0000-7000-8000-000000000001';
 const PHONE = '+919876543210';
 
-/**
- * Wire an AuthService whose collaborators record the transaction they were
- * handed, so a test can prove the profile insert and `user.profile.created`
- * join the *login* transaction rather than running beside it (R-USER-27).
- *
- * @param opts `existingUser` returns a returning caller; `profileCreated` is
- *             what `ensureExists` reports.
- */
-function makeService(opts: { existingUser?: boolean; profileCreated?: boolean } = {}) {
+function makeService(
+  opts: { existingUser?: boolean; profileCreated?: boolean; status?: string } = {},
+) {
   const seen = {
     ensureTx: undefined as unknown,
     ensureUserId: undefined as unknown,
@@ -31,7 +24,14 @@ function makeService(opts: { existingUser?: boolean; profileCreated?: boolean } 
     execute: async <T>(cb: (tx: TransactionClient) => Promise<T>): Promise<T> => cb(TX),
   };
   const otpService = { verify: async () => undefined };
-  const user = { id: USER_ID, status: 'ACTIVE', phoneNumber: PHONE, isPhoneVerified: true };
+
+  const user = {
+    id: USER_ID,
+    status: opts.status ?? 'ACTIVE',
+    phoneNumber: PHONE,
+    isPhoneVerified: true,
+    deletedAt: null,
+  };
   const userRepository = {
     findActiveByPhone: async () => (opts.existingUser ? user : null),
     create: async () => {
@@ -39,6 +39,8 @@ function makeService(opts: { existingUser?: boolean; profileCreated?: boolean } 
       return user;
     },
     updateLastLoginAt: async () => user,
+    markPhoneVerified: async () => undefined,
+    updateStatus: async () => user,
   };
   const userProfileRepository = {
     ensureExists: async (userId: string, tx: TransactionClient) => {
@@ -99,15 +101,10 @@ function makeService(opts: { existingUser?: boolean; profileCreated?: boolean } 
   return { service, seen };
 }
 
-/** The `user.profile.created` envelopes published during a login. */
 function profileEvents(seen: { published: { input: PublishInput; tx: unknown }[] }) {
   return seen.published.filter((p) => p.input.type === 'user.profile.created');
 }
 
-// Registration provisions the profile inside AUTH's login unit of work
-// (user doc 03 §4.1, FLOW §1). These assertions are the unit-level half of
-// USER-INV-1; the rollback half needs a real database and lives in
-// tests/integration/user-registration.test.ts.
 describe('AuthService — profile provisioning (unit)', () => {
   it('creates the profile inside the login transaction, before the session exists', async () => {
     const { service, seen } = makeService();
@@ -150,8 +147,6 @@ describe('AuthService — profile provisioning (unit)', () => {
     const { service, seen } = makeService({ existingUser: true, profileCreated: true });
     await service.verifyOtp({ phoneNumber: PHONE, code: '123456' });
 
-    // A returning user with no profile row gets one, and it is announced — the
-    // referral module still learns the profile is ready (doc 05 §3.1).
     assert.equal(profileEvents(seen).length, 1);
     assert.equal(
       seen.published.some((p) => p.input.type === 'account.role.granted'),

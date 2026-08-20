@@ -8,18 +8,6 @@ import { FIXED_OTP, bootApp, db, resetState } from './helpers/harness.js';
 
 const PHONE = '+919876517001';
 
-/**
- * The two AUTH invariants doc 07 §4 marks **integration (concurrent)**.
- *
- * Both are invisible to a sequential suite: a read-then-write account check and a
- * non-atomic OTP consume pass every test in `auth-login.test.ts` and fail only
- * when two callers arrive at once. That is the whole reason these rows exist
- * separately, and why they were the last gap in the AUTH suite.
- *
- * `Promise.all` over `app.inject` gives real overlap — Fastify handles each
- * injection independently, so the two requests interleave on the same Redis
- * connection pool and the same Postgres pool a real pair of clients would.
- */
 describe('auth concurrency invariants (integration)', () => {
   let app: FastifyInstance;
 
@@ -33,7 +21,6 @@ describe('auth concurrency invariants (integration)', () => {
     await resetState();
   });
 
-  /** Request an OTP and return the challenge the client would hold. */
   async function sendOtp(phoneNumber: string): Promise<string> {
     const sent = await app.inject({
       method: 'POST',
@@ -44,13 +31,6 @@ describe('auth concurrency invariants (integration)', () => {
     return sent.json().challengeId;
   }
 
-  /**
-   * Fire `count` verifies of the same code at once.
-   *
-   * Each carries its **own** `Idempotency-Key`. Sharing one would exercise the
-   * stored-response replay instead — a different guarantee, already covered in
-   * `auth-login.test.ts`, and it would hide the race these tests exist to find.
-   */
   function verifyConcurrently(
     phoneNumber: string,
     challengeId: string,
@@ -68,12 +48,9 @@ describe('auth concurrency invariants (integration)', () => {
     );
   }
 
-  /** Live (non-soft-deleted) rows holding a phone number. */
   function activeAccounts(phoneNumber: string) {
     return db().client.user.findMany({ where: { phoneNumber, deletedAt: null } });
   }
-
-  // ── AUTH-INV-1 ────────────────────────────────────────────────────────────
 
   describe('AUTH-INV-1 — exactly one active account per phone number', () => {
     it('admits one of two simultaneous first-time registrations, and only one', async () => {
@@ -83,8 +60,6 @@ describe('auth concurrency invariants (integration)', () => {
       const created = responses.filter((r) => r.statusCode === 200);
       assert.equal(created.length, 1, responses.map((r) => r.payload).join('\n'));
 
-      // The API response and the database must agree — a second row that nobody
-      // was told about is the failure mode this invariant exists to prevent.
       const rows = await activeAccounts(PHONE);
       assert.equal(rows.length, 1, 'exactly one active users row');
       assert.equal(created[0]!.json().user.id, rows[0]!.id, 'and it is the one that answered 200');
@@ -92,10 +67,6 @@ describe('auth concurrency invariants (integration)', () => {
     });
 
     it('lets the partial index settle it, not the application', async () => {
-      // Bypassing the service entirely: two inserts racing for the same number.
-      // `uq_users_phone_active` is the enforcement (auth doc 03 §4); the
-      // application check is a courtesy for the error message, and a check that
-      // runs before a write can always be overtaken by another writer.
       const insert = () =>
         db().client.user.create({ data: { phoneNumber: PHONE, status: 'ACTIVE' } });
       const outcomes = await Promise.allSettled([insert(), insert()]);
@@ -115,8 +86,6 @@ describe('auth concurrency invariants (integration)', () => {
       const first = await verifyConcurrently(PHONE, await sendOtp(PHONE), 1);
       const originalId = first[0]!.json().user.id;
 
-      // The index is partial on `deleted_at IS NULL`, so a soft delete releases
-      // the number without removing the history that hangs off the old identity.
       await db().client.user.update({
         where: { id: originalId },
         data: { deletedAt: new Date() },
@@ -146,8 +115,6 @@ describe('auth concurrency invariants (integration)', () => {
     });
   });
 
-  // ── AUTH-INV-2 ────────────────────────────────────────────────────────────
-
   describe('AUTH-INV-2 — an OTP is consumed exactly once', () => {
     it('lets exactly one of two simultaneous verifies through', async () => {
       const challengeId = await sendOtp(PHONE);
@@ -156,8 +123,6 @@ describe('auth concurrency invariants (integration)', () => {
       const codes = [a!.statusCode, b!.statusCode].sort();
       assert.deepEqual(codes, [200, 401], `${a!.payload}\n${b!.payload}`);
 
-      // The loser gets AUTH's merged OTP failure, not a distinct "already used"
-      // code — distinguishing them would be an oracle (doc 05 §3.2).
       const loser = [a!, b!].find((r) => r.statusCode === 401)!;
       assert.equal(loser.json().error.code, 'OTP_INVALID');
     });
@@ -198,10 +163,7 @@ describe('auth concurrency invariants (integration)', () => {
       const attempt = await db().client.otpVerification.findUniqueOrThrow({
         where: { id: challengeId },
       });
-      // Winner and losers write to the same challenge row. Before the conditional
-      // update in `updateOutcome`, a loser landing last filed a login that really
-      // succeeded as `failed` — while leaving `verified_at` set, so the row
-      // contradicted itself and the fraud reads disagreed with the outcome column.
+
       assert.equal(attempt.outcome, 'verified');
       assert.notEqual(attempt.verifiedAt, null, 'and the two agree');
     });
@@ -225,10 +187,7 @@ describe('auth concurrency invariants (integration)', () => {
       const responses = await verifyConcurrently(PHONE, challengeId, 6);
 
       assert.equal(responses.filter((r) => r.statusCode === 200).length, 1);
-      // The other five are refused, but not all with the same code: five failed
-      // attempts is the lockout threshold, so the last of them legitimately comes
-      // back `429 OTP_LOCKED` instead of `401 OTP_INVALID`. Which caller crosses
-      // it is a race, so the assertion is on the set, not the split.
+
       const refused = responses.filter((r) => r.statusCode !== 200);
       assert.equal(refused.length, 5, 'every other caller is refused');
       for (const response of refused) {
@@ -239,11 +198,160 @@ describe('auth concurrency invariants (integration)', () => {
     });
   });
 
-  /**
-   * Clear the OTP secret, challenge, and attempt counters without touching the
-   * database, so a test can run a second send/verify for the same number inside
-   * one case. Full `resetState` would drop the rows the assertion needs.
-   */
+  async function loginForRefreshToken(phoneNumber: string): Promise<string> {
+    const challengeId = await sendOtp(phoneNumber);
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/otp/verify',
+      headers: { 'idempotency-key': randomUUID() },
+      payload: { phoneNumber, code: FIXED_OTP, challengeId },
+    });
+    assert.equal(verified.statusCode, 200, verified.payload);
+    return verified.json().refreshToken as string;
+  }
+
+  function refreshConcurrently(refreshToken: string, count = 2): Promise<LightMyRequestResponse[]> {
+    return Promise.all(
+      Array.from({ length: count }, () =>
+        app.inject({
+          method: 'POST',
+          url: '/api/v1/auth/token/refresh',
+          headers: { 'idempotency-key': randomUUID() },
+          payload: { refreshToken },
+        }),
+      ),
+    );
+  }
+
+  describe('AUTH-INV-5 — a refresh token rotates exactly once', () => {
+    function liveTokens(userId: string) {
+      return db().client.refreshToken.findMany({ where: { userId, revokedAt: null } });
+    }
+
+    async function userIdFor(phoneNumber: string): Promise<string> {
+      const [user] = await activeAccounts(phoneNumber);
+      assert.ok(user, 'the account exists');
+      return user.id;
+    }
+
+    it('lets exactly one of two simultaneous refreshes through', async () => {
+      const refreshToken = await loginForRefreshToken(PHONE);
+
+      const responses = await refreshConcurrently(refreshToken);
+      const ok = responses.filter((r) => r.statusCode === 200);
+      const refused = responses.filter((r) => r.statusCode !== 200);
+
+      assert.equal(ok.length, 1, responses.map((r) => r.payload).join('\n'));
+      assert.equal(refused.length, 1);
+      assert.equal(refused[0]?.statusCode, 401);
+      assert.equal(refused[0]?.json().error.code, 'TOKEN_REUSE');
+    });
+
+    it('leaves exactly one live successor, never two', async () => {
+      const refreshToken = await loginForRefreshToken(PHONE);
+      const userId = await userIdFor(PHONE);
+
+      await refreshConcurrently(refreshToken);
+
+      const live = await liveTokens(userId);
+      assert.equal(
+        live.length,
+        0,
+        'the race is treated as reuse, so the whole family is revoked — not two live tokens',
+      );
+    });
+
+    it('holds under more than two callers', async () => {
+      const refreshToken = await loginForRefreshToken(PHONE);
+      const userId = await userIdFor(PHONE);
+
+      const responses = await refreshConcurrently(refreshToken, 6);
+      assert.equal(responses.filter((r) => r.statusCode === 200).length, 1);
+      assert.ok((await liveTokens(userId)).length <= 1);
+    });
+
+    it('revokes the family and bumps the epoch, per the existing reuse policy', async () => {
+      const refreshToken = await loginForRefreshToken(PHONE);
+      const userId = await userIdFor(PHONE);
+
+      await refreshConcurrently(refreshToken);
+
+      const reuse = await db().client.outboxEvent.findMany({
+        where: { eventType: 'auth.refresh.reuse_detected' },
+      });
+      assert.equal(reuse.length, 1, 'the race is audited as reuse, exactly like a replay');
+
+      const sessions = await db().client.userSession.findMany({ where: { userId } });
+      assert.ok(sessions.length >= 1, 'the session row survives for the audit trail');
+      const stillLive = await db().client.refreshToken.findMany({
+        where: { userId, revokedAt: null },
+      });
+      assert.equal(stillLive.length, 0);
+    });
+
+    it('replays rather than races when the retry carries the same key', async () => {
+      const refreshToken = await loginForRefreshToken(PHONE);
+      const key = randomUUID();
+
+      const responses = await Promise.all(
+        Array.from({ length: 2 }, () =>
+          app.inject({
+            method: 'POST',
+            url: '/api/v1/auth/token/refresh',
+            headers: { 'idempotency-key': key },
+            payload: { refreshToken },
+          }),
+        ),
+      );
+
+      const ok = responses.filter((r) => r.statusCode === 200);
+      assert.ok(ok.length >= 1, 'at least one caller gets the real answer');
+
+      for (const response of responses) {
+        assert.ok(
+          [200, 409].includes(response.statusCode),
+          `a same-key retry must not be treated as reuse (got ${response.statusCode})`,
+        );
+      }
+      if (ok.length === 2) {
+        assert.equal(
+          ok[0]?.json().refreshToken,
+          ok[1]?.json().refreshToken,
+          'a replay returns the stored response, not a second rotation',
+        );
+      }
+
+      assert.equal(
+        await db().client.outboxEvent.count({
+          where: { eventType: 'auth.refresh.reuse_detected' },
+        }),
+        0,
+        'and nothing was audited as reuse',
+      );
+    });
+
+    it('still detects a genuine replay after the rotation has settled', async () => {
+      const refreshToken = await loginForRefreshToken(PHONE);
+
+      const first = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/token/refresh',
+        headers: { 'idempotency-key': randomUUID() },
+        payload: { refreshToken },
+      });
+      assert.equal(first.statusCode, 200, first.payload);
+
+      const replay = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/token/refresh',
+        headers: { 'idempotency-key': randomUUID() },
+        payload: { refreshToken },
+      });
+      assert.equal(replay.statusCode, 401);
+      assert.equal(replay.json().error.code, 'TOKEN_REUSE');
+    });
+  });
+
   async function resetOtpState(): Promise<void> {
     const { redis } = await import('../../src/core/cache/client.js');
     const keys = await redis.keys('otp:*');

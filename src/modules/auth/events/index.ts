@@ -1,1 +1,1 @@
-export { AUTH_EVENT_CATALOG, authEvent, type AuthEventFields } from './catalog';
+export * from './catalog';

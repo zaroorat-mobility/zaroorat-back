@@ -1,16 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { UserService } from '../../../src/modules/users/user.service.js';
+import { UserService } from '../../../src/modules/users/services/user.service.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 
-/** A sentinel tx object the fake TransactionManager hands to the callback. */
 const TX = { __tx: true } as unknown as TransactionClient;
 
 const USER_ID = '00000000-0000-7000-8000-000000000001';
 
-/** A `users` row shaped enough for the account view. */
 const USER_ROW = {
   id: USER_ID,
   phoneNumber: '+919876543210',
@@ -23,11 +21,6 @@ const USER_ROW = {
   deletedAt: null,
 };
 
-/**
- * Wire a UserService whose collaborators capture the transaction argument they
- * receive, so a test can prove the row write and the outbox event run inside the
- * SAME transaction (R-USER-28, the UoW guarantee).
- */
 function makeService(opts: { profile?: Record<string, unknown> | null; user?: unknown } = {}) {
   const seen = {
     executeCalls: 0,
@@ -67,12 +60,22 @@ function makeService(opts: { profile?: Record<string, unknown> | null; user?: un
     },
   };
 
+  const fileService = {
+    assertReferenceable: async () => {
+      seen.order.push('assertReferenceable');
+    },
+    supersede: async () => {
+      seen.order.push('supersede');
+    },
+  };
+
   const service = new UserService(
     userRepository as never,
     userProfileRepository as never,
     roleRepository as never,
     transactionManager as never,
     eventPublisher as never,
+    fileService as never,
   );
   return { service, seen };
 }
@@ -105,7 +108,6 @@ describe('UserService.updateProfile — unit of work (unit)', () => {
     assert.equal(event.requestId, 'req-2');
     assert.deepEqual(event.data, { userId: USER_ID, changedFields: ['firstName', 'dateOfBirth'] });
 
-    // The payload must not carry the value of any changed field.
     const serialized = JSON.stringify(event.data);
     assert.ok(!serialized.includes('Aarav'), 'no name in the payload');
     assert.ok(!serialized.includes('1994'), 'no date of birth in the payload');

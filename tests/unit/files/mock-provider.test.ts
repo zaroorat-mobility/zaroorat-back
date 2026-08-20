@@ -1,15 +1,9 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
-import { MockStorageProvider } from '../../../src/modules/files/providers/mock.provider.js';
-import { StorageError } from '../../../src/modules/files/providers/storage.provider.js';
+import { MockStorageProvider } from '../../../src/modules/files/utils/storage/mock.provider.js';
+import { StorageError } from '../../../src/modules/files/utils/storage/storage.provider.js';
 
-/**
- * The mock provider is a deliverable, not a fixture (files doc 07 §7): every
- * other FILES test trusts it, so the properties it claims are asserted here
- * first. If the mock does not model versioning, the erase test in phase 6 would
- * pass against a provider that never reproduced the bug it guards (doc 08 §2.2).
- */
 describe('MockStorageProvider', () => {
   const KEY = 'dd/2026/08/c9f0f895fb98ab9159f51fd0297e236d.pdf';
   let provider: MockStorageProvider;
@@ -17,8 +11,6 @@ describe('MockStorageProvider', () => {
   beforeEach(() => {
     provider = new MockStorageProvider();
   });
-
-  // ── Versioning: the property the real bucket has and a Map does not ────────
 
   describe('versioning', () => {
     it('keeps every write as a distinct version', () => {
@@ -44,8 +36,7 @@ describe('MockStorageProvider', () => {
       await provider.delete(KEY);
 
       assert.equal(await provider.head(KEY, 512), null, 'hidden by the delete marker');
-      // Two versions plus the marker. This is the trap doc 08 §2.2 describes:
-      // on a versioned bucket a delete destroys nothing.
+
       assert.equal(provider.versionIds(KEY).length, 3);
     });
 
@@ -56,8 +47,6 @@ describe('MockStorageProvider', () => {
 
       await provider.erase(KEY);
 
-      // The contrast with the previous test is the whole point: "gone" has to
-      // mean gone exactly once, on the retention path (R-FILE-23).
       assert.deepEqual(provider.versionIds(KEY), []);
       assert.equal(await provider.head(KEY, 512), null);
     });
@@ -78,8 +67,6 @@ describe('MockStorageProvider', () => {
     });
   });
 
-  // ── Archive is the opposite of erase ──────────────────────────────────────
-
   describe('archive', () => {
     it('preserves the bytes and marks the storage class', async () => {
       provider.putObject(KEY, Buffer.from('evidence'), 'application/pdf');
@@ -92,27 +79,23 @@ describe('MockStorageProvider', () => {
     });
 
     it('refuses to archive an object that is not there', async () => {
-      // Unlike delete, this is a real fault: retention asked to preserve
-      // something that does not exist, which means its bookkeeping is wrong.
       await assert.rejects(() => provider.archive(KEY), StorageError);
     });
   });
-
-  // ── Signatures actually bind something ────────────────────────────────────
 
   describe('signed upload URLs', () => {
     it('accepts the exact request it was signed for', async () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
       const verdict = provider.verifyUrl(signed.url, {
         method: 'PUT',
         contentType: 'application/pdf',
-        sizeBytes: 999,
+        sizeBytes: 1000,
       });
       assert.deepEqual(verdict, { ok: true, key: KEY });
     });
@@ -121,7 +104,7 @@ describe('MockStorageProvider', () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -133,7 +116,7 @@ describe('MockStorageProvider', () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -144,11 +127,15 @@ describe('MockStorageProvider', () => {
       assert.deepEqual(verdict, { ok: false, reason: 'wrong-content-type' });
     });
 
-    it('binds the size ceiling, rather than merely checking it afterwards (R-FILE-2)', async () => {
+    // S3's signed Content-Length is an exact match, not a ceiling: verified
+    // against the real bucket, a body one byte over AND one byte under a
+    // 1024-byte signature both fail with SignatureDoesNotMatch. The mock binds
+    // the same way so a passing test here means a passing upload there.
+    it('refuses a body larger than the signed length (R-FILE-2)', async () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -157,14 +144,30 @@ describe('MockStorageProvider', () => {
         contentType: 'application/pdf',
         sizeBytes: 1001,
       });
-      assert.deepEqual(verdict, { ok: false, reason: 'too-large' });
+      assert.deepEqual(verdict, { ok: false, reason: 'wrong-length' });
+    });
+
+    it('refuses a body smaller than the signed length, as S3 does', async () => {
+      const signed = await provider.signUpload({
+        key: KEY,
+        contentType: 'application/pdf',
+        contentLength: 1000,
+        ttlSeconds: 900,
+      });
+
+      const verdict = provider.verifyUrl(signed.url, {
+        method: 'PUT',
+        contentType: 'application/pdf',
+        sizeBytes: 999,
+      });
+      assert.deepEqual(verdict, { ok: false, reason: 'wrong-length' });
     });
 
     it('cannot be edited to point at another key', async () => {
       const signed = await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 1000,
+        contentLength: 1000,
         ttlSeconds: 900,
       });
 
@@ -173,8 +176,6 @@ describe('MockStorageProvider', () => {
       assert.deepEqual(verdict, { ok: false, reason: 'bad-signature' });
     });
   });
-
-  // ── TTL, through the clock seam rather than a timer ───────────────────────
 
   describe('expiry', () => {
     it('accepts a URL a second before it expires and refuses it a second after', async () => {
@@ -201,8 +202,6 @@ describe('MockStorageProvider', () => {
     });
   });
 
-  // ── Fail-closed support ───────────────────────────────────────────────────
-
   describe('injected failures', () => {
     it('throws a StorageError carrying the operation and the retryable flag', async () => {
       provider.failNext('signUpload', true);
@@ -212,7 +211,7 @@ describe('MockStorageProvider', () => {
           provider.signUpload({
             key: KEY,
             contentType: 'application/pdf',
-            maxBytes: 1000,
+            contentLength: 1000,
             ttlSeconds: 900,
           }),
         (error: unknown) => {
@@ -241,14 +240,12 @@ describe('MockStorageProvider', () => {
     });
   });
 
-  // ── Call recording, for "no byte transits the API" ────────────────────────
-
   describe('call recording', () => {
     it('counts every contract call', async () => {
       await provider.signUpload({
         key: KEY,
         contentType: 'application/pdf',
-        maxBytes: 10,
+        contentLength: 10,
         ttlSeconds: 60,
       });
       await provider.head(KEY, 512);

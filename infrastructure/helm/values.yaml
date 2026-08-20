@@ -61,6 +61,51 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
+# Background job processor. Same image, `node dist/worker.js` instead of the API.
+# It owns every BullMQ queue — scheduled maintenance and OTP SMS delivery — so
+# with worker.enabled=false no OTP is ever sent.
+worker:
+  enabled: true
+  replicaCount: 2
+
+  # Probes only; there is no Service in front of this port.
+  healthPort: 3001
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  # No autoscaling block on purpose. CPU utilisation is a poor proxy for a worker
+  # that spends its time waiting on an SMS gateway, and there is no queue-depth
+  # metric exported yet to scale on instead. Scale with replicaCount until there
+  # is evidence for a threshold.
+
+  # WORKER_SHUTDOWN_GRACE_MS defaults to 120s; this must stay above it so a
+  # draining pod is never SIGKILLed mid-job.
+  terminationGracePeriodSeconds: 150
+
+  probes:
+    liveness:
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    startup:
+      enabled: true
+      periodSeconds: 5
+      # 30 x 5s = 150s before liveness may kill a slow boot.
+      failureThreshold: 30
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Non-secret configuration. Anything sensitive belongs in existingSecret.
 env:
   APP_NAME: zaroorat-backend

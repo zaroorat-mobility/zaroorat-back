@@ -3,7 +3,6 @@ import { config } from '@config';
 import { transport } from './transport.js';
 import { REDACT_PATHS } from './redact.js';
 import { serializers } from './serializers.js';
-
 export const logger = pino({
   level: config.app.environment === 'development' ? 'debug' : 'info',
   ...(transport ? { transport } : {}),

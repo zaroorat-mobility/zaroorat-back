@@ -1,12 +1,15 @@
 import { BaseRepository, DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { OtpVerification, OtpPurpose } from '@core/database/types';
-
-/** Terminal states recorded on an OTP attempt row (auth doc 03 §3). */
-export type OtpOutcome = 'sent' | 'verified' | 'failed' | 'expired' | 'locked';
-
-/** Non-secret metadata for one OTP attempt. The code/hash is NEVER stored
- *  here — it lives only in Redis (auth doc 02 §4.5). */
+export type OtpOutcome = 'queued' | 'sent' | 'verified' | 'failed' | 'expired' | 'locked';
+export interface RecordDeliveryOptions {
+  provider?: string;
+  providerRef?: string;
+  latencyMs?: number;
+  failureReason?: string;
+}
 export interface CreateOtpAttemptInput {
+  id?: string;
   phoneNumber: string;
   purpose: OtpPurpose;
   userId?: string | null;
@@ -21,35 +24,18 @@ export interface CreateOtpAttemptInput {
   outcome?: OtpOutcome | null;
   expiresAt: Date;
 }
-
-/** Optional fields recorded when an outcome is updated. */
 export interface UpdateOutcomeOptions {
   verifiedAt?: Date;
   failureReason?: string;
 }
-
-/**
- * Data access for the `OtpVerification` trail.
- *
- * This table is a purgeable fraud/audit log of OTP *attempts* (phone, purpose,
- * outcome, ip, device, timestamps) — it is NOT a verification store. The secret
- * is verified against Redis; nothing here can validate an OTP (auth doc 02 §4.5,
- * doc 03). Prisma-only, no business rules.
- */
 export class OtpRepository extends BaseRepository {
-  /** @param databaseService Resolved singleton facade over the Prisma client. */
   constructor(databaseService: DatabaseService) {
     super(databaseService);
   }
-
-  /**
-   * Record a new OTP attempt in the trail.
-   * @param input Non-secret attempt metadata plus its expiry.
-   * @returns The created trail row.
-   */
   async create(input: CreateOtpAttemptInput): Promise<OtpVerification> {
     return this.client.otpVerification.create({
       data: {
+        ...(input.id != null ? { id: input.id } : {}),
         phoneNumber: input.phoneNumber,
         purpose: input.purpose,
         expiresAt: input.expiresAt,
@@ -66,39 +52,9 @@ export class OtpRepository extends BaseRepository {
       },
     });
   }
-
-  /**
-   * Fetch an attempt/challenge row by id (used to classify a failed verify as
-   * expired vs. wrong without leaking existence).
-   * @param id Attempt row UUID (the challenge id).
-   * @returns The row, or `null` if unknown.
-   */
   async findById(id: string): Promise<OtpVerification | null> {
     return this.client.otpVerification.findUnique({ where: { id } });
   }
-
-  /**
-   * Update the recorded outcome of an attempt (e.g. `sent` → `verified`).
-   *
-   * **`verified` is terminal.** The write is conditional on the row not already
-   * carrying a `verified_at`, which makes the transition non-regressive under
-   * concurrency: when several clients present the same code at once, exactly one
-   * wins the atomic Redis consume and the losers record failures against the same
-   * challenge row. An unconditional update let whichever finished last decide the
-   * trail, so a login that genuinely succeeded could be filed as `failed` — with
-   * `verified_at` still set, contradicting itself — and the fraud reads in
-   * `countByPhoneSince` and the outcome column would disagree about what happened
-   * (R-AUTH-21/22).
-   *
-   * Ordering does not matter: a late `verified` still overwrites an earlier
-   * `failed`, and a late `failed` cannot overwrite an earlier `verified`.
-   *
-   * @param id Attempt row UUID.
-   * @param outcome New terminal/interim outcome.
-   * @param options Optional `verifiedAt` and `failureReason` to record.
-   * @returns `true` if this call wrote the outcome; `false` if the attempt was
-   *          already verified (or the id is unknown) and was left alone.
-   */
   async updateOutcome(
     id: string,
     outcome: OtpOutcome,
@@ -114,28 +70,46 @@ export class OtpRepository extends BaseRepository {
     });
     return count === 1;
   }
-
-  /**
-   * Count attempts for a phone number since a cutoff (fraud/observability reads).
-   * @param phoneNumber E.164 phone number.
-   * @param since Lower bound (inclusive) on `createdAt`.
-   * @returns Number of matching attempt rows.
-   */
+  async recordDelivery(
+    id: string,
+    outcome: Extract<OtpOutcome, 'sent' | 'failed'>,
+    options: RecordDeliveryOptions = {},
+  ): Promise<boolean> {
+    const { count } = await this.client.otpVerification.updateMany({
+      where: { id, verifiedAt: null },
+      data: {
+        outcome,
+        ...(options.provider != null ? { provider: options.provider } : {}),
+        ...(options.providerRef != null ? { providerRef: options.providerRef } : {}),
+        ...(options.latencyMs != null ? { latencyMs: options.latencyMs } : {}),
+        ...(options.failureReason != null ? { failureReason: options.failureReason } : {}),
+      },
+    });
+    return count === 1;
+  }
   async countByPhoneSince(phoneNumber: string, since: Date): Promise<number> {
     return this.client.otpVerification.count({
       where: { phoneNumber, createdAt: { gte: since } },
     });
   }
-
-  /**
-   * Purge expired attempt rows (retention R-AUTH-26).
-   * @param now Rows with `expiresAt` strictly before this are deleted.
-   * @returns Count of rows removed.
-   */
-  async purgeExpired(now: Date = new Date()): Promise<number> {
-    const { count } = await this.client.otpVerification.deleteMany({
-      where: { expiresAt: { lt: now } },
+  async deleteForUser(
+    userId: string,
+    phoneNumber: string,
+    tx?: TransactionClient,
+  ): Promise<number> {
+    const { count } = await (tx ?? this.client).otpVerification.deleteMany({
+      where: { OR: [{ userId }, { phoneNumber }] },
     });
     return count;
+  }
+  async purgeExpired(before: Date, limit: number): Promise<number> {
+    return this.client.$executeRaw`
+      DELETE FROM "otp_verifications"
+      WHERE "id" IN (
+        SELECT "id" FROM "otp_verifications"
+        WHERE "expires_at" < ${before}
+        ORDER BY "expires_at" ASC
+        LIMIT ${limit}
+      )`;
   }
 }

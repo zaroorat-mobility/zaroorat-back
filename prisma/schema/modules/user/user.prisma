@@ -59,25 +59,72 @@ model User {
   adminActivityLogs       AdminActivityLog[]
   featureFlagOverrides    FeatureFlagOverride[]
   adminSessions           AdminSession[]
+  deletionRequests        AccountDeletionRequest[]
 
   @@index([status])
   @@map("users")
 }
 
-model UserProfile {
-  id           String    @id @default(uuid(7)) @db.Uuid
-  userId       String    @unique @map("user_id") @db.Uuid
-  firstName    String?   @map("first_name")
-  lastName     String?   @map("last_name")
-  dateOfBirth  DateTime? @map("date_of_birth") @db.Date
-  gender       String?
-  profileImage String?   @map("profile_image")
-  languageCode String?   @default("en") @map("language_code")
-  referralCode String?   @unique @map("referral_code")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+/// The deletion-request ledger (user doc 02 §2.8, R-USER-18/19).
+///
+/// `POST /me/delete-request` recorded only an outbox event before this table
+/// existed, and an outbox row is a dispatch queue, not a ledger: it has no
+/// "erased yet?" state, nothing to index "due for erasure" on, and it is
+/// append-only by platform policy. Without somewhere to record the promise, the
+/// endpoint accepted an obligation nothing could discharge.
+model AccountDeletionRequest {
+  id           String                @id @default(uuid(7)) @db.Uuid
+  userId       String                @map("user_id") @db.Uuid
+  status       DeletionRequestStatus @default(PENDING)
+  /// When the user asked.
+  requestedAt  DateTime              @default(now()) @map("requested_at")
+  /// The earliest the erasure job may act — request + the retention window.
+  /// Stored rather than recomputed, so shortening the window in config can never
+  /// bring forward an erasure the user was already told the date of.
+  scheduledFor DateTime              @map("scheduled_for")
+  erasedAt     DateTime?             @map("erased_at")
+  /// Set when an operator restores the account before the window closes.
+  cancelledAt  DateTime?             @map("cancelled_at")
 
   user User @relation(fields: [userId], references: [id])
+
+  // The job's only query: PENDING rows whose date has passed (doc 03 §5).
+  @@index([status, scheduledFor], map: "ix_deletion_requests_due")
+  // At most one PENDING row per user is a PARTIAL unique index, in the same
+  // migration — Prisma cannot express the predicate (doc 03 §4).
+  @@map("account_deletion_requests")
+}
+
+/// Terminal states are one-way. A cancelled request is not reopened — the user
+/// asks again, and gets a new window from the day they ask.
+enum DeletionRequestStatus {
+  PENDING
+  ERASED
+  CANCELLED
+}
+
+model UserProfile {
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  userId             String    @unique @map("user_id") @db.Uuid
+  firstName          String?   @map("first_name")
+  lastName           String?   @map("last_name")
+  dateOfBirth        DateTime? @map("date_of_birth") @db.Date
+  gender             String?
+  /// The avatar, as a file reference (FILES-OD-2). A domain row never holds a
+  /// URL: a URL is minted per read, for one reader, and expires. `@unique` is
+  /// R-FILE-33 — at most one live domain row may reference a file.
+  profileImageFileId String?   @unique @map("profile_image_file_id") @db.Uuid
+  languageCode       String?   @default("en") @map("language_code")
+  referralCode       String?   @unique @map("referral_code")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  user             User  @relation(fields: [userId], references: [id])
+  // `Restrict`, not Prisma's `SetNull` default for an optional relation: a file
+  // row backing a live avatar must not be removable, and a silent NULL would
+  // turn a foreign-key violation into a user losing their photograph with
+  // nothing in the logs.
+  profileImageFile File? @relation("ProfileImage", fields: [profileImageFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@map("user_profiles")
 }

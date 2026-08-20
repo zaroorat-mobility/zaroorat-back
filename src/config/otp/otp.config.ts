@@ -1,14 +1,5 @@
 import { createHmac } from 'node:crypto';
 import { validatedEnv } from '../env/validated-env.js';
-
-/**
- * Resolve the OTP hashing pepper.
- *
- * Prefers an explicit `OTP_PEPPER` (secret store). Otherwise derives a distinct
- * pepper from the refresh secret via domain separation, so OTP hashing never
- * shares key material with refresh-token hashing while avoiding a new required
- * environment variable (doc 02 §4.1 / §3.4).
- */
 function resolvePepper(): string {
   const explicit = process.env.OTP_PEPPER;
   if (explicit) return explicit;
@@ -16,24 +7,34 @@ function resolvePepper(): string {
     .update('zaroorat:otp:pepper:v1')
     .digest('hex');
 }
-
-/**
- * OTP policy — codes, TTL, lockout, resend interval, and the three send
- * rate-limit axes (auth doc 02 §4.1–4.3). These are deterministic controls; the
- * OTP module reads them, it does not hardcode thresholds.
- */
 export const otpConfig = Object.freeze({
-  codeLength: 6,
-  ttlSeconds: 300,
-  maxVerifyAttempts: 5,
-  lockoutSeconds: 900,
-  resendIntervalSeconds: 60,
+  codeLength: Number(process.env.OTP_CODE_LENGTH ?? 6),
+  ttlSeconds: Number(process.env.OTP_TTL_SECONDS ?? 300),
+  maxVerifyAttempts: Number(process.env.OTP_MAX_VERIFY_ATTEMPTS ?? 5),
+  lockoutSeconds: Number(process.env.OTP_LOCKOUT_SECONDS ?? 900),
+  resendIntervalSeconds: Number(process.env.OTP_RESEND_INTERVAL_SECONDS ?? 60),
+  trailRetentionDays: Number(process.env.OTP_TRAIL_RETENTION_DAYS ?? 30),
+  delivery: {
+    attempts: Number(process.env.OTP_DELIVERY_ATTEMPTS ?? 3),
+    backoffMs: Number(process.env.OTP_DELIVERY_BACKOFF_MS ?? 2000),
+  },
   rateLimits: {
-    perPhone: { scope: 'otp:req', limit: 3, windowSeconds: 3600 },
-    perDevice: { scope: 'otp:dev', limit: 5, windowSeconds: 3600 },
-    perIp: { scope: 'otp:ip', limit: 20, windowSeconds: 3600 },
+    perPhone: {
+      scope: 'otp:req',
+      limit: Number(process.env.OTP_LIMIT_PHONE ?? 3),
+      windowSeconds: Number(process.env.OTP_WINDOW_PHONE ?? 3600),
+    },
+    perDevice: {
+      scope: 'otp:dev',
+      limit: Number(process.env.OTP_LIMIT_DEVICE ?? 5),
+      windowSeconds: Number(process.env.OTP_WINDOW_DEVICE ?? 3600),
+    },
+    perIp: {
+      scope: 'otp:ip',
+      limit: Number(process.env.OTP_LIMIT_IP ?? 20),
+      windowSeconds: Number(process.env.OTP_WINDOW_IP ?? 3600),
+    },
   },
   pepper: resolvePepper(),
 });
-
 export type OtpConfig = typeof otpConfig;

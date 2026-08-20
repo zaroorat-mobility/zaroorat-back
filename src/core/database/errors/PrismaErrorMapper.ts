@@ -5,17 +5,7 @@ import {
   RecordNotFoundError,
   UniqueConstraintError,
 } from './DatabaseError';
-
 export class PrismaErrorMapper {
-  /**
-   * True when the error came from Prisma and is therefore worth translating.
-   *
-   * `mapError` wraps *anything* it is handed, which is correct at a call site
-   * that only ever sees driver failures. A call site that also runs application
-   * code — a transaction callback — must ask this first, or a domain error thrown
-   * inside the callback is rewritten as a `DatabaseError` and a deliberate 403
-   * reaches the client as a 500.
-   */
   public static isPrismaError(error: unknown): boolean {
     return (
       error instanceof Prisma.PrismaClientKnownRequestError ||
@@ -25,10 +15,6 @@ export class PrismaErrorMapper {
       error instanceof Prisma.PrismaClientValidationError
     );
   }
-
-  /**
-   * Translates a Prisma-specific error into a domain DatabaseError.
-   */
   public static mapError(error: unknown, context?: string): Error {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       switch (error.code) {
@@ -55,18 +41,15 @@ export class PrismaErrorMapper {
           return new DatabaseError('Transaction failed due to write conflict/deadlock', error);
       }
     }
-
     if (error instanceof Prisma.PrismaClientInitializationError) {
       return new ConnectionError(
         'Failed to initialize Prisma client / Cannot reach database server',
         error,
       );
     }
-
     if (error instanceof Error) {
       return new DatabaseError(error.message, error);
     }
-
     return new DatabaseError('An unknown database error occurred', error);
   }
 }

@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { OtpValidator } from '../../../src/modules/auth/otp/otp.validator.js';
+import { OtpValidator } from '../../../src/modules/auth/services/otp/otp.validator.js';
 import { makeOtpConfig } from '../../helpers/config.js';
 
-// Format gate only (doc 02): accepts exactly N digits, rejects everything else,
-// and leaks nothing about correctness.
 describe('OtpValidator', () => {
   const validator = new OtpValidator(makeOtpConfig({ codeLength: 6 }));
 

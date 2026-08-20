@@ -1,5 +1,4 @@
 import { Prisma } from '../../../generated/prisma';
-
 export const driverExtension = Prisma.defineExtension({
   name: 'DriverExtension',
   model: {

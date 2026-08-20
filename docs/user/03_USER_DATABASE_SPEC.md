@@ -125,6 +125,38 @@ model SavedPlace {
 - Storing both the decimals and the geography is intentional redundancy: the decimals are what the API
   returns and validates, the geography is what indexes and distance queries use.
 
+### 3.4 `account_deletion_requests` — the erasure ledger
+
+```prisma
+model AccountDeletionRequest {
+  id           String                @id @default(uuid(7)) @db.Uuid
+  userId       String                @map("user_id") @db.Uuid
+  status       DeletionRequestStatus @default(PENDING)
+  requestedAt  DateTime              @default(now()) @map("requested_at")
+  scheduledFor DateTime              @map("scheduled_for")
+  erasedAt     DateTime?             @map("erased_at")
+  cancelledAt  DateTime?             @map("cancelled_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([status, scheduledFor], map: "ix_deletion_requests_due")
+  @@map("account_deletion_requests")
+}
+```
+
+- **Why it exists.** `POST /me/delete-request` (02 §2.8) says it "records the request", and until this
+  table there was nowhere to record it. The only durable trace was the
+  `user.account.deletion_requested` outbox event — which is a dispatch queue, not a ledger: it is
+  append-only by platform policy, has no "erased yet?" state to set, and offers nothing to index a
+  due-date scan on. The endpoint was correct and audited and still accepted an obligation nothing
+  could discharge.
+- **`scheduled_for` is stored, not recomputed.** It is the date the user was told. Shortening
+  `USER_DELETION_RETENTION_DAYS` therefore shortens the window for _future_ requests and can never
+  bring forward an erasure somebody already has a date for.
+- **Terminal states are one-way.** A cancelled request is not reopened; the user asks again and gets a
+  fresh window from the day they ask. Two timestamp columns rather than one, because "erased" and
+  "cancelled" are different answers to a compliance question and collapsing them loses which happened.
+
 ---
 
 ## 4. What the database must enforce
@@ -161,6 +193,34 @@ CREATE UNIQUE INDEX uq_users_phone_active ON users (phone_number) WHERE deleted_
 Two users racing onto the same free number both pass the step-1 check; the second one's `UPDATE`
 violates this index and the transaction rolls back → `409 PHONE_IN_USE` (02 §2.4.2). The application
 re-check inside the transaction is a courtesy for the error message; **the index is the enforcement**.
+
+### 4.2b One open deletion request per account
+
+```sql
+CREATE UNIQUE INDEX uq_deletion_requests_one_pending
+  ON account_deletion_requests (user_id) WHERE status = 'PENDING';
+```
+
+A second request while one is open is the **same** request, not a second one — the repository reads
+the open row and returns it rather than inserting. Without the index that read is a race, and two
+rows would both come due: the second would erase an already-erased account and emit a duplicate audit
+event for an act that happened once.
+
+Two `CHECK` constraints ride alongside it, both encoding facts the application would otherwise have
+to remember at every call site:
+
+```sql
+-- a status and its timestamp are one fact in two columns
+CHECK ((status='PENDING'   AND erased_at IS NULL     AND cancelled_at IS NULL)
+    OR (status='ERASED'    AND erased_at IS NOT NULL AND cancelled_at IS NULL)
+    OR (status='CANCELLED' AND cancelled_at IS NOT NULL AND erased_at IS NULL));
+
+-- a request cannot come due before it was made
+CHECK (scheduled_for >= requested_at);
+```
+
+`ERASED` with no `erased_at` would make "when was this discharged?" unanswerable by the only table
+that claims to answer it.
 
 ### 4.3 Ownership scoping (USER-INV-2)
 
@@ -220,6 +280,27 @@ raw SQL, because Prisma cannot express a functional index or a GiST index on an 
 | `emergency_contacts` | Same. Personal data about **third parties** — erased with the account, never retained past it. | NFR-PRIV |
 | `saved_places`       | Same. Home and work addresses are among the most sensitive rows the platform holds.            | NFR-PRIV |
 | `users`              | Soft-deleted, never physically removed; archived per policy.                                   | R-DATA-1 |
+
+**What the erasure job actually does** (`AccountErasureJob`, R-USER-18/19). The platform resolves the
+tension between R-DATA-1 and the DPDP right to erasure by **"erasing/anonymizing personal identifiers
+while retaining the immutable financial/safety record"**
+([15_Security/03](../15_Security/03_secrets-and-data-protection.md) §Privacy by design). Applied here:
+
+| Data                                                  | Treatment        | Why                                                                                                                       |
+| ----------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `user_profiles`, `emergency_contacts`, `saved_places` | **removed**      | The three rows above: they live and die with the account, and a `deleted_at` on a third party's phone number retains it   |
+| The avatar object                                     | released         | Soft-deleted through `FileService`, so FILES' own retention erases the bytes on its schedule (files doc 09 §4.2)          |
+| `users` row                                           | anonymized, kept | ~50 tables reference `users.id`. Removing it would take every ride, ledger entry, and dispute the law requires us to keep |
+| Rides, wallet, tickets                                | untouched        | The immutable record the same paragraph says to retain                                                                    |
+
+The identity keeps its `id` and its dates and loses everything that names a person: the phone number
+becomes a per-account tombstone that is deliberately **not** E.164 (so no client input can match it),
+`email` and `password_hash` are nulled, and `deleted_at` is set. A row that cannot be linked back to a
+human is what erasure means when the foreign keys must survive.
+
+**The obligation check runs again at erasure**, not just at the request (R-USER-21). Thirty days
+passed; a dispute can be opened about a ride taken before the account closed, and erasing the identity
+mid-dispute destroys the other side's evidence. A blocked request stays `PENDING` and is retried.
 
 USER writes no audit table of its own. Audit-class changes land in the shared outbox and, for
 admin-initiated actions, in `admin_activity_logs` (05 §4).

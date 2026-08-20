@@ -10,22 +10,10 @@ const BASE = '/api/v1/auth';
 const PHONE = '+919876518001';
 const TARGET = '+919876518002';
 
-/**
- * The root/jailbreak refusal for sensitive actions (doc 02 §5.2, R-DEVICE-5,
- * doc 07 §5 "rooted/jailbroken sensitive act").
- *
- * Doc 02 §5.2 is precise about the split: v1 **captures** the flags and
- * **allows normal auth**, then **denies the sensitive subset** — "the
- * sensitive-action list is owned by each module, AUTH enforces the flag". So
- * these tests prove both halves: a tampered device signs in and uses the app
- * normally, and is refused exactly where a module has opted in.
- */
 describe('tampered-device refusal (integration)', () => {
   let app: FastifyInstance;
 
   before(async () => {
-    // Built manually so a stand-in sensitive route exists before ready(), the
-    // same way the driver-operability gate is exercised.
     app = await createApp();
     app.post(
       '/test/wallet-debit',
@@ -41,7 +29,6 @@ describe('tampered-device refusal (integration)', () => {
     await resetState();
   });
 
-  /** Log in, reporting the device signals a real client would send. */
   async function login(
     phoneNumber: string,
     device: Record<string, unknown> = { deviceId: 'phone-a' },
@@ -78,8 +65,6 @@ describe('tampered-device refusal (integration)', () => {
   it('lets a tampered device authenticate and use the app normally', async () => {
     const rooted = await login(PHONE, { deviceId: 'phone-a', isRooted: true });
 
-    // Doc 02 §5.2: "capture + allow normal auth". Blocking login outright would
-    // lock out every user of a rooted phone, which is not the v1 policy.
     const ordinary = await app.inject({
       method: 'GET',
       url: '/api/v1/users/me',
@@ -116,8 +101,7 @@ describe('tampered-device refusal (integration)', () => {
 
   it('denies a session it cannot assess, rather than waving it through', async () => {
     const clean = await login(PHONE, { deviceId: 'phone-a' });
-    // A session with no device binding cannot be judged. "Cannot assess" must not
-    // resolve to "allowed" on the one subset of actions this flag protects.
+
     await db().client.userSession.updateMany({
       where: { userId: clean.userId },
       data: { deviceId: null },
@@ -130,8 +114,6 @@ describe('tampered-device refusal (integration)', () => {
     const rooted = await login(PHONE, { deviceId: 'phone-a', isRooted: true });
     assert.equal((await sensitiveAction(rooted.accessToken)).statusCode, 403);
 
-    // The check reads the device the *calling session* is bound to, not a claim
-    // baked into the token, so a second device is judged on its own signals.
     const clean = await login(PHONE, { deviceId: 'clean-b' });
     assert.equal((await sensitiveAction(clean.accessToken)).statusCode, 200);
     assert.equal(
@@ -150,12 +132,8 @@ describe('tampered-device refusal (integration)', () => {
       data: { isRooted: true },
     });
 
-    // Resolved per request rather than claimed in the token, so a device that
-    // becomes tampered does not keep its access until the token expires.
     assert.equal((await sensitiveAction(clean.accessToken)).statusCode, 403);
   });
-
-  // ── The one action the docs name today ────────────────────────────────────
 
   describe('the phone-number change (doc 02 §5.2’s own example)', () => {
     it('refuses both steps from a rooted device', async () => {
@@ -170,8 +148,6 @@ describe('tampered-device refusal (integration)', () => {
       assert.equal(requested.statusCode, 403, requested.payload);
       assert.equal(requested.json().error.code, 'FORBIDDEN');
 
-      // Guarding only step 1 would let a challenge obtained from a clean device
-      // be redeemed from a tampered one.
       const verified = await app.inject({
         method: 'POST',
         url: '/api/v1/users/me/phone/verify',
@@ -198,8 +174,6 @@ describe('tampered-device refusal (integration)', () => {
     it('leaves the rest of the module open to a tampered device', async () => {
       const rooted = await login(PHONE, { deviceId: 'phone-a', isRooted: true });
 
-      // Only the sensitive subset closes. A rooted phone can still read and edit
-      // its own profile — the flag is not an account-wide ban.
       const profile = await app.inject({
         method: 'PATCH',
         url: '/api/v1/users/me/profile',

@@ -72,15 +72,17 @@ Everything in 01–06 follows from that sentence. If a change would violate it, 
 
 ## 5. Status
 
-**Specified, not built.** `src/modules/files/` is a 2-line stub. `src/core/storage/` is empty,
-`src/integrations/aws-s3/` is an empty directory, and `bootstrapStorage()` is a
-`// Placeholder for Milestone 2` body.
+**Built.** `src/modules/files/` holds the service, both providers (`mock` and `s3`), the reference
+guard, the content inspector, and both jobs; `files` and its constraints are migrated; the
+profile-image cutover landed in three deploys. What is still a `// Placeholder for Milestone 2` body
+is `bootstrapStorage()`, so the readiness `storage` contributor 09 §3 specifies does not exist yet.
 
-Nothing in `prisma/schema/` models this yet — unlike USER, whose tables already existed when it was
-specified, **FILES starts with a migration** (03 §7.1).
+`src/core/storage/` and `src/integrations/aws-s3/` remain empty — the S3 client lives with the
+module that uses it (13.5).
 
-Phases and their order: [01 §12](01_FILES_BUSINESS_REQUIREMENTS.md#12-delivery-phases). Phase 6 is
-specified but **blocked** on a job runtime that does not exist; phases 1–5 and 7 are not.
+Phases and their order: [01 §12](01_FILES_BUSINESS_REQUIREMENTS.md#12-delivery-phases). Phase 6 was
+blocked on a job runtime that did not exist; that runtime shipped (handbook volume 08) and both jobs
+now run on the `files-maintenance` queue.
 
 ---
 
@@ -107,7 +109,7 @@ Recorded rather than guessed, per the module-authoring rule. Detail in
 | 13.1 | The schema stores URLs where FR-FILES requires signed access               | 🔴       |
 | 13.2 | `06_Database/02`'s `kyc_documents` sketch diverges from the shipped schema | 🟡       |
 | 13.3 | Two error-code conventions exist (`snake_case` vs `SCREAMING_SNAKE`)       | 🟡       |
-| 13.4 | FR-FILES is P0 but its retention job has no runtime                        | 🟡       |
+| 13.4 | FR-FILES is P0 but its retention job has no runtime — _resolved_           | 🟡       |
 | 13.5 | `src/core/storage/` and `src/integrations/aws-s3/` are empty               | 🟢       |
 
 ---

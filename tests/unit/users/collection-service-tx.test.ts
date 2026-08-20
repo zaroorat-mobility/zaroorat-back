@@ -1,34 +1,29 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { EmergencyContactService } from '../../../src/modules/users/emergency-contact.service.js';
-import { SavedPlaceService } from '../../../src/modules/users/saved-place.service.js';
+import { EmergencyContactService } from '../../../src/modules/users/services/emergency-contact/emergency-contact.service.js';
+import { SavedPlaceService } from '../../../src/modules/users/services/saved-place/saved-place.service.js';
 import {
   LabelConflictError,
   LimitExceededError,
   UserNotFoundError,
-} from '../../../src/modules/users/errors.js';
+} from '../../../src/modules/users/errors/user.errors.js';
 import { UniqueConstraintError } from '../../../src/core/database/errors/DatabaseError.js';
 import { userConfig } from '../../../src/config/user/index.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 
-/** The sentinel the fake TransactionManager hands to each callback. */
 const TX = { __tx: true } as unknown as TransactionClient;
 
 const USER_ID = '00000000-0000-7000-8000-000000000001';
 const ITEM_ID = '00000000-0000-7000-8000-0000000000e1';
 
 interface Options {
-  /** Rows the owner already has, for the cap check. */
   count?: number;
-  /** Make the write raise the way a unique-index violation would. */
   conflicts?: boolean;
-  /** Make the scoped update/delete match no row, i.e. not owned. */
   missing?: boolean;
 }
 
-/** Shared fakes: both collections have the same transaction shape. */
 function harness(opts: Options) {
   const seen = {
     order: [] as string[],
@@ -60,7 +55,6 @@ function harness(opts: Options) {
     },
   };
 
-  /** A repository whose count/create/update/delete all report what they saw. */
   const repository = (row: Record<string, unknown>) => ({
     findAllByUser: async () => [row],
     findOwned: async () => (opts.missing ? null : row),
@@ -133,10 +127,6 @@ function makePlaceService(opts: Options = {}) {
   return { service, seen: h.seen };
 }
 
-// The cap is the one rule here that a sequential test cannot prove. These
-// assertions pin the *shape* that makes it hold — lock, then count, then insert,
-// all in one transaction — and the concurrent proof lives in the integration
-// suite (USER-INV-7, doc 06 §4).
 describe('emergency contacts — unit of work (unit)', () => {
   it('locks the owner before counting, and counts inside the same transaction', async () => {
     const { service, seen } = makeContactService();
@@ -177,8 +167,6 @@ describe('emergency contacts — unit of work (unit)', () => {
     assert.equal(event.classification, 'domain');
     assert.deepEqual(event.data, { userId: USER_ID, contactId: ITEM_ID, priority: 2 });
 
-    // A third party who never accepted platform terms is not broadcast to every
-    // consumer, log sink, and broker retention window.
     const payload = JSON.stringify(event);
     assert.ok(!payload.includes('Priya'));
     assert.ok(!payload.includes('+919876500042'));
@@ -263,8 +251,7 @@ describe('saved places — unit of work (unit)', () => {
 
     const event = seen.published[0]!.input;
     assert.deepEqual(event.data, { userId: USER_ID, placeId: ITEM_ID, label: 'Home' });
-    // Home coordinates in an event stream are the single most dangerous payload
-    // this module could emit (doc 05 §3.4).
+
     const payload = JSON.stringify(event);
     assert.ok(!payload.includes('MG Road'));
     assert.ok(!payload.includes('12.97'));
@@ -272,8 +259,6 @@ describe('saved places — unit of work (unit)', () => {
   });
 
   it('turns a label collision into CONFLICT, on create and on edit alike', async () => {
-    // The pre-check a caller could do would still lose a race, so there is none:
-    // `uq_saved_places_user_label` settles it and this is where it becomes a 409.
     const created = makePlaceService({ conflicts: true });
     await assert.rejects(created.service.add(USER_ID, { label: 'home' }), LabelConflictError);
 

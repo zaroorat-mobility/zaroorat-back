@@ -1,12 +1,10 @@
 import { container } from '../core/di.js';
 import { OutboxRelay } from '@core/events';
+import type { EpochInvalidationConsumer } from '@modules/auth';
 import { logger } from '@shared/logger/index.js';
-
-/**
- * Starts the transactional-outbox relay, which polls `outbox_events` and
- * dispatches durable domain events to the in-process bus (auth doc 06 §2).
- */
 export async function bootstrapEvents(): Promise<void> {
+  container.resolve<EpochInvalidationConsumer>('epochInvalidationConsumer').register();
+  logger.info('Event subscribers registered');
   const relay = container.resolve<OutboxRelay>('outboxRelay');
   relay.start();
   logger.info('Outbox relay started');

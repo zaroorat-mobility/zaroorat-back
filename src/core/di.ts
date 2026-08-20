@@ -1,19 +1,20 @@
-import { createContainer, InjectionMode } from 'awilix';
+import { aliasTo, createContainer, InjectionMode } from 'awilix';
 import { registerDatabaseModule } from './database/DatabaseModule';
 import { registerRedisModule } from './cache/RedisModule';
 import { registerEventsModule } from './events';
 import { registerNotificationModule } from '@modules/notifications';
 import { registerAuthRepositories } from '@modules/auth/repositories';
 import { registerTokenServices } from '@modules/auth/services';
-import { registerOtpServices } from '@modules/auth/otp';
-import { registerSessionServices } from '@modules/auth/session';
+import { registerOtpServices } from '@modules/auth/services/otp';
+import { registerSessionServices } from '@modules/auth/services/session';
 import { registerAuthService } from '@modules/auth';
 import { registerUserRepositories, registerUserService } from '@modules/users';
 import { registerFileModule, registerFileRepositories } from '@modules/files';
-
+import { registerPaymentsModule } from '@modules/payments';
+import { registerRidesModule } from '@modules/rides';
+import { registerDriversModule } from '@modules/drivers';
+import { registerGeoModule } from '@modules/geo';
 export const container = createContainer({ injectionMode: InjectionMode.CLASSIC });
-
-// Register modules (dependencies before consumers)
 registerDatabaseModule(container);
 registerRedisModule(container);
 registerEventsModule(container);
@@ -24,6 +25,14 @@ registerFileRepositories(container);
 registerTokenServices(container);
 registerOtpServices(container);
 registerSessionServices(container);
-registerAuthService(container); // provisions the user profile in its login tx
+registerAuthService(container);
 registerUserService(container);
-registerFileModule(container); // storage provider + the upload pair (files doc 01 §12)
+registerFileModule(container);
+registerPaymentsModule(container);
+registerGeoModule(container);
+registerRidesModule(container);
+registerDriversModule(container);
+container.register({
+  db: aliasTo('databaseService'),
+  redis: aliasTo('redisService'),
+});

@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, resetState, FIXED_OTP } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
-import type { AuthService } from '../../src/modules/auth/auth.service.js';
+import type { AuthService } from '../../src/modules/auth/services/auth.service.js';
 
 const BASE = '/api/v1/auth';
 
@@ -15,8 +15,6 @@ interface Login {
   userId: string;
 }
 
-// Refresh rotation/reuse (AUTH-INV-5) and immediate revocation on logout /
-// suspension (AUTH-INV-3/4) against live Postgres + Redis.
 describe('auth token + session invariants (integration)', () => {
   let app: FastifyInstance;
 
@@ -30,7 +28,6 @@ describe('auth token + session invariants (integration)', () => {
     await resetState();
   });
 
-  /** Register/login a fresh phone and return its token pair + user id. */
   async function login(phone: string): Promise<Login> {
     const sent = await app.inject({
       method: 'POST',
@@ -75,13 +72,12 @@ describe('auth token + session invariants (integration)', () => {
 
   it('replaying a rotated refresh token is detected as reuse and kills the family (AUTH-INV-5)', async () => {
     const { refreshToken, userId } = await login('+919876500011');
-    await refresh(refreshToken); // consumes it, issues a successor
+    await refresh(refreshToken);
 
-    const replay = await refresh(refreshToken, randomUUID()); // different key => theft
+    const replay = await refresh(refreshToken, randomUUID());
     assert.equal(replay.statusCode, 401, replay.payload);
     assert.equal(replay.json().error.code, 'TOKEN_REUSE');
 
-    // Whole family revoked and the detection audited in the outbox.
     const live = await db().client.refreshToken.findMany({
       where: { userId, revokedAt: null },
     });
@@ -94,7 +90,7 @@ describe('auth token + session invariants (integration)', () => {
     const { refreshToken } = await login('+919876500012');
     const key = randomUUID();
     const first = await refresh(refreshToken, key);
-    const retry = await refresh(refreshToken, key); // same key => legitimate retry
+    const retry = await refresh(refreshToken, key);
 
     assert.equal(first.statusCode, 200, first.payload);
     assert.equal(retry.statusCode, 200, retry.payload);

@@ -10,14 +10,6 @@ const STRANGER = '+919876516002';
 
 const DEVICES = '/api/v1/auth/me/devices';
 
-/**
- * Self-service device management (auth doc 01 §6, doc 02 §5.2, user FLOW §7).
- *
- * These two endpoints were marked _(pending)_ in FLOW §7 and are the last
- * user-facing AUTH surface the requirements name. `→ revoked` is a **v1**
- * transition (doc 02 §5.2, "User/ops revoke; kills the device's sessions"), so
- * this is the user half of AUTH-INV-6.
- */
 describe('device management (integration)', () => {
   let app: FastifyInstance;
 
@@ -31,10 +23,6 @@ describe('device management (integration)', () => {
     await resetState();
   });
 
-  /**
-   * Log in with an explicit client-reported device id, so the account can hold
-   * more than one device. `loginAs` sends none, which binds a fresh row each time.
-   */
   async function loginWithDevice(phoneNumber: string, deviceId: string, platform = 'ANDROID') {
     const sent = await app.inject({
       method: 'POST',
@@ -116,8 +104,7 @@ describe('device management (integration)', () => {
     assert.equal(verified.statusCode, 200, verified.payload);
 
     const response = await list(verified.json().accessToken);
-    // The fingerprint is a signal AUTH matches against. Handing it back makes it
-    // readable from one compromised session and replayable from another.
+
     assert.ok(!response.payload.includes('fp-secret-value'), 'no fingerprint on the wire');
     assert.ok(!response.payload.includes('fingerprint'), 'not even the key');
 
@@ -138,7 +125,6 @@ describe('device management (integration)', () => {
 
     assert.equal((await revoke(tablet.accessToken, lost.id)).statusCode, 204);
 
-    // The lost phone is signed out on its next request; the tablet is untouched.
     const signedOut = await list(phone.accessToken);
     assert.equal(signedOut.statusCode, 401);
     assert.equal(signedOut.json().error.code, 'SESSION_REVOKED');
@@ -181,7 +167,6 @@ describe('device management (integration)', () => {
     await revoke(tablet.accessToken, lost.id);
     assert.equal((await list(phone.accessToken)).statusCode, 401);
 
-    // Re-registering is a full OTP verify — the device cannot restore itself.
     const returned = await loginWithDevice(OWNER, 'phone-a');
     assert.equal((await list(returned.accessToken)).statusCode, 200);
 
@@ -226,7 +211,8 @@ describe('device management (integration)', () => {
     );
 
     const stolen = await revoke(stranger.accessToken, ownerDevice!.id);
-    assert.equal(stolen.statusCode, 400, 'not owned reads exactly like not found');
+
+    assert.equal(stolen.statusCode, 404, 'not owned reads exactly like not found');
     const row = await db().client.userDevice.findUniqueOrThrow({ where: { id: ownerDevice!.id } });
     assert.equal(row.trustState, 'REGISTERED', 'and the owner’s device is untouched');
   });

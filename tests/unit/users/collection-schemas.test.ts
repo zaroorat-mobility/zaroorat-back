@@ -8,17 +8,15 @@ import {
   itemIdSchema,
   updateContactSchema,
   updatePlaceSchema,
-} from '../../../src/modules/users/http/user.schemas.js';
-import type { ErrorDetail } from '../../../src/modules/users/errors.js';
+} from '../../../src/modules/users/schemas/user.schemas.js';
+import type { ErrorDetail } from '../../../src/modules/users/errors/user.errors.js';
 
-/** Parse a body and return the doc 04 §6 details it produced (empty ⇒ accepted). */
 function detailsFor(schema: { safeParse: (v: unknown) => unknown }, body: unknown): ErrorDetail[] {
   const parsed = schema.safeParse(body) as
     { success: true } | { success: false; error: { issues: never[] } };
   return parsed.success ? [] : detailsFromZodIssues(parsed.error.issues);
 }
 
-/** The single detail code a body produced, or `undefined` if it was accepted. */
 function codeFor(
   schema: { safeParse: (v: unknown) => unknown },
   body: unknown,
@@ -66,8 +64,7 @@ describe('emergency contact schema (unit)', () => {
 
   it('lets relationship be cleared but never the NOT NULL columns', () => {
     assert.equal(codeFor(updateContactSchema, { relationship: null }), undefined);
-    // `contactName` and `phoneNumber` back columns that cannot hold null, so
-    // "clear it" is not a request this API can honour.
+
     assert.ok(codeFor(updateContactSchema, { contactName: null }) !== undefined);
     assert.ok(codeFor(updateContactSchema, { phoneNumber: null }) !== undefined);
   });
@@ -136,8 +133,6 @@ describe('saved place schema (unit)', () => {
   });
 
   it('refuses a half-set point, in either direction', () => {
-    // One coordinate alone would derive a location on the equator or the prime
-    // meridian and never say so (doc 02 §2.6, doc 03 §4.4).
     assert.deepEqual(detailsFor(createPlaceSchema, { ...PLACE, latitude: 12.97 }), [
       { field: 'longitude', code: 'REQUIRED' },
     ]);
@@ -159,8 +154,6 @@ describe('saved place schema (unit)', () => {
   });
 
   it('rejects a geometry the client tried to send itself', () => {
-    // `location` is derived server-side; a client that sets it is a client that
-    // can put a saved place anywhere it likes (doc 03 §3.3).
     assert.deepEqual(detailsFor(createPlaceSchema, { ...PLACE, location: 'POINT(0 0)' }), [
       { field: 'location', code: 'NOT_ALLOWED' },
     ]);

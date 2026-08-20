@@ -5,19 +5,14 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
-import type { MockStorageProvider } from '../../src/modules/files/providers/mock.provider.js';
+import { png as image } from '../helpers/image-fixtures.js';
+import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 
-/** A valid PNG header declaring the given dimensions. */
 function png(width: number, height: number, padTo = 0): Buffer {
-  const header = Buffer.alloc(Math.max(24, padTo));
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
-  header.write('IHDR', 12, 'ascii');
-  header.writeUInt32BE(width, 16);
-  header.writeUInt32BE(height, 20);
-  return header;
+  const base = image({ width, height });
+  return padTo > base.length ? Buffer.concat([base, Buffer.alloc(padTo - base.length)]) : base;
 }
 
-/** A Linux ELF header — a real executable, renamed. */
 const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00]);
 
 describe('file upload (integration)', () => {
@@ -36,7 +31,6 @@ describe('file upload (integration)', () => {
     provider.reset();
   });
 
-  /** Ask for an upload permission. */
   function request(
     auth: { authorization: string },
     body: Record<string, unknown>,
@@ -50,7 +44,6 @@ describe('file upload (integration)', () => {
     });
   }
 
-  /** Complete an upload. */
   function complete(auth: { authorization: string }, fileId: string) {
     return app.inject({
       method: 'POST',
@@ -59,7 +52,6 @@ describe('file upload (integration)', () => {
     });
   }
 
-  /** A default valid profile-image request body. */
   const PROFILE_BODY = {
     purpose: 'PROFILE_IMAGE',
     fileName: 'me.png',
@@ -67,7 +59,6 @@ describe('file upload (integration)', () => {
     sizeBytes: 2048,
   };
 
-  /** Run the whole happy path and return the file id and its key. */
   async function uploadPng(
     auth: { authorization: string },
     dimensions: [number, number] = [800, 600],
@@ -78,8 +69,6 @@ describe('file upload (integration)', () => {
     provider.putObject(row.storageKey, png(...dimensions), 'image/png');
     return { fileId, key: row.storageKey };
   }
-
-  // ── The two-step protocol ──────────────────────────────────────────────────
 
   describe('POST /files', () => {
     it('reserves a PENDING row and returns a scoped permission', async () => {
@@ -210,13 +199,14 @@ describe('file upload (integration)', () => {
 
       assert.equal(response.statusCode, 422);
       assert.equal(response.json().error.code, 'CONTENT_MISMATCH');
-      // The object is gone from every read path. Its earlier version survives
-      // behind a delete marker, which is what a versioned bucket does — only
-      // retention's erase() removes versions (doc 08 §2.2).
+
       assert.equal(await provider.head(row.storageKey, 32), null);
 
       const after = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
-      assert.equal(after.status, 'EXPIRED', 'the reservation is retired, not left retriable');
+      // Terminal and retired, but recorded as a refusal rather than a lapsed
+      // window — the reason is what makes the row worth keeping.
+      assert.equal(after.status, 'REJECTED', 'the reservation is retired, not left retriable');
+      assert.equal(after.rejectedReason, 'CONTENT_MISMATCH');
     });
 
     it('refuses a decompression bomb on pixel count, not bytes', async () => {
@@ -224,7 +214,7 @@ describe('file upload (integration)', () => {
       const created = await request(user.authHeader, PROFILE_BODY);
       const fileId = created.json().fileId as string;
       const row = await db().client.file.findUniqueOrThrow({ where: { id: fileId } });
-      // A tiny object that declares 40,000 x 40,000 — 6.4 GB decoded.
+
       const bomb = png(40000, 40000);
       assert.ok(bomb.length < 100);
       provider.putObject(row.storageKey, bomb, 'image/png');
@@ -295,7 +285,7 @@ describe('file upload (integration)', () => {
       const onNothing = await complete(stranger.authHeader, randomUUID());
 
       assert.equal(onOthers.statusCode, 404);
-      // Byte-identical after stripping the correlation id (FILE-INV-4).
+
       const strip = (payload: string): unknown => {
         const body = JSON.parse(payload) as { error: Record<string, unknown> };
         delete body.error.requestId;
@@ -313,20 +303,24 @@ describe('file upload (integration)', () => {
     });
   });
 
-  // ── The property the whole protocol exists for ────────────────────────────
-
   describe('no byte transits the API (R-FILE-1)', () => {
     it('completes an upload without the API ever writing an object', async () => {
       const user = await loginAs(app, '+919876540020');
       const { fileId, key } = await uploadPng(user.authHeader);
-      // Everything the API did to storage so far, plus the completion.
+
       const before = { ...provider.calls };
       await complete(user.authHeader, fileId);
 
-      // The API signs and reads a header. It never PUTs — there is no `put` on
-      // the interface for it to call (doc 07 §2.2).
       assert.ok(provider.calls.signUpload >= before.signUpload);
+      // `head` only: metadata plus a capped inspection window. There is no
+      // whole-object read on the provider at all, so completion cannot pull the
+      // bytes through this process even by accident.
       assert.ok(provider.calls.head > before.head);
+      assert.equal(
+        'read' in provider.calls,
+        false,
+        'the storage interface exposes no whole-object read (R-FILE-1, doc 07 §2.2)',
+      );
       assert.ok(provider.versionIds(key).length > 0, 'the object exists — the client wrote it');
     });
 

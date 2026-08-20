@@ -1,2 +1,7 @@
 export { config } from './config.js';
 export type { AppConfig } from './config.js';
+export * from './payment/index.js';
+export * from './rate-limit/index.js';
+export * from './ride/index.js';
+export * from './driver/index.js';
+export * from './geo/index.js';

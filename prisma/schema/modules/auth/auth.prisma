@@ -57,7 +57,9 @@ model OtpVerification {
   userId            String?    @map("user_id") @db.Uuid // null until the account exists
   phoneNumber       String     @map("phone_number")
   purpose           OtpPurpose
-  outcome           String? // sent | verified | failed | expired | locked
+  // queued = accepted by the API and handed to the delivery worker; the worker
+  // settles it to sent or failed once the SMS gateway has answered.
+  outcome           String? // queued | sent | verified | failed | expired | locked
   attempts          Int        @default(0)
   ipAddress         String?    @map("ip_address") @db.Inet
   deviceId          String?    @map("device_id") @db.Uuid
@@ -79,5 +81,9 @@ model OtpVerification {
 
   @@index([phoneNumber])
   @@index([createdAt])
+  // The nightly retention purge's only query: `expires_at < cutoff ORDER BY
+  // expires_at LIMIT n` (AuthRetentionJob). Without it that batch is a full scan
+  // plus a top-N sort of the largest table in the schema, every night.
+  @@index([expiresAt])
   @@map("otp_verifications")
 }
