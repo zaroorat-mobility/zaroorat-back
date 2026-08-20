@@ -103,6 +103,22 @@ jobs:
       # .env.test is committed (dummy values only) and already points at
       # localhost:5432 / localhost:6379, which is where the service containers
       # above are published. No environment setup step is needed.
+
+      # The integration harness TRUNCATEs named tables in beforeEach, so the
+      # schema has to exist before a single test runs.
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+        env:
+          APP_ENV: test
+
+      # prisma/seed/index.ts branches on APP_ENV=test and seeds the roles.
+      # Without it every login path fails with
+      # `Default role "customer" is not seeded` — 441 of 1283 tests.
+      - name: Seed the test database
+        run: npx prisma db seed
+        env:
+          APP_ENV: test
+
       - name: Run tests
         run: npm test
         env:

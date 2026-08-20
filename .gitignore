@@ -12,7 +12,7 @@ src/generated/
 
 # Demo Frontend
 
-ride-demo-frontend/
+frontend/
 
 # Environment files
 .env

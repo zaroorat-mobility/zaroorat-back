@@ -1,6 +1,6 @@
 name: Deploy staging
 
-# Every green merge to main lands on staging automatically.
+# Every green merge to main lands on staging automatically, once DEPLOY_STAGING=true.
 # Production is a separate, tag-gated workflow.
 on:
   push:
@@ -24,6 +24,9 @@ env:
 jobs:
   build:
     name: Build & push image
+    # Kill switch while the app is still in development: nothing deploys until
+    # the repo variable DEPLOY_STAGING is set to 'true' (Settings > Variables).
+    if: vars.DEPLOY_STAGING == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
