@@ -1,4 +1,5 @@
 import { asClass, aliasTo, AwilixContainer } from 'awilix';
+import { registerFileReference } from '@modules/files';
 import { DriverMetrics } from './metrics/driver.metrics.js';
 import {
   DriverRepository,
@@ -16,6 +17,7 @@ import {
   DriverWalletViewService,
   ShiftService,
   DriverService,
+  DriverEligibilityService,
 } from './services/index.js';
 import {
   DriverOnboardingController,
@@ -51,6 +53,8 @@ export function registerDriversModule(container: AwilixContainer): void {
     onboardingService: asClass(OnboardingService).singleton(),
     statusService: asClass(StatusService).singleton(),
     locationService: asClass(LocationService).singleton(),
+    driverEligibilityService: asClass(DriverEligibilityService).singleton(),
+    eligibilityService: aliasTo('driverEligibilityService'),
     driverWalletViewService: asClass(DriverWalletViewService).singleton(),
     shiftService: asClass(ShiftService).singleton(),
     driverService: asClass(DriverService)
@@ -82,5 +86,12 @@ export function registerDriversModule(container: AwilixContainer): void {
     statusRepo: aliasTo('driverStatusRepository'),
     txManager: aliasTo('transactionManager'),
     docExpirationJob: asClass(DocExpirationJob).singleton(),
+  });
+  registerFileReference('DRIVER_DOCUMENT', {
+    module: 'drivers',
+    isReferenced: (fileId, tx) =>
+      container
+        .resolve<DriverDocumentRepository>('driverDocumentRepository')
+        .isDocumentFile(fileId, tx),
   });
 }

@@ -2,6 +2,8 @@ import { DatabaseService } from '@core/database';
 import { RedisService } from '@core/cache/RedisService.js';
 import { DriverDocumentRepository } from '../repositories/driver-document.repository.js';
 import { DriverRepository } from '../repositories/driver.repository.js';
+import { DriverStatusRepository } from '../repositories/driver-status.repository.js';
+import { StatusService } from '../services/status/status.service.js';
 import { DriverMetrics } from '../metrics/driver.metrics.js';
 import { logger } from '@shared/logger/index.js';
 export class DocExpirationJob {
@@ -11,6 +13,8 @@ export class DocExpirationJob {
     private readonly docRepo: DriverDocumentRepository,
     private readonly driverRepo: DriverRepository,
     private readonly driverMetrics: DriverMetrics,
+    private readonly statusRepo: DriverStatusRepository,
+    private readonly statusService: StatusService,
   ) {}
   async run(): Promise<number> {
     const lockToken = await this.redis.lock.acquire('job:driver_doc_expiration', 15000);
@@ -33,6 +37,10 @@ export class DocExpirationJob {
           undefined,
           'Required document expired',
         );
+        const currentStatus = await this.statusRepo.getStatus(doc.driverId);
+        if (currentStatus?.status === 'ONLINE' || currentStatus?.status === 'BREAK') {
+          await this.statusService.setOffline(doc.driverId, 'DOCUMENT_EXPIRED');
+        }
         expiredCount++;
       }
     } catch (err) {

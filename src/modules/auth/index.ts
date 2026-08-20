@@ -3,6 +3,7 @@ import { AuthService } from './services/auth.service';
 import { AuthRetentionJob } from './jobs/auth-retention.job';
 import { OtpDeliveryJob } from './jobs/otp-delivery.job';
 import { EpochInvalidationConsumer } from './consumers/epoch-invalidation.consumer';
+import { AuthDriverVerifiedConsumer } from './consumers/driver-verified.consumer';
 export {
   AuthService,
   type SendOtpInput,
@@ -34,5 +35,6 @@ export function registerAuthService(container: AwilixContainer): void {
     authRetentionJob: asClass(AuthRetentionJob).singleton(),
     otpDeliveryJob: asClass(OtpDeliveryJob).singleton(),
     epochInvalidationConsumer: asClass(EpochInvalidationConsumer).singleton(),
+    authDriverVerifiedConsumer: asClass(AuthDriverVerifiedConsumer).singleton(),
   });
 }

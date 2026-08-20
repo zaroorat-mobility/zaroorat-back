@@ -15,6 +15,11 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
     controller.onboarding.submitDocument(req, reply),
   );
   fastify.post(
+    '/:driverId/documents/:documentId/review',
+    { preHandler: fastify.authorize({ roles: ['admin'] }) },
+    (req, reply) => controller.onboarding.reviewDocument(req, reply),
+  );
+  fastify.post(
     '/:id/verify',
     { preHandler: fastify.authorize({ roles: ['admin'] }) },
     (req, reply) => controller.onboarding.reviewVerification(req, reply),

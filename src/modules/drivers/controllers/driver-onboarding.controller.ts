@@ -6,8 +6,9 @@ import {
   updateDriverProfileSchema,
   submitDriverDocumentSchema,
   reviewVerificationSchema,
+  reviewDriverDocumentSchema,
 } from '../schemas/driver.schemas.js';
-import { actingDriverId } from './driver-identity.js';
+import { actingDriverId, authorizedDriverId } from './driver-identity.js';
 import { DriverNotFoundError } from '../errors/driver.errors.js';
 export class DriverOnboardingController {
   constructor(
@@ -53,13 +54,37 @@ export class DriverOnboardingController {
   async submitDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await actingDriverId(req, this.driverRepository);
     const body = submitDriverDocumentSchema.parse(req.body);
-    const doc = await this.driverService.onboarding.submitDocument({
+    const doc = await this.driverService.onboarding.submitDocument(
+      {
+        driverId,
+        documentType: body.documentType,
+        fileId: body.fileId,
+        ...(body.documentNumber !== undefined ? { documentNumber: body.documentNumber } : {}),
+        ...(body.expiresAt !== undefined ? { expiresAt: new Date(body.expiresAt) } : {}),
+      },
+      req.id,
+    );
+    reply.code(201).send({ data: doc });
+  }
+  async reviewDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { driverId: requestedDriverId, documentId } = req.params as {
+      driverId: string;
+      documentId: string;
+    };
+    const driverId = await authorizedDriverId(req, this.driverRepository, requestedDriverId);
+    const reviewerId = callerId(req);
+    const body = reviewDriverDocumentSchema.parse(req.body);
+    const doc = await this.driverService.onboarding.reviewDocument(
+      documentId,
       driverId,
-      documentType: body.documentType,
-      fileUrl: body.fileUrl,
-      ...(body.documentNumber !== undefined ? { documentNumber: body.documentNumber } : {}),
-      ...(body.expiresAt !== undefined ? { expiresAt: new Date(body.expiresAt) } : {}),
-    });
+      body.status,
+      reviewerId,
+      body.rejectionReason,
+    );
+    req.log.info(
+      { documentId, driverId, status: body.status, reviewerUserId: reviewerId },
+      '[drivers] document review decision recorded',
+    );
     reply.send({ data: doc });
   }
   async reviewVerification(req: FastifyRequest, reply: FastifyReply): Promise<void> {

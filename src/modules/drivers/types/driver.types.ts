@@ -31,3 +31,10 @@ export type {
   DriverStatus,
   DriverDocumentType,
 };
+export interface DocumentEligibilityResult {
+  eligible: boolean;
+  missing: DriverDocumentType[];
+  pending: DriverDocumentType[];
+  rejected: DriverDocumentType[];
+  expired: DriverDocumentType[];
+}

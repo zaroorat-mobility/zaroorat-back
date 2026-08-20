@@ -74,7 +74,8 @@ model DriverDocument {
   driverId           String             @map("driver_id") @db.Uuid
   documentType       DriverDocumentType @map("document_type")
   documentNumber     String?            @map("document_number")
-  fileUrl            String             @map("file_url")
+  fileUrl            String?            @map("file_url")
+  fileId             String?            @map("file_id") @db.Uuid
   issuedAt           DateTime?          @map("issued_at") @db.Date
   expiresAt          DateTime?          @map("expires_at") @db.Date
   verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
@@ -88,7 +89,9 @@ model DriverDocument {
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
   driver Driver @relation(fields: [driverId], references: [id])
+  file   File?  @relation(fields: [fileId], references: [id])
 
+  @@unique([driverId, documentType], map: "driver_documents_driver_id_document_type_key")
   @@index([driverId])
   @@index([documentType])
   @@index([expiresAt])
