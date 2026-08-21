@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerHasRole, callerId } from '@core/auth';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { RideService } from '../services/ride.service.js';
+import { RideDispatchRepository } from '../repositories/ride-dispatch.repository.js';
 import {
   acceptRideRequestSchema,
   startRideSchema,
@@ -13,12 +14,18 @@ export class RideStateController {
   constructor(
     private readonly rideService: RideService,
     private readonly driverRepository: DriverRepository,
+    private readonly dispatchRepo: RideDispatchRepository,
   ) {}
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
     const driver = await this.driverRepository.findByUserId(userId);
     if (!driver) throw new DriverNotFoundError(userId);
     return driver.id;
+  }
+  async listOffers(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const driverId = await this.actingDriverId(req);
+    const offers = await this.dispatchRepo.findPendingForDriver(driverId);
+    reply.send({ data: offers });
   }
   async accept(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);

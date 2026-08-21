@@ -16,7 +16,11 @@ function makeWorld() {
   const statusEvents: string[] = [];
   const events: string[] = [];
   const ledgerPostings: string[] = [];
+  const resolvedOffers: string[] = [];
+  const driverStatuses: { driverId: string; status: string }[] = [];
   const locks = new Map<string, Promise<void>>();
+  // driverId -> rideId of the one active ride they're currently on, if any.
+  const activeRideByDriver = new Map<string, string>();
 
   const rideRepo = {
     async lockForUpdate(id: string) {
@@ -31,6 +35,10 @@ function makeWorld() {
       await previous;
       queueMicrotask(() => release());
       return rides.get(id) ? { ...rides.get(id) } : null;
+    },
+    async findActiveByDriver(driverId: string) {
+      const rideId = activeRideByDriver.get(driverId);
+      return rideId ? { ...rides.get(rideId) } : null;
     },
     async updateStatusIf(
       id: string,
@@ -47,6 +55,7 @@ function makeWorld() {
       const id = `ride_${rides.size + 1}`;
       const ride = { id, status: 'ACCEPTED', ...input };
       rides.set(id, ride);
+      activeRideByDriver.set(input.driverId as string, id);
       return ride;
     },
   };
@@ -63,6 +72,18 @@ function makeWorld() {
     },
   };
 
+  const dispatchRepo = {
+    async resolveOffers(requestId: string, winningDriverId: string) {
+      resolvedOffers.push(`${requestId}:${winningDriverId}`);
+    },
+  };
+
+  const driverStatusRepository = {
+    async updateStatus(driverId: string, status: string) {
+      driverStatuses.push({ driverId, status });
+    },
+  };
+
   const service = new LifecycleService(
     rideRepo as never,
     requestRepo as never,
@@ -71,6 +92,7 @@ function makeWorld() {
         statusEvents.push(e.toStatus);
       },
     } as never,
+    dispatchRepo as never,
     {
       async generateStartOtp() {
         return { plaintextOtp: '123456' };
@@ -95,6 +117,7 @@ function makeWorld() {
         return [];
       },
     } as never,
+    driverStatusRepository as never,
     {
       async execute<T>(fn: (tx: unknown) => Promise<T>) {
         return fn({});
@@ -108,7 +131,18 @@ function makeWorld() {
     { rideStarted() {}, rideCompleted() {}, rideCancelled() {} } as never,
   );
 
-  return { service, rides, requests, fares, statusEvents, events, ledgerPostings };
+  return {
+    service,
+    rides,
+    requests,
+    fares,
+    statusEvents,
+    events,
+    ledgerPostings,
+    resolvedOffers,
+    driverStatuses,
+    activeRideByDriver,
+  };
 }
 
 function seedRide(world: ReturnType<typeof makeWorld>, status: string) {
@@ -147,6 +181,72 @@ describe('Ride lifecycle concurrency', () => {
     assert.equal(lost.length, 1);
     assert.ok((lost[0] as PromiseRejectedResult).reason instanceof RideRequestAlreadyMatchedError);
     assert.equal(world.rides.size, 1, 'only one ride row may exist for one request');
+  });
+
+  it('accepting a request resolves its offers and puts the driver ON_TRIP', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+
+    await world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v1' });
+
+    assert.deepEqual(world.resolvedOffers, ['req_1:d1']);
+    assert.deepEqual(world.driverStatuses, [{ driverId: 'd1', status: 'ON_TRIP' }]);
+  });
+
+  it('refuses to let a driver already on a ride accept a second one', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+    world.requests.set('req_2', {
+      id: 'req_2',
+      status: 'SEARCHING',
+      customerId: 'cust_2',
+      vehicleTypeId: 'v1',
+      pickupLat: 2,
+      pickupLng: 2,
+    });
+
+    await world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v1' });
+
+    await assert.rejects(
+      () =>
+        world.service.acceptRideRequest({ requestId: 'req_2', driverId: 'd1', vehicleId: 'v1' }),
+      (err: unknown) => (err as { code?: string }).code === 'DRIVER_NOT_AVAILABLE',
+    );
+    // The second request must still be claimable by someone else — a driver
+    // who is already busy must not have consumed it on the way to failing.
+    assert.equal(world.requests.get('req_2')?.status, 'SEARCHING');
+  });
+
+  it('frees the driver back to ONLINE on completion and on cancellation', async () => {
+    const worldA = makeWorld();
+    seedRide(worldA, 'IN_PROGRESS');
+    await worldA.service.completeRide('ride_1', 'driver_1', 12, 25);
+    assert.ok(
+      worldA.driverStatuses.some((s) => s.driverId === 'driver_1' && s.status === 'ONLINE'),
+      'completion must release the driver',
+    );
+
+    const worldB = makeWorld();
+    seedRide(worldB, 'ACCEPTED');
+    await worldB.service.cancelRide('ride_1', 'CUSTOMER', 'cust_1', 'CHANGED_MIND');
+    assert.ok(
+      worldB.driverStatuses.some((s) => s.driverId === 'driver_1' && s.status === 'ONLINE'),
+      'cancellation must release the driver too, regardless of who cancelled',
+    );
   });
 
   it('completes a ride exactly once under two concurrent calls', async () => {

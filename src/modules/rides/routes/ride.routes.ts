@@ -11,6 +11,7 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     controller.request.createRequest(req, reply),
   );
   const driverOnly = { preHandler: fastify.authorize({ requireOperableDriver: true }) };
+  fastify.get('/offers', driverOnly, (req, reply) => controller.state.listOffers(req, reply));
   fastify.post('/accept', driverOnly, (req, reply) => controller.state.accept(req, reply));
   fastify.post('/:id/arrive', driverOnly, (req, reply) => controller.state.arrive(req, reply));
   fastify.post('/:id/start', driverOnly, (req, reply) => controller.state.start(req, reply));
