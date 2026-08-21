@@ -11,6 +11,9 @@ import { FareService } from '../fare/fare.service.js';
 import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
+import { UserRepository } from '@modules/auth/repositories/user.repository.js';
+import { NotificationService } from '@modules/notifications';
+import { logger } from '@shared/logger/index.js';
 import {
   InvalidRideStateTransitionError,
   RideNotFoundError,
@@ -69,6 +72,8 @@ export class LifecycleService {
     private readonly cancellationService: CancellationService,
     private readonly ledgerService: LedgerService,
     private readonly driverStatusRepository: DriverStatusRepository,
+    private readonly userRepository: UserRepository,
+    private readonly notificationService: NotificationService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
@@ -115,7 +120,7 @@ export class LifecycleService {
     ride: Ride;
     plaintextOtp: string;
   }> {
-    return this.txManager.execute(async (tx) => {
+    const result = await this.txManager.execute(async (tx) => {
       const request = await this.requestRepo.lockForUpdate(data.requestId, tx);
       if (!request) throw new RideNotFoundError(data.requestId);
       const existingDriverRide = await this.rideRepo.findActiveByDriver(data.driverId, tx);
@@ -164,6 +169,33 @@ export class LifecycleService {
       );
       return { ride, plaintextOtp };
     });
+    await this.deliverStartOtpToCustomer(
+      result.ride.customerId,
+      result.ride.id,
+      result.plaintextOtp,
+    );
+    return result;
+  }
+  /// The driver is the one who types the OTP; the customer is the one who
+  /// must actually receive it to read aloud. Delivered after commit — a slow
+  /// or failed SMS send must never roll back an already-successful accept,
+  /// and this is the only channel that currently exists (see the platform
+  /// audit's P0 finding: no push/socket delivery exists yet).
+  private async deliverStartOtpToCustomer(
+    customerId: string,
+    rideId: string,
+    plaintextOtp: string,
+  ): Promise<void> {
+    try {
+      const customer = await this.userRepository.findById(customerId);
+      if (!customer) return;
+      await this.notificationService.sendSms(
+        customer.phoneNumber,
+        `Zaroorat: Share this code with your driver to start the trip: ${plaintextOtp}. Do not share it before your driver has arrived.`,
+      );
+    } catch (err) {
+      logger.warn({ err, rideId }, '[rides] failed to deliver start OTP to customer');
+    }
   }
   async markDriverArrived(rideId: string, driverId: string): Promise<Ride> {
     return this.txManager.execute(async (tx) => {

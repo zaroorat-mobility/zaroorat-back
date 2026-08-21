@@ -84,6 +84,19 @@ function makeWorld() {
     },
   };
 
+  const sentOtpSms: { to: string; body: string }[] = [];
+  const userRepository = {
+    async findById(userId: string) {
+      return { id: userId, phoneNumber: `+91${userId}` };
+    },
+  };
+  const notificationService = {
+    async sendSms(to: string, body: string) {
+      sentOtpSms.push({ to, body });
+      return {};
+    },
+  };
+
   const service = new LifecycleService(
     rideRepo as never,
     requestRepo as never,
@@ -118,6 +131,8 @@ function makeWorld() {
       },
     } as never,
     driverStatusRepository as never,
+    userRepository as never,
+    notificationService as never,
     {
       async execute<T>(fn: (tx: unknown) => Promise<T>) {
         return fn({});
@@ -142,6 +157,7 @@ function makeWorld() {
     resolvedOffers,
     driverStatuses,
     activeRideByDriver,
+    sentOtpSms,
   };
 }
 
@@ -194,10 +210,24 @@ describe('Ride lifecycle concurrency', () => {
       pickupLng: 1,
     });
 
-    await world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v1' });
+    const { plaintextOtp } = await world.service.acceptRideRequest({
+      requestId: 'req_1',
+      driverId: 'd1',
+      vehicleId: 'v1',
+    });
 
     assert.deepEqual(world.resolvedOffers, ['req_1:d1']);
     assert.deepEqual(world.driverStatuses, [{ driverId: 'd1', status: 'ON_TRIP' }]);
+    assert.equal(
+      world.sentOtpSms.length,
+      1,
+      'the customer, not the driver, receives the start OTP',
+    );
+    assert.equal(world.sentOtpSms[0]!.to, '+91cust_1');
+    assert.ok(
+      world.sentOtpSms[0]!.body.includes(plaintextOtp),
+      'the delivered message carries the same code the driver must be given',
+    );
   });
 
   it('refuses to let a driver already on a ride accept a second one', async () => {
