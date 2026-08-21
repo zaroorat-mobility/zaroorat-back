@@ -8,11 +8,13 @@ import {
 import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { FareService } from '../fare/fare.service.js';
+import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
 import {
   ActiveRideExistsError,
   RideNotFoundError,
   RideCustomerMismatchError,
   RideRequestNotCancellableError,
+  IncompleteProfileError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
@@ -24,6 +26,7 @@ export class RideRequestService {
     private readonly rideRepo: RideRepository,
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly fareService: FareService,
+    private readonly userProfileRepository: UserProfileRepository,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
@@ -49,6 +52,10 @@ export class RideRequestService {
     paymentMethod?: string;
     promoCode?: string;
   }): Promise<RideRequest> {
+    const profile = await this.userProfileRepository.findByUserId(input.customerId);
+    if (!profile?.firstName || !profile.lastName) {
+      throw new IncompleteProfileError();
+    }
     const activeRide = await this.rideRepo.findActiveByCustomer(input.customerId);
     if (activeRide) {
       throw new ActiveRideExistsError();

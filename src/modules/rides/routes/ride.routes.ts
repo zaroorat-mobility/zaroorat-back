@@ -26,6 +26,11 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: fastify.rateLimit(rateLimits.rideWrite) },
     (req, reply) => controller.state.cancel(req, reply),
   );
+  fastify.post(
+    '/:id/rating',
+    { preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.state.submitRating(req, reply),
+  );
   fastify.get('/active', (req, reply) => controller.query.getActive(req, reply));
   fastify.get('/history', (req, reply) => controller.query.listHistory(req, reply));
   fastify.get('/:id', (req, reply) => controller.query.getById(req, reply));

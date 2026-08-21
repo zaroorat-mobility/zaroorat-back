@@ -64,6 +64,9 @@ function makeWorld() {
     async lockForUpdate(id: string) {
       return requests.get(id) ? { ...requests.get(id) } : null;
     },
+    async findById(id: string) {
+      return requests.get(id) ? { ...requests.get(id) } : null;
+    },
     async claimForMatch(id: string) {
       const request = requests.get(id);
       if (!request || !['CREATED', 'SEARCHING'].includes(request.status as string)) return false;
@@ -386,6 +389,35 @@ describe('Ride lifecycle concurrency', () => {
 
     await world.service.completeRide('ride_1', 'driver_1', 30, 60);
     assert.equal(world.rides.get('ride_1')?.actualDurationMin, 60);
+  });
+
+  it('rejects a final distance wildly beyond the original quote', async () => {
+    const world = makeWorld();
+    world.rides.set('ride_1', {
+      id: 'ride_1',
+      status: 'IN_PROGRESS',
+      driverId: 'driver_1',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      paymentMethod: 'CASH',
+      waitTimeMin: 0,
+      requestId: 'req_1',
+    });
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'MATCHED',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      estimatedDistanceKm: 5,
+      estimatedDurationMin: 15,
+    });
+
+    await assert.rejects(
+      () => world.service.completeRide('ride_1', 'driver_1', 500, 20),
+      (err: unknown) => (err as { code?: string }).code === 'IMPLAUSIBLE_TRIP_DATA',
+    );
+    assert.equal(world.rides.get('ride_1')?.status, 'IN_PROGRESS', 'the ride is untouched');
+    assert.deepEqual(world.fares, [], 'no fare was written for the rejected completion');
   });
 
   it('refuses a customer cancelling someone else’s ride', async () => {

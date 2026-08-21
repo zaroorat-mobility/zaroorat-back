@@ -3,6 +3,7 @@ export const IDEMPOTENCY_OPERATIONS = Object.freeze({
   TOKEN_REFRESH: 'token-refresh',
   PHONE_CHANGE_VERIFY: 'phone-change-verify',
   PAYMENT: 'payment',
+  RIDE_REQUEST: 'ride-request',
 } as const);
 export type IdempotencyOperation =
   (typeof IDEMPOTENCY_OPERATIONS)[keyof typeof IDEMPOTENCY_OPERATIONS];

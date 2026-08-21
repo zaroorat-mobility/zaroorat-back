@@ -24,8 +24,15 @@ import {
   RideActorRequiredError,
   DriverNotAvailableError,
   VehicleMismatchError,
+  ImplausibleTripDataError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
+import {
+  TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER,
+  TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM,
+  TRIP_DURATION_PLAUSIBILITY_MULTIPLIER,
+  TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN,
+} from '../../constants/ride.constants.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { LedgerService } from '@modules/payments/services/ledger/ledger.service.js';
 import type { Ride, RideStatus } from '../../types';
@@ -135,6 +142,44 @@ export class LifecycleService {
     }
     if (vehicle.vehicleTypeId !== requestedVehicleTypeId) {
       throw new VehicleMismatchError("This vehicle's category does not match the ride request");
+    }
+  }
+  /// Not a GPS cross-check — no trip location trail is persisted anywhere in
+  /// this codebase (DriverLocation holds only a driver's current position,
+  /// overwritten on every update; driver_location_history is a raw-SQL
+  /// partitioned table nothing writes to). The one real reference point that
+  /// does exist is the quote this ride was requested against — a driver
+  /// submitting actuals wildly beyond it is rejected rather than trusted.
+  private async assertPlausibleTripData(
+    requestId: string,
+    actualDistanceKm: number,
+    actualDurationMin: number,
+    tx: TransactionClient,
+  ): Promise<void> {
+    const request = await this.requestRepo.findById(requestId, tx);
+    const estimatedDistanceKm = request?.estimatedDistanceKm
+      ? Number(request.estimatedDistanceKm)
+      : null;
+    const estimatedDurationMin = request?.estimatedDurationMin ?? null;
+    if (estimatedDistanceKm != null) {
+      const maxPlausibleKm =
+        estimatedDistanceKm * TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER +
+        TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM;
+      if (actualDistanceKm > maxPlausibleKm) {
+        throw new ImplausibleTripDataError(
+          `Reported distance (${actualDistanceKm}km) is far beyond the quoted estimate (${estimatedDistanceKm}km)`,
+        );
+      }
+    }
+    if (estimatedDurationMin != null) {
+      const maxPlausibleMin =
+        estimatedDurationMin * TRIP_DURATION_PLAUSIBILITY_MULTIPLIER +
+        TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN;
+      if (actualDurationMin > maxPlausibleMin) {
+        throw new ImplausibleTripDataError(
+          `Reported duration (${actualDurationMin}min) is far beyond the quoted estimate (${estimatedDurationMin}min)`,
+        );
+      }
     }
   }
   async acceptRideRequest(data: {
@@ -306,6 +351,7 @@ export class LifecycleService {
         'COMPLETED',
         tx,
       );
+      await this.assertPlausibleTripData(ride.requestId, actualDistanceKm, actualDurationMin, tx);
       const waitingMinutes = ride.waitTimeMin ?? 0;
       const itemizedFare = await this.fareService.calculateFinalFare({
         actualDistanceKm,
