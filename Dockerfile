@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# Node version is pinned to match .nvmrc (v26.4.0). Keep the two in sync.
-ARG NODE_VERSION=26.4.0
+# Node version is pinned to match .nvmrc (v22.21.0). Keep the two in sync.
+ARG NODE_VERSION=22.21.0
 
 # ──────────────────────────────────────────────────────────────
 # Stage 1: dependencies (full, including dev — needed to compile)

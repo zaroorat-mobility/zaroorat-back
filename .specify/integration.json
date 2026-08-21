@@ -1,0 +1,17 @@
+{
+  "version": "0.16.4",
+  "integration_state_schema": 1,
+  "installed_integrations": ["claude", "agy"],
+  "integration_settings": {
+    "claude": {
+      "script": "ps",
+      "invoke_separator": "-"
+    },
+    "agy": {
+      "script": "ps",
+      "invoke_separator": "-"
+    }
+  },
+  "integration": "claude",
+  "default_integration": "claude"
+}
