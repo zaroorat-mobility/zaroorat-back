@@ -51,6 +51,7 @@ export class DriverRepository {
     });
   }
   async updateProfile(
+    userId: string,
     driverId: string,
     profileData: Partial<{
       fullLegalName: string;
@@ -64,17 +65,29 @@ export class DriverRepository {
       bloodGroup: string;
       alternatePhone: string;
       drivingExperienceYears: number;
+      email: string | null;
     }>,
     tx?: TransactionClient,
   ): Promise<DriverProfile> {
     const client = tx ?? this.db.client;
+
+    // Extract email from profileData so it isn't passed to driverProfile.upsert
+    const { email, ...driverProfileData } = profileData;
+
+    if (email !== undefined) {
+      await client.user.update({
+        where: { id: userId },
+        data: { email },
+      });
+    }
+
     return client.driverProfile.upsert({
       where: { driverId },
       create: {
         driverId,
-        ...profileData,
+        ...driverProfileData,
       },
-      update: profileData,
+      update: driverProfileData,
     });
   }
   async updateVerificationStatus(

@@ -8,6 +8,7 @@ export interface UpdateUserProfileInput {
   gender?: string | null;
   profileImageFileId?: string | null;
   languageCode?: string | null;
+  email?: string | null;
 }
 export class UserProfileRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {

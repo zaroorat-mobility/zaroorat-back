@@ -9,14 +9,20 @@ import {
   reviewDriverDocumentSchema,
 } from '../schemas/driver.schemas.js';
 import { actingDriverId, authorizedDriverId } from './driver-identity.js';
+import { DriverNotFoundError } from '../errors/driver.errors.js';
 export class DriverOnboardingController {
   constructor(
     private readonly driverService: DriverService,
     private readonly driverRepository: DriverRepository,
   ) {}
   async getMe(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const driver = await this.driverService.onboarding.createOrGetDriver(callerId(req));
+    const driver = await this.driverRepository.findByUserId(callerId(req));
+    if (!driver) throw new DriverNotFoundError(callerId(req));
     reply.send({ data: driver });
+  }
+  async onboard(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const driver = await this.driverService.onboarding.onboardDriver(callerId(req));
+    reply.status(201).send({ data: driver });
   }
   async updateProfile(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await actingDriverId(req, this.driverRepository);
@@ -37,7 +43,12 @@ export class DriverOnboardingController {
     if (body.drivingExperienceYears !== undefined) {
       updateParams.drivingExperienceYears = body.drivingExperienceYears;
     }
-    const profile = await this.driverService.onboarding.updateProfile(driverId, updateParams);
+    if (body.email !== undefined) updateParams.email = body.email;
+    const profile = await this.driverService.onboarding.updateProfile(
+      callerId(req),
+      driverId,
+      updateParams,
+    );
     reply.send({ data: profile });
   }
   async submitDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {

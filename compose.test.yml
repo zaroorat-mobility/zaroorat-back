@@ -1,0 +1,80 @@
+# Test stack: test runner + Postgres/PostGIS + Redis.
+#
+# There is deliberately NO api service and NO worker service:
+#   - tests/integration/helpers/harness.ts boots Fastify in-process with
+#     createApp() + app.inject() and never calls app.listen()
+#   - the same file documents that no BullMQ worker runs; queued jobs just sit
+#     there and resetState()'s flushdb clears them
+# What the tests do need is a real PostGIS database (resetState TRUNCATEs 12
+# tables) and a real Redis (flushdb, rate limits, sessions).
+#
+#   make test        run the suite, tear the stack down, propagate the exit code
+#   make down-test   force cleanup
+
+name: zaroorat-test
+
+services:
+  test:
+    build:
+      context: .
+      target: test
+    # Migrate, then seed, then run.
+    #   migrate — resetState() TRUNCATEs named tables, which must exist first
+    #   seed    — prisma/seed/index.ts branches on APP_ENV=test and seeds the
+    #             roles; without it every login test dies on
+    #             `Default role "customer" is not seeded`
+    # `&&` means the suite's exit code is the container's exit code — 0 on pass,
+    # non-zero on fail — which is what `docker compose run --rm` returns.
+    command: ['sh', '-c', 'npx prisma migrate deploy && npx prisma db seed && npm run test']
+    environment:
+      APP_NAME: zaroorat-backend
+      APP_ENV: test
+      NODE_ENV: test
+      # Overrides the localhost values baked into .env.test. loader.ts uses
+      # dotenv `override: false`, so these container values win.
+      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_test
+      REDIS_URL: redis://redis:6379/1
+    # loader.ts THROWS when APP_ENV=test and .env.test is absent from the
+    # working directory. It is mounted, not baked into the image, so the image
+    # carries no environment identity. .env.test is committed and holds only
+    # throwaway values; the localhost URLs inside it lose to the block above,
+    # because loader.ts uses dotenv `override: false`.
+    volumes:
+      - ./.env.test:/app/.env.test:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_USER: zaroorat
+      POSTGRES_PASSWORD: zaroorat
+      POSTGRES_DB: zaroorat
+    # No published port: the test stack must never be reachable from, or
+    # collide with, the development stack on 5432.
+    volumes:
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    # Ephemeral by construction — the database dies with the container, so no
+    # test run can inherit state from a previous one.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U zaroorat -d zaroorat_test']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:8-trixie
+    # No appendonly and no volume: job/cache state must not survive a run.
+    command: ['redis-server', '--save', '']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s

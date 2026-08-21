@@ -23,6 +23,7 @@ function toProfileUpdate(body: UpdateProfileBody): UpdateUserProfileInput {
     changes.profileImageFileId = body.profileImageFileId ?? null;
   }
   if (Object.hasOwn(body, 'languageCode')) changes.languageCode = body.languageCode ?? null;
+  if (Object.hasOwn(body, 'email')) changes.email = body.email ?? null;
   return changes;
 }
 export class ProfileController {

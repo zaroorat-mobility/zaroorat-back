@@ -34,26 +34,40 @@ export class OnboardingService {
     private readonly statusRepo: DriverStatusRepository,
     private readonly statusService: StatusService,
   ) {}
-  async createOrGetDriver(userId: string): Promise<Driver> {
+  async onboardDriver(userId: string): Promise<Driver> {
     const existing = await this.driverRepo.findByUserId(userId);
     if (existing) return existing;
-    return this.txManager.execute(async (tx) => {
-      const created = await this.driverRepo.createDriver(userId, tx);
-      this.driverMetrics.driverRegistered({ driverId: created.id, userId });
-      await this.eventPublisher.publish(
-        driverEvent(DRIVER_EVENT_CATALOG.ONBOARDED, created.id, {
-          driverId: created.id,
-          userId,
-        }),
-        tx,
-      );
-      return created;
-    });
+    try {
+      return await this.txManager.execute(async (tx) => {
+        const created = await this.driverRepo.createDriver(userId, tx);
+        this.driverMetrics.driverRegistered({ driverId: created.id, userId });
+        await this.eventPublisher.publish(
+          driverEvent(DRIVER_EVENT_CATALOG.ONBOARDED, created.id, {
+            driverId: created.id,
+            userId,
+          }),
+          tx,
+        );
+        return created;
+      });
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code === 'P2002') {
+        const raceConditionDriver = await this.driverRepo.findByUserId(userId);
+        if (raceConditionDriver) return raceConditionDriver;
+      }
+      throw err;
+    }
   }
-  async updateProfile(driverId: string, data: Parameters<DriverRepository['updateProfile']>[1]) {
+  async updateProfile(
+    userId: string,
+    driverId: string,
+    data: Parameters<DriverRepository['updateProfile']>[2],
+  ) {
     const driver = await this.driverRepo.findById(driverId);
     if (!driver) throw new DriverNotFoundError(driverId);
-    return this.driverRepo.updateProfile(driverId, data);
+    return this.txManager.execute(async (tx) => {
+      return this.driverRepo.updateProfile(userId, driverId, data, tx);
+    });
   }
   async submitDocument(
     data: {

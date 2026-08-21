@@ -1,0 +1,188 @@
+# Production stack: API + Worker + Postgres/PostGIS + Redis, single host.
+#
+# Secrets are NOT stored here. Every ${VAR:?...} below must be present in the
+# shell environment (or a local, git-ignored .env file next to this compose
+# file) or `docker compose config` fails loudly before anything starts.
+#
+# Required:
+#   POSTGRES_PASSWORD  REDIS_PASSWORD  JWT_ACCESS_SECRET  JWT_REFRESH_SECRET
+#   PAYMENT_WEBHOOK_SECRET  STORAGE_BUCKET  STORAGE_QUARANTINE_BUCKET
+#   MSG91_AUTH_KEY  STORAGE_KMS_KEY_ID
+# Optional (defaults shown in the interpolation):
+#   POSTGRES_USER  POSTGRES_DB  API_PORT  IMAGE_TAG
+#
+# Migrations are a DEPLOYMENT step, never a container start-up step — running
+# them per replica would race N ways on every scale-up. See `make migrate-prod`.
+#
+#   make migrate-prod   run migrations once, against the built image
+#   make up-prod        start api + worker + datastores
+#   make logs-prod      tail the api
+
+name: zaroorat-prod
+
+x-app-image: &app-image
+  image: zaroorat-backend:${IMAGE_TAG:-latest}
+  build:
+    context: .
+    target: runner
+
+x-app-env: &app-env
+  APP_NAME: zaroorat-backend
+  APP_ENV: production
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-zaroorat}
+  REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
+  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required (min 32 chars)}
+  JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required (min 32 chars)}
+  # postgres and the app share a private network, so TLS between them is not
+  # required here. Set DB_SSL_MODE=require when the database is external.
+  DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+  # ── Boot-mandatory under APP_ENV=production ───────────────────────────
+  # These are not preferences. APP_ENV=production flips three config modules
+  # from their mock defaults to live ones, and each then throws during module
+  # load or provider construction if its credentials are absent:
+  #   payment.config.ts      -> gateway defaults to 'razorpay', demands a secret
+  #   storage.config.ts      -> provider defaults to 's3', demands both buckets
+  #   notification.config.ts -> SMS defaults to 'msg91', demands an auth key
+  # Verified by running the built image: it exits before Fastify starts.
+  PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?required when APP_ENV=production (payment gateway defaults to razorpay)}
+  STORAGE_BUCKET: ${STORAGE_BUCKET:?required when APP_ENV=production (storage provider defaults to s3)}
+  # Must differ from STORAGE_BUCKET — unscanned uploads land here first.
+  STORAGE_QUARANTINE_BUCKET: ${STORAGE_QUARANTINE_BUCKET:?required when APP_ENV=production and must differ from STORAGE_BUCKET}
+  MSG91_AUTH_KEY: ${MSG91_AUTH_KEY:?required when APP_ENV=production (SMS provider defaults to msg91)}
+  # ── Pass-through, defaulted ───────────────────────────────────────────
+  PAYMENT_DEFAULT_GATEWAY: ${PAYMENT_DEFAULT_GATEWAY:-razorpay}
+  RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+  RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+  STORAGE_REGION: ${STORAGE_REGION:-ap-south-1}
+  # Leave both blank to use the instance role.
+  STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-}
+  STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
+  # In production the malware scanner defaults to 'guardduty', and
+  # storage.config.ts then REQUIRES aws:kms plus a named key — AES256 is
+  # rejected at boot. Set STORAGE_MALWARE_SCANNER=disabled if you genuinely
+  # have no GuardDuty Malware Protection, and AES256 becomes valid again.
+  STORAGE_MALWARE_SCANNER: ${STORAGE_MALWARE_SCANNER:-guardduty}
+  STORAGE_SSE: ${STORAGE_SSE:-aws:kms}
+  STORAGE_KMS_KEY_ID: ${STORAGE_KMS_KEY_ID:?required unless STORAGE_MALWARE_SCANNER=disabled and STORAGE_SSE=AES256}
+  SMS_PROVIDER: ${SMS_PROVIDER:-msg91}
+  MSG91_SENDER_ID: ${MSG91_SENDER_ID:-}
+  MSG91_OTP_TEMPLATE_ID: ${MSG91_OTP_TEMPLATE_ID:-}
+  # Pepper for OTP hashing. Rotating it invalidates every in-flight challenge.
+  OTP_PEPPER: ${OTP_PEPPER:-}
+  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+
+services:
+  # Profile-gated, so `up` never triggers it. Run explicitly, once, before
+  # rolling the app:  docker compose -f compose.prod.yml run --rm migrate
+  # Uses the same runner image, so the schema shipped is the schema deployed.
+  migrate:
+    <<: *app-image
+    profiles: ['migrate']
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    # Deliberately NOT *app-env: the Prisma CLI reads only DATABASE_URL, and
+    # requiring the storage/SMS/payment secrets here would mean you could not
+    # run a migration without them.
+    environment:
+      APP_ENV: production
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-zaroorat}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    <<: *app-image
+    # dist/server.js, already compiled. No tsx, no TypeScript at runtime.
+    command: ['npm', 'run', 'start']
+    environment:
+      <<: *app-env
+      HOST: 0.0.0.0
+      PORT: 3000
+    ports:
+      - '${API_PORT:-3000}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Liveness comes from the image's own HEALTHCHECK (GET /health).
+    restart: always
+    stop_grace_period: 30s
+
+  worker:
+    <<: *app-image
+    command: ['npm', 'run', 'worker']
+    environment:
+      <<: *app-env
+      WORKER_HEALTH_PORT: 3001
+    # Health server is for probes, not callers — internal only.
+    expose:
+      - '3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    restart: always
+    # Must exceed WORKER_SHUTDOWN_GRACE_MS (default 120000) so in-flight jobs
+    # drain instead of being SIGKILLed mid-transaction.
+    stop_grace_period: 150s
+
+  postgres:
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-zaroorat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-zaroorat}
+    # No `ports`. Reachable only over the compose network.
+    # No init-script mount either: migration 20260724173304_init runs
+    # CREATE EXTENSION for both pgcrypto and postgis itself.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-zaroorat} -d ${POSTGRES_DB:-zaroorat}',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: always
+
+  redis:
+    image: redis:8-trixie
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    # $$ escapes compose interpolation so the shell expands it, keeping the
+    # password out of the process argument list in `docker inspect`/`ps`.
+    command: ['sh', '-c', 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes']
+    # No `ports`.
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: always
+
+volumes:
+  postgres_data:
+  redis_data:
