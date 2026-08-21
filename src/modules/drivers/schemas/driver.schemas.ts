@@ -12,6 +12,7 @@ export const updateDriverProfileSchema = z.object({
   bloodGroup: z.string().max(10).optional(),
   alternatePhone: z.string().max(20).optional(),
   drivingExperienceYears: z.number().int().nonnegative().optional(),
+  email: z.string().email().max(100).nullable().optional(),
 });
 export type UpdateDriverProfileBody = z.infer<typeof updateDriverProfileSchema>;
 export const submitDriverDocumentSchema = z.object({

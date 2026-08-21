@@ -58,6 +58,9 @@ export class UserService {
           ? await this.attachProfileImage(userId, changes.profileImageFileId ?? null, tx, requestId)
           : null;
       const updated = await this.userProfileRepository.update(userId, changes, tx);
+      if ('email' in changes) {
+        await this.userRepository.updateEmail(userId, changes.email ?? null, tx);
+      }
       if (outgoing !== null) {
         await this.fileService.releaseInTransaction(outgoing, userId, tx, requestId);
       }

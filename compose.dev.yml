@@ -1,0 +1,175 @@
+# Development stack: API + Worker + Postgres/PostGIS + Redis.
+#
+# The API and worker run the SAME image with different commands — the worker
+# owns every queue (including OTP SMS delivery) and is the only process that
+# registers the cron schedules, so an API-only stack delivers no OTPs.
+#
+#   make up-dev      build and start everything
+#   make logs-dev    tail the api
+#   make down-dev    stop and delete volumes
+
+name: zaroorat-dev
+
+x-app-env: &app-env
+  APP_NAME: zaroorat-backend
+  APP_ENV: development
+  NODE_ENV: development
+  # Set here rather than in .env.development so the container talks to the
+  # service containers, not to localhost. `environment` beats `env_file`.
+  DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_dev
+  REDIS_URL: redis://redis:6379
+  JWT_ACCESS_SECRET: local_dev_access_secret_do_not_use_in_prod
+  JWT_REFRESH_SECRET: local_dev_refresh_secret_do_not_use_in_prod
+
+x-app-build: &app-build
+  context: .
+  target: development
+
+# Hot reload uses Compose file sync, not bind mounts. tsx watch uses fs.watch,
+# which gets no inotify events through a Windows/macOS bind mount — the files
+# change but nothing ever reloads. `develop.watch` polls from the host side and
+# writes into the container, which fs.watch does see.
+#
+#   docker compose -f compose.dev.yml watch     (or: make watch-dev)
+#
+# src/generated is excluded: the host copy carries host-platform Prisma engines
+# and must never overwrite the Linux one built into the image.
+x-app-watch: &app-watch
+  watch:
+    - action: sync
+      path: ./src
+      target: /app/src
+      ignore:
+        - generated/
+    - action: sync
+      path: ./tests
+      target: /app/tests
+    - action: sync+restart
+      path: ./prisma
+      target: /app/prisma
+    # A dependency change cannot be synced in — it needs a real install.
+    - action: rebuild
+      path: ./package.json
+
+# src/config/env/loader.ts THROWS when APP_ENV=development and .env.development
+# is not present in the working directory, so the file is mounted rather than
+# baked into the image — the image stays environment-agnostic and this compose
+# file owns the environment. `make up-dev` creates it from .env.example if it
+# is missing. Values inside it are still overridden by the `environment` block
+# above, because loader.ts uses dotenv `override: false`.
+x-app-env-mount: &app-env-mount
+  - ./.env.development:/app/.env.development:ro
+
+services:
+  # One-shot. Nothing else starts until this exits 0, so a fresh `up` never
+  # leaves the app pointing at an empty schema.
+  migrate:
+    build: *app-build
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    environment: *app-env
+    volumes: *app-env-mount
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build: *app-build
+    command: ['npm', 'run', 'dev']
+    environment:
+      <<: *app-env
+      HOST: 0.0.0.0
+      PORT: 3000
+    volumes: *app-env-mount
+    ports:
+      - '3000:3000'
+    develop: *app-watch
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    build: *app-build
+    command: ['npm', 'run', 'worker:dev']
+    environment:
+      <<: *app-env
+      WORKER_HEALTH_PORT: 3001
+    volumes: *app-env-mount
+    # Published in development only so `curl localhost:3001/ready` works while
+    # debugging queue startup. Not published in production.
+    ports:
+      - '3001:3001'
+    develop: *app-watch
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  postgres:
+    # PostGIS variant is mandatory, not a preference: migration
+    # 20260724173304_init runs `CREATE EXTENSION postgis` and the schema
+    # declares extensions = [postgis, pgcrypto].
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_USER: zaroorat
+      POSTGRES_PASSWORD: zaroorat
+      # The application databases (zaroorat_dev, zaroorat_test) are created by
+      # the init scripts below; this is only the bootstrap/maintenance database.
+      POSTGRES_DB: zaroorat
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs once on first boot of an empty volume: creates zaroorat_dev and
+      # zaroorat_test, then installs postgis/uuid-ossp/pgcrypto into both.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -U/-d must be set or pg_isready checks the wrong role and passes early.
+      # -h forces TCP, so this cannot pass during the init phase, when postgres
+      # is listening on the unix socket only.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U zaroorat -d zaroorat_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-trixie
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

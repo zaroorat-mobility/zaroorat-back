@@ -28,15 +28,26 @@ This specification defines the minimum production-correct set of changes to make
 Everything in this section was directly re-verified against source in this session (not taken from prior audit docs without cross-check). File:line references are exact as of the current working tree.
 
 ### 2.1 Driver onboarding & profile — `VERIFIED_EXISTING`, working correctly
-- `GET /drivers/me` → `OnboardingService.createOrGetDriver(userId)` (`src/modules/drivers/services/onboarding/onboarding.service.ts:23-38`) auto-creates a `Driver` row (`verificationStatus: PENDING`) on first call for the authenticated user, inside a transaction, publishing `DRIVER_EVENT_CATALOG.ONBOARDED`. This is an accepted existing behavior for the *Drivers* module's own `/me` (distinct from the *Users* module's `GET /me`, which never touches `Driver` — see §2.9).
+
+- `GET /drivers/me` → `OnboardingService.createOrGetDriver(userId)` (`src/modules/drivers/services/onboarding/onboarding.service.ts:23-38`) auto-creates a `Driver` row (`verificationStatus: PENDING`) on first call for the authenticated user, inside a transaction, publishing `DRIVER_EVENT_CATALOG.ONBOARDED`. This is an accepted existing behavior for the _Drivers_ module's own `/me` (distinct from the _Users_ module's `GET /me`, which never touches `Driver` — see §2.9).
 - `PATCH /drivers/:driverId/profile` → `OnboardingService.updateProfile` → `DriverRepository.updateProfile`, a real Prisma `upsert` on `DriverProfile` keyed by `driverId` (`driver.repository.ts:71-78`). DB-enforced 1:1 via `driver_profiles_driver_id_key` unique index (migration `20260724173304_init`).
 
 ### 2.2 Document submission — `VERIFIED_EXISTING` (broken/insecure as built)
+
 - Route: `POST /drivers/:driverId/documents` (`driver.routes.ts:13-15`) → `submitDocument` (`driver-onboarding.controller.ts:42-53`).
 - Schema (`driver.schemas.ts:17-32`):
   ```ts
   export const submitDriverDocumentSchema = z.object({
-    documentType: z.enum(['DRIVING_LICENSE','RC','INSURANCE','AADHAAR','PAN','PUC','POLICE_VERIFICATION','PROFILE_PHOTO']),
+    documentType: z.enum([
+      'DRIVING_LICENSE',
+      'RC',
+      'INSURANCE',
+      'AADHAAR',
+      'PAN',
+      'PUC',
+      'POLICE_VERIFICATION',
+      'PROFILE_PHOTO',
+    ]),
     fileUrl: z.string().url(),
     documentNumber: z.string().max(100).optional(),
     expiresAt: z.string().datetime().optional(),
@@ -48,7 +59,9 @@ Everything in this section was directly re-verified against source in this sessi
 - `DriverDocument` Prisma model (`driver.prisma:72-96`) has `fileUrl String` — **no FK to `File`**, no `fileId` column at all.
 
 ### 2.3 Admin driver approval — `VERIFIED_EXISTING` (checks nothing)
+
 `POST /drivers/:id/verify` (admin-only, `authorize({ roles: ['admin'] })`) → `reviewVerification` → `OnboardingService.reviewDriverVerification`, full method (`onboarding.service.ts:67-98`):
+
 ```ts
 async reviewDriverVerification(driverId, status, approvedBy?, rejectionReason?): Promise<Driver> {
   const driver = await this.driverRepo.findById(driverId);
@@ -65,11 +78,14 @@ async reviewDriverVerification(driverId, status, approvedBy?, rejectionReason?):
   });
 }
 ```
+
 - Reads zero `DriverDocument` rows. No transition guard (an already-`VERIFIED` driver can be re-approved; a `REJECTED` driver can be approved by simply calling again).
 - `DRIVER_EVENT_CATALOG.VERIFIED` (`driver.events/catalog.ts:5`, value `'driver.verified'`) **is already published correctly, transactionally**, via the standard outbox pattern (`eventPublisher.publish(..., tx)` — written to `outbox_events` in the same DB transaction as the state write). This is the only place `VERIFIED` is ever published.
 
 ### 2.4 `setOnline` — `VERIFIED_EXISTING` (currently unsatisfiable)
+
 Full method, `StatusService.setOnline` (`status.service.ts:28-76`):
+
 ```ts
 if (driver.verificationStatus !== 'VERIFIED') throw new DriverNotVerifiedError(...);
 if (driver.isSuspended) throw new DriverSuspendedError(...);
@@ -77,23 +93,29 @@ const docs = await this.docRepo.findByDriverId(driverId, tx);
 const hasValidLicense = docs.some(d => d.documentType === 'DRIVING_LICENSE' && d.verificationStatus === 'VERIFIED');
 if (!hasValidLicense) throw new DriverNotVerifiedError('Driver does not have a verified Driving License');
 ```
+
 Since no code path (per §2.5) ever sets a document's `verificationStatus` to `'VERIFIED'`, **the third check can never pass** — `setOnline` is presently a dead end for every real driver. Route guard: `preHandler: fastify.authorize({ requireOperableDriver: true })` (`driver.routes.ts:21-25`).
 
 ### 2.5 Per-document review — does not exist
+
 `DriverDocumentRepository.updateVerificationStatus(id, status, verifiedBy?, rejectionReason?, tx?)` (`driver-document.repository.ts:54-75`) exists and is capable of writing `VERIFIED`, but has **exactly one caller in the entire repo**: `doc-expiration.job.ts:23-28`, which only ever writes `'REJECTED'`. No controller, route, or service sets a document to `VERIFIED`. The `DriverDocument` model already has `verifiedBy String? / verifiedAt DateTime? / verificationNotes String? / rejectionReason String?` columns (`driver.prisma:80-86,89`) — **fully unused today**, but schema-ready for a review endpoint with no migration needed for those specific fields.
 
 ### 2.6 `requireApprovedDocuments` — `VERIFIED_EXISTING` (dead config)
+
 `src/config/driver/driver.config.ts:1-18`:
+
 ```ts
 requireApprovedDocuments: process.env.DRIVER_REQUIRE_APPROVED_DOCS !== 'false', // defaults true
 ```
-Repo-wide grep found this referenced **only in its own definition** — never read by `reviewDriverVerification`, `setOnline`, or anywhere else. No `REQUIRED_DOCUMENT_TYPES`-style config exists anywhere (mandatory document *types* are not declared anywhere in code).
+
+Repo-wide grep found this referenced **only in its own definition** — never read by `reviewDriverVerification`, `setOnline`, or anywhere else. No `REQUIRED_DOCUMENT_TYPES`-style config exists anywhere (mandatory document _types_ are not declared anywhere in code).
 
 ### 2.7 Files module — `VERIFIED_EXISTING`, mature, and has the exact pattern needed
+
 - Upload is two-step: `POST /files` (presigned S3 PUT, `FileUploadService.createUpload`) → client PUTs bytes → `POST /files/:id/complete` (`FileUploadService.completeUpload`, validates magic bytes/size/EXIF, promotes `PENDING → READY`, publishes `file.uploaded`). File bytes never transit the API.
 - `FilePurpose` enum (`file.prisma:101-108`) already includes `DRIVER_DOCUMENT` and `VEHICLE_DOCUMENT` — already policy-configured in `filePurposePolicy` (`file.config.ts:30-79`: MIME allow-list `image/jpeg, image/png, image/webp, application/pdf`, 10MB max, `readTtlSeconds: 300`, EXIF-location stripped, 8-year retention on `DRIVER_RELATIONSHIP_ENDED`) but **functionally orphaned** — nothing in the Drivers module calls into Files at all.
-- `FileLifecycleService.assertReferenceable(fileId, ownerUserId, purpose, tx)` (`file-lifecycle.service.ts:75-88`) is the **exact primitive needed**: throws `FileNotFoundError` unless the file is owned by that user *and* matches the declared purpose; throws `FileStateError` unless `status === 'READY' && deletedAt === null`; throws `FileInUseError` if another module already holds a live reference.
-- `FileLifecycleService.supersede(previousFileId, replacementFileId, tx, requestId)` (lines 89-126) is the primitive for document *renewal* (old file → `SUPERSEDED`, not deleted).
+- `FileLifecycleService.assertReferenceable(fileId, ownerUserId, purpose, tx)` (`file-lifecycle.service.ts:75-88`) is the **exact primitive needed**: throws `FileNotFoundError` unless the file is owned by that user _and_ matches the declared purpose; throws `FileStateError` unless `status === 'READY' && deletedAt === null`; throws `FileInUseError` if another module already holds a live reference.
+- `FileLifecycleService.supersede(previousFileId, replacementFileId, tx, requestId)` (lines 89-126) is the primitive for document _renewal_ (old file → `SUPERSEDED`, not deleted).
 - **A working example of this exact pattern already exists** — Users module's profile-image attach flow:
   ```ts
   // src/modules/users/services/user.service.ts:76-90
@@ -110,24 +132,28 @@ Repo-wide grep found this referenced **only in its own definition** — never re
   ```ts
   registerFileReference('PROFILE_IMAGE', {
     module: 'users',
-    isReferenced: (fileId, tx) => container.resolve('userProfileRepository').isProfileImage(fileId, tx),
+    isReferenced: (fileId, tx) =>
+      container.resolve('userProfileRepository').isProfileImage(fileId, tx),
   });
   ```
-  `docs/files/FLOW.md` §5 explicitly documents this same pattern as the *intended* design for driver documents (`POST /drivers/me/documents {documentType, fileId}` → `assertReferenceable` → write `driver_documents.file_id`) — it was simply never implemented in `drivers`. This spec closes that gap.
+  `docs/files/FLOW.md` §5 explicitly documents this same pattern as the _intended_ design for driver documents (`POST /drivers/me/documents {documentType, fileId}` → `assertReferenceable` → write `driver_documents.file_id`) — it was simply never implemented in `drivers`. This spec closes that gap.
 
 ### 2.8 Auth: role grant, epoch, JWT — `VERIFIED_EXISTING`, ready to use as-is
-- `AuthService.grantRole(userId, roleSlug, opts)` (`auth.service.ts:256-294`) is **idempotent by construction**: checks `findActiveAssignment` first, `create()`s only if none active, returns `false` (no-op) on a duplicate call. Only bumps the Redis epoch (`epochService.bump(userId)`) if a *new* grant happened.
+
+- `AuthService.grantRole(userId, roleSlug, opts)` (`auth.service.ts:256-294`) is **idempotent by construction**: checks `findActiveAssignment` first, `create()`s only if none active, returns `false` (no-op) on a duplicate call. Only bumps the Redis epoch (`epochService.bump(userId)`) if a _new_ grant happened.
 - Epoch (`src/core/cache/stores/EpochStore.ts`) is a **Redis-only** per-user counter (`INCR`/`GET`, no DB column). The JWT access token carries an `epoch` claim minted at issuance; `auth.plugin.ts:43-45` compares it on **every authenticated request** and rejects with `401 TOKEN_STALE` on mismatch. This is the existing, working mechanism that forces a client to obtain a new token after any role change — no new invalidation mechanism is needed.
 - Refresh (`token.service.ts` `rotate()`) **re-resolves roles fresh from the DB** on every refresh call (`AuthService.resolveActiveRoles` → `RoleRepository.findActiveRoleSlugs`), not from a cached claim.
 - `grantRole`/`revokeRole` currently have **zero production callers** anywhere in the codebase (confirmed by repo-wide grep) — the only role-granting code that runs today is `ensureDefaultRole` (grants the `customer` role idempotently on every login).
-- **No cross-module event consumer exists anywhere in the codebase today.** `src/modules/auth/consumers/epoch-invalidation.consumer.ts` is the only consumer directory under `src/modules/*`, and it subscribes only to auth's *own* events (`account.role.granted`, `account.role.revoked`, `account.suspended`, `auth.refresh.reuse_detected`) — an intra-module pattern, not a cross-module one. A Drivers→Auth subscriber will be **the first cross-module consumer in this codebase**; this spec must establish, not merely replicate, that wiring — using the same registration mechanics (`container.register(asClass(...).singleton())` + explicit `.register()` call from `src/bootstrap/events.bootstrap.ts`, `eventBus.on(type, handler)`).
+- **No cross-module event consumer exists anywhere in the codebase today.** `src/modules/auth/consumers/epoch-invalidation.consumer.ts` is the only consumer directory under `src/modules/*`, and it subscribes only to auth's _own_ events (`account.role.granted`, `account.role.revoked`, `account.suspended`, `auth.refresh.reuse_detected`) — an intra-module pattern, not a cross-module one. A Drivers→Auth subscriber will be **the first cross-module consumer in this codebase**; this spec must establish, not merely replicate, that wiring — using the same registration mechanics (`container.register(asClass(...).singleton())` + explicit `.register()` call from `src/bootstrap/events.bootstrap.ts`, `eventBus.on(type, handler)`).
 - `requireOperableDriver` (`auth.plugin.ts:93-110` → `DriverAccessRepository.isOperableDriver`, `driver-access.repository.ts:6-12`) is a **live DB query** (`driver.findFirst({ where: { userId, verificationStatus: 'VERIFIED', isSuspended: false, deletedAt: null } })`) — it does **not** check the `driver` role claim at all, and is fail-closed (503) on lookup error. This means driver-operability gating is already immune to JWT/role propagation lag (see §14).
 - Module boundaries in this codebase are **not** universally enforced via events-only: `src/modules/users/services/account/account.service.ts:16-25` directly injects `AuthService` (calls `activateInTransaction`/`deactivateInTransaction` transactionally). So "Drivers must not directly inject AuthService" (this spec's Option B decision, §13) is a deliberate choice for this feature, not an existing repo-wide law — noted per the user's explicit instruction to use Option B regardless.
 
 ### 2.9 Users module — `VERIFIED_EXISTING`
+
 `UserService.getMe` (`user.service.ts:35-45`) reads only `User`/`UserProfile`/roles — **never touches `Driver`**, no auto-creation of anything. Confirms §J (Customer Safety) is currently satisfied and must remain so.
 
 ### 2.10 Geo — `VERIFIED_EXISTING`
+
 - Live index = Redis (per-driver key + H3-cell sets) + H3 bucketing; PostGIS (`driver_locations`, GiST-indexed) is the durable source of truth. `docs/COMPLETE_RIDE_PLATFORM_WORKFLOW_AUDIT.md` (current/reliable) confirms Geo is fully built; `docs/PRODUCTION_RIDE_WORKFLOW_AUDIT.md`'s "geo is a stub" claim is **stale** and should be disregarded.
 - `LocationService.updateLocation` (`location.service.ts:26-65`) does **both** the durable PostGIS upsert (`driver_locations`, single row per driver, not a history table — `driverId String @id`) **and** the live-index publish (`geoService.recordDriverPosition`) in one call chain — these are not separate call sites today.
 - **No eligibility check exists on this path at all** — verification status, suspension, and online status are not checked. Any driver row that exists can publish to the live geo index merely by POSTing GPS coordinates, regardless of `PENDING`/`REJECTED`/`SUSPENDED` state.
@@ -136,35 +162,41 @@ Repo-wide grep found this referenced **only in its own definition** — never re
 - A `driver_location_history` table is referenced only in a schema comment; **no application code writes to it**.
 
 ### 2.11 Vehicles / ride-accept boundary — `VERIFIED_EXISTING`, confirms no vehicle-online gate is warranted
+
 - `src/modules/vehicles` is a stub (`export {};`) beyond its Prisma models.
 - `VehicleAssignment` (`vehicle.prisma:64-81`) is **never queried anywhere in `src`** (confirmed by repo-wide grep) — not at `setOnline`, not anywhere.
-- The **only** place a vehicle is required is `LifecycleService.acceptRideRequest` (`rides/services/lifecycle/lifecycle.service.ts:105-156`), which takes a mandatory, client-supplied `vehicleId: string` with **no validation** it belongs to the driver. `DispatchService.offerToDriver` takes `vehicleId` as *optional* and currently has zero callers.
+- The **only** place a vehicle is required is `LifecycleService.acceptRideRequest` (`rides/services/lifecycle/lifecycle.service.ts:105-156`), which takes a mandatory, client-supplied `vehicleId: string` with **no validation** it belongs to the driver. `DispatchService.offerToDriver` takes `vehicleId` as _optional_ and currently has zero callers.
 - **Conclusion, directly confirming the user's stated architectural assumption**: driver availability (online/verified/not-suspended) and vehicle assignment are two entirely disconnected axes in current code. No vehicle-related online gate should be added by this feature (§10.3).
 
 ### 2.12 Payments/wallet boundary — `VERIFIED_EXISTING`
+
 Drivers' wallet code (`driver-wallet.repository.ts`, `wallet.service.ts`) is a **pure read model** — `getOrCreateWallet` (bootstrap create of a zero-balance row) and `listTransactions` only; no balance-mutation method exists anywhere in the Drivers module. Ledger mutations live exclusively in `payments`. Out of scope for this feature either way (§4).
 
 ### 2.13 Database invariants — `VERIFIED_EXISTING` findings
-| Invariant | DB-enforced? | Evidence |
-|---|---|---|
-| One `Driver` per `User` | **Yes** | `drivers_user_id_key` unique index (init migration) |
-| One `DriverProfile` per `Driver` | **Yes** | `driver_profiles_driver_id_key` unique index; app uses real `upsert` |
-| One `DriverDocument` per `(driverId, documentType)` | **No** | Only non-unique indexes on `driver_documents`; app does findFirst-then-create/update (`upsertDocument`), a genuine TOCTOU race |
-| One active ride per Driver | **No** | Only `rides_request_id_key` (per-request, not per-driver) exists; no such invariant implemented at all today |
-| One active vehicle assignment per Driver | **No** | `vehicle_assignments.status` is a free-text `String`, no unique/partial-unique index |
-| One active `(user, role)` pair | **Yes** | `uq_user_role_active` partial unique index `WHERE revoked_at IS NULL` (init migration) — this is the pattern to replicate for #3 |
+
+| Invariant                                           | DB-enforced? | Evidence                                                                                                                         |
+| --------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| One `Driver` per `User`                             | **Yes**      | `drivers_user_id_key` unique index (init migration)                                                                              |
+| One `DriverProfile` per `Driver`                    | **Yes**      | `driver_profiles_driver_id_key` unique index; app uses real `upsert`                                                             |
+| One `DriverDocument` per `(driverId, documentType)` | **No**       | Only non-unique indexes on `driver_documents`; app does findFirst-then-create/update (`upsertDocument`), a genuine TOCTOU race   |
+| One active ride per Driver                          | **No**       | Only `rides_request_id_key` (per-request, not per-driver) exists; no such invariant implemented at all today                     |
+| One active vehicle assignment per Driver            | **No**       | `vehicle_assignments.status` is a free-text `String`, no unique/partial-unique index                                             |
+| One active `(user, role)` pair                      | **Yes**      | `uq_user_role_active` partial unique index `WHERE revoked_at IS NULL` (init migration) — this is the pattern to replicate for #3 |
 
 `docs/06_Database/*.md` describes an entirely different, non-matching conceptual schema (different table names, a ledger subsystem that doesn't exist, claims of constraints — `uq_active_assignment_per_driver`, `uq_rider_one_active_trip` — that are **not present** in any migration). Disregard `docs/06_Database/` for this feature; the table above is derived directly from `prisma/schema/` and all 14 `prisma/migrations/*/migration.sql` files.
 
 ### 2.14 Existing tests — `VERIFIED_EXISTING` gap
+
 - `tests/unit/drivers/verification-gate.test.ts` — unit test, mocked repository, tests `setOnline`'s guard logic in isolation.
 - `tests/integration/auth-driver-gate.test.ts`, `tests/integration/authorization-bola.test.ts` — HTTP-level, but their `makeDriver` fixture (`tests/integration/helpers/fixtures.ts:15-42`) **writes `Driver` and a pre-`VERIFIED` `DriverDocument` row directly via Prisma**, bypassing both the document-submission and driver-approval endpoints entirely.
 - **No test anywhere calls `POST /:driverId/documents`.** The `/:id/verify` transition itself is exercised via real HTTP in `authorization-bola.test.ts` (for RBAC purposes only), but every precondition state is fabricated directly in the DB. This confirms the user's stated premise (§K) that HTTP/integration coverage for the driver lifecycle is inadequate.
 
 ### 2.15 Config/env — `VERIFIED_EXISTING`
+
 The zod-validated env schema (`src/config/env/schema.ts`) is deliberately minimal (app/server/DB/Redis/JWT secrets only). `driverConfig`, `fileConfig`, `rateLimits` are read directly off `process.env` in per-module config files with inline defaults, not validated by the central schema. `rateLimits.driverLocation` is wired to `POST /drivers/location` only — no rate limit exists on `/documents`, `/verify`, or `/status/online` today.
 
 ### 2.16 Historical audit docs — reconciliation
+
 Per the user's instruction to verify every audit finding against current source rather than trust it: the five documents named in the task (`docs/PLATFORM_CURRENT_PRODUCTION_WORKFLOW_AND_IMPLEMENTATION_PLAN.md`, `docs/PLATFORM_FULL_WORKFLOW_AND_MODULE_OWNERSHIP_AUDIT.md`, `docs/DRIVER_MODULE_FULL_OWNERSHIP_AND_PLACEMENT_AUDIT.md`, `docs/DRIVER_PLATFORM_FINAL_CURRENT_STATE_AUDIT.md`, `docs/DRIVER_PLATFORM_FINAL_PRODUCTION_BASELINE.md`) **do not exist in this repository** (confirmed by filesystem search of `docs/` and all subdirectories). The closest existing equivalents were used instead and cross-checked line-by-line against current source in this session: `docs/DRIVER_REGISTRATION_ONBOARDING_AUDIT.md`, `docs/DRIVER_SUPPLY_PRODUCTION_AUDIT.md`, `docs/ROLE_SOURCE_AND_AUTH_FLOW_AUDIT.md`, `docs/AUTH_VERIFICATION_REPORT.md`, `docs/COMPLETE_RIDE_PLATFORM_WORKFLOW_AUDIT.md`, `docs/PRODUCTION_RIDE_WORKFLOW_AUDIT.md`, `docs/OTP_PRODUCTION_CODEBASE_AUDIT.md`, `docs/files/FLOW.md`, `docs/05_Design/08_domain-events.md`, `docs/10_Backend/02_dependency-injection.md`, `docs/06_Database/*.md`. Specific staleness found and disregarded: `docs/10_Backend/02_dependency-injection.md` describes a FastAPI/Python/SQLAlchemy stack that does not exist in this repo at all; `docs/05_Design/08_domain-events.md`'s claims of a Redis event bus and an extensive cross-module consumer catalog are aspirational, not implemented; `docs/OTP_PRODUCTION_CODEBASE_AUDIT.md`'s three most severe findings (synchronous SMS send, no worker deployed) are already remediated in current source; `docs/PRODUCTION_RIDE_WORKFLOW_AUDIT.md`'s "geo is a stub" claim is false; `docs/06_Database/*.md` describes a non-matching schema. `OPEN_QUESTION`: confirm with the user whether the five named documents were renamed/never committed, or exist in a location not yet indexed — they were not used as a source for this spec.
 
 ---
@@ -172,6 +204,7 @@ Per the user's instruction to verify every audit finding against current source 
 ## 3. Scope
 
 In scope (matches user's task sections A–K):
+
 1. Driver document submission via `fileId` (Files-module-validated), replacing the raw-URL mechanism.
 2. Per-document admin review endpoint (`VERIFIED`/`REJECTED`) with reviewer identity, timestamp, rejection reason.
 3. One authoritative required-document eligibility function, reusing/wiring `requireApprovedDocuments`.
@@ -189,12 +222,12 @@ Per the user's explicit instruction (§L), this spec does **not** cover: full ve
 
 ## 5. Actors and Permissions
 
-| Actor | Capabilities relevant to this feature |
-|---|---|
-| **Customer/unauthenticated-to-authenticated user** | Completes OTP login; `VERIFIED_EXISTING`, unaffected by this feature. |
-| **Driver (self)** | Onboards (`GET /drivers/me`), completes profile, submits documents (own driver only), views own documents/wallet, goes online/offline, sends heartbeat/location. **Must never** review any document (own or others') or approve their own driver record — enforced structurally by `authorize({ roles: ['admin'] })` on review/approval routes plus an explicit self-review guard (§9.4). |
-| **Admin** | Reviews individual `DriverDocument` rows (new), approves/rejects the overall `Driver` (existing endpoint, hardened), suspends drivers (existing, unchanged). |
-| **Auth module (system actor)** | Consumes `driver.verified`, calls `AuthService.grantRole(userId, 'driver')` idempotently. Not a human actor; included because it is a first-class participant in the workflow. |
+| Actor                                              | Capabilities relevant to this feature                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Customer/unauthenticated-to-authenticated user** | Completes OTP login; `VERIFIED_EXISTING`, unaffected by this feature.                                                                                                                                                                                                                                                                                                                     |
+| **Driver (self)**                                  | Onboards (`GET /drivers/me`), completes profile, submits documents (own driver only), views own documents/wallet, goes online/offline, sends heartbeat/location. **Must never** review any document (own or others') or approve their own driver record — enforced structurally by `authorize({ roles: ['admin'] })` on review/approval routes plus an explicit self-review guard (§9.4). |
+| **Admin**                                          | Reviews individual `DriverDocument` rows (new), approves/rejects the overall `Driver` (existing endpoint, hardened), suspends drivers (existing, unchanged).                                                                                                                                                                                                                              |
+| **Auth module (system actor)**                     | Consumes `driver.verified`, calls `AuthService.grantRole(userId, 'driver')` idempotently. Not a human actor; included because it is a first-class participant in the workflow.                                                                                                                                                                                                            |
 
 `CONFIGURATION_DECISION`: an admin who happens to also hold a `driver` record must not be able to review/approve their own documents — see §9.4 for the guard.
 
@@ -244,13 +277,13 @@ Numbered `FR-*`, each independently testable, each labeled.
 
 - **FR-1** (`REQUIRED_CHANGE`): `POST /drivers/:driverId/documents` MUST accept `fileId: string (uuid)` instead of `fileUrl: string (url)`, and MUST reject requests still supplying `fileUrl` (schema-level 400, not silently ignored).
 - **FR-2** (`REQUIRED_CHANGE`): Before persisting a `DriverDocument`, the service MUST call `FileLifecycleService.assertReferenceable(fileId, callerUserId, 'DRIVER_DOCUMENT', tx)` inside the same transaction as the document write. Any thrown `FileNotFoundError`/`FileStateError`/`FileInUseError` MUST propagate as the corresponding driver-module 4xx (mapped, not swallowed).
-- **FR-3** (`REQUIRED_CHANGE`): The caller's `userId` used for `assertReferenceable` MUST be the *authenticated caller's* userId, not a value read from the request body — this is what prevents attaching another user's `fileId` (BOLA).
+- **FR-3** (`REQUIRED_CHANGE`): The caller's `userId` used for `assertReferenceable` MUST be the _authenticated caller's_ userId, not a value read from the request body — this is what prevents attaching another user's `fileId` (BOLA).
 - **FR-4** (`REQUIRED_CHANGE`): On successful validation, `DriverDocument.fileId` MUST be written (new FK column, §12). If a document of that `(driverId, documentType)` already exists, the previous `fileId` MUST be released via `FileLifecycleService.supersede(previousFileId, newFileId, tx, requestId)`, mirroring the Users profile-image pattern exactly.
 - **FR-5** (`REQUIRED_CHANGE`): Re-submitting a document (replacing an existing one) MUST reset `verificationStatus` to `PENDING`, `verifiedBy`/`verifiedAt`/`verificationNotes`/`rejectionReason` to `null` (existing hardcoded-PENDING behavior is kept, but see FR-6 for the driver-level side effect this behavior was previously missing).
-- **FR-6** (`REQUIRED_CHANGE`): If a document that was `VERIFIED` and *required* is replaced (re-uploaded) while the driver's `verificationStatus` is currently `VERIFIED`, the driver MUST be downgraded to `DOCUMENT_REVIEW` in the same transaction (mirrors the existing `DocExpirationJob` behavior for expiry, applied consistently to re-upload).
+- **FR-6** (`REQUIRED_CHANGE`): If a document that was `VERIFIED` and _required_ is replaced (re-uploaded) while the driver's `verificationStatus` is currently `VERIFIED`, the driver MUST be downgraded to `DOCUMENT_REVIEW` in the same transaction (mirrors the existing `DocExpirationJob` behavior for expiry, applied consistently to re-upload).
 - **FR-7** (`REQUIRED_CHANGE`): New endpoint `POST /drivers/:driverId/documents/:documentId/review`, admin-only (`authorize({ roles: ['admin'] })`), body `{ status: 'VERIFIED' | 'REJECTED', rejectionReason?: string }`. `rejectionReason` MUST be required (schema-enforced, min length 1) when `status === 'REJECTED'`.
 - **FR-8** (`REQUIRED_CHANGE`): The review endpoint MUST reject (409) if `documentId` does not belong to `driverId` in the URL (defense against ID confusion), and MUST reject (404) if the document does not exist.
-- **FR-9** (`CONFIGURATION_DECISION`): Valid document-review transitions: `PENDING → VERIFIED`, `PENDING → REJECTED`, `VERIFIED → REJECTED` (admin reconsideration), `REJECTED → VERIFIED` (admin reconsideration after clarification) are all permitted — admin decisions are reversible by a subsequent admin action. Re-submitting the *same* status as the document's current status MUST be idempotent (200, no-op, no timestamp/reviewer overwrite) — this satisfies the user's explicit idempotency requirement without inventing a rigid one-way state machine the business hasn't asked for.
+- **FR-9** (`CONFIGURATION_DECISION`): Valid document-review transitions: `PENDING → VERIFIED`, `PENDING → REJECTED`, `VERIFIED → REJECTED` (admin reconsideration), `REJECTED → VERIFIED` (admin reconsideration after clarification) are all permitted — admin decisions are reversible by a subsequent admin action. Re-submitting the _same_ status as the document's current status MUST be idempotent (200, no-op, no timestamp/reviewer overwrite) — this satisfies the user's explicit idempotency requirement without inventing a rigid one-way state machine the business hasn't asked for.
 - **FR-10** (`REQUIRED_CHANGE`): The review endpoint MUST refuse (403) if the authenticated admin's `userId` equals the driver's `userId` (self-review guard, §9.4), even though `roles: ['admin']` already structurally prevents a `driver`-only user from reaching this route.
 - **FR-11** (`REQUIRED_CHANGE`): A single authoritative `DriverEligibilityService.checkRequiredDocuments(driverId, tx?)` MUST be the only code path that decides required-document eligibility. It MUST be called from both `reviewDriverVerification` (approval gate) and `setOnline` (online gate) — no duplicated inline checks in controllers.
 - **FR-12** (`CONFIGURATION_DECISION`): Required document types for MVP: `DRIVING_LICENSE`, `RC`, `INSURANCE` (matches the existing ad-hoc `DRIVING_LICENSE`-only check's intent, extended to the full set implied by `driver.constants.ts`'s document-type list and the vehicle-relevant subset). Configurable via a new `driverConfig.requiredDocumentTypes: DriverDocumentTypeEnum[]` (env-overridable, default as above) — this is additive, not a duplicate of `requireApprovedDocuments` (see FR-13). `AADHAAR`, `PAN`, `PUC`, `POLICE_VERIFICATION`, `PROFILE_PHOTO` remain optional/non-blocking for this feature. `OPEN_QUESTION`: confirm this exact required set with product/compliance before `/speckit.plan`.
@@ -270,6 +303,7 @@ Numbered `FR-*`, each independently testable, each labeled.
 ## 8. State Transitions
 
 ### 8.1 `Driver.verificationStatus` (`DriverVerificationStatus`: `PENDING | DOCUMENT_REVIEW | VERIFIED | REJECTED | SUSPENDED`)
+
 ```
 PENDING ──(first document submitted)──► DOCUMENT_REVIEW      [VERIFIED_EXISTING]
 DOCUMENT_REVIEW ──(admin approves, eligibility gate passes)──► VERIFIED   [REQUIRED_CHANGE: gated]
@@ -279,9 +313,11 @@ VERIFIED ──(admin rejects)──► REJECTED                         [VERIFI
 VERIFIED ──(required doc expires OR is re-uploaded)──► DOCUMENT_REVIEW  [FR-23/FR-6, REQUIRED_CHANGE: now also forces offline+geo-forget]
 VERIFIED / REJECTED ──(re-approve/re-reject to same value)──► no-op (idempotent)   [FR-16, REQUIRED_CHANGE]
 ```
+
 `SUSPENDED` (the enum value) remains unused — suspension continues to be modeled via the separate `Driver.isSuspended` boolean (`VERIFIED_EXISTING`, unchanged; wiring the enum value is explicitly out of scope, §4).
 
 ### 8.2 `DriverDocument.verificationStatus` (shared `VerificationStatus`: `PENDING | VERIFIED | REJECTED`)
+
 ```
 (create/re-upload) ──► PENDING                                 [VERIFIED_EXISTING]
 PENDING ──(admin reviews VERIFIED)──► VERIFIED                  [REQUIRED_CHANGE, new endpoint]
@@ -291,6 +327,7 @@ REJECTED ──(admin reviews VERIFIED)──► VERIFIED                 [REQUI
 VERIFIED ──(expiresAt passes, DocExpirationJob)──► REJECTED      [VERIFIED_EXISTING, "expired" overloads REJECTED — no EXPIRED enum value exists; kept as-is, not introducing a schema enum change for this]
 (any) ──(document re-uploaded)──► PENDING                       [VERIFIED_EXISTING behavior, kept]
 ```
+
 `CONFIGURATION_DECISION`: no new `EXPIRED` enum value is introduced; expiry continues to be represented as `REJECTED` with `rejectionReason: 'Document expired'` (existing convention) plus the live `expiresAt` check inside `checkRequiredDocuments` (FR-14) so expiry is caught even between job runs.
 
 ## 9. Authorization Rules
@@ -344,9 +381,9 @@ This directly answers the user's instruction not to assume refresh behavior.
 2. Every authenticated request checks `claims.epoch !== currentEpoch(userId)` (`auth.plugin.ts:43-45`, `VERIFIED_EXISTING`) and returns `401 TOKEN_STALE` on mismatch — this happens for **any** endpoint, not just role-gated ones, so the driver's very next API call after approval (regardless of which endpoint) will fail with `TOKEN_STALE` if it used the pre-approval access token.
 3. The client's existing 401-triggers-refresh behavior (assumed to already exist for other epoch-invalidating events like suspension and session revocation — `VERIFIED_EXISTING` pattern the app must already implement for those cases to work at all) calls `POST /auth/refresh` with the refresh token.
 4. Refresh (`TokenService.rotate`, `VERIFIED_EXISTING`) re-resolves roles **fresh from the database** on every call (`AuthService.resolveActiveRoles` → `RoleRepository.findActiveRoleSlugs`) and mints a new access token with the current epoch and `roles: [...,'driver']`.
-5. **Critically, `POST /drivers/status/online` does not need step 3–4 to have happened yet.** Its `requireOperableDriver` gate (`VERIFIED_EXISTING`, §2.8) queries the `drivers` table directly (`verificationStatus === 'VERIFIED' && !isSuspended && deletedAt === null`) — it never inspects the JWT's `roles` claim. So a driver whose access token is already `TOKEN_STALE` (post-approval, pre-refresh) can still successfully call `/status/online`, **provided** they first hit any endpoint that forces the refresh, or the client refreshes proactively/silently before the stale token is used at all. If the client attempts `/status/online` with the stale token directly, standard request-level auth (`authenticate`, checked before `authorize`) will 401 it first — the client must refresh regardless, but the *reason* going-online works right after refreshing is the DB-backed operability check, not the `driver` role claim being present.
-6. `CONFIGURATION_DECISION`: this spec does not add a `roles.includes('driver')` check to `/status/online` — `requireOperableDriver` is sufficient and already role-claim-independent, which is actually the more robust design (avoids a hard dependency on token freshness for this specific gate). The `driver` role claim remains useful for *other* purposes (e.g., driver-specific UI gating, other future driver-role-gated endpoints) but is not load-bearing for online eligibility.
-7. **Answer to the user's explicit question** ("how does a newly approved driver obtain a token containing the new driver role"): via the **existing, unmodified** refresh-token rotation endpoint, triggered by the **existing, unmodified** epoch-staleness check — no new token endpoint, no new refresh trigger, no polling mechanism is introduced by this feature. The only *new* piece is what causes the epoch to bump in the first place (`grantRole` being called at all, via FR-18's consumer).
+5. **Critically, `POST /drivers/status/online` does not need step 3–4 to have happened yet.** Its `requireOperableDriver` gate (`VERIFIED_EXISTING`, §2.8) queries the `drivers` table directly (`verificationStatus === 'VERIFIED' && !isSuspended && deletedAt === null`) — it never inspects the JWT's `roles` claim. So a driver whose access token is already `TOKEN_STALE` (post-approval, pre-refresh) can still successfully call `/status/online`, **provided** they first hit any endpoint that forces the refresh, or the client refreshes proactively/silently before the stale token is used at all. If the client attempts `/status/online` with the stale token directly, standard request-level auth (`authenticate`, checked before `authorize`) will 401 it first — the client must refresh regardless, but the _reason_ going-online works right after refreshing is the DB-backed operability check, not the `driver` role claim being present.
+6. `CONFIGURATION_DECISION`: this spec does not add a `roles.includes('driver')` check to `/status/online` — `requireOperableDriver` is sufficient and already role-claim-independent, which is actually the more robust design (avoids a hard dependency on token freshness for this specific gate). The `driver` role claim remains useful for _other_ purposes (e.g., driver-specific UI gating, other future driver-role-gated endpoints) but is not load-bearing for online eligibility.
+7. **Answer to the user's explicit question** ("how does a newly approved driver obtain a token containing the new driver role"): via the **existing, unmodified** refresh-token rotation endpoint, triggered by the **existing, unmodified** epoch-staleness check — no new token endpoint, no new refresh trigger, no polling mechanism is introduced by this feature. The only _new_ piece is what causes the epoch to bump in the first place (`grantRole` being called at all, via FR-18's consumer).
 
 ## 15. Online Eligibility Rules
 
@@ -358,6 +395,7 @@ This directly answers the user's instruction not to assume refresh behavior.
 ## 16. Location/Geo Availability Rules
 
 (See FR-22, FR-23, §10.5.)
+
 - **16.1** Location **storage** (durable `driver_locations` PostGIS row): unconditional, for any existing driver row, regardless of state (`VERIFIED_EXISTING`, unchanged) — needed for support/ops tooling regardless of eligibility.
 - **16.2** Location **publish to live geo/dispatch index** (Redis/H3): conditional on `verificationStatus === VERIFIED && !isSuspended && isAvailable === true` at the moment of the location update (`REQUIRED_CHANGE`, FR-22) — this is the concrete mechanism preventing unverified/suspended/offline drivers from polluting dispatch availability, since `GeoService`/`NearbyDriverService` itself deliberately performs no eligibility filtering by design (`VERIFIED_EXISTING`, §2.10) and callers are expected to gate.
 - **16.3** When a driver transitions out of eligibility while already published (suspension, document expiry/re-upload downgrade — FR-23), the live position MUST be actively removed via `geoService.forgetDriverPosition` (mirrors the existing `setOffline` behavior, `VERIFIED_EXISTING` for the suspend case, `REQUIRED_CHANGE` to extend to the doc-expiry/re-upload case).
@@ -375,13 +413,15 @@ This directly answers the user's instruction not to assume refresh behavior.
 Two migrations, both `REQUIRED_CHANGE`:
 
 **Migration A — `driver_documents` uniqueness (invariant #3):**
+
 1. Pre-migration data check: `SELECT driver_id, document_type, COUNT(*) FROM driver_documents GROUP BY 1,2 HAVING COUNT(*) > 1;` — run against the target environment before deploying.
-2. Duplicate handling strategy: for any existing duplicate `(driver_id, document_type)` group, keep the row with the latest `updated_at` (most recent submission is the intended current state) and delete the older row(s) — a one-time cleanup `DELETE` in the migration's `up`, scoped only to non-latest rows per group (safe because `upsertDocument`'s findFirst-then-update pattern means only one row per group was ever being *read* going forward anyway; the older rows are dead data, not conflicting live state).
+2. Duplicate handling strategy: for any existing duplicate `(driver_id, document_type)` group, keep the row with the latest `updated_at` (most recent submission is the intended current state) and delete the older row(s) — a one-time cleanup `DELETE` in the migration's `up`, scoped only to non-latest rows per group (safe because `upsertDocument`'s findFirst-then-update pattern means only one row per group was ever being _read_ going forward anyway; the older rows are dead data, not conflicting live state).
 3. Index type: **plain unique index**, not partial — `DriverDocument` has no soft-delete (`deletedAt`) column, so there's no "only constrain live rows" nuance needed (unlike `uq_users_phone_active`/`uq_user_role_active`, which are partial because those tables do soft-delete/revoke). `CREATE UNIQUE INDEX "driver_documents_driver_id_document_type_key" ON "driver_documents"("driver_id", "document_type");`
 4. Rollback: `DROP INDEX "driver_documents_driver_id_document_type_key";` — safe, reversible, no data loss on rollback (the cleanup DELETE from step 2 is not reversible, which is why step 1's pre-check is mandatory before running in any environment with real data).
 5. Compatibility: `DriverDocumentRepository.upsertDocument` MUST be converted to a real `client.driverDocument.upsert({ where: { driverId_documentType: { driverId, documentType } }, ... })` in the same change as this migration (FR-24) — deploying the constraint without the code change would turn the existing race into hard 500s (Prisma `P2002`) instead of silent duplication, which is strictly better but should still ship together.
 
 **Migration B — `DriverDocument.fileId` FK (Files integration, §10.4, §17.4):**
+
 1. Add nullable `file_id UUID` column + FK to `files(id)` `ON DELETE RESTRICT` + `UNIQUE` index, in one migration.
 2. Data handling: any pre-existing `driver_documents` rows only have `file_url` (raw string), which cannot be mechanically resolved to a `File` row (no corresponding upload ever went through the Files module for them, per §2.2/§2.7 — this endpoint was never wired to Files). These rows MUST be treated as invalid on migration: set their `verification_status = 'PENDING'` (force re-review) if not already, and surface them to affected drivers for re-submission via the new `fileId` flow. `OPEN_QUESTION`: confirm with the user/ops whether any such legacy rows actually exist in a real environment (a fresh `zaroorat-back` deployment may have none) before deciding whether an active backfill/notification step is needed versus a no-op.
 3. Whether `file_url` is dropped in this same migration or kept temporarily nullable for a rollback window: `CONFIGURATION_DECISION` — drop it in the same migration once FR-1 (schema-level rejection of `fileUrl` in the request) ships, since keeping a write-only dead column serves no purpose and the user explicitly said not to invent/preserve a second storage mechanism.
@@ -390,23 +430,23 @@ Two migrations, both `REQUIRED_CHANGE`:
 
 ## 19. Failure Scenarios
 
-| Scenario | Expected behavior | Rule |
-|---|---|---|
-| Arbitrary/foreign file URL submitted | Schema rejects (`fileUrl` no longer accepted) | FR-1 |
-| `fileId` belongs to another user | `FileNotFoundError` (not exposing existence via a distinct 403) | 10.1, `VERIFIED_EXISTING` `FileAccessService` convention of not leaking existence |
-| Nonexistent `fileId` | `FileNotFoundError` | 10.1 |
-| `fileId` has wrong purpose (e.g. `PROFILE_IMAGE`) | `FileNotFoundError` (purpose mismatch treated same as not-found by `assertReferenceable`) | 10.1 |
-| `fileId` file not yet `READY` (still uploading) | `FileStateError` | 10.1 |
-| Driver reviews own or another driver's document | 403 (role gate + FR-10 self-review guard) | 9.2, 9.4 |
-| Admin approves driver with missing required docs | 422 with structured breakdown, no state change | FR-15 |
-| Admin approves driver with a `PENDING` required doc | 422 (counted under `pending`) | FR-14, FR-15 |
-| Admin approves driver with a `REJECTED` required doc | 422 (counted under `rejected`) | FR-14, FR-15 |
-| Admin approves driver with an expired required doc | 422 (counted under `expired`, live-computed) | FR-14, FR-15 |
-| Re-approving an already-`VERIFIED` driver | 200, idempotent no-op, no duplicate event | FR-16 |
-| `setOnline` called before verification | `DriverNotVerifiedError` (403) | 15.1, `VERIFIED_EXISTING` first check |
-| `setOnline` called before token refresh (role propagation lag) | Succeeds anyway — `requireOperableDriver` is DB-backed, not role-claim-based | §14.5 |
-| Duplicate `driver.verified` event delivery | No duplicate `UserRoleAssignment`; DB unique index is the backstop | 13.4 |
-| Concurrent duplicate document submission (same type) | Post-migration: second write gets `P2002`, mapped to a 409 (`REQUIRED_CHANGE`: add error mapping for this Prisma error code in the driver-document write path) | 17.1, 18/A |
+| Scenario                                                       | Expected behavior                                                                                                                                              | Rule                                                                              |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Arbitrary/foreign file URL submitted                           | Schema rejects (`fileUrl` no longer accepted)                                                                                                                  | FR-1                                                                              |
+| `fileId` belongs to another user                               | `FileNotFoundError` (not exposing existence via a distinct 403)                                                                                                | 10.1, `VERIFIED_EXISTING` `FileAccessService` convention of not leaking existence |
+| Nonexistent `fileId`                                           | `FileNotFoundError`                                                                                                                                            | 10.1                                                                              |
+| `fileId` has wrong purpose (e.g. `PROFILE_IMAGE`)              | `FileNotFoundError` (purpose mismatch treated same as not-found by `assertReferenceable`)                                                                      | 10.1                                                                              |
+| `fileId` file not yet `READY` (still uploading)                | `FileStateError`                                                                                                                                               | 10.1                                                                              |
+| Driver reviews own or another driver's document                | 403 (role gate + FR-10 self-review guard)                                                                                                                      | 9.2, 9.4                                                                          |
+| Admin approves driver with missing required docs               | 422 with structured breakdown, no state change                                                                                                                 | FR-15                                                                             |
+| Admin approves driver with a `PENDING` required doc            | 422 (counted under `pending`)                                                                                                                                  | FR-14, FR-15                                                                      |
+| Admin approves driver with a `REJECTED` required doc           | 422 (counted under `rejected`)                                                                                                                                 | FR-14, FR-15                                                                      |
+| Admin approves driver with an expired required doc             | 422 (counted under `expired`, live-computed)                                                                                                                   | FR-14, FR-15                                                                      |
+| Re-approving an already-`VERIFIED` driver                      | 200, idempotent no-op, no duplicate event                                                                                                                      | FR-16                                                                             |
+| `setOnline` called before verification                         | `DriverNotVerifiedError` (403)                                                                                                                                 | 15.1, `VERIFIED_EXISTING` first check                                             |
+| `setOnline` called before token refresh (role propagation lag) | Succeeds anyway — `requireOperableDriver` is DB-backed, not role-claim-based                                                                                   | §14.5                                                                             |
+| Duplicate `driver.verified` event delivery                     | No duplicate `UserRoleAssignment`; DB unique index is the backstop                                                                                             | 13.4                                                                              |
+| Concurrent duplicate document submission (same type)           | Post-migration: second write gets `P2002`, mapped to a 409 (`REQUIRED_CHANGE`: add error mapping for this Prisma error code in the driver-document write path) | 17.1, 18/A                                                                        |
 
 ## 20. Idempotency and Concurrency Requirements
 
@@ -446,9 +486,10 @@ Each maps to a testable scenario in §24.
 
 ## 24. Test Requirements
 
-Per the user's explicit instruction, all state transitions in the acceptance suite MUST go through real API/service calls — no direct Prisma writes to fake state, except for setting up *unrelated* preconditions (e.g., seeding an admin user's role) where no lifecycle endpoint exists for that purpose.
+Per the user's explicit instruction, all state transitions in the acceptance suite MUST go through real API/service calls — no direct Prisma writes to fake state, except for setting up _unrelated_ preconditions (e.g., seeding an admin user's role) where no lifecycle endpoint exists for that purpose.
 
 **Primary end-to-end scenario** (maps to the user's 21-step list in §K verbatim — all steps REQUIRED_CHANGE as new test code, since §2.14 confirmed none of this currently exists as HTTP-level coverage):
+
 1. OTP login → user.
 2. Authenticate (access+refresh tokens obtained).
 3. `GET /drivers/me` → driver onboarded.

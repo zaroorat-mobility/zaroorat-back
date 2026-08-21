@@ -39,17 +39,27 @@ export class OutboxRepository extends BaseRepository {
   }
   async claimBatch(limit: number, now: Date = new Date()): Promise<ClaimedOutboxEvent[]> {
     const claimToken = randomUUID();
+    // The ORDER BY inside the subquery decides WHICH rows are claimed (the
+    // oldest ones), but RETURNING carries no ordering guarantee of its own —
+    // postgres emits updated rows in whatever order it touched them. Wrapping
+    // the UPDATE in a CTE and ordering the outer SELECT is what actually makes
+    // the batch oldest-first, which is the order the relay publishes in.
     return this.client.$queryRaw<ClaimedOutboxEvent[]>`
-      UPDATE outbox_events
-      SET status = 'PROCESSING', claimed_at = ${now}, claim_token = ${claimToken}::uuid
-      WHERE id IN (
-        SELECT id FROM outbox_events
-        WHERE status = 'PENDING' AND next_attempt_at <= ${now}
-        ORDER BY created_at, id
-        LIMIT ${limit}
-        FOR UPDATE SKIP LOCKED
+      WITH claimed AS (
+        UPDATE outbox_events
+        SET status = 'PROCESSING', claimed_at = ${now}, claim_token = ${claimToken}::uuid
+        WHERE id IN (
+          SELECT id FROM outbox_events
+          WHERE status = 'PENDING' AND next_attempt_at <= ${now}
+          ORDER BY created_at, id
+          LIMIT ${limit}
+          FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id, event_type, retries, payload, claim_token, created_at
       )
-      RETURNING id, event_type AS "eventType", retries, payload, claim_token AS "claimToken"
+      SELECT id, event_type AS "eventType", retries, payload, claim_token AS "claimToken"
+      FROM claimed
+      ORDER BY created_at, id
     `;
   }
   async markPublished(ids: string[], claimToken: string): Promise<number> {

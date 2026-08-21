@@ -31,6 +31,7 @@ export const updateProfileSchema = z.strictObject({
     .refine((value) => userConfig.supportedLanguageCodes.includes(value), 'NOT_ALLOWED')
     .nullable()
     .optional(),
+  email: z.string().email().max(100).nullable().optional(),
 });
 export type UpdateProfileBody = z.infer<typeof updateProfileSchema>;
 export const phoneChangeSchema = z.strictObject({

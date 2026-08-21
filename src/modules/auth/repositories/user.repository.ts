@@ -42,6 +42,9 @@ export class UserRepository extends BaseRepository {
   async markPhoneVerified(id: string, tx?: TransactionClient): Promise<void> {
     await (tx ?? this.client).user.update({ where: { id }, data: { isPhoneVerified: true } });
   }
+  async updateEmail(id: string, email: string | null, tx?: TransactionClient): Promise<User> {
+    return (tx ?? this.client).user.update({ where: { id }, data: { email } });
+  }
   async softDelete(id: string, at: Date = new Date()): Promise<void> {
     await this.client.user.update({ where: { id }, data: { deletedAt: at } });
   }

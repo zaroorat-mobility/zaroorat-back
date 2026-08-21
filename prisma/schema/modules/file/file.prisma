@@ -5,76 +5,76 @@
 // them.
 
 model File {
-  id              String      @id @default(uuid(7)) @db.Uuid
-  ownerUserId     String      @map("owner_user_id") @db.Uuid
-  purpose         FilePurpose
-  status          FileStatus  @default(PENDING)
+  id                  String         @id @default(uuid(7)) @db.Uuid
+  ownerUserId         String         @map("owner_user_id") @db.Uuid
+  purpose             FilePurpose
+  status              FileStatus     @default(PENDING)
   // Server-generated, unguessable, never reused, never returned (R-FILE-7, FILE-INV-1/2).
-  storageKey      String      @map("storage_key")
+  storageKey          String         @map("storage_key")
   // Which provider wrote it. A vendor change must not repoint historical keys.
-  storageProvider String      @map("storage_provider")
+  storageProvider     String         @map("storage_provider")
   /// Which bucket holds it. Nullable because rows written before this column
   /// existed cannot be back-filled reliably — the bucket at the time is not
   /// recoverable. Without it a bucket rename orphans every historical row.
-  storageBucket   String?     @map("storage_bucket")
+  storageBucket       String?        @map("storage_bucket")
   /// The S3 version the validated bytes live at, when the bucket is versioned.
   /// Null on unversioned buckets and on providers that do not report one.
   /// Erasure needs this to prove it destroyed the object it validated.
-  storageVersionId String?    @map("storage_version_id")
+  storageVersionId    String?        @map("storage_version_id")
   // The client's name, kept for display only. Never part of the key, never trusted.
-  fileName        String      @map("file_name")
+  fileName            String         @map("file_name")
   /// What the client SAID the bytes are. Never authoritative.
-  contentType     String      @map("content_type")
+  contentType         String         @map("content_type")
   /// What the bytes ACTUALLY are, decided server-side from the stored object's
   /// magic bytes. Null until validation has run.
-  detectedContentType String? @map("detected_content_type")
+  detectedContentType String?        @map("detected_content_type")
   // Declared at creation; overwritten with the verified value at completion (R-FILE-5).
-  sizeBytes       Int         @map("size_bytes")
+  sizeBytes           Int            @map("size_bytes")
   /// SHA-256 of the stored object as recorded by object storage, which was made
   /// to validate it on PUT by binding the declared digest into the upload
   /// signature. Null when no digest was declared: the API never reads the object
   /// back to compute one, because bytes do not transit this process (R-FILE-1).
-  checksumSha256  String?     @map("checksum_sha256")
+  checksumSha256      String?        @map("checksum_sha256")
   /// Malware verdict. A file is never READY without `CLEAN` (or `SKIPPED`,
   /// which only exists outside production).
-  scanStatus      FileScanStatus @default(PENDING) @map("scan_status")
-  scannedAt       DateTime?      @map("scanned_at")
+  scanStatus          FileScanStatus @default(PENDING) @map("scan_status")
+  scannedAt           DateTime?      @map("scanned_at")
   /// The scanner's threat identifier, for the security event and investigation.
   /// Never returned to the uploader — it discloses scanner internals.
-  scanThreat      String?        @map("scan_threat")
+  scanThreat          String?        @map("scan_threat")
   /// Why the file was REJECTED, as a stable code (`THREAT`, `CONTENT_MISMATCH`,
   /// `EXIF_LOCATION_PRESENT`, …). Drives metrics and support, not the response.
-  rejectedReason  String?        @map("rejected_reason")
+  rejectedReason      String?        @map("rejected_reason")
   // When the write permission lapses. The sweeper reads this (R-FILE-22).
-  uploadExpiresAt DateTime    @map("upload_expires_at")
+  uploadExpiresAt     DateTime       @map("upload_expires_at")
   /// When the object was first observed in storage. Distinct from completedAt:
   /// reconciliation can observe an object long before the row settles, and the
   /// gap between the two is what tells you a client abandoned the handshake.
-  uploadedAt      DateTime?   @map("uploaded_at")
+  uploadedAt          DateTime?      @map("uploaded_at")
   /// When server-side content validation passed. Distinct from completedAt,
   /// which is when the row reached its terminal state.
-  verifiedAt      DateTime?   @map("verified_at")
-  completedAt     DateTime?   @map("completed_at")
-  createdAt       DateTime    @default(now()) @map("created_at")
-  updatedAt       DateTime    @updatedAt @map("updated_at")
+  verifiedAt          DateTime?      @map("verified_at")
+  completedAt         DateTime?      @map("completed_at")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
   // Soft delete. The object outlives this until retention erases it (R-FILE-18).
-  deletedAt       DateTime?   @map("deleted_at")
+  deletedAt           DateTime?      @map("deleted_at")
   // Retention moved the bytes to cold storage. Distinct from erasure: the object
   // still exists (R-FILE-21). Mutually exclusive with erasedAt (FILE-INV-9).
-  archivedAt      DateTime?   @map("archived_at")
+  archivedAt          DateTime?      @map("archived_at")
   // Retention destroyed every version of the object (R-FILE-23).
-  erasedAt        DateTime?   @map("erased_at")
+  erasedAt            DateTime?      @map("erased_at")
   // The file that replaced this one (R-FILE-31). `@unique` is what keeps a
   // version chain a line rather than a tree (FILE-INV-8) — Postgres treats NULLs
   // as distinct, so every current file coexists freely.
-  supersededById  String?     @unique @map("superseded_by_id") @db.Uuid
+  supersededById      String?        @unique @map("superseded_by_id") @db.Uuid
 
-  owner        User         @relation(fields: [ownerUserId], references: [id])
-  supersededBy File?        @relation("FileVersion", fields: [supersededById], references: [id])
-  supersedes   File?        @relation("FileVersion")
+  owner           User             @relation(fields: [ownerUserId], references: [id])
+  supersededBy    File?            @relation("FileVersion", fields: [supersededById], references: [id])
+  supersedes      File?            @relation("FileVersion")
   // The profile this file is the avatar of, if any — the first live reference
   // any module holds (files doc 03 §7.2).
-  profileOf    UserProfile? @relation("ProfileImage")
+  profileOf       UserProfile?     @relation("ProfileImage")
   // Driver documents this file backs, if any (drivers module's live reference).
   driverDocuments DriverDocument[]
 

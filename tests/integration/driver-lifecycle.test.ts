@@ -72,17 +72,17 @@ describe('driver verification lifecycle — full production path (integration)',
 
     // 3. Driver onboarding.
     const me1 = await app.inject({
-      method: 'GET',
-      url: '/api/v1/drivers/me',
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
       headers: driver.authHeader,
     });
-    assert.equal(me1.statusCode, 200, me1.payload);
+    assert.equal(me1.statusCode, 201, me1.payload);
     const driverId = me1.json().data.id as string;
 
     // 19. Duplicate onboarding stays safe — still one Driver row.
     const me2 = await app.inject({
-      method: 'GET',
-      url: '/api/v1/drivers/me',
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
       headers: driver.authHeader,
     });
     assert.equal(me2.json().data.id, driverId);

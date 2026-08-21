@@ -12,6 +12,10 @@ package-lock.json
 # Chart.yaml and the values-*.yaml files are plain YAML and stay formatted.
 infrastructure/helm/templates/
 
+# Separate browser app with its own toolchain. Git already ignores it, but
+# Prettier does not read .gitignore, so it has to be listed here too.
+frontend/
+
 # Generated
 prisma/migrations/
 src/generated/

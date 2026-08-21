@@ -17,7 +17,7 @@ module.exports = defineConfig([
     // Separate browser app with its own toolchain and its own build output.
     // `dist/` above is anchored to this config's directory, so it does not
     // cover the bundle inside this folder.
-    'ride-demo-frontend/',
+    'frontend/',
   ]),
 
   js.configs.recommended,

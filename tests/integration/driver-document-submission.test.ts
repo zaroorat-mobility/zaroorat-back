@@ -54,11 +54,11 @@ describe('driver document submission via fileId (integration)', () => {
 
   async function onboardDriver(user: LoggedInUser): Promise<string> {
     const me = await app.inject({
-      method: 'GET',
-      url: '/api/v1/drivers/me',
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
       headers: user.authHeader,
     });
-    assert.equal(me.statusCode, 200, me.payload);
+    assert.equal(me.statusCode, 201, me.payload);
     return me.json().data.id as string;
   }
 

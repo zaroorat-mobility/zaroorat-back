@@ -62,8 +62,8 @@ describe('driver approval eligibility gate and role propagation (integration)', 
 
   async function onboard(user: LoggedInUser): Promise<string> {
     const me = await app.inject({
-      method: 'GET',
-      url: '/api/v1/drivers/me',
+      method: 'POST',
+      url: '/api/v1/drivers/me/onboard',
       headers: user.authHeader,
     });
     return me.json().data.id as string;
