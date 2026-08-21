@@ -61,6 +61,13 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     name: JOB_NAMES.PAYMENT_RECONCILIATION,
     pattern: process.env.PAYMENT_RECONCILIATION_CRON ?? '15 * * * *',
   },
+  {
+    queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
+    name: JOB_NAMES.DRIVER_SETTLEMENT,
+    // Once daily, well after midnight UTC, so the prior full day's rides
+    // (the window this job settles) are all in.
+    pattern: process.env.DRIVER_SETTLEMENT_CRON ?? '30 2 * * *',
+  },
 ]);
 export async function registerJobSchedules(): Promise<void> {
   for (const schedule of JOB_SCHEDULES) {

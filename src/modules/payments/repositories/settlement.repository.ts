@@ -88,6 +88,25 @@ export class SettlementRepository {
       rideCount: Number(row?.ride_count ?? 0),
     };
   }
+  /// Drivers who completed at least one fared ride in the window — the input
+  /// `calculateSettlement` needs but nothing previously produced (the job used
+  /// to require an explicit, externally-supplied driver list).
+  async findDriverIdsWithCompletedRides(
+    periodStart: Date,
+    periodEnd: Date,
+    tx?: TransactionClient,
+  ): Promise<string[]> {
+    const client = tx ?? this.db.client;
+    const rows = await client.ride.findMany({
+      where: {
+        status: 'COMPLETED',
+        completedAt: { gte: periodStart, lt: periodEnd },
+      },
+      select: { driverId: true },
+      distinct: ['driverId'],
+    });
+    return rows.map((row) => row.driverId);
+  }
   async lockForUpdate(id: string, tx: TransactionClient): Promise<DriverSettlement | null> {
     const locked = await tx.$queryRaw<
       {
