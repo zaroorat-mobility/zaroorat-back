@@ -3,6 +3,7 @@ export * from './wallet.repository.js';
 export * from './intent.repository.js';
 export * from './ledger.repository.js';
 export * from './settlement.repository.js';
+export * from './settlement-wallet.repository.js';
 export * from './payout.repository.js';
 export * from './refund.repository.js';
 export * from './chargeback.repository.js';

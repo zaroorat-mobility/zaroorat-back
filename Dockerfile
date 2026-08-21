@@ -1,10 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# ------------------------------------------------------------------------------
-# Configuration & Build Architecture
-# ------------------------------------------------------------------------------
-# Node version is pinned to match .nvmrc (v26.4.0). Keep the two in sync.
-ARG NODE_VERSION=26.4.0
+# Node version is pinned to match .nvmrc (v22.21.0). Keep the two in sync.
+ARG NODE_VERSION=22.21.0
 
 # Stage order matters: `runner` must stay LAST so an untargeted `docker build .`
 # (which is what ci.yml does) still selects the production image.

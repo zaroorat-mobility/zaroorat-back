@@ -32,6 +32,16 @@ export class DeviceRepository extends BaseRepository {
       orderBy: [{ lastSeenAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
     });
   }
+  /// The most recently active device that actually has a push token — a user
+  /// may have logged in from several devices, only some of which reported one.
+  async findLatestFcmToken(userId: string): Promise<string | null> {
+    const device = await this.client.userDevice.findFirst({
+      where: { userId, fcmToken: { not: null } },
+      orderBy: [{ lastSeenAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+      select: { fcmToken: true },
+    });
+    return device?.fcmToken ?? null;
+  }
   async findOwned(userId: string, id: string): Promise<UserDevice | null> {
     return this.client.userDevice.findFirst({ where: { id, userId } });
   }

@@ -130,4 +130,11 @@ export class DriverRepository {
       data: { isAvailable },
     });
   }
+  async updateCurrentVehicle(
+    id: string,
+    vehicleId: string | null,
+    tx: TransactionClient,
+  ): Promise<Driver> {
+    return tx.driver.update({ where: { id }, data: { currentVehicleId: vehicleId } });
+  }
 }

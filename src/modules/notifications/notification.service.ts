@@ -1,4 +1,5 @@
 import type { SmsProvider, SmsSendResult } from './providers/sms.provider';
+import type { PushProvider, PushSendResult } from './providers/push.provider';
 import type { NotificationConfig } from './notification.config';
 export interface SendSmsOptions {
   templateId?: string;
@@ -7,8 +8,17 @@ export interface SendSmsOptions {
 export class NotificationService {
   constructor(
     private readonly smsProvider: SmsProvider,
+    private readonly pushProvider: PushProvider,
     private readonly notificationConfig: NotificationConfig,
   ) {}
+  async sendPush(
+    fcmToken: string,
+    title: string,
+    body: string,
+    data?: Record<string, string>,
+  ): Promise<PushSendResult> {
+    return this.pushProvider.sendPush({ to: fcmToken, title, body, ...(data ? { data } : {}) });
+  }
   async sendSms(to: string, body: string, options?: SendSmsOptions): Promise<SmsSendResult> {
     return this.smsProvider.sendSms({
       to,

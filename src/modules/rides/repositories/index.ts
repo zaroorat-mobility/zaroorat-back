@@ -6,3 +6,4 @@ export * from './ride-cancellation.repository.js';
 export * from './ride-otp.repository.js';
 export * from './ride-status-event.repository.js';
 export * from './ride-receipt.repository.js';
+export * from './ride-rating.repository.js';

@@ -31,6 +31,7 @@ export const MAINTENANCE_HANDLERS: Readonly<Record<MaintenanceJobName, string>> 
   [JOB_NAMES.DRIVER_HEARTBEAT_TIMEOUT]: 'heartbeatTimeoutJob',
   [JOB_NAMES.DRIVER_DOC_EXPIRATION]: 'docExpirationJob',
   [JOB_NAMES.PAYMENT_RECONCILIATION]: 'reconciliationJob',
+  [JOB_NAMES.DRIVER_SETTLEMENT]: 'settlementJob',
 });
 export async function runMaintenanceJob(
   name: string,

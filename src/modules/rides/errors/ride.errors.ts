@@ -74,3 +74,47 @@ export class DriverNotAvailableError extends RideError {
     this.name = 'DriverNotAvailableError';
   }
 }
+export class RideRequestNotCancellableError extends RideError {
+  constructor(status: string) {
+    super(
+      `Ride request cannot be cancelled from status '${status}'`,
+      'RIDE_REQUEST_NOT_CANCELLABLE',
+      409,
+    );
+    this.name = 'RideRequestNotCancellableError';
+  }
+}
+export class VehicleMismatchError extends RideError {
+  constructor(message: string) {
+    super(message, 'VEHICLE_MISMATCH', 403);
+    this.name = 'VehicleMismatchError';
+  }
+}
+export class ImplausibleTripDataError extends RideError {
+  constructor(message: string) {
+    super(message, 'IMPLAUSIBLE_TRIP_DATA', 422);
+    this.name = 'ImplausibleTripDataError';
+  }
+}
+export class RideNotRatableError extends RideError {
+  constructor(status: string) {
+    super(
+      `Only a completed ride can be rated (current status: '${status}')`,
+      'RIDE_NOT_RATABLE',
+      409,
+    );
+    this.name = 'RideNotRatableError';
+  }
+}
+export class AlreadyRatedError extends RideError {
+  constructor() {
+    super('You have already rated this ride', 'ALREADY_RATED', 409);
+    this.name = 'AlreadyRatedError';
+  }
+}
+export class IncompleteProfileError extends RideError {
+  constructor() {
+    super('Add your name to your profile before booking a ride', 'INCOMPLETE_PROFILE', 422);
+    this.name = 'IncompleteProfileError';
+  }
+}

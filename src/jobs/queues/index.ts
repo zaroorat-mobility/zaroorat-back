@@ -22,6 +22,7 @@ export const JOB_NAMES = Object.freeze({
   DRIVER_HEARTBEAT_TIMEOUT: 'driver-heartbeat-timeout',
   DRIVER_DOC_EXPIRATION: 'driver-doc-expiration',
   PAYMENT_RECONCILIATION: 'payment-reconciliation',
+  DRIVER_SETTLEMENT: 'driver-settlement',
   OTP_SEND: 'otp-send',
 } as const);
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];

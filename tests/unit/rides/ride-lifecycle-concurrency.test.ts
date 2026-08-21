@@ -16,7 +16,11 @@ function makeWorld() {
   const statusEvents: string[] = [];
   const events: string[] = [];
   const ledgerPostings: string[] = [];
+  const resolvedOffers: string[] = [];
+  const driverStatuses: { driverId: string; status: string }[] = [];
   const locks = new Map<string, Promise<void>>();
+  // driverId -> rideId of the one active ride they're currently on, if any.
+  const activeRideByDriver = new Map<string, string>();
 
   const rideRepo = {
     async lockForUpdate(id: string) {
@@ -31,6 +35,10 @@ function makeWorld() {
       await previous;
       queueMicrotask(() => release());
       return rides.get(id) ? { ...rides.get(id) } : null;
+    },
+    async findActiveByDriver(driverId: string) {
+      const rideId = activeRideByDriver.get(driverId);
+      return rideId ? { ...rides.get(rideId) } : null;
     },
     async updateStatusIf(
       id: string,
@@ -47,6 +55,7 @@ function makeWorld() {
       const id = `ride_${rides.size + 1}`;
       const ride = { id, status: 'ACCEPTED', ...input };
       rides.set(id, ride);
+      activeRideByDriver.set(input.driverId as string, id);
       return ride;
     },
   };
@@ -55,11 +64,57 @@ function makeWorld() {
     async lockForUpdate(id: string) {
       return requests.get(id) ? { ...requests.get(id) } : null;
     },
+    async findById(id: string) {
+      return requests.get(id) ? { ...requests.get(id) } : null;
+    },
     async claimForMatch(id: string) {
       const request = requests.get(id);
       if (!request || !['CREATED', 'SEARCHING'].includes(request.status as string)) return false;
       requests.set(id, { ...request, status: 'MATCHED' });
       return true;
+    },
+  };
+
+  const dispatchRepo = {
+    async resolveOffers(requestId: string, winningDriverId: string) {
+      resolvedOffers.push(`${requestId}:${winningDriverId}`);
+    },
+  };
+
+  const driverStatusRepository = {
+    async updateStatus(driverId: string, status: string) {
+      driverStatuses.push({ driverId, status });
+    },
+  };
+
+  const sentOtpSms: { to: string; body: string }[] = [];
+  const userRepository = {
+    async findById(userId: string) {
+      return { id: userId, phoneNumber: `+91${userId}` };
+    },
+  };
+  const notificationService = {
+    async sendSms(to: string, body: string) {
+      sentOtpSms.push({ to, body });
+      return {};
+    },
+  };
+  // Every test in this file pairs driver 'd1' with vehicle 'v1', 'd2' with
+  // 'v2', and every request's vehicleTypeId is 'v1' — mirror that so the
+  // accept-time vehicle-eligibility check passes for the scenarios these
+  // tests actually construct, without hand-rolling a full fake registry.
+  const vehicleOwnerByVehicleId = new Map([
+    ['v1', 'd1'],
+    ['v2', 'd2'],
+  ]);
+  const vehicleRepository = {
+    async findById(vehicleId: string) {
+      return {
+        id: vehicleId,
+        isActive: true,
+        currentDriverId: vehicleOwnerByVehicleId.get(vehicleId) ?? null,
+        vehicleTypeId: 'v1',
+      };
     },
   };
 
@@ -71,6 +126,7 @@ function makeWorld() {
         statusEvents.push(e.toStatus);
       },
     } as never,
+    dispatchRepo as never,
     {
       async generateStartOtp() {
         return { plaintextOtp: '123456' };
@@ -95,6 +151,10 @@ function makeWorld() {
         return [];
       },
     } as never,
+    driverStatusRepository as never,
+    userRepository as never,
+    notificationService as never,
+    vehicleRepository as never,
     {
       async execute<T>(fn: (tx: unknown) => Promise<T>) {
         return fn({});
@@ -108,7 +168,19 @@ function makeWorld() {
     { rideStarted() {}, rideCompleted() {}, rideCancelled() {} } as never,
   );
 
-  return { service, rides, requests, fares, statusEvents, events, ledgerPostings };
+  return {
+    service,
+    rides,
+    requests,
+    fares,
+    statusEvents,
+    events,
+    ledgerPostings,
+    resolvedOffers,
+    driverStatuses,
+    activeRideByDriver,
+    sentOtpSms,
+  };
 }
 
 function seedRide(world: ReturnType<typeof makeWorld>, status: string) {
@@ -147,6 +219,106 @@ describe('Ride lifecycle concurrency', () => {
     assert.equal(lost.length, 1);
     assert.ok((lost[0] as PromiseRejectedResult).reason instanceof RideRequestAlreadyMatchedError);
     assert.equal(world.rides.size, 1, 'only one ride row may exist for one request');
+  });
+
+  it('accepting a request resolves its offers and puts the driver ON_TRIP', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+
+    const { plaintextOtp } = await world.service.acceptRideRequest({
+      requestId: 'req_1',
+      driverId: 'd1',
+      vehicleId: 'v1',
+    });
+
+    assert.deepEqual(world.resolvedOffers, ['req_1:d1']);
+    assert.deepEqual(world.driverStatuses, [{ driverId: 'd1', status: 'ON_TRIP' }]);
+    assert.equal(
+      world.sentOtpSms.length,
+      1,
+      'the customer, not the driver, receives the start OTP',
+    );
+    assert.equal(world.sentOtpSms[0]!.to, '+91cust_1');
+    assert.ok(
+      world.sentOtpSms[0]!.body.includes(plaintextOtp),
+      'the delivered message carries the same code the driver must be given',
+    );
+  });
+
+  it('refuses to accept with a vehicle that is not currently assigned to the driver', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+
+    // v2 is owned by d2, not d1.
+    await assert.rejects(
+      () =>
+        world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v2' }),
+      (err: unknown) => (err as { code?: string }).code === 'VEHICLE_MISMATCH',
+    );
+    assert.equal(world.requests.get('req_1')?.status, 'SEARCHING', 'the request stays claimable');
+  });
+
+  it('refuses to let a driver already on a ride accept a second one', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+    world.requests.set('req_2', {
+      id: 'req_2',
+      status: 'SEARCHING',
+      customerId: 'cust_2',
+      vehicleTypeId: 'v1',
+      pickupLat: 2,
+      pickupLng: 2,
+    });
+
+    await world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v1' });
+
+    await assert.rejects(
+      () =>
+        world.service.acceptRideRequest({ requestId: 'req_2', driverId: 'd1', vehicleId: 'v1' }),
+      (err: unknown) => (err as { code?: string }).code === 'DRIVER_NOT_AVAILABLE',
+    );
+    // The second request must still be claimable by someone else — a driver
+    // who is already busy must not have consumed it on the way to failing.
+    assert.equal(world.requests.get('req_2')?.status, 'SEARCHING');
+  });
+
+  it('frees the driver back to ONLINE on completion and on cancellation', async () => {
+    const worldA = makeWorld();
+    seedRide(worldA, 'IN_PROGRESS');
+    await worldA.service.completeRide('ride_1', 'driver_1', 12, 25);
+    assert.ok(
+      worldA.driverStatuses.some((s) => s.driverId === 'driver_1' && s.status === 'ONLINE'),
+      'completion must release the driver',
+    );
+
+    const worldB = makeWorld();
+    seedRide(worldB, 'ACCEPTED');
+    await worldB.service.cancelRide('ride_1', 'CUSTOMER', 'cust_1', 'CHANGED_MIND');
+    assert.ok(
+      worldB.driverStatuses.some((s) => s.driverId === 'driver_1' && s.status === 'ONLINE'),
+      'cancellation must release the driver too, regardless of who cancelled',
+    );
   });
 
   it('completes a ride exactly once under two concurrent calls', async () => {
@@ -217,6 +389,35 @@ describe('Ride lifecycle concurrency', () => {
 
     await world.service.completeRide('ride_1', 'driver_1', 30, 60);
     assert.equal(world.rides.get('ride_1')?.actualDurationMin, 60);
+  });
+
+  it('rejects a final distance wildly beyond the original quote', async () => {
+    const world = makeWorld();
+    world.rides.set('ride_1', {
+      id: 'ride_1',
+      status: 'IN_PROGRESS',
+      driverId: 'driver_1',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      paymentMethod: 'CASH',
+      waitTimeMin: 0,
+      requestId: 'req_1',
+    });
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'MATCHED',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      estimatedDistanceKm: 5,
+      estimatedDurationMin: 15,
+    });
+
+    await assert.rejects(
+      () => world.service.completeRide('ride_1', 'driver_1', 500, 20),
+      (err: unknown) => (err as { code?: string }).code === 'IMPLAUSIBLE_TRIP_DATA',
+    );
+    assert.equal(world.rides.get('ride_1')?.status, 'IN_PROGRESS', 'the ride is untouched');
+    assert.deepEqual(world.fares, [], 'no fare was written for the rejected completion');
   });
 
   it('refuses a customer cancelling someone else’s ride', async () => {

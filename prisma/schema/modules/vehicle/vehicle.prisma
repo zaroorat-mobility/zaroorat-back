@@ -63,6 +63,10 @@ model Vehicle {
 
 model VehicleAssignment {
   id         String    @id @default(uuid(7)) @db.Uuid
+  /// One ACTIVE row per driver, and one per vehicle: a raw-SQL partial unique
+  /// index (migration 20260821140000, `vehicle_assignments_active_driver_key`
+  /// / `_active_vehicle_key`) — Prisma can't express a WHERE-scoped unique
+  /// constraint, so neither is declared as `@@unique` here.
   driverId   String    @map("driver_id") @db.Uuid
   vehicleId  String    @map("vehicle_id") @db.Uuid
   assignedAt DateTime  @default(now()) @map("assigned_at")

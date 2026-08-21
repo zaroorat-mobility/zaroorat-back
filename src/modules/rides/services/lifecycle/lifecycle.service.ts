@@ -5,10 +5,16 @@ import { EventPublisher } from '@core/events';
 import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideRequestRepository } from '../../repositories/ride-request.repository.js';
 import { RideStatusEventRepository } from '../../repositories/ride-status-event.repository.js';
+import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { RideOtpService } from '../otp/ride-otp.service.js';
 import { FareService } from '../fare/fare.service.js';
 import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
+import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
+import { UserRepository } from '@modules/auth/repositories/user.repository.js';
+import { NotificationService } from '@modules/notifications';
+import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
+import { logger } from '@shared/logger/index.js';
 import {
   InvalidRideStateTransitionError,
   RideNotFoundError,
@@ -16,8 +22,17 @@ import {
   RideDriverMismatchError,
   RideCustomerMismatchError,
   RideActorRequiredError,
+  DriverNotAvailableError,
+  VehicleMismatchError,
+  ImplausibleTripDataError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
+import {
+  TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER,
+  TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM,
+  TRIP_DURATION_PLAUSIBILITY_MULTIPLIER,
+  TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN,
+} from '../../constants/ride.constants.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { LedgerService } from '@modules/payments/services/ledger/ledger.service.js';
 import type { Ride, RideStatus } from '../../types';
@@ -59,11 +74,16 @@ export class LifecycleService {
     private readonly rideRepo: RideRepository,
     private readonly requestRepo: RideRequestRepository,
     private readonly statusEventRepo: RideStatusEventRepository,
+    private readonly dispatchRepo: RideDispatchRepository,
     private readonly rideOtpService: RideOtpService,
     private readonly fareService: FareService,
     private readonly fareRepo: RideFareRepository,
     private readonly cancellationService: CancellationService,
     private readonly ledgerService: LedgerService,
+    private readonly driverStatusRepository: DriverStatusRepository,
+    private readonly userRepository: UserRepository,
+    private readonly notificationService: NotificationService,
+    private readonly vehicleRepository: VehicleRepository,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
@@ -102,6 +122,66 @@ export class LifecycleService {
     this.validateTransition(ride.status, toStatus);
     return ride;
   }
+  /// The one place a client-supplied `vehicleId` is checked against anything
+  /// at all beyond "does this row exist" (the DB foreign key). Before the
+  /// vehicles module existed there was nothing to check it against — a driver
+  /// could accept with any vehicle id in the table, owned by anyone, of any
+  /// category.
+  private async assertVehicleEligible(
+    vehicleId: string,
+    driverId: string,
+    requestedVehicleTypeId: string,
+    tx: TransactionClient,
+  ): Promise<void> {
+    const vehicle = await this.vehicleRepository.findById(vehicleId, tx);
+    if (!vehicle || !vehicle.isActive) {
+      throw new VehicleMismatchError('Vehicle does not exist or is not active');
+    }
+    if (vehicle.currentDriverId !== driverId) {
+      throw new VehicleMismatchError('This vehicle is not currently assigned to you');
+    }
+    if (vehicle.vehicleTypeId !== requestedVehicleTypeId) {
+      throw new VehicleMismatchError("This vehicle's category does not match the ride request");
+    }
+  }
+  /// Not a GPS cross-check — no trip location trail is persisted anywhere in
+  /// this codebase (DriverLocation holds only a driver's current position,
+  /// overwritten on every update; driver_location_history is a raw-SQL
+  /// partitioned table nothing writes to). The one real reference point that
+  /// does exist is the quote this ride was requested against — a driver
+  /// submitting actuals wildly beyond it is rejected rather than trusted.
+  private async assertPlausibleTripData(
+    requestId: string,
+    actualDistanceKm: number,
+    actualDurationMin: number,
+    tx: TransactionClient,
+  ): Promise<void> {
+    const request = await this.requestRepo.findById(requestId, tx);
+    const estimatedDistanceKm = request?.estimatedDistanceKm
+      ? Number(request.estimatedDistanceKm)
+      : null;
+    const estimatedDurationMin = request?.estimatedDurationMin ?? null;
+    if (estimatedDistanceKm != null) {
+      const maxPlausibleKm =
+        estimatedDistanceKm * TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER +
+        TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM;
+      if (actualDistanceKm > maxPlausibleKm) {
+        throw new ImplausibleTripDataError(
+          `Reported distance (${actualDistanceKm}km) is far beyond the quoted estimate (${estimatedDistanceKm}km)`,
+        );
+      }
+    }
+    if (estimatedDurationMin != null) {
+      const maxPlausibleMin =
+        estimatedDurationMin * TRIP_DURATION_PLAUSIBILITY_MULTIPLIER +
+        TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN;
+      if (actualDurationMin > maxPlausibleMin) {
+        throw new ImplausibleTripDataError(
+          `Reported duration (${actualDurationMin}min) is far beyond the quoted estimate (${estimatedDurationMin}min)`,
+        );
+      }
+    }
+  }
   async acceptRideRequest(data: {
     requestId: string;
     driverId: string;
@@ -110,9 +190,14 @@ export class LifecycleService {
     ride: Ride;
     plaintextOtp: string;
   }> {
-    return this.txManager.execute(async (tx) => {
+    const result = await this.txManager.execute(async (tx) => {
       const request = await this.requestRepo.lockForUpdate(data.requestId, tx);
       if (!request) throw new RideNotFoundError(data.requestId);
+      const existingDriverRide = await this.rideRepo.findActiveByDriver(data.driverId, tx);
+      if (existingDriverRide) {
+        throw new DriverNotAvailableError('Driver already has an active ride in progress');
+      }
+      await this.assertVehicleEligible(data.vehicleId, data.driverId, request.vehicleTypeId, tx);
       if (!(await this.requestRepo.claimForMatch(data.requestId, tx))) {
         throw new RideRequestAlreadyMatchedError(data.requestId);
       }
@@ -134,6 +219,8 @@ export class LifecycleService {
         tx,
       );
       const { plaintextOtp } = await this.rideOtpService.generateStartOtp(ride.id, tx);
+      await this.dispatchRepo.resolveOffers(request.id, data.driverId, tx);
+      await this.driverStatusRepository.updateStatus(data.driverId, 'ON_TRIP', {}, tx);
       await this.statusEventRepo.record(
         {
           rideId: ride.id,
@@ -153,6 +240,33 @@ export class LifecycleService {
       );
       return { ride, plaintextOtp };
     });
+    await this.deliverStartOtpToCustomer(
+      result.ride.customerId,
+      result.ride.id,
+      result.plaintextOtp,
+    );
+    return result;
+  }
+  /// The driver is the one who types the OTP; the customer is the one who
+  /// must actually receive it to read aloud. Delivered after commit — a slow
+  /// or failed SMS send must never roll back an already-successful accept,
+  /// and this is the only channel that currently exists (see the platform
+  /// audit's P0 finding: no push/socket delivery exists yet).
+  private async deliverStartOtpToCustomer(
+    customerId: string,
+    rideId: string,
+    plaintextOtp: string,
+  ): Promise<void> {
+    try {
+      const customer = await this.userRepository.findById(customerId);
+      if (!customer) return;
+      await this.notificationService.sendSms(
+        customer.phoneNumber,
+        `Zaroorat: Share this code with your driver to start the trip: ${plaintextOtp}. Do not share it before your driver has arrived.`,
+      );
+    } catch (err) {
+      logger.warn({ err, rideId }, '[rides] failed to deliver start OTP to customer');
+    }
   }
   async markDriverArrived(rideId: string, driverId: string): Promise<Ride> {
     return this.txManager.execute(async (tx) => {
@@ -237,6 +351,7 @@ export class LifecycleService {
         'COMPLETED',
         tx,
       );
+      await this.assertPlausibleTripData(ride.requestId, actualDistanceKm, actualDurationMin, tx);
       const waitingMinutes = ride.waitTimeMin ?? 0;
       const itemizedFare = await this.fareService.calculateFinalFare({
         actualDistanceKm,
@@ -293,6 +408,7 @@ export class LifecycleService {
         },
         tx,
       );
+      await this.driverStatusRepository.updateStatus(driverId, 'ONLINE', {}, tx);
       await this.statusEventRepo.record(
         {
           rideId,
@@ -358,6 +474,11 @@ export class LifecycleService {
         },
         tx,
       );
+      // Cancellation is only reachable from ACCEPTED-and-later states (see
+      // ALLOWED_TRANSITIONS above), so a driver is always assigned here and
+      // was flipped to ON_TRIP at accept time — free them back up regardless
+      // of who cancelled.
+      await this.driverStatusRepository.updateStatus(ride.driverId, 'ONLINE', {}, tx);
       await this.statusEventRepo.record(
         {
           rideId,

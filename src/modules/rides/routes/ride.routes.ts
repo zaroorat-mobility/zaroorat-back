@@ -10,7 +10,13 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/requests', { preHandler: fastify.rateLimit(rateLimits.rideWrite) }, (req, reply) =>
     controller.request.createRequest(req, reply),
   );
+  fastify.post(
+    '/requests/:id/cancel',
+    { preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.request.cancelRequest(req, reply),
+  );
   const driverOnly = { preHandler: fastify.authorize({ requireOperableDriver: true }) };
+  fastify.get('/offers', driverOnly, (req, reply) => controller.state.listOffers(req, reply));
   fastify.post('/accept', driverOnly, (req, reply) => controller.state.accept(req, reply));
   fastify.post('/:id/arrive', driverOnly, (req, reply) => controller.state.arrive(req, reply));
   fastify.post('/:id/start', driverOnly, (req, reply) => controller.state.start(req, reply));
@@ -20,8 +26,16 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: fastify.rateLimit(rateLimits.rideWrite) },
     (req, reply) => controller.state.cancel(req, reply),
   );
+  fastify.post(
+    '/:id/rating',
+    { preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.state.submitRating(req, reply),
+  );
   fastify.get('/active', (req, reply) => controller.query.getActive(req, reply));
   fastify.get('/history', (req, reply) => controller.query.listHistory(req, reply));
   fastify.get('/:id', (req, reply) => controller.query.getById(req, reply));
   fastify.get('/:id/receipt', (req, reply) => controller.query.getReceipt(req, reply));
+  fastify.get('/:id/driver-location', (req, reply) =>
+    controller.query.getDriverLocation(req, reply),
+  );
 }
