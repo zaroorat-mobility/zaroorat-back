@@ -6,15 +6,23 @@ import {
   CreateRideRequestInput,
 } from '../../repositories/ride-request.repository.js';
 import { RideRepository } from '../../repositories/ride.repository.js';
+import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { FareService } from '../fare/fare.service.js';
-import { ActiveRideExistsError } from '../../errors/ride.errors.js';
+import {
+  ActiveRideExistsError,
+  RideNotFoundError,
+  RideCustomerMismatchError,
+  RideRequestNotCancellableError,
+} from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import type { RideRequest } from '../../types';
+const CANCELLABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
 export class RideRequestService {
   constructor(
     private readonly requestRepo: RideRequestRepository,
     private readonly rideRepo: RideRepository,
+    private readonly dispatchRepo: RideDispatchRepository,
     private readonly fareService: FareService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
@@ -87,6 +95,29 @@ export class RideRequestService {
         tx,
       );
       return request;
+    });
+  }
+  /// A request nobody has accepted yet has no `Ride` row, so `LifecycleService`'s
+  /// cancel path (which acts on a `Ride`) can't reach it — this is the only
+  /// cancel path for that window. Without it a customer's sole recourse was to
+  /// wait out RequestExpiryJob's five-minute window.
+  async cancelRequest(requestId: string, customerId: string): Promise<RideRequest> {
+    return this.txManager.execute(async (tx) => {
+      const request = await this.requestRepo.lockForUpdate(requestId, tx);
+      if (!request) throw new RideNotFoundError(requestId);
+      if (request.customerId !== customerId) {
+        throw new RideCustomerMismatchError(requestId);
+      }
+      if (!CANCELLABLE_REQUEST_STATUSES.has(request.status)) {
+        throw new RideRequestNotCancellableError(request.status);
+      }
+      const cancelled = await this.requestRepo.updateStatus(requestId, 'ABANDONED', tx);
+      await this.dispatchRepo.cancelAllPendingForRequest(requestId, tx);
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.REQUEST_ABANDONED, customerId, { requestId }),
+        tx,
+      );
+      return cancelled;
     });
   }
 }

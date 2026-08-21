@@ -94,4 +94,19 @@ export class RideDispatchRepository {
       data: { response: 'CANCELLED', respondedAt },
     });
   }
+  async cancelAllPendingForRequest(requestId: string, tx?: TransactionClient): Promise<void> {
+    const client = tx ?? this.db.client;
+    await client.rideDispatch.updateMany({
+      where: { requestId, response: 'PENDING' },
+      data: { response: 'CANCELLED', respondedAt: new Date() },
+    });
+  }
+  async findAllDriverIdsForRequest(requestId: string, tx?: TransactionClient): Promise<string[]> {
+    const client = tx ?? this.db.client;
+    const rows = await client.rideDispatch.findMany({
+      where: { requestId },
+      select: { driverId: true },
+    });
+    return rows.map((row) => row.driverId);
+  }
 }

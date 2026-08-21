@@ -2,6 +2,7 @@ import type { PublishInput } from '@core/events/types.js';
 export const RIDE_PRODUCER = 'rides';
 export const RIDE_EVENT_CATALOG = {
   REQUESTED: 'ride.requested',
+  REQUEST_ABANDONED: 'ride.request.abandoned',
   DISPATCH_OFFERED: 'ride.dispatch.offered',
   DISPATCH_ACCEPTED: 'ride.dispatch.accepted',
   DISPATCH_REJECTED: 'ride.dispatch.rejected',

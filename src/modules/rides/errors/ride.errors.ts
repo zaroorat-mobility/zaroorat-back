@@ -74,3 +74,19 @@ export class DriverNotAvailableError extends RideError {
     this.name = 'DriverNotAvailableError';
   }
 }
+export class RideRequestNotCancellableError extends RideError {
+  constructor(status: string) {
+    super(
+      `Ride request cannot be cancelled from status '${status}'`,
+      'RIDE_REQUEST_NOT_CANCELLABLE',
+      409,
+    );
+    this.name = 'RideRequestNotCancellableError';
+  }
+}
+export class VehicleMismatchError extends RideError {
+  constructor(message: string) {
+    super(message, 'VEHICLE_MISMATCH', 403);
+    this.name = 'VehicleMismatchError';
+  }
+}

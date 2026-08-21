@@ -32,4 +32,10 @@ export class RideRequestController {
     });
     reply.send({ data: request });
   }
+  async cancelRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const customerId = callerId(req);
+    const { id } = req.params as { id: string };
+    const request = await this.rideService.request.cancelRequest(id, customerId);
+    reply.send({ data: request });
+  }
 }

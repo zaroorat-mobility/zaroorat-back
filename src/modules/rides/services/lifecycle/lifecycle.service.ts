@@ -13,6 +13,7 @@ import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { NotificationService } from '@modules/notifications';
+import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
 import { logger } from '@shared/logger/index.js';
 import {
   InvalidRideStateTransitionError,
@@ -22,6 +23,7 @@ import {
   RideCustomerMismatchError,
   RideActorRequiredError,
   DriverNotAvailableError,
+  VehicleMismatchError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
@@ -74,6 +76,7 @@ export class LifecycleService {
     private readonly driverStatusRepository: DriverStatusRepository,
     private readonly userRepository: UserRepository,
     private readonly notificationService: NotificationService,
+    private readonly vehicleRepository: VehicleRepository,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
@@ -112,6 +115,28 @@ export class LifecycleService {
     this.validateTransition(ride.status, toStatus);
     return ride;
   }
+  /// The one place a client-supplied `vehicleId` is checked against anything
+  /// at all beyond "does this row exist" (the DB foreign key). Before the
+  /// vehicles module existed there was nothing to check it against — a driver
+  /// could accept with any vehicle id in the table, owned by anyone, of any
+  /// category.
+  private async assertVehicleEligible(
+    vehicleId: string,
+    driverId: string,
+    requestedVehicleTypeId: string,
+    tx: TransactionClient,
+  ): Promise<void> {
+    const vehicle = await this.vehicleRepository.findById(vehicleId, tx);
+    if (!vehicle || !vehicle.isActive) {
+      throw new VehicleMismatchError('Vehicle does not exist or is not active');
+    }
+    if (vehicle.currentDriverId !== driverId) {
+      throw new VehicleMismatchError('This vehicle is not currently assigned to you');
+    }
+    if (vehicle.vehicleTypeId !== requestedVehicleTypeId) {
+      throw new VehicleMismatchError("This vehicle's category does not match the ride request");
+    }
+  }
   async acceptRideRequest(data: {
     requestId: string;
     driverId: string;
@@ -127,6 +152,7 @@ export class LifecycleService {
       if (existingDriverRide) {
         throw new DriverNotAvailableError('Driver already has an active ride in progress');
       }
+      await this.assertVehicleEligible(data.vehicleId, data.driverId, request.vehicleTypeId, tx);
       if (!(await this.requestRepo.claimForMatch(data.requestId, tx))) {
         throw new RideRequestAlreadyMatchedError(data.requestId);
       }

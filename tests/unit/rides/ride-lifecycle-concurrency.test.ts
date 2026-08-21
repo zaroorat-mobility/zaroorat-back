@@ -96,6 +96,24 @@ function makeWorld() {
       return {};
     },
   };
+  // Every test in this file pairs driver 'd1' with vehicle 'v1', 'd2' with
+  // 'v2', and every request's vehicleTypeId is 'v1' — mirror that so the
+  // accept-time vehicle-eligibility check passes for the scenarios these
+  // tests actually construct, without hand-rolling a full fake registry.
+  const vehicleOwnerByVehicleId = new Map([
+    ['v1', 'd1'],
+    ['v2', 'd2'],
+  ]);
+  const vehicleRepository = {
+    async findById(vehicleId: string) {
+      return {
+        id: vehicleId,
+        isActive: true,
+        currentDriverId: vehicleOwnerByVehicleId.get(vehicleId) ?? null,
+        vehicleTypeId: 'v1',
+      };
+    },
+  };
 
   const service = new LifecycleService(
     rideRepo as never,
@@ -133,6 +151,7 @@ function makeWorld() {
     driverStatusRepository as never,
     userRepository as never,
     notificationService as never,
+    vehicleRepository as never,
     {
       async execute<T>(fn: (tx: unknown) => Promise<T>) {
         return fn({});
@@ -228,6 +247,26 @@ describe('Ride lifecycle concurrency', () => {
       world.sentOtpSms[0]!.body.includes(plaintextOtp),
       'the delivered message carries the same code the driver must be given',
     );
+  });
+
+  it('refuses to accept with a vehicle that is not currently assigned to the driver', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+
+    // v2 is owned by d2, not d1.
+    await assert.rejects(
+      () =>
+        world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v2' }),
+      (err: unknown) => (err as { code?: string }).code === 'VEHICLE_MISMATCH',
+    );
+    assert.equal(world.requests.get('req_1')?.status, 'SEARCHING', 'the request stays claimable');
   });
 
   it('refuses to let a driver already on a ride accept a second one', async () => {
