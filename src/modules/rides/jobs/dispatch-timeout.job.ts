@@ -1,20 +1,23 @@
-import { DatabaseService } from '@core/database';
 import { RedisService } from '@core/cache/RedisService.js';
+import { EventPublisher } from '@core/events';
 import { RideMetrics } from '../metrics/ride.metrics.js';
-import { RideRequestRepository } from '../repositories/ride-request.repository.js';
 import { RideDispatchRepository } from '../repositories/ride-dispatch.repository.js';
 import { DispatchService } from '../services/dispatch/dispatch.service.js';
-import { MatchingService } from '../services/dispatch/matching.service.js';
+import { rideEvent, RIDE_EVENT_CATALOG } from '../events/catalog.js';
 import { logger } from '@shared/logger/index.js';
+
+/// How many expired offers one tick will sweep. Bounds the job's runtime so a
+/// backlog is worked through over several ticks rather than in one long
+/// transaction-free loop holding the singleton lock.
+const SWEEP_BATCH_LIMIT = 500;
+
 export class DispatchTimeoutJob {
   constructor(
-    private readonly db: DatabaseService,
     private readonly redis: RedisService,
     private readonly rideMetrics: RideMetrics,
-    private readonly requestRepo: RideRequestRepository,
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly dispatchService: DispatchService,
-    private readonly matchingService: MatchingService,
+    private readonly eventPublisher: EventPublisher,
   ) {}
   async run(): Promise<number> {
     const lockToken = await this.redis.lock.acquire('job:dispatch_timeout', 15000);
@@ -22,23 +25,37 @@ export class DispatchTimeoutJob {
     let expiredCount = 0;
     try {
       const now = new Date();
-      const timedOutDispatches = await this.db.client.rideDispatch.findMany({
-        where: {
-          response: 'PENDING',
-          expiresAt: { lte: now },
-        },
-      });
-      for (const dispatch of timedOutDispatches) {
-        await this.db.client.rideDispatch.update({
-          where: { id: dispatch.id },
-          data: {
-            response: 'TIMEOUT',
-            respondedAt: now,
-          },
-        });
+      const timedOut = await this.dispatchRepo.findExpiredPending(now, SWEEP_BATCH_LIMIT);
+      // One request can have several offers expiring in the same tick — that is
+      // the normal case now that a round offers a batch. Collect the affected
+      // requests and dispatch each exactly once, or a batch of three would kick
+      // off three rounds for one customer.
+      const affectedRequests = new Set<string>();
+      for (const dispatch of timedOut) {
+        // Conditional: a driver may have accepted or rejected between the read
+        // above and now. Losing that race means the offer is no longer ours to
+        // expire, and must not be counted or re-dispatched on.
+        if (!(await this.dispatchRepo.respondIfPending(dispatch.id, 'TIMEOUT'))) continue;
         expiredCount++;
         this.rideMetrics.dispatchTimeout({ dispatchId: dispatch.id, driverId: dispatch.driverId });
-        await this.retryNextCandidate(dispatch.requestId, dispatch.dispatchRound);
+        await this.eventPublisher.publish(
+          rideEvent(RIDE_EVENT_CATALOG.DISPATCH_EXPIRED, dispatch.driverId, {
+            dispatchId: dispatch.id,
+            requestId: dispatch.requestId,
+            driverId: dispatch.driverId,
+          }),
+        );
+        affectedRequests.add(dispatch.requestId);
+      }
+      for (const requestId of affectedRequests) {
+        // `dispatchNextBatch` re-reads the request and holds a per-request lock,
+        // so a cancelled, expired or already-accepted request is a no-op here
+        // and two overlapping ticks cannot double-dispatch.
+        try {
+          await this.dispatchService.dispatchNextBatch(requestId);
+        } catch (err) {
+          logger.warn({ err, requestId }, '[rides] failed to re-dispatch after timeout');
+        }
       }
     } catch (err) {
       logger.error({ err }, 'Error running dispatch timeout job');
@@ -46,41 +63,5 @@ export class DispatchTimeoutJob {
       await this.redis.lock.release('job:dispatch_timeout', lockToken);
     }
     return expiredCount;
-  }
-  /// A timed-out offer used to just be a dead end — the request sat in
-  /// SEARCHING until RequestExpiryJob eventually expired it, with exactly one
-  /// driver ever having been asked. This tries the next nearest eligible
-  /// candidate, excluding every driver already offered this request
-  /// (accepted, rejected, cancelled, or timed out) so nobody is asked twice.
-  /// RequestExpiryJob's own window (default 5 minutes) is what bounds the
-  /// number of rounds — no separate cap is needed here.
-  private async retryNextCandidate(requestId: string, previousRound: number): Promise<void> {
-    const request = await this.requestRepo.findById(requestId);
-    if (!request || !['CREATED', 'SEARCHING'].includes(request.status)) return;
-    const alreadyTried = await this.dispatchRepo.findAllDriverIdsForRequest(requestId);
-    const candidate = await this.matchingService.findNextEligibleCandidate(
-      { latitude: Number(request.pickupLat), longitude: Number(request.pickupLng) },
-      alreadyTried,
-    );
-    if (!candidate) {
-      logger.info(
-        { requestId },
-        '[rides] dispatch timed out and no further eligible candidates remain',
-      );
-      return;
-    }
-    try {
-      await this.dispatchService.offerToDriver({
-        requestId,
-        driverId: candidate.driverId,
-        driverDistanceM: Math.round(candidate.distanceMeters),
-        dispatchRound: previousRound + 1,
-      });
-    } catch (err) {
-      logger.warn(
-        { err, requestId, driverId: candidate.driverId },
-        '[rides] failed to offer the retry candidate',
-      );
-    }
   }
 }

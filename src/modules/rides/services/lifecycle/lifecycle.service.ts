@@ -27,6 +27,8 @@ import {
   DriverNotAvailableError,
   VehicleMismatchError,
   ImplausibleTripDataError,
+  RideOfferNotFoundError,
+  RideOfferNotActionableError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import {
@@ -164,6 +166,31 @@ export class LifecycleService {
       await this.vehicleEligibilityService.checkVehicle(vehicle, tx),
     );
   }
+  /// Accepting a request used to consult the request row and nothing else: the
+  /// dispatch offer was written, notified on, timed out and resolved, but never
+  /// actually *checked*. Any online driver could accept any request they had
+  /// never been offered, and a driver whose offer had timed out, been rejected,
+  /// or been cancelled because somebody else won could still accept it — the
+  /// request's own status was the only thing standing in the way.
+  ///
+  /// The row is locked, not merely read, so this serialises against the timeout
+  /// job and against the driver's own reject.
+  private async assertOfferActionable(
+    requestId: string,
+    driverId: string,
+    tx: TransactionClient,
+  ): Promise<void> {
+    const offer = await this.dispatchRepo.lockActionableOffer(requestId, driverId, tx);
+    if (!offer) throw new RideOfferNotFoundError(requestId);
+    if (offer.response !== 'PENDING') {
+      throw new RideOfferNotActionableError(offer.response);
+    }
+    if (offer.expiresAt && offer.expiresAt <= new Date()) {
+      // Expired but not yet swept by DispatchTimeoutJob. The window is what
+      // decides, not whether a cron has caught up with it.
+      throw new RideOfferNotActionableError(offer.response, true);
+    }
+  }
   /// Not a GPS cross-check — no trip location trail is persisted anywhere in
   /// this codebase (DriverLocation holds only a driver's current position,
   /// overwritten on every update; driver_location_history is a raw-SQL
@@ -213,9 +240,17 @@ export class LifecycleService {
     const result = await this.txManager.execute(async (tx) => {
       const request = await this.requestRepo.lockForUpdate(data.requestId, tx);
       if (!request) throw new RideNotFoundError(data.requestId);
+      await this.assertOfferActionable(data.requestId, data.driverId, tx);
       const existingDriverRide = await this.rideRepo.findActiveByDriver(data.driverId, tx);
       if (existingDriverRide) {
         throw new DriverNotAvailableError('Driver already has an active ride in progress');
+      }
+      // A driver who went offline after the offer landed is no longer a driver
+      // dispatch would have picked; re-checked here because an offer's window
+      // outlives the decision that created it.
+      const status = await this.driverStatusRepository.getStatus(data.driverId, tx);
+      if (status?.status !== 'ONLINE') {
+        throw new DriverNotAvailableError('You must be online to accept a ride');
       }
       await this.assertVehicleEligible(data.vehicleId, data.driverId, request.vehicleTypeId, tx);
       if (!(await this.requestRepo.claimForMatch(data.requestId, tx))) {
@@ -287,6 +322,39 @@ export class LifecycleService {
     } catch (err) {
       logger.warn({ err, rideId }, '[rides] failed to deliver start OTP to customer');
     }
+  }
+  /// `DRIVER_ARRIVING` was in the `RideStatus` enum and in the transition table
+  /// from the start, but nothing could ever reach it: a ride went straight from
+  /// ACCEPTED to DRIVER_ARRIVED, so "driver is on the way" was a state the
+  /// customer app had no way to be told about. This is the transition into it.
+  async markDriverArriving(rideId: string, driverId: string): Promise<Ride> {
+    return this.txManager.execute(async (tx) => {
+      const ride = await this.lockAndValidate(
+        rideId,
+        { kind: 'driver', driverId },
+        'DRIVER_ARRIVING',
+        tx,
+      );
+      if (!(await this.rideRepo.updateStatusIf(rideId, ride.status, 'DRIVER_ARRIVING', {}, tx))) {
+        throw new InvalidRideStateTransitionError(ride.status, 'DRIVER_ARRIVING');
+      }
+      await this.statusEventRepo.record(
+        {
+          rideId,
+          fromStatus: ride.status,
+          toStatus: 'DRIVER_ARRIVING',
+          actorType: 'DRIVER',
+          actorId: driverId,
+        },
+        tx,
+      );
+      this.rideMetrics.driverArriving({ rideId });
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.DRIVER_ARRIVING, ride.customerId, { rideId, driverId }),
+        tx,
+      );
+      return { ...ride, status: 'DRIVER_ARRIVING' as RideStatus };
+    });
   }
   async markDriverArrived(rideId: string, driverId: string): Promise<Ride> {
     return this.txManager.execute(async (tx) => {

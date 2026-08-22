@@ -7,6 +7,8 @@ import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/h
 import {
   grantRole,
   makeAssignedVehicle,
+  makeDispatchOffer,
+  markDriverOnline,
   makeDriver,
   makeRideRequest,
   makeVehicleType,
@@ -515,6 +517,8 @@ describe('driver vehicle management, documents and verification (integration)', 
       const { vehicleId } = await makeAssignedVehicle(driverId);
       const otherTypeId = await makeVehicleType({ code: 'OTHER' });
       const requestId = await pendingRequest(otherTypeId);
+      await markDriverOnline(driverId);
+      await makeDispatchOffer(requestId, driverId);
 
       const response = await post('/api/v1/rides/accept', user, { requestId, vehicleId });
       assert.equal(response.statusCode, 403, response.payload);
@@ -532,6 +536,8 @@ describe('driver vehicle management, documents and verification (integration)', 
       await makeAssignedVehicle(bId, { vehicleTypeId: aVehicle.vehicleTypeId });
 
       const requestId = await pendingRequest(aVehicle.vehicleTypeId);
+      await markDriverOnline(bId);
+      await makeDispatchOffer(requestId, bId);
 
       const response = await post('/api/v1/rides/accept', b, {
         requestId,
@@ -547,6 +553,8 @@ describe('driver vehicle management, documents and verification (integration)', 
       const driverId = await makeDriver(user.userId, { verified: true });
       const { vehicleId, vehicleTypeId } = await makeAssignedVehicle(driverId, { verified: false });
       const requestId = await pendingRequest(vehicleTypeId);
+      await markDriverOnline(driverId);
+      await makeDispatchOffer(requestId, driverId);
 
       const response = await post('/api/v1/rides/accept', user, { requestId, vehicleId });
       assert.equal(response.statusCode, 403, response.payload);
@@ -560,6 +568,8 @@ describe('driver vehicle management, documents and verification (integration)', 
       const { vehicleId, vehicleTypeId } = await makeAssignedVehicle(driverId);
       await db().client.vehicle.update({ where: { id: vehicleId }, data: { isActive: false } });
       const requestId = await pendingRequest(vehicleTypeId);
+      await markDriverOnline(driverId);
+      await makeDispatchOffer(requestId, driverId);
 
       const response = await post('/api/v1/rides/accept', user, { requestId, vehicleId });
       assert.equal(response.statusCode, 409, response.payload);
@@ -572,6 +582,8 @@ describe('driver vehicle management, documents and verification (integration)', 
       const driverId = await makeDriver(user.userId, { verified: true });
       const { vehicleId, vehicleTypeId } = await makeAssignedVehicle(driverId);
       const requestId = await pendingRequest(vehicleTypeId);
+      await markDriverOnline(driverId);
+      await makeDispatchOffer(requestId, driverId);
 
       const response = await post('/api/v1/rides/accept', user, { requestId, vehicleId });
       assert.equal(response.statusCode, 200, response.payload);

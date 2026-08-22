@@ -118,3 +118,31 @@ export class IncompleteProfileError extends RideError {
     this.name = 'IncompleteProfileError';
   }
 }
+/// Accepting a request used to consult nothing but the request row: any online
+/// driver could accept any ride, offered to them or not, and a timed-out or
+/// already-lost offer was just as acceptable as a live one. These three are the
+/// vocabulary for the offer check that now guards it.
+export class RideOfferNotFoundError extends RideError {
+  constructor(requestId: string) {
+    super(`You have no offer for ride request '${requestId}'`, 'RIDE_OFFER_NOT_FOUND', 404);
+    this.name = 'RideOfferNotFoundError';
+  }
+}
+export class RideOfferNotActionableError extends RideError {
+  constructor(response: string, expired = false) {
+    super(
+      expired
+        ? 'This ride offer has expired'
+        : `This ride offer is no longer actionable (already ${response})`,
+      'RIDE_OFFER_NOT_ACTIONABLE',
+      409,
+    );
+    this.name = 'RideOfferNotActionableError';
+  }
+}
+export class RideOfferDriverMismatchError extends RideError {
+  constructor(dispatchId: string) {
+    super(`Ride offer '${dispatchId}' was not made to this driver`, 'RIDE_OFFER_MISMATCH', 403);
+    this.name = 'RideOfferDriverMismatchError';
+  }
+}

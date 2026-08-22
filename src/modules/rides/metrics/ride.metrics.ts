@@ -11,8 +11,14 @@ export class RideMetrics {
   dispatchAccepted(fields?: RideMetricFields): void {
     this.emit('dispatch_accepted_total', fields);
   }
+  dispatchRejected(fields?: RideMetricFields): void {
+    this.emit('dispatch_rejected_total', fields);
+  }
   dispatchTimeout(fields?: RideMetricFields): void {
     this.emit('dispatch_timeout_total', fields);
+  }
+  driverArriving(fields?: RideMetricFields): void {
+    this.emit('driver_arriving_total', fields);
   }
   rideStarted(fields?: RideMetricFields): void {
     this.emit('started_total', fields);
