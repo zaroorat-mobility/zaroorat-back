@@ -6,3 +6,4 @@ export * from './ride/index.js';
 export * from './driver/index.js';
 export * from './geo/index.js';
 export * from './vehicle/index.js';
+export * from './realtime/index.js';
