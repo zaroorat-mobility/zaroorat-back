@@ -12,6 +12,11 @@ model VehicleType {
   perMinuteRate      Decimal? @map("per_minute_rate") @db.Decimal(10, 2)
   waitingCharge      Decimal? @map("waiting_charge") @db.Decimal(10, 2)
   cancellationCharge Decimal? @map("cancellation_charge") @db.Decimal(10, 2)
+  /// Client-side glyph key for the category picker (e.g. "bike", "auto").
+  /// Deliberately not a URL: the app ships its own artwork and only needs to
+  /// know which one to draw.
+  icon               String?
+  displayOrder       Int      @default(0) @map("display_order") @db.SmallInt
   isActive           Boolean  @default(true) @map("is_active")
   createdAt          DateTime @default(now()) @map("created_at")
 
@@ -22,28 +27,36 @@ model VehicleType {
   surgeWindows SurgeWindow[]
   promotions   Promotion[]
 
+  @@index([isActive, displayOrder])
   @@map("vehicle_types")
 }
 
 model Vehicle {
-  id                 String   @id @default(uuid(7)) @db.Uuid
-  registrationNumber String   @unique @map("registration_number")
-  registrationState  String?  @map("registration_state")
-  vin                String?  @unique
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  registrationNumber String             @unique @map("registration_number")
+  registrationState  String?            @map("registration_state")
+  vin                String?            @unique
   make               String?
   model              String?
-  manufacturingYear  Int?     @map("manufacturing_year") @db.SmallInt
+  manufacturingYear  Int?               @map("manufacturing_year") @db.SmallInt
   color              String?
-  fuelType           String?  @map("fuel_type")
-  seatingCapacity    Int?     @map("seating_capacity") @db.SmallInt
-  vehicleTypeId      String   @map("vehicle_type_id") @db.Uuid
-  ownerName          String?  @map("owner_name")
-  ownerPhone         String?  @map("owner_phone")
-  currentOdometer    Int?     @map("current_odometer")
-  currentDriverId    String?  @map("current_driver_id") @db.Uuid
-  isActive           Boolean  @default(true) @map("is_active")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  fuelType           String?            @map("fuel_type")
+  seatingCapacity    Int?               @map("seating_capacity") @db.SmallInt
+  vehicleTypeId      String             @map("vehicle_type_id") @db.Uuid
+  ownerName          String?            @map("owner_name")
+  ownerPhone         String?            @map("owner_phone")
+  currentOdometer    Int?               @map("current_odometer")
+  currentDriverId    String?            @map("current_driver_id") @db.Uuid
+  /// Operator approval to carry passengers — distinct from `isActive`, which
+  /// only says the row is usable. Mirrors `Driver.verificationStatus`: before
+  /// this existed a VERIFIED driver could operate a vehicle nobody reviewed.
+  verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
+  verifiedBy         String?            @map("verified_by") @db.Uuid
+  verifiedAt         DateTime?          @map("verified_at")
+  rejectionReason    String?            @map("rejection_reason")
+  isActive           Boolean            @default(true) @map("is_active")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
 
   vehicleType     VehicleType         @relation(fields: [vehicleTypeId], references: [id])
   documents       VehicleDocument[]
@@ -58,6 +71,7 @@ model Vehicle {
 
   @@index([vehicleTypeId])
   @@index([isActive])
+  @@index([verificationStatus])
   @@map("vehicles")
 }
 
@@ -89,14 +103,23 @@ model VehicleDocument {
   vehicleId          String             @map("vehicle_id") @db.Uuid
   documentType       String             @map("document_type")
   documentNumber     String?            @map("document_number")
-  fileUrl            String             @map("file_url")
+  /// Legacy client-supplied URL, kept nullable for the expand half of the
+  /// file-reference cutover. New writes populate `fileId` only.
+  fileUrl            String?            @map("file_url")
+  fileId             String?            @map("file_id") @db.Uuid
   issuedAt           DateTime?          @map("issued_at") @db.Date
   expiresAt          DateTime?          @map("expires_at") @db.Date
   verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
+  verifiedBy         String?            @map("verified_by") @db.Uuid
+  verifiedAt         DateTime?          @map("verified_at")
+  rejectionReason    String?            @map("rejection_reason")
   createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
 
   vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  file    File?   @relation(fields: [fileId], references: [id])
 
+  @@unique([vehicleId, documentType], map: "vehicle_documents_vehicle_id_document_type_key")
   @@index([vehicleId])
   @@index([expiresAt])
   @@map("vehicle_documents")

@@ -6,7 +6,10 @@ export const quoteFareSchema = z.object({
   pickupLng: longitudeSchema,
   dropLat: latitudeSchema.optional(),
   dropLng: longitudeSchema.optional(),
-  vehicleTypeId: z.string().uuid(),
+  /// Optional: omit to price every active category in one call (the customer
+  /// app's picker), supply one to price just that category.
+  vehicleTypeId: z.string().uuid().optional(),
+  cityId: z.string().uuid().optional(),
 });
 export type QuoteFareBody = z.infer<typeof quoteFareSchema>;
 export const createRideRequestSchema = z.object({

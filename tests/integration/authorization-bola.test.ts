@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
 import {
   grantRole,
+  makeAssignedVehicle,
   makeDriver,
   makePaidTransaction,
   makePendingIntent,
@@ -259,12 +260,33 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       assert.equal(response.statusCode, 403, response.payload);
     });
 
-    it('lets a verified, unsuspended driver go online', async () => {
+    it('lets a verified, unsuspended driver with an operable vehicle go online', async () => {
+      const driver = await loginWithRole(DRIVER_A, 'driver');
+      const driverId = await makeDriver(driver.userId, { verified: true });
+      // Going online now gates on the vehicle as well as the driver.
+      await makeAssignedVehicle(driverId);
+
+      const response = await post('/api/v1/drivers/status/online', driver, {});
+      assert.equal(response.statusCode, 200, response.payload);
+    });
+
+    it('refuses a fully verified driver who has claimed no vehicle', async () => {
       const driver = await loginWithRole(DRIVER_A, 'driver');
       await makeDriver(driver.userId, { verified: true });
 
       const response = await post('/api/v1/drivers/status/online', driver, {});
-      assert.equal(response.statusCode, 200, response.payload);
+      assert.equal(response.statusCode, 409, response.payload);
+      assert.equal(response.json().error.code, 'VEHICLE_MISSING');
+    });
+
+    it('refuses a fully verified driver whose vehicle is awaiting review', async () => {
+      const driver = await loginWithRole(DRIVER_A, 'driver');
+      const driverId = await makeDriver(driver.userId, { verified: true });
+      await makeAssignedVehicle(driverId, { verified: false });
+
+      const response = await post('/api/v1/drivers/status/online', driver, {});
+      assert.equal(response.statusCode, 403, response.payload);
+      assert.equal(response.json().error.code, 'VEHICLE_NOT_VERIFIED');
     });
   });
 

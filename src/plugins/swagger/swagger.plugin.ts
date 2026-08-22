@@ -7,6 +7,8 @@ const TAG_BY_PREFIX: Record<string, string> = {
   rides: 'Rides',
   drivers: 'Drivers',
   payments: 'Payments',
+  vehicles: 'Vehicles',
+  'vehicle-types': 'Vehicles',
 };
 export default fp(
   async function swaggerPlugin(app: FastifyInstance): Promise<void> {
@@ -54,6 +56,11 @@ export default fp(
           {
             name: 'Drivers',
             description: 'Driver onboarding, status, location and wallet',
+          },
+          {
+            name: 'Vehicles',
+            description:
+              'Vehicle type catalog, driver vehicle claim/management, documents and verification',
           },
           {
             name: 'Payments',

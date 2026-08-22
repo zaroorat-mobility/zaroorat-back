@@ -14,7 +14,8 @@ export class RideRequestController {
     const quote = await this.rideService.request.createQuote({
       pickupLat: body.pickupLat,
       pickupLng: body.pickupLng,
-      vehicleTypeId: body.vehicleTypeId,
+      ...(body.vehicleTypeId !== undefined ? { vehicleTypeId: body.vehicleTypeId } : {}),
+      ...(body.cityId !== undefined ? { cityId: body.cityId } : {}),
       ...(body.dropLat !== undefined ? { dropLat: body.dropLat } : {}),
       ...(body.dropLng !== undefined ? { dropLng: body.dropLng } : {}),
     });

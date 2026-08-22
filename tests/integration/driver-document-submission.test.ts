@@ -4,7 +4,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
-import { grantRole } from './helpers/fixtures.js';
+import { grantRole, makeAssignedVehicle } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
@@ -190,6 +190,9 @@ describe('driver document submission via fileId (integration)', () => {
       payload: { status: 'VERIFIED' },
     });
     assert.equal(approved.statusCode, 200, approved.payload);
+
+    // Going online gates on the vehicle as well as the driver.
+    await makeAssignedVehicle(driverId);
 
     const online = await app.inject({
       method: 'POST',

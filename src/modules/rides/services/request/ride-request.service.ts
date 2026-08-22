@@ -9,6 +9,8 @@ import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { FareService } from '../fare/fare.service.js';
 import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
+import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
+import { toVehicleTypeView } from '@modules/vehicles/controllers/vehicle-type.controller.js';
 import {
   ActiveRideExistsError,
   RideNotFoundError,
@@ -19,6 +21,28 @@ import {
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import type { RideRequest } from '../../types';
+import type { ItemizedFareResult } from '../fare/fare.service.js';
+
+export interface QuoteOption {
+  vehicleTypeId: string;
+  vehicleTypeCode: string;
+  displayName: string;
+  icon: string | null;
+  passengerCapacity: number | null;
+  luggageCapacity: number | null;
+  estimatedFare: number;
+  minimumFare: number;
+  fareBreakdown: ItemizedFareResult;
+}
+
+export interface RideQuote {
+  pickup: { latitude: number; longitude: number };
+  drop: { latitude: number; longitude: number };
+  estimatedDistanceKm: number;
+  estimatedDurationMin: number;
+  currency: string;
+  options: QuoteOption[];
+}
 const CANCELLABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
 export class RideRequestService {
   constructor(
@@ -26,19 +50,79 @@ export class RideRequestService {
     private readonly rideRepo: RideRepository,
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly fareService: FareService,
+    private readonly vehicleTypeService: VehicleTypeService,
     private readonly userProfileRepository: UserProfileRepository,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
   ) {}
+  /// One request, every category. `vehicleTypeId` narrows the result to a
+  /// single option; omitting it prices every active type so the customer app
+  /// renders its picker from one call instead of one call per category.
+  ///
+  /// Types are loaded once and their rate cards passed into the fare service,
+  /// so pricing N categories costs one query, not N.
   async createQuote(params: {
     pickupLat: number;
     pickupLng: number;
     dropLat?: number;
     dropLng?: number;
-    vehicleTypeId: string;
-  }) {
-    return this.fareService.calculateFareQuote(params);
+    vehicleTypeId?: string;
+    cityId?: string;
+  }): Promise<RideQuote> {
+    if (params.dropLat == null || params.dropLng == null) {
+      throw new Error(
+        'A fare quote requires drop coordinates. Quoting an open-ended ride at a ' +
+          'fixed default distance produced a price unrelated to the trip.',
+      );
+    }
+
+    const vehicleTypes = params.vehicleTypeId
+      ? [await this.vehicleTypeService.requireActive(params.vehicleTypeId)]
+      : await this.vehicleTypeService.listActive(
+          params.cityId !== undefined ? { cityId: params.cityId } : {},
+        );
+
+    const trip = this.fareService.estimateTrip({
+      pickupLat: params.pickupLat,
+      pickupLng: params.pickupLng,
+      dropLat: params.dropLat,
+      dropLng: params.dropLng,
+    });
+
+    const options: QuoteOption[] = [];
+    for (const vehicleType of vehicleTypes) {
+      const rateCard = this.fareService.rateCardFor(vehicleType);
+      const fare = await this.fareService.calculateFareQuote({
+        pickupLat: params.pickupLat,
+        pickupLng: params.pickupLng,
+        dropLat: params.dropLat,
+        dropLng: params.dropLng,
+        vehicleTypeId: vehicleType.id,
+        rateCard,
+      });
+      const view = toVehicleTypeView(vehicleType);
+      options.push({
+        vehicleTypeId: vehicleType.id,
+        vehicleTypeCode: view.code,
+        displayName: view.name,
+        icon: view.icon,
+        passengerCapacity: view.passengerCapacity,
+        luggageCapacity: view.luggageCapacity,
+        estimatedFare: fare.totalFare,
+        minimumFare: rateCard.minimumFare,
+        fareBreakdown: fare,
+      });
+    }
+
+    return {
+      pickup: { latitude: params.pickupLat, longitude: params.pickupLng },
+      drop: { latitude: params.dropLat, longitude: params.dropLng },
+      estimatedDistanceKm: trip.distanceKm,
+      estimatedDurationMin: trip.durationMin,
+      currency: 'INR',
+      options,
+    };
   }
   async createRequest(input: {
     customerId: string;
@@ -64,14 +148,20 @@ export class RideRequestService {
     if (activeRequest) {
       throw new ActiveRideExistsError('Customer already has an active ride request');
     }
-    const quoteParams = {
+    // Validates the client-supplied type before anything is written: an
+    // unknown id is 404 VEHICLE_TYPE_NOT_FOUND, a retired one is 409
+    // VEHICLE_TYPE_INACTIVE. Before the catalog existed the only check was the
+    // database foreign key, which could not tell the two apart.
+    const vehicleType = await this.vehicleTypeService.requireActive(input.vehicleTypeId);
+
+    const fareQuote = await this.fareService.calculateFareQuote({
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
       vehicleTypeId: input.vehicleTypeId,
+      rateCard: this.fareService.rateCardFor(vehicleType),
       ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
       ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
-    };
-    const fareQuote = await this.createQuote(quoteParams);
+    });
     return this.txManager.execute(async (tx) => {
       const createInput: CreateRideRequestInput = {
         customerId: input.customerId,

@@ -4,6 +4,7 @@ import { DriverRepository } from '../../repositories/driver.repository.js';
 import { DriverStatusRepository } from '../../repositories/driver-status.repository.js';
 import { DriverShiftRepository } from '../../repositories/driver-shift.repository.js';
 import { DriverEligibilityService } from '../eligibility/eligibility.service.js';
+import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
 import {
   DriverNotFoundError,
   DriverNotVerifiedError,
@@ -20,6 +21,7 @@ export class StatusService {
     private readonly statusRepo: DriverStatusRepository,
     private readonly shiftRepo: DriverShiftRepository,
     private readonly eligibilityService: DriverEligibilityService,
+    private readonly vehicleEligibilityService: VehicleEligibilityService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly driverMetrics: DriverMetrics,
@@ -50,6 +52,11 @@ export class StatusService {
           eligibility,
         );
       }
+      // The vehicle half of the gate. Throws its own distinct codes —
+      // VEHICLE_MISSING, VEHICLE_INACTIVE, VEHICLE_NOT_VERIFIED,
+      // VEHICLE_DOCUMENTS_INCOMPLETE — rather than folding into the driver
+      // document error above, so the app can tell the four apart.
+      await this.vehicleEligibilityService.assertOperable(driverId, tx);
       const shift = await this.shiftRepo.startShift(driverId, tx);
       await this.driverRepo.updateAvailability(driverId, true, tx);
       const onlineStatus = await this.statusRepo.updateStatus(

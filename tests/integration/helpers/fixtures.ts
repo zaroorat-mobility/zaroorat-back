@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { driverConfig } from '../../../src/config/driver/driver.config.js';
+import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config.js';
 import { db } from './harness.js';
 
 export async function grantRole(userId: string, slug: string): Promise<void> {
@@ -44,21 +45,76 @@ export async function makeDriver(
   return driver.id;
 }
 
-export async function makeVehicleType(): Promise<string> {
+export async function makeVehicleType(
+  options: { isActive?: boolean; code?: string; name?: string; perKmRate?: number } = {},
+): Promise<string> {
   const type = await db().client.vehicleType.create({
-    data: { code: `VT_${randomUUID().slice(0, 8)}`, name: 'Hatchback' },
+    data: {
+      code: options.code ?? `VT_${randomUUID().slice(0, 8)}`,
+      name: options.name ?? 'Hatchback',
+      isActive: options.isActive ?? true,
+      ...(options.perKmRate !== undefined ? { perKmRate: options.perKmRate } : {}),
+    },
   });
   return type.id;
 }
 
-export async function makeVehicle(vehicleTypeId: string): Promise<string> {
+export async function makeVehicle(
+  vehicleTypeId: string,
+  options: { verified?: boolean; isActive?: boolean } = {},
+): Promise<string> {
   const vehicle = await db().client.vehicle.create({
     data: {
       registrationNumber: `KA01${randomUUID().slice(0, 6).toUpperCase()}`,
       vehicleTypeId,
+      isActive: options.isActive ?? true,
+      verificationStatus: options.verified === false ? 'PENDING' : 'VERIFIED',
+      ...(options.verified === false ? {} : { verifiedAt: new Date() }),
     },
   });
+
+  if (options.verified !== false) {
+    for (const documentType of vehicleConfig.requiredDocumentTypes) {
+      await db().client.vehicleDocument.create({
+        data: {
+          vehicleId: vehicle.id,
+          documentType,
+          verificationStatus: 'VERIFIED',
+          fileUrl: `https://example.invalid/${documentType.toLowerCase()}.jpg`,
+        },
+      });
+    }
+  }
+
   return vehicle.id;
+}
+
+/// Gives a driver an operable vehicle: an active, VERIFIED vehicle with every
+/// required vehicle document VERIFIED, assigned to them. Going online now gates
+/// on this as well as on the driver's own documents, so any fixture that brings
+/// a driver online needs it.
+export async function makeAssignedVehicle(
+  driverId: string,
+  options: { vehicleTypeId?: string; verified?: boolean } = {},
+): Promise<{ vehicleId: string; vehicleTypeId: string }> {
+  const vehicleTypeId = options.vehicleTypeId ?? (await makeVehicleType());
+  const vehicleId = await makeVehicle(vehicleTypeId, {
+    ...(options.verified !== undefined ? { verified: options.verified } : {}),
+  });
+
+  await db().client.vehicle.update({
+    where: { id: vehicleId },
+    data: { currentDriverId: driverId },
+  });
+  await db().client.vehicleAssignment.create({
+    data: { driverId, vehicleId, status: 'ACTIVE' },
+  });
+  await db().client.driver.update({
+    where: { id: driverId },
+    data: { currentVehicleId: vehicleId },
+  });
+
+  return { vehicleId, vehicleTypeId };
 }
 
 export async function makeRideRequest(customerId: string, vehicleTypeId: string): Promise<string> {
