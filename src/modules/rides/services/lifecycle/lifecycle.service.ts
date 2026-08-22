@@ -14,6 +14,8 @@ import { DriverStatusRepository } from '@modules/drivers/repositories/driver-sta
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { NotificationService } from '@modules/notifications';
 import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
+import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
+import { VehicleAssignmentRepository } from '@modules/vehicles/repositories/vehicle-assignment.repository.js';
 import { logger } from '@shared/logger/index.js';
 import {
   InvalidRideStateTransitionError,
@@ -84,6 +86,8 @@ export class LifecycleService {
     private readonly userRepository: UserRepository,
     private readonly notificationService: NotificationService,
     private readonly vehicleRepository: VehicleRepository,
+    private readonly vehicleAssignmentRepository: VehicleAssignmentRepository,
+    private readonly vehicleEligibilityService: VehicleEligibilityService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
@@ -127,6 +131,12 @@ export class LifecycleService {
   /// vehicles module existed there was nothing to check it against — a driver
   /// could accept with any vehicle id in the table, owned by anyone, of any
   /// category.
+  ///
+  /// Ownership and category matching stay here because they are ride-request
+  /// facts. Everything about whether the vehicle is fit to operate at all —
+  /// active, verified, papers in order — is delegated to
+  /// `VehicleEligibilityService`, the same implementation the go-online gate
+  /// uses, so the two paths cannot drift apart.
   private async assertVehicleEligible(
     vehicleId: string,
     driverId: string,
@@ -134,15 +144,25 @@ export class LifecycleService {
     tx: TransactionClient,
   ): Promise<void> {
     const vehicle = await this.vehicleRepository.findById(vehicleId, tx);
-    if (!vehicle || !vehicle.isActive) {
+    if (!vehicle) {
       throw new VehicleMismatchError('Vehicle does not exist or is not active');
     }
     if (vehicle.currentDriverId !== driverId) {
       throw new VehicleMismatchError('This vehicle is not currently assigned to you');
     }
+    // `currentDriverId` is a denormalised pointer; the assignment ledger is the
+    // record of account. An assignment released without the pointer being
+    // cleared would otherwise still pass the check above.
+    const assignment = await this.vehicleAssignmentRepository.findActiveForDriver(driverId, tx);
+    if (!assignment || assignment.vehicleId !== vehicleId) {
+      throw new VehicleMismatchError('This vehicle is not currently assigned to you');
+    }
     if (vehicle.vehicleTypeId !== requestedVehicleTypeId) {
       throw new VehicleMismatchError("This vehicle's category does not match the ride request");
     }
+    this.vehicleEligibilityService.assertEligibility(
+      await this.vehicleEligibilityService.checkVehicle(vehicle, tx),
+    );
   }
   /// Not a GPS cross-check — no trip location trail is persisted anywhere in
   /// this codebase (DriverLocation holds only a driver's current position,

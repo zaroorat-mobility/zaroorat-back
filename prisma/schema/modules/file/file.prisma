@@ -69,14 +69,16 @@ model File {
   // as distinct, so every current file coexists freely.
   supersededById      String?        @unique @map("superseded_by_id") @db.Uuid
 
-  owner           User             @relation(fields: [ownerUserId], references: [id])
-  supersededBy    File?            @relation("FileVersion", fields: [supersededById], references: [id])
-  supersedes      File?            @relation("FileVersion")
+  owner            User              @relation(fields: [ownerUserId], references: [id])
+  supersededBy     File?             @relation("FileVersion", fields: [supersededById], references: [id])
+  supersedes       File?             @relation("FileVersion")
   // The profile this file is the avatar of, if any — the first live reference
   // any module holds (files doc 03 §7.2).
-  profileOf       UserProfile?     @relation("ProfileImage")
+  profileOf        UserProfile?      @relation("ProfileImage")
   // Driver documents this file backs, if any (drivers module's live reference).
-  driverDocuments DriverDocument[]
+  driverDocuments  DriverDocument[]
+  // Vehicle documents this file backs, if any (vehicles module's live reference).
+  vehicleDocuments VehicleDocument[]
 
   // FILE-INV-1. Total, not partial: a key must stay unique across erased rows
   // too, or a stale signed URL could resolve to somebody else's object. This one

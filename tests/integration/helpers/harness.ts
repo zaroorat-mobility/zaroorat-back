@@ -9,6 +9,7 @@ import { closeQueues } from '../../../src/jobs/queues/index.js';
 import type { DatabaseService } from '../../../src/core/database/DatabaseService.js';
 import type { PrismaClientProvider } from '../../../src/core/database/client/PrismaClientProvider.js';
 import type { OtpGenerator } from '../../../src/modules/auth/services/otp/otp.generator.js';
+import { seedVehicleTypes } from '../../../prisma/seed/shared/vehicle-types.js';
 
 export const FIXED_OTP = '123456';
 
@@ -38,8 +39,15 @@ export async function resetState(): Promise<void> {
     'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
       '"account_deletion_requests", ' +
       '"files", "otp_verifications", "outbox_events", "vehicle_types", ' +
+      '"vehicles", "vehicle_assignments", "vehicle_documents", ' +
       '"payment_ledger_entries", "gateway_events" RESTART IDENTITY CASCADE',
   );
+  // Vehicle types are reference data, like the RBAC roles — except `roles` is
+  // not in the TRUNCATE list and `vehicle_types` has to be, because tests create
+  // throwaway types. Re-seeding here keeps the canonical catalog present for
+  // every test the way the roles table is, so GET /vehicle-types is never empty
+  // and no test has to seed the platform's own catalog itself.
+  await seedVehicleTypes(db().client);
   await redis.flushdb();
 }
 

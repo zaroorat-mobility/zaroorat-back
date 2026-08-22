@@ -4,7 +4,11 @@ import { LifecycleService } from '../../../src/modules/rides/services/lifecycle/
 import { InvalidRideStateTransitionError } from '../../../src/modules/rides/errors/ride.errors.js';
 
 describe('Ride State Machine Tests', () => {
+  // Every collaborator is a stub: these cases only exercise the pure
+  // transition table, which touches none of them.
   const service = new LifecycleService(
+    {} as never,
+    {} as never,
     {} as never,
     {} as never,
     {} as never,

@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import { LifecycleService } from '../../../src/modules/rides/services/lifecycle/lifecycle.service.js';
 import { FareService } from '../../../src/modules/rides/services/fare/fare.service.js';
+import { VehicleEligibilityService } from '../../../src/modules/vehicles/services/vehicle-eligibility.service.js';
+import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config.js';
 import {
   InvalidRideStateTransitionError,
   RideDriverMismatchError,
@@ -114,9 +116,35 @@ function makeWorld() {
         isActive: true,
         currentDriverId: vehicleOwnerByVehicleId.get(vehicleId) ?? null,
         vehicleTypeId: 'v1',
+        verificationStatus: 'VERIFIED',
       };
     },
   };
+  // The assignment ledger is now consulted alongside `currentDriverId` — the
+  // pointer alone is denormalised and can outlive a released assignment.
+  const vehicleAssignmentRepository = {
+    async findActiveForDriver(driverId: string) {
+      for (const [vehicleId, owner] of vehicleOwnerByVehicleId) {
+        if (owner === driverId) return { driverId, vehicleId, status: 'ACTIVE' };
+      }
+      return null;
+    },
+  };
+  // The real service is used rather than a stub: accept-time eligibility is
+  // exactly the behaviour these concurrency tests must not silently lose.
+  const vehicleEligibilityService = new VehicleEligibilityService(
+    vehicleRepository as never,
+    vehicleAssignmentRepository as never,
+    {
+      async findByVehicleId() {
+        return vehicleConfig.requiredDocumentTypes.map((documentType) => ({
+          documentType,
+          verificationStatus: 'VERIFIED',
+          expiresAt: null,
+        }));
+      },
+    } as never,
+  );
 
   const service = new LifecycleService(
     rideRepo as never,
@@ -132,7 +160,11 @@ function makeWorld() {
         return { plaintextOtp: '123456' };
       },
     } as never,
-    new FareService(),
+    new FareService({
+      async findById() {
+        return null;
+      },
+    } as never),
     {
       async create(f: { rideId: string }) {
         fares.push(f.rideId);
@@ -155,6 +187,8 @@ function makeWorld() {
     userRepository as never,
     notificationService as never,
     vehicleRepository as never,
+    vehicleAssignmentRepository as never,
+    vehicleEligibilityService,
     {
       async execute<T>(fn: (tx: unknown) => Promise<T>) {
         return fn({});

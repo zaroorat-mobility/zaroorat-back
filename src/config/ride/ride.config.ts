@@ -15,8 +15,15 @@ export interface RideConfig {
   requireStartOtp: boolean;
   cancellationGraceMinutes: number;
   defaultCancellationFee: number;
+  /// Platform-wide fallback. Per-category pricing lives on `VehicleType`
+  /// columns (base_fare, per_km_rate, per_minute_rate, minimum_fare,
+  /// waiting_charge); this fills in any field a type leaves null, plus the
+  /// three that have no column at all (platformFee, commissionRate, taxRate).
+  ///
+  /// The previous `RIDE_RATE_CARDS_JSON` override keyed cards by vehicle-type
+  /// UUID from an environment variable, which no operator could populate for
+  /// database-generated ids — it was removed rather than left as dead config.
   defaultRateCard: RideRateCard;
-  rateCardsByVehicleType: Readonly<Record<string, RideRateCard>>;
 }
 const defaultRateCard: RideRateCard = Object.freeze({
   baseFare: Number(process.env.RIDE_BASE_FARE ?? 50),
@@ -28,30 +35,6 @@ const defaultRateCard: RideRateCard = Object.freeze({
   taxRate: Number(process.env.RIDE_TAX_RATE ?? 0.05),
   minimumFare: Number(process.env.RIDE_MINIMUM_FARE ?? 50),
 });
-function parseRateCards(): Readonly<Record<string, RideRateCard>> {
-  const raw = process.env.RIDE_RATE_CARDS_JSON;
-  if (raw == null || raw.trim() === '') return Object.freeze({});
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error('RIDE_RATE_CARDS_JSON is not valid JSON');
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('RIDE_RATE_CARDS_JSON must be a JSON object keyed by vehicle type');
-  }
-  const cards: Record<string, RideRateCard> = {};
-  for (const [vehicleType, override] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof override !== 'object' || override === null) {
-      throw new Error(`RIDE_RATE_CARDS_JSON["${vehicleType}"] must be an object`);
-    }
-    cards[vehicleType] = Object.freeze({
-      ...defaultRateCard,
-      ...(override as Partial<RideRateCard>),
-    });
-  }
-  return Object.freeze(cards);
-}
 export const rideConfig: RideConfig = Object.freeze({
   defaultSearchRadiusKm: Number(process.env.RIDE_SEARCH_RADIUS_KM ?? 5),
   dispatchTimeoutSeconds: Number(process.env.RIDE_DISPATCH_TIMEOUT_SEC ?? 30),
@@ -60,5 +43,4 @@ export const rideConfig: RideConfig = Object.freeze({
   cancellationGraceMinutes: Number(process.env.RIDE_CANCELLATION_GRACE_MIN ?? 2),
   defaultCancellationFee: Number(process.env.RIDE_DEFAULT_CANCELLATION_FEE ?? 50),
   defaultRateCard,
-  rateCardsByVehicleType: parseRateCards(),
 });

@@ -4,7 +4,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
-import { grantRole, makeDriver } from './helpers/fixtures.js';
+import { grantRole, makeAssignedVehicle, makeDriver } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
@@ -105,6 +105,9 @@ describe('driver online activation and geo safety (integration)', () => {
       payload: { status: 'VERIFIED' },
     });
     assert.equal(approved.statusCode, 200, approved.payload);
+    // Going online gates on the vehicle as well as the driver: an operable
+    // driver needs an active, VERIFIED vehicle with its own papers in order.
+    await makeAssignedVehicle(driverId);
     return user;
   }
 

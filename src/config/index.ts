@@ -5,3 +5,4 @@ export * from './rate-limit/index.js';
 export * from './ride/index.js';
 export * from './driver/index.js';
 export * from './geo/index.js';
+export * from './vehicle/index.js';

@@ -1,5 +1,6 @@
 import { ProviderClient } from '../../../src/core/database';
 import { assignRole, RoleSlug, seedRoles } from '../shared/roles';
+import { seedVehicleTypes } from '../shared/vehicle-types';
 
 type Prisma = ProviderClient;
 
@@ -33,6 +34,9 @@ export async function seedDevelopment(prisma: Prisma) {
 
   // Roles are reference data; ensure they exist before assigning them.
   await seedRoles(prisma);
+  // The service catalog — reference data, same as roles: every environment
+  // needs it, and no client can obtain a vehicleTypeId without it.
+  await seedVehicleTypes(prisma);
 
   const fixtures: Array<{
     phone: string;

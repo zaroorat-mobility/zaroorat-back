@@ -1,8 +1,41 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { FareService } from '../../../src/modules/rides/services/fare/fare.service.js';
+import type { VehicleTypeRepository } from '../../../src/modules/vehicles/repositories/vehicle-type.repository.js';
+import type { VehicleType } from '../../../src/modules/vehicles/types/index.js';
 
-const fareService = new FareService();
+/// Pricing now comes from the VehicleType row. These cases exercise the pricing
+/// arithmetic, not the lookup, so the repository is stubbed: 'v-type-1' has no
+/// pricing columns set and therefore prices on the platform defaults, exactly
+/// as it did when rate cards lived in configuration.
+function vehicleType(overrides: Partial<VehicleType> = {}): VehicleType {
+  return {
+    id: 'v-type-1',
+    code: 'CAB',
+    name: 'Cab',
+    icon: null,
+    displayOrder: 0,
+    passengerCapacity: 4,
+    luggageCapacity: 2,
+    minimumFare: null,
+    baseFare: null,
+    perKmRate: null,
+    perMinuteRate: null,
+    waitingCharge: null,
+    cancellationCharge: null,
+    isActive: true,
+    createdAt: new Date(),
+    ...overrides,
+  } as VehicleType;
+}
+
+const types = new Map<string, VehicleType>([['v-type-1', vehicleType()]]);
+
+const vehicleTypeRepository = {
+  findById: async (id: string) => types.get(id) ?? null,
+} as unknown as VehicleTypeRepository;
+
+const fareService = new FareService(vehicleTypeRepository);
 
 describe('Itemized fare calculation', () => {
   it('computes an itemized quote whose parts reconcile to the total', async () => {
@@ -70,14 +103,17 @@ describe('Final fare (billed on actual trip values)', () => {
     assert.equal(result.estimatedDurationMin, 30);
   });
 
-  it('prices vehicle types differently when a rate card is configured', async () => {
-    const card = fareService.rateCardFor('v-type-1');
-    const premium = { ...card, perKm: card.perKm * 2, baseFare: card.baseFare * 2 };
-
-    const original = fareService.rateCardFor;
-    (fareService as unknown as { rateCardFor: (id: string) => unknown }).rateCardFor = (
-      id: string,
-    ) => (id === 'premium' ? premium : card);
+  it('prices vehicle types differently from their own pricing columns', async () => {
+    const card = fareService.rateCardFor(vehicleType());
+    types.set(
+      'premium',
+      vehicleType({
+        id: 'premium',
+        code: 'CAB_PREMIUM',
+        perKmRate: (card.perKm * 2) as unknown as VehicleType['perKmRate'],
+        baseFare: (card.baseFare * 2) as unknown as VehicleType['baseFare'],
+      }),
+    );
 
     try {
       const standard = await fareService.calculateFinalFare({
@@ -92,8 +128,29 @@ describe('Final fare (billed on actual trip values)', () => {
       });
       assert.ok(expensive.totalFare > standard.totalFare);
     } finally {
-      (fareService as unknown as { rateCardFor: unknown }).rateCardFor = original;
+      types.delete('premium');
     }
+  });
+
+  it('falls back per field, so a type that prices only per-km keeps sane defaults', () => {
+    const fallback = fareService.rateCardFor(null);
+    const partial = fareService.rateCardFor(
+      vehicleType({ perKmRate: 99 as unknown as VehicleType['perKmRate'] }),
+    );
+
+    assert.equal(partial.perKm, 99);
+    assert.equal(partial.baseFare, fallback.baseFare);
+    assert.equal(partial.minimumFare, fallback.minimumFare);
+    assert.equal(partial.commissionRate, fallback.commissionRate);
+  });
+
+  it('prices an unknown vehicle type on the platform default rather than throwing', async () => {
+    const result = await fareService.calculateFinalFare({
+      actualDistanceKm: 10,
+      actualDurationMin: 20,
+      vehicleTypeId: 'does-not-exist',
+    });
+    assert.ok(result.totalFare > 0);
   });
 
   it('never bills below the minimum fare', async () => {
@@ -102,7 +159,7 @@ describe('Final fare (billed on actual trip values)', () => {
       actualDurationMin: 0,
       vehicleTypeId: 'v-type-1',
     });
-    assert.ok(result.totalFare >= fareService.rateCardFor('v-type-1').minimumFare);
+    assert.ok(result.totalFare >= fareService.rateCardFor(vehicleType()).minimumFare);
   });
 
   it('rejects negative or non-finite trip values rather than pricing them', async () => {

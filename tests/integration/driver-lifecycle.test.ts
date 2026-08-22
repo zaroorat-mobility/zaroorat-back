@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { grantRole } from './helpers/fixtures.js';
+import { vehicleConfig } from '../../src/config/vehicle/vehicle.config.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
@@ -19,6 +20,7 @@ function png(): Buffer {
 
 const CENTRE = { latitude: 12.9716, longitude: 77.5946 };
 const REQUIRED_TYPES = ['DRIVING_LICENSE', 'RC', 'INSURANCE'];
+const VEHICLE_REQUIRED_TYPES = vehicleConfig.requiredDocumentTypes;
 
 function driverIdsOf(result: NearbyDriversResult): string[] {
   return result.outcome === 'no-live-candidates' ? [] : result.drivers.map((d) => d.driverId);
@@ -41,13 +43,16 @@ describe('driver verification lifecycle — full production path (integration)',
     provider.reset();
   });
 
-  async function uploadFile(auth: { authorization: string }): Promise<string> {
+  async function uploadFile(
+    auth: { authorization: string },
+    purpose: 'DRIVER_DOCUMENT' | 'VEHICLE_DOCUMENT' = 'DRIVER_DOCUMENT',
+  ): Promise<string> {
     const created = await app.inject({
       method: 'POST',
       url: '/api/v1/files',
       headers: { ...auth, 'idempotency-key': randomUUID() },
       payload: {
-        purpose: 'DRIVER_DOCUMENT',
+        purpose,
         fileName: 'doc.png',
         contentType: 'image/png',
         sizeBytes: 2048,
@@ -200,6 +205,92 @@ describe('driver verification lifecycle — full production path (integration)',
       headers: freshAuthHeader,
     });
     assert.ok([...meAfterRefresh.json().roles].includes('driver'));
+
+    // 12a. Going online is refused before a vehicle exists — a distinct code
+    // from the driver-document gate, so the app can tell the two apart.
+    const noVehicle = await app.inject({
+      method: 'POST',
+      url: '/api/v1/drivers/status/online',
+      headers: freshAuthHeader,
+      payload: {},
+    });
+    assert.equal(noVehicle.statusCode, 409, noVehicle.payload);
+    assert.equal(noVehicle.json().error.code, 'VEHICLE_MISSING');
+
+    // 12b. Vehicle catalog → claim → documents → review → approval, entirely
+    // over the public API. No test here touches the vehicle tables directly:
+    // the point is that a driver can finish onboarding without one.
+    const catalog = await app.inject({
+      method: 'GET',
+      url: '/api/v1/vehicle-types',
+      headers: freshAuthHeader,
+    });
+    assert.equal(catalog.statusCode, 200, catalog.payload);
+    const vehicleTypeId = catalog.json().data[0]?.id as string;
+    assert.ok(vehicleTypeId, 'the seeded catalog must expose at least one active type');
+
+    const claimed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/vehicles/me/claim',
+      headers: freshAuthHeader,
+      payload: { registrationNumber: 'KA01AB1234', vehicleTypeId },
+    });
+    assert.equal(claimed.statusCode, 200, claimed.payload);
+    const vehicleId = claimed.json().data.id as string;
+    assert.equal(claimed.json().data.verificationStatus, 'PENDING');
+
+    // A claimed but unreviewed vehicle still blocks going online.
+    const unverifiedVehicle = await app.inject({
+      method: 'POST',
+      url: '/api/v1/drivers/status/online',
+      headers: freshAuthHeader,
+      payload: {},
+    });
+    assert.equal(unverifiedVehicle.statusCode, 403, unverifiedVehicle.payload);
+    assert.equal(unverifiedVehicle.json().error.code, 'VEHICLE_NOT_VERIFIED');
+
+    const vehicleDocumentIds: string[] = [];
+    for (const documentType of VEHICLE_REQUIRED_TYPES) {
+      const fileId = await uploadFile(freshAuthHeader, 'VEHICLE_DOCUMENT');
+      const submitted = await app.inject({
+        method: 'POST',
+        url: `/api/v1/vehicles/${vehicleId}/documents`,
+        headers: freshAuthHeader,
+        payload: { documentType, fileId },
+      });
+      assert.equal(submitted.statusCode, 201, submitted.payload);
+      vehicleDocumentIds.push(submitted.json().data.id as string);
+    }
+
+    // Approval before the documents are reviewed is refused, exactly as it is
+    // for a driver.
+    const vehicleTooEarly = await app.inject({
+      method: 'POST',
+      url: `/api/v1/vehicles/${vehicleId}/verify`,
+      headers: admin.authHeader,
+      payload: { status: 'VERIFIED' },
+    });
+    assert.equal(vehicleTooEarly.statusCode, 403, vehicleTooEarly.payload);
+    assert.equal(vehicleTooEarly.json().error.code, 'VEHICLE_DOCUMENTS_INCOMPLETE');
+
+    for (const documentId of vehicleDocumentIds) {
+      const reviewed = await app.inject({
+        method: 'POST',
+        url: `/api/v1/vehicles/${vehicleId}/documents/${documentId}/review`,
+        headers: admin.authHeader,
+        payload: { status: 'VERIFIED' },
+      });
+      assert.equal(reviewed.statusCode, 200, reviewed.payload);
+    }
+
+    const vehicleApproved = await app.inject({
+      method: 'POST',
+      url: `/api/v1/vehicles/${vehicleId}/verify`,
+      headers: admin.authHeader,
+      payload: { status: 'VERIFIED' },
+    });
+    assert.equal(vehicleApproved.statusCode, 200, vehicleApproved.payload);
+    assert.equal(vehicleApproved.json().data.verificationStatus, 'VERIFIED');
 
     // 13. Go online.
     const online = await app.inject({
