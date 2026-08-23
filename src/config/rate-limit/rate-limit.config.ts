@@ -49,5 +49,11 @@ export const rateLimits = Object.freeze({
     windowSeconds: Number(process.env.RL_DRIVER_LOCATION_WINDOW ?? 60),
     keyBy: 'user',
   }),
+  adminLogin: Object.freeze<RateLimitOptions>({
+    scope: 'rl:admin-login',
+    limit: Number(process.env.RL_ADMIN_LOGIN_LIMIT ?? 10),
+    windowSeconds: Number(process.env.RL_ADMIN_LOGIN_WINDOW ?? 900),
+    keyBy: 'ip',
+  }),
 });
 export type RateLimits = typeof rateLimits;

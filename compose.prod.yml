@@ -143,7 +143,9 @@ services:
     stop_grace_period: 150s
 
   postgres:
+    # Official tags are amd64-only; Apple Silicon runs this under emulation.
     image: postgis/postgis:17-3.5
+    platform: linux/amd64
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-zaroorat}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}

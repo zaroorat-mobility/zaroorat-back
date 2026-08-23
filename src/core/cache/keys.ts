@@ -1,5 +1,6 @@
 export const IDEMPOTENCY_OPERATIONS = Object.freeze({
   OTP_VERIFY: 'otp-verify',
+  ADMIN_LOGIN: 'admin-login',
   TOKEN_REFRESH: 'token-refresh',
   PHONE_CHANGE_VERIFY: 'phone-change-verify',
   PAYMENT: 'payment',

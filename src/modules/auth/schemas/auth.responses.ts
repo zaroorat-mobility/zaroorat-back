@@ -188,6 +188,40 @@ export const sessionListResponse = {
   },
   required: ['sessions'],
 } as const;
+export const adminPasswordLoginBodySchema = {
+  type: 'object',
+  properties: {
+    email: { type: 'string', format: 'email', description: 'Staff email address' },
+    password: { type: 'string', minLength: 8, description: 'Staff password' },
+  },
+  required: ['email', 'password'],
+} as const;
+export const adminLoginResponse = {
+  type: 'object',
+  properties: {
+    ...tokenPairProperties,
+    user: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', format: 'uuid' },
+        status: { type: 'string', enum: ['UNVERIFIED', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED'] },
+        roles: { type: 'array', items: { type: 'string' } },
+        isNew: { type: 'boolean' },
+        email: { type: ['string', 'null'] },
+        phoneNumber: { type: 'string' },
+        name: { type: ['string', 'null'] },
+      },
+      required: ['id', 'status', 'roles', 'isNew'],
+    },
+  },
+  required: [
+    'accessToken',
+    'accessTokenExpiresInSec',
+    'refreshToken',
+    'refreshTokenExpiresInSec',
+    'user',
+  ],
+} as const;
 export const deviceListResponse = {
   type: 'object',
   properties: {

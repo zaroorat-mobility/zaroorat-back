@@ -1,4 +1,5 @@
 import { ProviderClient } from '../../../src/core/database';
+import { hashPassword } from '../../../src/modules/auth/utils/password';
 import { assignRole, RoleSlug, seedRoles } from '../shared/roles';
 import { seedVehicleTypes } from '../shared/vehicle-types';
 
@@ -16,7 +17,19 @@ async function ensureUser(
   extra?: Record<string, unknown>,
 ) {
   const existing = await prisma.user.findFirst({ where: { phoneNumber: phone, deletedAt: null } });
-  if (existing) return existing;
+  if (existing) {
+    if (extra && extra.email != null) {
+      return prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          email: extra.email as string,
+          passwordHash: extra.passwordHash as string,
+          isEmailVerified: extra.isEmailVerified === true,
+        },
+      });
+    }
+    return existing;
+  }
 
   return prisma.user.create({
     data: {
@@ -44,7 +57,16 @@ export async function seedDevelopment(prisma: Prisma) {
     roles: RoleSlug[];
     extra?: Record<string, unknown>;
   }> = [
-    { phone: '+10000000000', profile: { firstName: 'Admin', lastName: 'User' }, roles: ['admin'] },
+    {
+      phone: '+10000000000',
+      profile: { firstName: 'Admin', lastName: 'User' },
+      roles: ['admin'],
+      extra: {
+        email: (process.env.ADMIN_SEED_EMAIL ?? 'admin@zaroorat.com').toLowerCase(),
+        passwordHash: hashPassword(process.env.ADMIN_SEED_PASSWORD ?? 'Admin@12345'),
+        isEmailVerified: true,
+      },
+    },
     {
       phone: '+10000000001',
       profile: { firstName: 'Demo', lastName: 'Driver' },

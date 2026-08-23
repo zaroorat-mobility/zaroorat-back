@@ -16,6 +16,8 @@ import {
   tokenPairResponse,
   verifyOtpBodySchema,
   verifyOtpResponse,
+  adminPasswordLoginBodySchema,
+  adminLoginResponse,
 } from '../schemas/auth.responses';
 const noContent = { type: 'null', description: 'No content' } as const;
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
@@ -198,5 +200,79 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     controller.revokeDevice,
+  );
+  app.post(
+    '/admin/login',
+    {
+      config: { public: true },
+      preHandler: app.rateLimit(rateLimits.adminLogin),
+      schema: {
+        tags: ['Auth'],
+        summary: 'Admin email & password login',
+        description:
+          'Authenticates a provisioned staff account (admin, support, or finance). ' +
+          'Does not register rider or customer accounts. Unknown, non-staff, or wrong ' +
+          'credentials all return 401 INVALID_CREDENTIALS.',
+        body: adminPasswordLoginBodySchema,
+        response: {
+          200: adminLoginResponse,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          429: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    controller.loginAdminPassword,
+  );
+  app.post(
+    '/admin/otp/send',
+    {
+      config: { public: true },
+      preHandler: app.rateLimit(rateLimits.otpSend),
+      schema: {
+        tags: ['Auth'],
+        summary: 'Request admin OTP',
+        description:
+          'Sends an OTP only when the number belongs to an existing staff account. ' +
+          'The response shape is identical otherwise, so this endpoint does not disclose ' +
+          'whether a number is staff.',
+        body: sendOtpBodySchema,
+        response: {
+          200: sendOtpResponse,
+          400: errorResponseSchema,
+          429: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    controller.sendAdminOtp,
+  );
+  app.post(
+    '/admin/otp/verify',
+    {
+      config: { public: true },
+      preHandler: app.rateLimit(rateLimits.otpVerify),
+      schema: {
+        tags: ['Auth'],
+        summary: 'Verify admin OTP',
+        description:
+          'Verifies an OTP for a staff account and issues tokens. Never creates a new ' +
+          'account. A rider or customer number is refused with 401 INVALID_CREDENTIALS.',
+        headers: idempotencyHeaderSchema,
+        body: verifyOtpBodySchema,
+        response: {
+          200: adminLoginResponse,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          410: errorResponseSchema,
+          429: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    controller.verifyAdminOtp,
   );
 }
