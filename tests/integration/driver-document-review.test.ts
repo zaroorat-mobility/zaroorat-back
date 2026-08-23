@@ -82,7 +82,7 @@ describe('driver document review (integration)', () => {
   ) {
     return app.inject({
       method: 'POST',
-      url: `/api/v1/drivers/${driverId}/documents/${documentId}/review`,
+      url: `/api/v1/admin/drivers/${driverId}/documents/${documentId}/review`,
       headers: admin.authHeader,
       payload: body,
     });

@@ -7,3 +7,4 @@ export * from './driver/index.js';
 export * from './geo/index.js';
 export * from './vehicle/index.js';
 export * from './realtime/index.js';
+export * from './pricing/index.js';

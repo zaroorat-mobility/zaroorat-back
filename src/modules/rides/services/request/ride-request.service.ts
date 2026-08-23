@@ -7,7 +7,7 @@ import {
 } from '../../repositories/ride-request.repository.js';
 import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
-import { FareService } from '../fare/fare.service.js';
+import { PricingService, SurgeService } from '@modules/pricing';
 import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
 import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
 import { toVehicleTypeView } from '@modules/vehicles/controllers/vehicle-type.controller.js';
@@ -21,7 +21,7 @@ import {
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import type { RideRequest } from '../../types';
-import type { ItemizedFareResult } from '../fare/fare.service.js';
+import type { ItemizedFareResult } from '@modules/pricing';
 
 export interface QuoteOption {
   vehicleTypeId: string;
@@ -49,7 +49,8 @@ export class RideRequestService {
     private readonly requestRepo: RideRequestRepository,
     private readonly rideRepo: RideRepository,
     private readonly dispatchRepo: RideDispatchRepository,
-    private readonly fareService: FareService,
+    private readonly pricingService: PricingService,
+    private readonly surgeService: SurgeService,
     private readonly vehicleTypeService: VehicleTypeService,
     private readonly userProfileRepository: UserProfileRepository,
     private readonly txManager: TransactionManager,
@@ -83,7 +84,7 @@ export class RideRequestService {
           params.cityId !== undefined ? { cityId: params.cityId } : {},
         );
 
-    const trip = this.fareService.estimateTrip({
+    const trip = this.pricingService.estimateTrip({
       pickupLat: params.pickupLat,
       pickupLng: params.pickupLng,
       dropLat: params.dropLat,
@@ -92,13 +93,20 @@ export class RideRequestService {
 
     const options: QuoteOption[] = [];
     for (const vehicleType of vehicleTypes) {
-      const rateCard = this.fareService.rateCardFor(vehicleType);
-      const fare = await this.fareService.calculateFareQuote({
+      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id, params.cityId);
+      const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
+        params.pickupLat,
+        params.pickupLng,
+        vehicleType.id,
+      );
+
+      const fare = await this.pricingService.calculateFareQuote({
         pickupLat: params.pickupLat,
         pickupLng: params.pickupLng,
         dropLat: params.dropLat,
         dropLng: params.dropLng,
         vehicleTypeId: vehicleType.id,
+        surgeMultiplier,
         rateCard,
       });
       const view = toVehicleTypeView(vehicleType);
@@ -151,14 +159,22 @@ export class RideRequestService {
     // Validates the client-supplied type before anything is written: an
     // unknown id is 404 VEHICLE_TYPE_NOT_FOUND, a retired one is 409
     // VEHICLE_TYPE_INACTIVE. Before the catalog existed the only check was the
-    // database foreign key, which could not tell the two apart.
-    const vehicleType = await this.vehicleTypeService.requireActive(input.vehicleTypeId);
+    // database foreign key, which could not tell the two apart. Called for
+    // that guard alone — pricing now resolves its own rate card from
+    // PricingRuleRepository, so the returned type is not needed here.
+    await this.vehicleTypeService.requireActive(input.vehicleTypeId);
 
-    const fareQuote = await this.fareService.calculateFareQuote({
+    const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
+      input.pickupLat,
+      input.pickupLng,
+      input.vehicleTypeId,
+    );
+
+    const fareQuote = await this.pricingService.calculateFareQuote({
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
       vehicleTypeId: input.vehicleTypeId,
-      rateCard: this.fareService.rateCardFor(vehicleType),
+      surgeMultiplier,
       ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
       ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
     });
