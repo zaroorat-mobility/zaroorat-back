@@ -9,6 +9,8 @@ import { rideRoutes } from '@modules/rides/routes';
 import { driverRoutes } from '@modules/drivers/routes';
 import { vehicleRoutes, vehicleTypeRoutes } from '@modules/vehicles/routes';
 import { paymentRoutes } from '@modules/payments/routes';
+import { adminRoutes } from '@modules/admin';
+
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(healthRoute, { prefix: '/api/v1' });
   await app.register(healthRoute);
@@ -23,4 +25,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(vehicleRoutes, { prefix: '/api/v1/vehicles' });
   await app.register(vehicleTypeRoutes, { prefix: '/api/v1/vehicle-types' });
   await app.register(paymentRoutes, { prefix: '/api/v1/payments' });
+  // Admin routes declare domain-scoped bare paths (`/drivers/:id/verify`,
+  // `/payments/payouts`, `/surge-zones`). Mounted at `/api/v1` those would
+  // collide with the real drivers/vehicles/payments modules above and expose
+  // staff-only actions on the public domain prefixes. The `/admin` segment is
+  // what keeps them distinct — and is the path every admin test asserts.
+  await app.register(adminRoutes, { prefix: '/api/v1/admin' });
 }

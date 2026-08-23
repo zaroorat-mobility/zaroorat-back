@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { calculateHaversineDistanceKm } from '../../../src/modules/rides/utils/distance.util.js';
+import { calculateHaversineDistanceKm } from '../../../src/modules/pricing/utils/distance.util.js';
 
 describe('Haversine Distance Calculator Tests', () => {
   it('calculates 0 km for identical coordinates', () => {

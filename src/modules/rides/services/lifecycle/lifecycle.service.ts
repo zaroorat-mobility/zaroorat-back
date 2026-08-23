@@ -7,7 +7,7 @@ import { RideRequestRepository } from '../../repositories/ride-request.repositor
 import { RideStatusEventRepository } from '../../repositories/ride-status-event.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { RideOtpService } from '../otp/ride-otp.service.js';
-import { FareService } from '../fare/fare.service.js';
+import { PricingService } from '@modules/pricing';
 import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
@@ -80,7 +80,7 @@ export class LifecycleService {
     private readonly statusEventRepo: RideStatusEventRepository,
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly rideOtpService: RideOtpService,
-    private readonly fareService: FareService,
+    private readonly pricingService: PricingService,
     private readonly fareRepo: RideFareRepository,
     private readonly cancellationService: CancellationService,
     private readonly ledgerService: LedgerService,
@@ -441,7 +441,7 @@ export class LifecycleService {
       );
       await this.assertPlausibleTripData(ride.requestId, actualDistanceKm, actualDurationMin, tx);
       const waitingMinutes = ride.waitTimeMin ?? 0;
-      const itemizedFare = await this.fareService.calculateFinalFare({
+      const itemizedFare = await this.pricingService.calculateFinalFare({
         actualDistanceKm,
         actualDurationMin,
         vehicleTypeId: ride.vehicleTypeId,

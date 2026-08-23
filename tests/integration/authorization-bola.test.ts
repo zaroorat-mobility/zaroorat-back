@@ -448,7 +448,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/v1/payments/payouts',
+        url: '/api/v1/admin/payments/payouts',
         headers: { ...driver.authHeader, 'idempotency-key': randomUUID() },
         payload: { driverId, amount: 100 },
       });
@@ -463,7 +463,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       const driverUser = await loginWithRole(DRIVER_A, 'driver');
       const driverId = await makeDriver(driverUser.userId, { verified: false });
 
-      const response = await post(`/api/v1/drivers/${driverId}/verify`, customer, {
+      const response = await post(`/api/v1/admin/drivers/${driverId}/verify`, customer, {
         status: 'VERIFIED',
       });
       assert.equal(response.statusCode, 403, response.payload);
@@ -476,7 +476,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       const driverUser = await loginWithRole(DRIVER_A, 'driver');
       const driverId = await makeDriver(driverUser.userId, { verified: false });
 
-      const response = await post(`/api/v1/drivers/${driverId}/verify`, driverUser, {
+      const response = await post(`/api/v1/admin/drivers/${driverId}/verify`, driverUser, {
         status: 'VERIFIED',
       });
       assert.equal(response.statusCode, 403, response.payload);
@@ -490,7 +490,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       const driverUser = await loginWithRole(DRIVER_A, 'driver');
       const driverId = await makeDriver(driverUser.userId, { verified: true });
 
-      const response = await post(`/api/v1/drivers/${driverId}/suspend`, customer, {
+      const response = await post(`/api/v1/admin/drivers/${driverId}/suspend`, customer, {
         isSuspended: true,
       });
       assert.equal(response.statusCode, 403, response.payload);
@@ -511,7 +511,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
         });
       }
 
-      const response = await post(`/api/v1/drivers/${driverId}/verify`, admin, {
+      const response = await post(`/api/v1/admin/drivers/${driverId}/verify`, admin, {
         status: 'VERIFIED',
       });
       assert.equal(response.statusCode, 200, response.payload);
@@ -535,7 +535,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/v1/payments/payouts',
+        url: '/api/v1/admin/payments/payouts',
         headers: { ...finance.authHeader, 'idempotency-key': randomUUID() },
         payload: { driverId, amount: 100 },
       });
@@ -548,7 +548,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       const driverUser = await loginWithRole(DRIVER_A, 'driver');
       const driverId = await makeDriver(driverUser.userId, { verified: false });
 
-      const response = await post(`/api/v1/drivers/${driverId}/verify`, finance, {
+      const response = await post(`/api/v1/admin/drivers/${driverId}/verify`, finance, {
         status: 'VERIFIED',
       });
       assert.equal(response.statusCode, 403, response.payload);
@@ -559,7 +559,7 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       const driverUser = await loginWithRole(DRIVER_A, 'driver');
       const driverId = await makeDriver(driverUser.userId, { verified: true });
 
-      const response = await post(`/api/v1/drivers/${driverId}/suspend`, finance, {
+      const response = await post(`/api/v1/admin/drivers/${driverId}/suspend`, finance, {
         isSuspended: true,
       });
       assert.equal(response.statusCode, 403, response.payload);

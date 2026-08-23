@@ -52,11 +52,14 @@ module.exports = defineConfig([
     },
   },
 
-  // Maintenance CLIs (schema merge/validate, db reset) and seed scripts.
-  // These are CommonJS Node scripts whose entire purpose is printing progress
-  // to a terminal, so require() and console are correct here — not lapses.
+  // Maintenance CLIs (schema merge/validate, db reset, one-off data migrations)
+  // and seed scripts. These are Node scripts whose entire purpose is printing
+  // progress to a terminal, so require() and console are correct here — not
+  // lapses. `.ts` is included because newer maintenance tools are written in
+  // TypeScript and run through tsx; the rationale is the file's role, not its
+  // extension. Type-safety rules are deliberately NOT relaxed here.
   {
-    files: ['scripts/**/*.js', 'prisma/seed/**/*.ts'],
+    files: ['scripts/**/*.js', 'scripts/**/*.ts', 'prisma/seed/**/*.ts'],
     rules: {
       '@typescript-eslint/no-require-imports': 'off',
       'no-console': 'off',

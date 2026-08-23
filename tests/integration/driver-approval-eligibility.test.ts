@@ -94,7 +94,7 @@ describe('driver approval eligibility gate and role propagation (integration)', 
   ) {
     const response = await app.inject({
       method: 'POST',
-      url: `/api/v1/drivers/${driverId}/documents/${documentId}/review`,
+      url: `/api/v1/admin/drivers/${driverId}/documents/${documentId}/review`,
       headers: admin.authHeader,
       payload: status === 'REJECTED' ? { status, rejectionReason: 'bad scan' } : { status },
     });
@@ -104,7 +104,7 @@ describe('driver approval eligibility gate and role propagation (integration)', 
   function approve(admin: LoggedInUser, driverId: string) {
     return app.inject({
       method: 'POST',
-      url: `/api/v1/drivers/${driverId}/verify`,
+      url: `/api/v1/admin/drivers/${driverId}/verify`,
       headers: admin.authHeader,
       payload: { status: 'VERIFIED' },
     });

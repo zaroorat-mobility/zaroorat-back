@@ -364,7 +364,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/v1/payments/payouts',
+        url: '/api/v1/admin/payments/payouts',
         headers: { ...finance.authHeader, 'idempotency-key': idempotencyKey },
         payload: { driverId: w.driverId, settlementId: settlement.id, amount },
       });
@@ -435,7 +435,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       const pay = () =>
         app.inject({
           method: 'POST',
-          url: '/api/v1/payments/payouts',
+          url: '/api/v1/admin/payments/payouts',
           headers: { ...finance.authHeader, 'idempotency-key': randomUUID() },
           payload: { driverId: w.driverId, settlementId: settlement.id, amount: earned },
         });

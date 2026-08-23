@@ -30,16 +30,7 @@ export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/refunds', { preHandler: fastify.rateLimit(rateLimits.payment) }, (req, reply) =>
     controller.refund.processRefund(req, reply),
   );
-  fastify.post(
-    '/payouts',
-    {
-      preHandler: [
-        fastify.authorize({ roles: ['admin', 'finance'] }),
-        fastify.rateLimit(rateLimits.payment),
-      ],
-    },
-    (req, reply) => controller.payout.executePayout(req, reply),
-  );
+
   await fastify.register(async (webhookScope) => {
     registerRawJsonParser(webhookScope);
     webhookScope.post(

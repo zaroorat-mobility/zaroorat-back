@@ -13,7 +13,6 @@ import {
 } from './repositories/index.js';
 import {
   RideRequestService,
-  FareService,
   RideOtpService,
   CancellationService,
   DispatchService,
@@ -62,7 +61,7 @@ export function registerRidesModule(container: AwilixContainer): void {
     rideReceiptRepository: asClass(RideReceiptRepository).singleton(),
     rideRatingRepository: asClass(RideRatingRepository).singleton(),
     rideRequestService: asClass(RideRequestService).singleton(),
-    fareService: asClass(FareService).singleton(),
+
     rideOtpService: asClass(RideOtpService).singleton(),
     cancellationService: asClass(CancellationService).singleton(),
     dispatchService: asClass(DispatchService).singleton(),
@@ -75,7 +74,7 @@ export function registerRidesModule(container: AwilixContainer): void {
       .inject((c) => ({
         request: c.resolve('rideRequestService'),
         lifecycle: c.resolve('lifecycleService'),
-        fare: c.resolve('fareService'),
+        pricing: c.resolve('pricingService'),
         otp: c.resolve('rideOtpService'),
         cancellation: c.resolve('cancellationService'),
         dispatch: c.resolve('dispatchService'),

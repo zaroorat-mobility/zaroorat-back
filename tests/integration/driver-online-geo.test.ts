@@ -92,7 +92,7 @@ describe('driver online activation and geo safety (integration)', () => {
       const documentId = submitted.json().data.id as string;
       const reviewed = await app.inject({
         method: 'POST',
-        url: `/api/v1/drivers/${driverId}/documents/${documentId}/review`,
+        url: `/api/v1/admin/drivers/${driverId}/documents/${documentId}/review`,
         headers: admin.authHeader,
         payload: { status: 'VERIFIED' },
       });
@@ -100,7 +100,7 @@ describe('driver online activation and geo safety (integration)', () => {
     }
     const approved = await app.inject({
       method: 'POST',
-      url: `/api/v1/drivers/${driverId}/verify`,
+      url: `/api/v1/admin/drivers/${driverId}/verify`,
       headers: admin.authHeader,
       payload: { status: 'VERIFIED' },
     });

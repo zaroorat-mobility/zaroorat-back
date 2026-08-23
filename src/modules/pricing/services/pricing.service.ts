@@ -1,50 +1,12 @@
-import { rideConfig, type RideRateCard } from '@config';
-import { VehicleTypeRepository } from '@modules/vehicles/repositories/vehicle-type.repository.js';
-import type { VehicleType } from '@modules/vehicles/types/index.js';
-import { calculateHaversineDistanceKm } from '../../utils/distance.util.js';
-
-export interface FareCalculationParams {
-  pickupLat: number;
-  pickupLng: number;
-  dropLat?: number;
-  dropLng?: number;
-  vehicleTypeId: string;
-  surgeMultiplier?: number;
-  waitingMinutes?: number;
-  discountAmount?: number;
-  /// Pre-resolved rate card. The multi-category quote loads every active type
-  /// in one query and passes each card in, so pricing N categories stays one
-  /// round trip rather than N.
-  rateCard?: RideRateCard;
-}
-
-export interface FinalFareParams {
-  actualDistanceKm: number;
-  actualDurationMin: number;
-  vehicleTypeId: string;
-  surgeMultiplier?: number;
-  waitingMinutes?: number;
-  discountAmount?: number;
-  rateCard?: RideRateCard;
-}
-
-export interface ItemizedFareResult {
-  estimatedDistanceKm: number;
-  estimatedDurationMin: number;
-  baseFare: number;
-  distanceFare: number;
-  timeFare: number;
-  waitingCharge: number;
-  surgeMultiplier: number;
-  surgeAmount: number;
-  subtotal: number;
-  discountAmount: number;
-  taxAmount: number;
-  platformFee: number;
-  totalFare: number;
-  driverEarning: number;
-  platformCommission: number;
-}
+import { pricingConfig, type PricingRateCard } from '@config';
+import type { PricingRule } from '../../../generated/prisma/index.js';
+import { PricingRuleRepository } from '../repositories/pricing-rule.repository.js';
+import { calculateHaversineDistanceKm } from '../utils/distance.util.js';
+import type {
+  FareCalculationParams,
+  FinalFareParams,
+  ItemizedFareResult,
+} from '../domain/pricing.types.js';
 
 function money(value: number): number {
   return Math.round(value * 100) / 100;
@@ -56,42 +18,44 @@ function decimal(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export class FareService {
-  constructor(private readonly vehicleTypeRepository: VehicleTypeRepository) {}
+export class PricingService {
+  constructor(private readonly pricingRuleRepository: PricingRuleRepository) {}
 
-  /// Maps a VehicleType row onto a rate card. Pure and synchronous on purpose:
-  /// every field falls back to `rideConfig.defaultRateCard` individually, so a
-  /// type that sets only `perKmRate` still gets sane values for the rest, and a
-  /// type with no pricing at all prices exactly as it did before pricing moved
-  /// onto the table. `commissionRate`, `taxRate` and `platformFee` have no
-  /// column on VehicleType and stay platform-wide config.
-  rateCardFor(vehicleType: VehicleType | null): RideRateCard {
-    const fallback = rideConfig.defaultRateCard;
-    if (!vehicleType) return fallback;
+  /// Maps a PricingRule row onto a rate card. Pure and synchronous on purpose:
+  /// every field falls back to `pricingConfig.defaultRateCard` individually.
+  /// `commissionRate`, `taxRate` and `platformFee` stay platform-wide config.
+  rateCardFor(rule: PricingRule | null): PricingRateCard {
+    const fallback = pricingConfig.defaultRateCard;
+    if (!rule) return fallback;
     return Object.freeze({
-      baseFare: decimal(vehicleType.baseFare) ?? fallback.baseFare,
-      perKm: decimal(vehicleType.perKmRate) ?? fallback.perKm,
-      perMinute: decimal(vehicleType.perMinuteRate) ?? fallback.perMinute,
-      perWaitingMinute: decimal(vehicleType.waitingCharge) ?? fallback.perWaitingMinute,
-      minimumFare: decimal(vehicleType.minimumFare) ?? fallback.minimumFare,
+      baseFare: decimal(rule.baseFare) ?? fallback.baseFare,
+      perKm: decimal(rule.perKmRate) ?? fallback.perKm,
+      perMinute: decimal(rule.perMinuteRate) ?? fallback.perMinute,
+      perWaitingMinute: decimal(rule.waitingPerMin) ?? fallback.perWaitingMinute,
+      minimumFare: decimal(rule.minimumFare) ?? fallback.minimumFare,
       platformFee: fallback.platformFee,
       commissionRate: fallback.commissionRate,
       taxRate: fallback.taxRate,
     });
   }
 
-  /// The one I/O path to a rate card. An unknown id falls back to the platform
-  /// default rather than throwing: callers that need a *validated* type call
-  /// `VehicleTypeService.requireActive` first, and pricing should never be the
-  /// thing that decides a type does not exist.
-  async rateCardForTypeId(vehicleTypeId: string): Promise<RideRateCard> {
-    return this.rateCardFor(await this.vehicleTypeRepository.findById(vehicleTypeId));
+  /// The one I/O path to a rate card. It looks for a specific city's rule,
+  /// falls back to 'GLOBAL', and if neither exist, returns the default config.
+  async rateCardForTypeId(vehicleTypeId: string, cityCode?: string): Promise<PricingRateCard> {
+    let rule = null;
+    if (cityCode) {
+      rule = await this.pricingRuleRepository.findActiveRule(vehicleTypeId, cityCode);
+    }
+    if (!rule) {
+      rule = await this.pricingRuleRepository.findActiveRule(vehicleTypeId, 'GLOBAL');
+    }
+    return this.rateCardFor(rule);
   }
 
   private price(
     distanceKm: number,
     durationMin: number,
-    card: RideRateCard,
+    card: PricingRateCard,
     params: {
       surgeMultiplier?: number;
       waitingMinutes?: number;
@@ -165,7 +129,8 @@ export class FareService {
       dropLat: params.dropLat as number,
       dropLng: params.dropLng as number,
     });
-    const card = params.rateCard ?? (await this.rateCardForTypeId(params.vehicleTypeId));
+    const card =
+      params.rateCard ?? (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode));
     return this.price(trip.distanceKm, trip.durationMin, card, params);
   }
 
@@ -180,7 +145,8 @@ export class FareService {
         `actualDurationMin must be a non-negative number, got ${params.actualDurationMin}`,
       );
     }
-    const card = params.rateCard ?? (await this.rateCardForTypeId(params.vehicleTypeId));
+    const card =
+      params.rateCard ?? (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode));
     return this.price(params.actualDistanceKm, params.actualDurationMin, card, params);
   }
 }

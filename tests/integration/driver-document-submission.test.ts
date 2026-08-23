@@ -177,7 +177,7 @@ describe('driver document submission via fileId (integration)', () => {
     for (const doc of docs) {
       const review = await app.inject({
         method: 'POST',
-        url: `/api/v1/drivers/${driverId}/documents/${doc.id}/review`,
+        url: `/api/v1/admin/drivers/${driverId}/documents/${doc.id}/review`,
         headers: admin.authHeader,
         payload: { status: 'VERIFIED' },
       });
@@ -185,7 +185,7 @@ describe('driver document submission via fileId (integration)', () => {
     }
     const approved = await app.inject({
       method: 'POST',
-      url: `/api/v1/drivers/${driverId}/verify`,
+      url: `/api/v1/admin/drivers/${driverId}/verify`,
       headers: admin.authHeader,
       payload: { status: 'VERIFIED' },
     });

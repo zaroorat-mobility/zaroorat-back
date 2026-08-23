@@ -38,7 +38,7 @@ describe('driver payout authorization (integration, real HTTP)', () => {
   ) {
     return app.inject({
       method: 'POST',
-      url: '/api/v1/payments/payouts',
+      url: '/api/v1/admin/payments/payouts',
       headers: { ...user.authHeader, 'idempotency-key': idempotencyKey },
       payload: body,
     });
@@ -255,7 +255,7 @@ describe('driver payout authorization (integration, real HTTP)', () => {
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/v1/payments/payouts',
+        url: '/api/v1/admin/payments/payouts',
         headers: { 'idempotency-key': randomUUID() },
         payload: { driverId, settlementId, amount: 100 },
       });
@@ -295,7 +295,7 @@ describe('driver payout authorization (integration, real HTTP)', () => {
 
       const response = await app.inject({
         method: 'POST',
-        url: '/api/v1/payments/payouts',
+        url: '/api/v1/admin/payments/payouts',
         headers: finance.authHeader,
         payload: { driverId, settlementId, amount: 100 },
       });

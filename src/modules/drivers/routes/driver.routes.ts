@@ -14,16 +14,7 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/:driverId/documents', (req, reply) =>
     controller.onboarding.submitDocument(req, reply),
   );
-  fastify.post(
-    '/:driverId/documents/:documentId/review',
-    { preHandler: fastify.authorize({ roles: ['admin'] }) },
-    (req, reply) => controller.onboarding.reviewDocument(req, reply),
-  );
-  fastify.post(
-    '/:id/verify',
-    { preHandler: fastify.authorize({ roles: ['admin'] }) },
-    (req, reply) => controller.onboarding.reviewVerification(req, reply),
-  );
+
   fastify.post(
     '/status/online',
     { preHandler: fastify.authorize({ requireOperableDriver: true }) },
@@ -31,11 +22,7 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
   );
   fastify.post('/status/offline', (req, reply) => controller.status.setOffline(req, reply));
   fastify.post('/heartbeat', (req, reply) => controller.status.heartbeat(req, reply));
-  fastify.post(
-    '/:id/suspend',
-    { preHandler: fastify.authorize({ roles: ['admin'] }) },
-    (req, reply) => controller.status.suspend(req, reply),
-  );
+
   fastify.post(
     '/location',
     { preHandler: fastify.rateLimit(rateLimits.driverLocation) },
