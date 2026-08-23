@@ -2,22 +2,18 @@ import type { FastifyInstance } from 'fastify';
 import { container } from '@core/di';
 import { VehicleController } from '../controllers/vehicle.controller.js';
 import { VehicleDocumentController } from '../controllers/vehicle-document.controller.js';
-import { VehicleVerificationController } from '../controllers/vehicle-verification.controller.js';
 import { handleVehicleError } from '../schemas/error-response.js';
 import {
   claimVehicleBodySchema,
   myVehicleResponse,
   noContentResponse,
-  reviewVehicleBodySchema,
   submitVehicleDocumentBodySchema,
   updateVehicleBodySchema,
   vehicleDocumentListResponse,
-  vehicleDocumentParamSchema,
   vehicleDocumentResponse,
   vehicleErrorResponseSchema as err,
   vehicleIdParamSchema,
   vehicleResponse,
-  vehicleReviewResponse,
 } from '../schemas/vehicle.responses.js';
 
 const commonErrors = { 400: err, 401: err, 403: err, 500: err } as const;
@@ -26,9 +22,6 @@ const itemErrors = { ...commonErrors, 404: err } as const;
 export async function vehicleRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<VehicleController>('vehicleController');
   const documents = container.resolve<VehicleDocumentController>('vehicleDocumentController');
-  const verification = container.resolve<VehicleVerificationController>(
-    'vehicleVerificationController',
-  );
   fastify.setErrorHandler(handleVehicleError);
 
   // Not gated on requireOperableDriver: registering a vehicle is part of
@@ -137,56 +130,5 @@ export async function vehicleRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
     (req, reply) => documents.list(req, reply),
-  );
-
-  fastify.get(
-    '/:id/review',
-    {
-      preHandler: fastify.authorize({ roles: ['admin'] }),
-      schema: {
-        tags: ['Vehicles'],
-        summary: 'Get a vehicle with its documents for review',
-        security: [{ bearerAuth: [] }],
-        params: vehicleIdParamSchema,
-        response: { 200: vehicleReviewResponse, ...itemErrors },
-      },
-    },
-    (req, reply) => verification.getForReview(req, reply),
-  );
-
-  fastify.post(
-    '/:id/documents/:documentId/review',
-    {
-      preHandler: fastify.authorize({ roles: ['admin'] }),
-      schema: {
-        tags: ['Vehicles'],
-        summary: 'Approve or reject a vehicle document',
-        security: [{ bearerAuth: [] }],
-        params: vehicleDocumentParamSchema,
-        body: reviewVehicleBodySchema,
-        response: { 200: vehicleDocumentResponse, ...itemErrors, 409: err },
-      },
-    },
-    (req, reply) => verification.reviewDocument(req, reply),
-  );
-
-  fastify.post(
-    '/:id/verify',
-    {
-      preHandler: fastify.authorize({ roles: ['admin'] }),
-      schema: {
-        tags: ['Vehicles'],
-        summary: 'Approve or reject a vehicle',
-        description:
-          'Approval requires every required vehicle document to be VERIFIED and unexpired, the ' +
-          'same rule driver approval applies. A reviewer may not approve a vehicle assigned to ' +
-          'themselves.',
-        security: [{ bearerAuth: [] }],
-        params: vehicleIdParamSchema,
-        body: reviewVehicleBodySchema,
-        response: { 200: vehicleResponse, ...itemErrors, 409: err, 422: err },
-      },
-    },
-    (req, reply) => verification.reviewVehicle(req, reply),
   );
 }

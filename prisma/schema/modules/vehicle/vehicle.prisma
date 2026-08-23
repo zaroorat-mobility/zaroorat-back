@@ -6,12 +6,6 @@ model VehicleType {
   name               String
   passengerCapacity  Int?     @map("passenger_capacity") @db.SmallInt
   luggageCapacity    Int?     @map("luggage_capacity") @db.SmallInt
-  minimumFare        Decimal? @map("minimum_fare") @db.Decimal(10, 2)
-  baseFare           Decimal? @map("base_fare") @db.Decimal(10, 2)
-  perKmRate          Decimal? @map("per_km_rate") @db.Decimal(10, 2)
-  perMinuteRate      Decimal? @map("per_minute_rate") @db.Decimal(10, 2)
-  waitingCharge      Decimal? @map("waiting_charge") @db.Decimal(10, 2)
-  cancellationCharge Decimal? @map("cancellation_charge") @db.Decimal(10, 2)
   /// Client-side glyph key for the category picker (e.g. "bike", "auto").
   /// Deliberately not a URL: the app ships its own artwork and only needs to
   /// know which one to draw.

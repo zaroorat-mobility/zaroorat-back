@@ -149,7 +149,7 @@ describe('driver verification lifecycle — full production path (integration)',
     // 7. Negative: admin approval attempted before any document is reviewed → 422.
     const tooEarly = await app.inject({
       method: 'POST',
-      url: `/api/v1/drivers/${driverId}/verify`,
+      url: `/api/v1/admin/drivers/${driverId}/verify`,
       headers: admin.authHeader,
       payload: { status: 'VERIFIED' },
     });
@@ -159,7 +159,7 @@ describe('driver verification lifecycle — full production path (integration)',
     for (const documentId of documentIds) {
       const reviewed = await app.inject({
         method: 'POST',
-        url: `/api/v1/drivers/${driverId}/documents/${documentId}/review`,
+        url: `/api/v1/admin/drivers/${driverId}/documents/${documentId}/review`,
         headers: admin.authHeader,
         payload: { status: 'VERIFIED' },
       });
@@ -169,7 +169,7 @@ describe('driver verification lifecycle — full production path (integration)',
     // 9. Admin approves the driver.
     const approved = await app.inject({
       method: 'POST',
-      url: `/api/v1/drivers/${driverId}/verify`,
+      url: `/api/v1/admin/drivers/${driverId}/verify`,
       headers: admin.authHeader,
       payload: { status: 'VERIFIED' },
     });
@@ -266,7 +266,7 @@ describe('driver verification lifecycle — full production path (integration)',
     // for a driver.
     const vehicleTooEarly = await app.inject({
       method: 'POST',
-      url: `/api/v1/vehicles/${vehicleId}/verify`,
+      url: `/api/v1/admin/vehicles/${vehicleId}/verify`,
       headers: admin.authHeader,
       payload: { status: 'VERIFIED' },
     });
@@ -276,7 +276,7 @@ describe('driver verification lifecycle — full production path (integration)',
     for (const documentId of vehicleDocumentIds) {
       const reviewed = await app.inject({
         method: 'POST',
-        url: `/api/v1/vehicles/${vehicleId}/documents/${documentId}/review`,
+        url: `/api/v1/admin/vehicles/${vehicleId}/documents/${documentId}/review`,
         headers: admin.authHeader,
         payload: { status: 'VERIFIED' },
       });
@@ -285,7 +285,7 @@ describe('driver verification lifecycle — full production path (integration)',
 
     const vehicleApproved = await app.inject({
       method: 'POST',
-      url: `/api/v1/vehicles/${vehicleId}/verify`,
+      url: `/api/v1/admin/vehicles/${vehicleId}/verify`,
       headers: admin.authHeader,
       payload: { status: 'VERIFIED' },
     });

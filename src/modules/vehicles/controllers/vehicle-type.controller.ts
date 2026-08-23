@@ -10,10 +10,6 @@ export interface VehicleTypeView {
   displayOrder: number;
   passengerCapacity: number | null;
   luggageCapacity: number | null;
-  baseFare: number | null;
-  perKmRate: number | null;
-  perMinuteRate: number | null;
-  minimumFare: number | null;
   isActive: boolean;
 }
 
@@ -28,10 +24,6 @@ export function toVehicleTypeView(vehicleType: VehicleType): VehicleTypeView {
     displayOrder: vehicleType.displayOrder,
     passengerCapacity: vehicleType.passengerCapacity,
     luggageCapacity: vehicleType.luggageCapacity,
-    baseFare: vehicleType.baseFare ? Number(vehicleType.baseFare) : null,
-    perKmRate: vehicleType.perKmRate ? Number(vehicleType.perKmRate) : null,
-    perMinuteRate: vehicleType.perMinuteRate ? Number(vehicleType.perMinuteRate) : null,
-    minimumFare: vehicleType.minimumFare ? Number(vehicleType.minimumFare) : null,
     isActive: vehicleType.isActive,
   };
 }

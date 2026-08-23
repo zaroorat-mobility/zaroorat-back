@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { LifecycleService } from '../../../src/modules/rides/services/lifecycle/lifecycle.service.js';
-import { FareService } from '../../../src/modules/rides/services/fare/fare.service.js';
+import { PricingService } from '../../../src/modules/pricing';
 import { VehicleEligibilityService } from '../../../src/modules/vehicles/services/vehicle-eligibility.service.js';
 import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config.js';
 import {
@@ -180,8 +180,14 @@ function makeWorld() {
         return { plaintextOtp: '123456' };
       },
     } as never,
-    new FareService({
-      async findById() {
+    // PricingRuleRepository's real contract. Returning null for both the city
+    // and the 'GLOBAL' lookup makes `rateCardForTypeId` fall back to the
+    // default config rate card — the same deterministic pricing this suite
+    // relied on when it stubbed the old VehicleTypeRepository's `findById`.
+    // The stub tracks the pricing repository interface; it must not be
+    // narrowed to whatever the service happens to call today.
+    new PricingService({
+      async findActiveRule() {
         return null;
       },
     } as never),

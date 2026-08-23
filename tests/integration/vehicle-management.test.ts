@@ -423,7 +423,7 @@ describe('driver vehicle management, documents and verification (integration)', 
     it('refuses a non-admin', async () => {
       const { user, vehicleId } = await driverWithVehicle(DRIVER_A);
 
-      const response = await post(`/api/v1/vehicles/${vehicleId}/verify`, user, {
+      const response = await post(`/api/v1/admin/vehicles/${vehicleId}/verify`, user, {
         status: 'VERIFIED',
       });
       assert.equal(response.statusCode, 403, response.payload);
@@ -433,7 +433,7 @@ describe('driver vehicle management, documents and verification (integration)', 
       const world = await driverWithSubmittedDocuments();
       const admin = await loginWithRole(ADMIN, 'admin');
 
-      const response = await post(`/api/v1/vehicles/${world.vehicleId}/verify`, admin, {
+      const response = await post(`/api/v1/admin/vehicles/${world.vehicleId}/verify`, admin, {
         status: 'VERIFIED',
       });
       assert.equal(response.statusCode, 403, response.payload);
@@ -446,14 +446,14 @@ describe('driver vehicle management, documents and verification (integration)', 
 
       for (const documentId of world.documentIds) {
         const reviewed = await post(
-          `/api/v1/vehicles/${world.vehicleId}/documents/${documentId}/review`,
+          `/api/v1/admin/vehicles/${world.vehicleId}/documents/${documentId}/review`,
           admin,
           { status: 'VERIFIED' },
         );
         assert.equal(reviewed.statusCode, 200, reviewed.payload);
       }
 
-      const approved = await post(`/api/v1/vehicles/${world.vehicleId}/verify`, admin, {
+      const approved = await post(`/api/v1/admin/vehicles/${world.vehicleId}/verify`, admin, {
         status: 'VERIFIED',
       });
       assert.equal(approved.statusCode, 200, approved.payload);
@@ -468,7 +468,7 @@ describe('driver vehicle management, documents and verification (integration)', 
       const world = await driverWithSubmittedDocuments();
       const admin = await loginWithRole(ADMIN, 'admin');
 
-      const rejected = await post(`/api/v1/vehicles/${world.vehicleId}/verify`, admin, {
+      const rejected = await post(`/api/v1/admin/vehicles/${world.vehicleId}/verify`, admin, {
         status: 'REJECTED',
         rejectionReason: 'Number plate illegible',
       });
@@ -487,7 +487,7 @@ describe('driver vehicle management, documents and verification (integration)', 
       const driverId = await makeDriver(user.userId, { verified: true });
       const { vehicleId } = await makeAssignedVehicle(driverId);
 
-      const response = await post(`/api/v1/vehicles/${vehicleId}/verify`, user, {
+      const response = await post(`/api/v1/admin/vehicles/${vehicleId}/verify`, user, {
         status: 'VERIFIED',
       });
       assert.equal(response.statusCode, 403, response.payload);
@@ -498,7 +498,7 @@ describe('driver vehicle management, documents and verification (integration)', 
       const world = await driverWithSubmittedDocuments();
       const admin = await loginWithRole(ADMIN, 'admin');
 
-      const response = await get(`/api/v1/vehicles/${world.vehicleId}/review`, admin);
+      const response = await get(`/api/v1/admin/vehicles/${world.vehicleId}/review`, admin);
       assert.equal(response.statusCode, 200, response.payload);
       assert.equal(response.json().data.vehicle.id, world.vehicleId);
       assert.equal(response.json().data.documents.length, REQUIRED.length);

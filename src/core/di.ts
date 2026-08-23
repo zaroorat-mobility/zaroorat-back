@@ -11,6 +11,8 @@ import { registerAuthService } from '@modules/auth';
 import { registerUserRepositories, registerUserService } from '@modules/users';
 import { registerFileModule, registerFileRepositories } from '@modules/files';
 import { registerPaymentsModule } from '@modules/payments';
+import { registerPricingModule } from '@modules/pricing';
+import { registerAdminModule } from '@modules/admin';
 import { registerRidesModule } from '@modules/rides';
 import { registerDriversModule } from '@modules/drivers';
 import { registerVehiclesModule } from '@modules/vehicles';
@@ -35,6 +37,8 @@ registerGeoModule(container);
 registerRealtimeModule(container);
 registerDriversModule(container);
 registerVehiclesModule(container);
+registerPricingModule(container);
+registerAdminModule(container);
 registerRidesModule(container);
 container.register({
   db: aliasTo('databaseService'),
