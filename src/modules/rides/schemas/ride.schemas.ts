@@ -49,3 +49,9 @@ export const submitRatingSchema = z.object({
   comment: z.string().max(500).optional(),
 });
 export type SubmitRatingBody = z.infer<typeof submitRatingSchema>;
+/// A reason is optional and free-text: it feeds driver-quality analytics, not
+/// any decision the dispatcher makes.
+export const rejectOfferSchema = z.object({
+  reason: z.string().max(255).optional(),
+});
+export type RejectOfferBody = z.infer<typeof rejectOfferSchema>;

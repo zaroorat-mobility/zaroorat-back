@@ -67,6 +67,14 @@ export class RideDispatchRepository {
         driverId,
         response: 'PENDING',
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        // The offer row is not the whole truth about whether it is worth
+        // showing. A dispatch round can commit an offer moments before another
+        // driver's accept claims the request, and `resolveOffers` only closes
+        // the offers that existed when it ran — so a PENDING row can outlive its
+        // request. Filtering on the request's own status stops the driver app
+        // rendering an offer whose only possible outcome is
+        // RIDE_REQUEST_ALREADY_MATCHED.
+        request: { status: { in: ['CREATED', 'SEARCHING'] } },
       },
       include: { request: true },
       orderBy: { offeredAt: 'desc' },
@@ -108,5 +116,86 @@ export class RideDispatchRepository {
       select: { driverId: true },
     });
     return rows.map((row) => row.driverId);
+  }
+  /// Locks one offer row for the duration of the caller's transaction. Reject
+  /// and accept both go through this so two responses to the same offer — or a
+  /// response racing the timeout job — serialise instead of interleaving.
+  async lockForUpdate(id: string, tx: TransactionClient): Promise<RideDispatch | null> {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "ride_dispatches" WHERE "id" = ${id}::uuid FOR UPDATE
+    `;
+    if (locked.length === 0) return null;
+    return tx.rideDispatch.findUnique({ where: { id } });
+  }
+  /// The offer a driver is acting on when they accept: theirs, for this
+  /// request, still PENDING, still inside its window. Row-locked because the
+  /// caller is about to decide a race on it.
+  async lockActionableOffer(
+    requestId: string,
+    driverId: string,
+    tx: TransactionClient,
+  ): Promise<RideDispatch | null> {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "ride_dispatches"
+       WHERE "request_id" = ${requestId}::uuid AND "driver_id" = ${driverId}::uuid
+       FOR UPDATE
+    `;
+    const id = locked[0]?.id;
+    if (!id) return null;
+    return tx.rideDispatch.findUnique({ where: { id } });
+  }
+  /// Conditional transition out of PENDING. Returns false when somebody else
+  /// already moved the row — the caller turns that into the right error rather
+  /// than overwriting a decision that has already been made.
+  async respondIfPending(
+    id: string,
+    response: DispatchResponse,
+    rejectReason?: string,
+    tx?: TransactionClient,
+  ): Promise<boolean> {
+    const client = tx ?? this.db.client;
+    const { count } = await client.rideDispatch.updateMany({
+      where: { id, response: 'PENDING' },
+      data: {
+        response,
+        respondedAt: new Date(),
+        ...(rejectReason !== undefined ? { rejectReason } : {}),
+      },
+    });
+    return count === 1;
+  }
+  async findExpiredPending(
+    now: Date,
+    limit: number,
+    tx?: TransactionClient,
+  ): Promise<RideDispatch[]> {
+    const client = tx ?? this.db.client;
+    return client.rideDispatch.findMany({
+      where: { response: 'PENDING', expiresAt: { lte: now } },
+      orderBy: { expiresAt: 'asc' },
+      take: limit,
+    });
+  }
+  /// Offers still in front of a driver right now: PENDING and inside their
+  /// window. What a dispatch round tops up towards the batch size, so a run of
+  /// rejections cannot stack round on round until half the city holds an offer.
+  async countLiveOffers(requestId: string, tx?: TransactionClient): Promise<number> {
+    const client = tx ?? this.db.client;
+    return client.rideDispatch.count({
+      where: {
+        requestId,
+        response: 'PENDING',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+    });
+  }
+  async highestRound(requestId: string, tx?: TransactionClient): Promise<number> {
+    const client = tx ?? this.db.client;
+    const row = await client.rideDispatch.findFirst({
+      where: { requestId },
+      orderBy: { dispatchRound: 'desc' },
+      select: { dispatchRound: true },
+    });
+    return row?.dispatchRound ?? 0;
   }
 }

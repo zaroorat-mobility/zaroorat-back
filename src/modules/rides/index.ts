@@ -30,7 +30,11 @@ import {
   RideController,
 } from './controllers/index.js';
 import { DispatchTimeoutJob, RequestExpiryJob } from './jobs/index.js';
-import { RideRequestedConsumer, RideNotificationConsumer } from './consumers/index.js';
+import {
+  RideRequestedConsumer,
+  RideNotificationConsumer,
+  RideRealtimeConsumer,
+} from './consumers/index.js';
 export * from './controllers/index.js';
 export * from './routes/index.js';
 export * from './schemas/index.js';
@@ -91,6 +95,7 @@ export function registerRidesModule(container: AwilixContainer): void {
     requestExpiryJob: asClass(RequestExpiryJob).singleton(),
     rideRequestedConsumer: asClass(RideRequestedConsumer).singleton(),
     rideNotificationConsumer: asClass(RideNotificationConsumer).singleton(),
+    rideRealtimeConsumer: asClass(RideRealtimeConsumer).singleton(),
     rideRepo: aliasTo('rideRepository'),
     requestRepo: aliasTo('rideRequestRepository'),
     statusEventRepo: aliasTo('rideStatusEventRepository'),

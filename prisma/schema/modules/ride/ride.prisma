@@ -58,6 +58,11 @@ model RideDispatch {
   @@unique([requestId, driverId])
   @@index([driverId])
   @@index([response])
+  /// DispatchTimeoutJob's whole query: PENDING offers past their window. On the
+  /// `response`-only index that is a scan of every live offer, and PENDING is
+  /// the hot value — the composite is what keeps the sweep cheap as the table
+  /// grows.
+  @@index([response, expiresAt])
   @@map("ride_dispatches")
 }
 

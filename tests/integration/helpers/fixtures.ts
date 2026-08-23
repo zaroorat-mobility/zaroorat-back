@@ -233,3 +233,33 @@ export async function makePendingIntent(userId: string, amount: number): Promise
   });
   return intent.id;
 }
+
+/// A live dispatch offer, the way a dispatch round would leave one. Accepting a
+/// ride now requires the driver to actually hold one — the offer is checked, not
+/// merely written — so any fixture that drives `/rides/accept` needs this.
+export async function makeDispatchOffer(
+  requestId: string,
+  driverId: string,
+  options: { expiresInMs?: number; response?: string } = {},
+): Promise<string> {
+  const dispatch = await db().client.rideDispatch.create({
+    data: {
+      requestId,
+      driverId,
+      response: (options.response ?? 'PENDING') as 'PENDING',
+      expiresAt: new Date(Date.now() + (options.expiresInMs ?? 60_000)),
+    },
+  });
+  return dispatch.id;
+}
+
+/// Puts a driver's status row straight into ONLINE. The go-online endpoint is
+/// the real path and gates on documents and vehicle; this is for fixtures that
+/// need the status without re-testing that gate.
+export async function markDriverOnline(driverId: string): Promise<void> {
+  await db().client.driverOnlineStatus.upsert({
+    where: { driverId },
+    create: { driverId, status: 'ONLINE', lastOnlineAt: new Date() },
+    update: { status: 'ONLINE', lastOnlineAt: new Date() },
+  });
+}

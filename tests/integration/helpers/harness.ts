@@ -10,6 +10,10 @@ import type { DatabaseService } from '../../../src/core/database/DatabaseService
 import type { PrismaClientProvider } from '../../../src/core/database/client/PrismaClientProvider.js';
 import type { OtpGenerator } from '../../../src/modules/auth/services/otp/otp.generator.js';
 import { seedVehicleTypes } from '../../../prisma/seed/shared/vehicle-types.js';
+import { registerEventConsumers } from '../../../src/bootstrap/events.bootstrap.js';
+import type { Unsubscribe } from '../../../src/core/events/index.js';
+import type { OutboxRelay } from '../../../src/core/events/OutboxRelay.js';
+import { RealtimeGateway } from '../../../src/modules/realtime/index.js';
 
 export const FIXED_OTP = '123456';
 
@@ -86,5 +90,64 @@ export async function loginAs(app: FastifyInstance, phoneNumber: string): Promis
     accessToken: body.accessToken,
     refreshToken: body.refreshToken,
     authHeader: { authorization: `Bearer ${body.accessToken}` },
+  };
+}
+
+/// Subscribes every production event consumer to the bus, and returns the
+/// handle that tears them down again.
+///
+/// This is the whole point of splitting `registerEventConsumers` out of
+/// `bootstrapEvents`: consumer registration is pure, so a test can have the real
+/// consumers wired without also starting the outbox relay's polling loop, an
+/// HTTP listener, or any BullMQ worker. Drive delivery with
+/// `outboxRelay.processBatch()` at the point a deployment's relay would.
+export function bootEventConsumers(): Unsubscribe {
+  return registerEventConsumers();
+}
+
+/// Relays committed outbox rows to the bus, the way the running relay would,
+/// and keeps going until nothing new appears.
+///
+/// One pass is not enough: a consumer often publishes while handling — the
+/// dispatch consumer writes `ride.dispatch.offered` in response to
+/// `ride.requested` — and that row lands after the batch that triggered it. A
+/// real relay polls on a loop and picks it up; this reproduces that.
+export async function drainOutbox(limit = 200): Promise<number> {
+  const relay = container.resolve<OutboxRelay>('outboxRelay');
+  let total = 0;
+  // Bounded so a consumer that publishes what it consumes cannot spin forever.
+  for (let pass = 0; pass < 10; pass++) {
+    const { published } = await relay.processBatch(limit);
+    if (published === 0) break;
+    total += published;
+  }
+  return total;
+}
+
+export interface ListeningApp {
+  app: FastifyInstance;
+  port: number;
+  url: string;
+  close: () => Promise<void>;
+}
+
+/// A Fastify instance on a real ephemeral port with the socket gateway attached.
+/// `app.inject()` never binds a port, so socket tests — which need a genuine
+/// client connection — cannot use `bootApp()`.
+export async function bootListeningApp(): Promise<ListeningApp> {
+  const app = await createApp();
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const gateway = container.resolve<RealtimeGateway>('realtimeGateway');
+  gateway.attach(app.server);
+  const address = app.server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  return {
+    app,
+    port,
+    url: `http://127.0.0.1:${port}`,
+    close: async () => {
+      await gateway.close();
+      await app.close();
+    },
   };
 }

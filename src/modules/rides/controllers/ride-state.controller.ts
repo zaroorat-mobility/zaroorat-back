@@ -3,9 +3,11 @@ import { callerHasRole, callerId } from '@core/auth';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { RideService } from '../services/ride.service.js';
 import { RideDispatchRepository } from '../repositories/ride-dispatch.repository.js';
+import { DispatchService } from '../services/dispatch/dispatch.service.js';
 import { RatingService } from '../services/rating/rating.service.js';
 import {
   acceptRideRequestSchema,
+  rejectOfferSchema,
   startRideSchema,
   completeRideSchema,
   cancelRideSchema,
@@ -17,6 +19,7 @@ export class RideStateController {
     private readonly rideService: RideService,
     private readonly driverRepository: DriverRepository,
     private readonly dispatchRepo: RideDispatchRepository,
+    private readonly dispatchService: DispatchService,
     private readonly ratingService: RatingService,
   ) {}
   private async actingDriverId(req: FastifyRequest): Promise<string> {
@@ -39,6 +42,29 @@ export class RideStateController {
       vehicleId: body.vehicleId,
     });
     reply.send({ data: result });
+  }
+  /// Declining an offer, so the next drivers are asked immediately instead of
+  /// a timeout window later. The dispatch id comes from the path; ownership is
+  /// checked against the token's driver, never taken from the request.
+  async rejectOffer(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const driverId = await this.actingDriverId(req);
+    const { id } = req.params as { id: string };
+    const body = rejectOfferSchema.parse(req.body ?? {});
+    const offer = await this.dispatchService.rejectOffer({
+      dispatchId: id,
+      driverId,
+      ...(body.reason !== undefined ? { reason: body.reason } : {}),
+    });
+    reply.send({ data: offer });
+  }
+  /// Driver has started travelling to the pickup point.
+  async arriving(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const driverId = await this.actingDriverId(req);
+    const { id } = req.params as {
+      id: string;
+    };
+    const ride = await this.rideService.lifecycle.markDriverArriving(id, driverId);
+    reply.send({ data: ride });
   }
   async arrive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);

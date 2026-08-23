@@ -29,6 +29,9 @@ export class RideNotificationConsumer {
           'Your driver is on the way to your pickup location.',
         ),
       ),
+      this.eventBus.on(RIDE_EVENT_CATALOG.DRIVER_ARRIVING, (e) =>
+        this.onRideEvent(e, 'Your driver is on the way', 'Your driver has started heading to you.'),
+      ),
       this.eventBus.on(RIDE_EVENT_CATALOG.DRIVER_ARRIVED, (e) =>
         this.onRideEvent(
           e,
@@ -50,12 +53,13 @@ export class RideNotificationConsumer {
       data.driverId,
       'New ride request',
       'A ride is nearby — open the app to accept.',
+      envelope,
     );
   }
   private async onRideEvent(envelope: EventEnvelope, title: string, body: string): Promise<void> {
     const data = envelope.data as { rideId?: string };
     if (!data.rideId) return;
-    await this.pushToRideCustomer(data.rideId, title, body);
+    await this.pushToRideCustomer(data.rideId, title, body, envelope);
   }
   private async onCompleted(envelope: EventEnvelope): Promise<void> {
     const data = envelope.data as { rideId?: string; totalFare?: number };
@@ -66,29 +70,52 @@ export class RideNotificationConsumer {
       data.rideId,
       'Trip completed',
       `You have arrived at your destination.${fareText}`,
+      envelope,
     );
   }
-  private async pushToDriver(driverId: string, title: string, body: string): Promise<void> {
+  /// The de-duplication key. `RideRealtimeConsumer` puts this same outbox event
+  /// id on the socket message for the same domain fact, so a driver whose app
+  /// was backgrounded during an offer — and therefore got both a push and, on
+  /// reconnect, the socket event — can tell they are one thing rather than two.
+  private dedupeData(envelope: EventEnvelope): Record<string, string> {
+    return { eventId: envelope.eventId, eventType: envelope.type };
+  }
+  private async pushToDriver(
+    driverId: string,
+    title: string,
+    body: string,
+    envelope: EventEnvelope,
+  ): Promise<void> {
     try {
       const driver = await this.driverRepository.findById(driverId);
       if (!driver) return;
-      await this.pushToUser(driver.userId, title, body);
+      await this.pushToUser(driver.userId, title, body, envelope);
     } catch (err) {
       logger.warn({ err, driverId }, '[rides] failed to push-notify driver');
     }
   }
-  private async pushToRideCustomer(rideId: string, title: string, body: string): Promise<void> {
+  private async pushToRideCustomer(
+    rideId: string,
+    title: string,
+    body: string,
+    envelope: EventEnvelope,
+  ): Promise<void> {
     try {
       const ride = await this.rideRepo.findById(rideId);
       if (!ride) return;
-      await this.pushToUser(ride.customerId, title, body);
+      await this.pushToUser(ride.customerId, title, body, envelope);
     } catch (err) {
       logger.warn({ err, rideId }, '[rides] failed to push-notify customer');
     }
   }
-  private async pushToUser(userId: string, title: string, body: string): Promise<void> {
+  private async pushToUser(
+    userId: string,
+    title: string,
+    body: string,
+    envelope: EventEnvelope,
+  ): Promise<void> {
     const fcmToken = await this.deviceRepository.findLatestFcmToken(userId);
     if (!fcmToken) return;
-    await this.notificationService.sendPush(fcmToken, title, body);
+    await this.notificationService.sendPush(fcmToken, title, body, this.dedupeData(envelope));
   }
 }
