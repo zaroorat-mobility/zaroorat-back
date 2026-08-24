@@ -378,4 +378,28 @@ describe('ride collection (integration, real HTTP)', () => {
       'charged once',
     );
   });
+
+  // Invariant 5 -- the ledger never claims a payment that has not happened
+
+  it('posts nothing to the ledger for a ride that has not been collected yet', async () => {
+    const w = await world();
+    await fundWallet(app, w.customer, 2000);
+    const { rideId } = await completeRide(app, w, {
+      distanceKm: 8,
+      durationMin: 18,
+      paymentMethod: 'WALLET',
+    });
+    // Deliberately no drainOutbox: the ride is complete, the fare is priced,
+    // and nobody has paid. This used to post a wallet debit, driver earnings
+    // and platform commission right here (FR-038).
+    const entries = await db().client.paymentLedgerEntry.findMany({
+      where: { referenceType: 'RIDE', referenceId: rideId },
+    });
+    assert.equal(entries.length, 0, 'no entry asserts a payment nobody has made');
+
+    const succeeded = await db().client.ridePayment.count({
+      where: { rideId, status: 'SUCCEEDED' },
+    });
+    assert.equal(succeeded, 0, 'and there is no payment record to justify one');
+  });
 });

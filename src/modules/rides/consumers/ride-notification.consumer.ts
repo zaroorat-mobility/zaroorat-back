@@ -5,6 +5,7 @@ import { DriverRepository } from '@modules/drivers/repositories/driver.repositor
 import { logger } from '@shared/logger/index.js';
 import { RideRepository } from '../repositories/ride.repository.js';
 import { RIDE_EVENT_CATALOG } from '../events/catalog.js';
+import { PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
 /// Every one of these events was already published — none of them had a
 /// consumer. This is the delivery half of the P1 finding "FCM tokens are
 /// collected and never read": it's the first and only reader of them.
@@ -43,6 +44,17 @@ export class RideNotificationConsumer {
         this.onRideEvent(e, 'Trip started', 'Your trip is now in progress.'),
       ),
       this.eventBus.on(RIDE_EVENT_CATALOG.COMPLETED, (e) => this.onCompleted(e)),
+      // Collection outcomes, which land after the ride is already over.
+      //
+      // `payment.ride.collected` only — never `payment.succeeded`. The two are
+      // not interchangeable: `succeeded` is instrument-level (an intent
+      // settled at the provider) and `collected` is obligation-level (a ride's
+      // debt is discharged). A card ride fires both, so subscribing to each
+      // would notify the rider twice for one payment.
+      this.eventBus.on(PAYMENT_EVENT_CATALOG.RIDE_COLLECTED, (e) => this.onCollected(e)),
+      this.eventBus.on(PAYMENT_EVENT_CATALOG.RIDE_COLLECTION_FAILED, (e) =>
+        this.onCollectionFailed(e),
+      ),
     ];
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }
@@ -73,6 +85,34 @@ export class RideNotificationConsumer {
       envelope,
     );
   }
+  private async onCollected(envelope: EventEnvelope): Promise<void> {
+    const data = envelope.data as { rideId?: string; amount?: number };
+    if (!data.rideId) return;
+    const amountText = typeof data.amount === 'number' ? ` ₹${data.amount.toFixed(2)}` : '';
+    await this.pushToRideCustomer(
+      data.rideId,
+      'Payment received',
+      `Your fare of${amountText} has been paid. Thanks for riding.`,
+      envelope,
+    );
+  }
+
+  /// Only the attempt that gives up is worth a notification.
+  ///
+  /// A rider does not need to hear about each retry of a card the platform is
+  /// going to try again in five minutes; they need to hear when it has stopped
+  /// trying and the ball is in their court.
+  private async onCollectionFailed(envelope: EventEnvelope): Promise<void> {
+    const data = envelope.data as { rideId?: string; willRetry?: boolean };
+    if (!data.rideId || data.willRetry !== false) return;
+    await this.pushToRideCustomer(
+      data.rideId,
+      'Payment unsuccessful',
+      'We could not collect the fare for your last trip. Open the app to settle it.',
+      envelope,
+    );
+  }
+
   /// The de-duplication key. `RideRealtimeConsumer` puts this same outbox event
   /// id on the socket message for the same domain fact, so a driver whose app
   /// was backgrounded during an offer — and therefore got both a push and, on

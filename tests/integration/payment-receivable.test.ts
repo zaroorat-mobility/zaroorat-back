@@ -366,4 +366,35 @@ describe('customer receivable (integration, real HTTP)', () => {
       'and no longer counts toward the threshold',
     );
   });
+
+  // Invariant 9 -- the receivable account equals the fares actually outstanding
+
+  it('keeps the CUSTOMER_RECEIVABLE position equal to the summed UNPAID fares', async () => {
+    const w = await world();
+    const first = await rideWithOpenReceivable(w);
+    const second = await rideWithOpenReceivable(w);
+
+    const outstanding = new Decimal(first.fare.totalFare).add(new Decimal(second.fare.totalFare));
+    const position = await accountBalance('CUSTOMER_RECEIVABLE', {
+      accountRefId: w.customer.userId,
+    });
+    assert.equal(
+      position.neg().toFixed(2),
+      outstanding.toFixed(2),
+      'the asset the platform is carrying is exactly what its riders owe',
+    );
+
+    // And it follows both ways out of the state: settling clears one, writing
+    // off clears the other, and neither leaves a residue behind.
+    await fundWallet(app, w.customer, 20000);
+    await retry(w, first.rideId);
+    await ageBeyondWriteOff(second.rideId);
+    await writeOffJob().run();
+
+    assert.equal(
+      (await accountBalance('CUSTOMER_RECEIVABLE', { accountRefId: w.customer.userId })).toFixed(2),
+      '0.00',
+      'nothing outstanding, nothing carried',
+    );
+  });
 });

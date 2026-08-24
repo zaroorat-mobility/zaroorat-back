@@ -483,24 +483,24 @@ TID [P?] [Story?] Objective — `exact/file/path`
 
 ## Phase 8: Polish & Cross-Cutting
 
-- [ ] T086 [P] Add collection metrics — `src/modules/payments/metrics/payment.metrics.ts`
+- [x] T086 [P] Add collection metrics — `src/modules/payments/metrics/payment.metrics.ts`
   - **Reuse**: existing `incrementCounter` counters
   - **Accept**: collection success/failure, write-off, auto-resolution (constitution §17.1). No secret or PII reaches a log (§17.3)
 
-- [ ] T087 [P] Extend push notifications for collection outcomes — `src/modules/rides/consumers/ride-notification.consumer.ts`
+- [x] T087 [P] Extend push notifications for collection outcomes — `src/modules/rides/consumers/ride-notification.consumer.ts`
   - **Reuse**: existing `dedupeData` push-dedupe path
   - **Accept**: subscribes to `payment.ride.collected` **only, never `payment.succeeded`** — otherwise a card ride notifies twice (contracts/events.md §Boundary)
 
-- [ ] T088 Verify every money-path invariant is asserted **directly** — tests across `tests/unit/payments/`, `tests/integration/`
+- [x] T088 Verify every money-path invariant is asserted **directly** — audit found 10 of 12 already covered; invariants **5** (no ledger entry asserts an uncollected payment) and **9** (the `CUSTOMER_RECEIVABLE` position equals the summed UNPAID fares) were only implied by other assertions and now have dedicated tests — tests across `tests/unit/payments/`, `tests/integration/`
   - **Accept**: all 12 invariants in [data-model.md](./data-model.md) §4, not as a side effect of another assertion (constitution §15.4)
 
-- [ ] T089 Run the quality gates — no file
+- [x] T089 Run the quality gates — no file
   - **Accept**: `npm run lint`, `npm run format:check`, `npm run typecheck` all clean (constitution §18.1)
 
-- [ ] T090 Compare against the recorded baseline — no file
+- [ ] T090 Compare against the recorded baseline — no file — **NOT MET.** Unit is 901/902 (the one failure is a Node test-runner IPC error, not an assertion, and reproduces without any Payment file). Integration is 747/751: the 2 expected `vehicle-catalog` failures plus **2 order-dependent failures that are a real delta** — `payment-reconciliation` → "detects a driver balance that diverges" and `user-collections` → "holds the cap under concurrent creates". Both pass in isolation and fail in the full run. **Neither is diagnosed.** Leading suspect is cross-suite state: `wallet_reconciliations` is keyed by a plain wallet id and is not in `resetState`'s TRUNCATE list. A fix adding it was tried and reverted — it broke `user-collections` in isolation, so it is not the whole story.
   - **Accept**: unit **864/864**; integration failures **≤ 2** (the `vehicle-catalog` pricing-extraction regression, which is **out of scope**). The 15 `INCOMPLETE_PROFILE` failures must be **resolved** by T019. Any other delta is a regression and must be diagnosed, never characterised (constitution §15.3)
 
-- [ ] T091 Walk the quickstart scenarios — [quickstart.md](./quickstart.md)
+- [ ] T091 Walk the quickstart scenarios — [quickstart.md](./quickstart.md) — **NOT RUN.** Requires `npm run dev` and `npm run worker:dev` both up against a live server; not executed in this session.
   - **Accept**: all 11 scenarios pass against a running server with **both** `npm run dev` and `npm run worker:dev` up — without the worker the outbox never drains and collection never happens
 
 ---
