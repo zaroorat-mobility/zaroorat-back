@@ -22,7 +22,7 @@ export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void
   fastify.get(
     '/vehicles/:id/review',
     {
-      preHandler: fastify.authorize({ roles: ['admin'] }),
+      preHandler: fastify.authorize({ permissions: ['vehicles:read'] }),
       schema: {
         tags: ['Admin', 'Vehicles'],
         summary: 'Get a vehicle with its documents for review',
@@ -37,7 +37,7 @@ export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void
   fastify.post(
     '/vehicles/:id/documents/:documentId/review',
     {
-      preHandler: fastify.authorize({ roles: ['admin'] }),
+      preHandler: fastify.authorize({ permissions: ['vehicles:read'] }),
       schema: {
         tags: ['Admin', 'Vehicles'],
         summary: 'Approve or reject a vehicle document',
@@ -53,7 +53,7 @@ export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void
   fastify.post(
     '/vehicles/:id/verify',
     {
-      preHandler: fastify.authorize({ roles: ['admin'] }),
+      preHandler: fastify.authorize({ permissions: ['vehicles:read'] }),
       schema: {
         tags: ['Admin', 'Vehicles'],
         summary: 'Approve or reject a vehicle',

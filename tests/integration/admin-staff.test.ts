@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
@@ -29,7 +30,7 @@ describe('admin staff users (integration)', () => {
 
   async function loginAdmin() {
     const seed = await loginAs(app, ADMIN_PHONE);
-    await grantRole(seed.userId, 'admin');
+    await grantRole(seed.userId, 'system_admin');
     await db().client.user.update({
       where: { id: seed.userId },
       data: {
@@ -65,7 +66,7 @@ describe('admin staff users (integration)', () => {
     assert.equal(listed.statusCode, 200, listed.payload);
     const listBody = listed.json();
     assert.equal(listBody.data.length, 1);
-    assert.equal(listBody.data[0].role, 'admin');
+    assert.equal(listBody.data[0].role, 'system_admin');
 
     const created = await app.inject({
       method: 'POST',
@@ -92,6 +93,44 @@ describe('admin staff users (integration)', () => {
       headers: admin.authHeader,
     });
     assert.equal(listedAgain.json().data.length, 2);
+  });
+
+  it('creates a custom staff role and provisions a user into it', async () => {
+    const admin = await loginAdmin();
+    const suffix = randomUUID().slice(0, 8);
+    const role = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/rbac/roles',
+      headers: admin.authHeader,
+      payload: { name: `Operations ${suffix}`, permissionCodes: ['riders:read'] },
+    });
+    assert.equal(role.statusCode, 201, role.payload);
+    const slug = role.json().data.slug as string;
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/users',
+      headers: admin.authHeader,
+      payload: {
+        firstName: 'Ops',
+        lastName: 'Lead',
+        email: 'ops@zaroorat.test',
+        phoneNumber: '+919876540088',
+        password: 'OpsLead@12345',
+        role: slug,
+      },
+    });
+    assert.equal(created.statusCode, 201, created.payload);
+    assert.equal(created.json().data.role, slug);
+
+    const loggedIn = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/login',
+      payload: { email: 'ops@zaroorat.test', password: 'OpsLead@12345' },
+    });
+    assert.equal(loggedIn.statusCode, 200, loggedIn.payload);
+    assert.ok(loggedIn.json().user.roles.includes(slug));
+    assert.ok(loggedIn.json().user.permissions.includes('riders:read'));
   });
 
   it('refuses staff management for a customer token', async () => {

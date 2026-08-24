@@ -14,6 +14,33 @@ export class RoleRepository extends BaseRepository {
   async findBySlug(slug: string, tx?: TransactionClient): Promise<Role | null> {
     return (tx ?? this.client).role.findUnique({ where: { slug } });
   }
+  async listBySlugs(slugs: string[]): Promise<Role[]> {
+    return this.client.role.findMany({
+      where: { slug: { in: slugs } },
+      orderBy: { slug: 'asc' },
+    });
+  }
+  async listAssignableStaffRoles(excludedSlugs: string[]): Promise<Role[]> {
+    return this.client.role.findMany({
+      where: { slug: { notIn: excludedSlugs } },
+      orderBy: { slug: 'asc' },
+    });
+  }
+  async create(input: {
+    slug: string;
+    name: string;
+    description?: string | null;
+    isSystem?: boolean;
+  }): Promise<Role> {
+    return this.client.role.create({
+      data: {
+        slug: input.slug,
+        name: input.name,
+        description: input.description ?? null,
+        isSystem: input.isSystem ?? false,
+      },
+    });
+  }
   async findActiveAssignment(
     userId: string,
     roleId: string,

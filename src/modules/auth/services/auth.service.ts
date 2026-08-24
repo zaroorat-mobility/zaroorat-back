@@ -9,6 +9,7 @@ import { UserProfileRepository } from '@modules/users/repositories';
 import { userEvent } from '@modules/users/events';
 import { UserRepository } from '../repositories/user.repository';
 import { RoleRepository } from '../repositories/role.repository';
+import { PermissionRepository } from '../repositories/permission.repository';
 import { OtpService, type SendOtpResult } from './otp/otp.service';
 import { TokenService } from './token/token.service';
 import { EpochService } from './token/epoch.service';
@@ -25,7 +26,7 @@ import {
   AUTH_OTP_PURPOSE,
   IDEMPOTENCY_TTL_SECONDS,
   DEFAULT_ROLE_SLUG,
-  STAFF_ROLE_SLUGS,
+  isStaffRoleSlug,
 } from '../constants/auth.constants';
 import { uuidV7 } from '@shared/crypto';
 import { verifyPassword } from '../utils/password';
@@ -81,6 +82,7 @@ export interface AuthLoginResult extends TokenPair {
     id: string;
     status: string;
     roles: string[];
+    permissions?: string[];
     isNew: boolean;
     email?: string | null;
     phoneNumber?: string;
@@ -99,6 +101,7 @@ export class AuthService {
     private readonly userRepository: UserRepository,
     private readonly userProfileRepository: UserProfileRepository,
     private readonly roleRepository: RoleRepository,
+    private readonly permissionRepository: PermissionRepository,
     private readonly deviceService: DeviceService,
     private readonly sessionService: SessionService,
     private readonly tokenService: TokenService,
@@ -483,7 +486,7 @@ export class AuthService {
       : this.sessionConfig.maxConcurrentSessions;
   }
   private isStaff(roles: string[]): boolean {
-    return roles.some((role) => (STAFF_ROLE_SLUGS as readonly string[]).includes(role));
+    return roles.some((role) => isStaffRoleSlug(role));
   }
   private opaqueOtpAck(): SendOtpResult {
     return {
@@ -605,17 +608,41 @@ export class AuthService {
       this.capForRoles(input.roles),
       outcome.session.id,
     );
+    const permissions = await this.permissionRepository.findAllowedCodesForUser(input.user.id);
     return {
       ...outcome.pair,
       user: {
         id: input.user.id,
         status: input.user.status,
         roles: input.roles,
+        permissions,
         isNew: false,
         email: input.user.email,
         phoneNumber: input.user.phoneNumber,
         name: outcome.name,
       },
+    };
+  }
+
+  async getMe(userId: string): Promise<AuthLoginResult['user']> {
+    const user = await this.userRepository.findById(userId);
+    if (!user || user.deletedAt) throw new InvalidCredentialsError();
+    this.assertAuthenticatable(user);
+    const [roles, permissions, profile] = await Promise.all([
+      this.roleRepository.findActiveRoleSlugs(user.id),
+      this.permissionRepository.findAllowedCodesForUser(user.id),
+      this.userProfileRepository.findByUserId(user.id),
+    ]);
+    const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || null;
+    return {
+      id: user.id,
+      status: user.status,
+      roles,
+      permissions,
+      isNew: false,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      name,
     };
   }
 }

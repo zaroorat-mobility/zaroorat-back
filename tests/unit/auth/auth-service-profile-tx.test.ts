@@ -88,6 +88,7 @@ function makeService(
     userRepository as never,
     userProfileRepository as never,
     roleRepository as never,
+    { findAllowedCodesForUser: async () => [] } as never,
     deviceService as never,
     sessionService as never,
     tokenService as never,

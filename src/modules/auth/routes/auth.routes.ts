@@ -201,6 +201,29 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.revokeDevice,
   );
+  app.get(
+    '/me',
+    {
+      schema: {
+        tags: ['Auth'],
+        summary: 'Current session identity',
+        security: [{ bearerAuth: [] }],
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              user: adminLoginResponse.properties.user,
+            },
+            required: ['user'],
+          },
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    controller.getMe,
+  );
   app.post(
     '/admin/login',
     {

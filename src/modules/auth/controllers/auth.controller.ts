@@ -247,6 +247,16 @@ export class AuthController {
     if (revoked === null) return replyAuthError(request, reply, 'NOT_FOUND', 'Device not found');
     return reply.status(204).send();
   };
+  getMe = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+    try {
+      const user = await this.authService.getMe(auth.userId);
+      return reply.status(200).send({ user });
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
+  };
   private requireIdempotencyKey(request: FastifyRequest, reply: FastifyReply): string | null {
     const key = request.headers['idempotency-key'];
     if (typeof key !== 'string' || key.length === 0) {
