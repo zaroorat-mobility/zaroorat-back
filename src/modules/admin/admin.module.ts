@@ -18,6 +18,11 @@ import {
   paymentManagementRoutes,
   AdminPaymentManagementController,
 } from './payment-management/index.js';
+import {
+  staffManagementRoutes,
+  AdminStaffController,
+  AdminStaffService,
+} from './staff-management/index.js';
 
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
@@ -26,6 +31,8 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminDriverManagementController: asClass(AdminDriverManagementController).singleton(),
     adminVehicleManagementController: asClass(AdminVehicleManagementController).singleton(),
     adminPaymentManagementController: asClass(AdminPaymentManagementController).singleton(),
+    adminStaffService: asClass(AdminStaffService).singleton(),
+    adminStaffController: asClass(AdminStaffController).singleton(),
   });
 }
 
@@ -35,4 +42,5 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   await app.register(driverManagementRoutes);
   await app.register(vehicleManagementRoutes);
   await app.register(paymentManagementRoutes);
+  await app.register(staffManagementRoutes);
 }

@@ -29,16 +29,13 @@ export class RoleRepository extends BaseRepository {
       },
     });
   }
-  async findActiveRoleSlugs(
-    userId: string,
-    now: Date = new Date(),
-    tx?: TransactionClient,
-  ): Promise<string[]> {
+  async findActiveRoleSlugs(userId: string, now?: Date, tx?: TransactionClient): Promise<string[]> {
+    const asOf = now ?? new Date();
     const assignments = await (tx ?? this.client).userRoleAssignment.findMany({
       where: {
         userId,
         revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        OR: [{ expiresAt: null }, { expiresAt: { gt: asOf } }],
       },
       select: { role: { select: { slug: true } } },
     });
