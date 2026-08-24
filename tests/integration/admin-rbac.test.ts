@@ -60,8 +60,8 @@ describe('admin RBAC (integration)', () => {
 
   it('lets system_admin list roles and grant riders:read to support', async () => {
     const systemAdmin = await loginWithRole(SYSTEM_PHONE, 'system_admin', SYSTEM_EMAIL);
-    assert.ok(systemAdmin.permissions.includes('rbac:manage'));
-    assert.ok(systemAdmin.roles.includes('system_admin'));
+    assert.ok((systemAdmin as { permissions: string[] }).permissions.includes('rbac:manage'));
+    assert.ok((systemAdmin as { roles: string[] }).roles.includes('system_admin'));
 
     const catalog = await app.inject({
       method: 'GET',
