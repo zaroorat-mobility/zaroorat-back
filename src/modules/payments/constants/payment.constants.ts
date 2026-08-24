@@ -21,6 +21,14 @@ export const LEDGER_ACCOUNTS = {
   PLATFORM_COMMISSION: 'PLATFORM_COMMISSION',
   GATEWAY_CLEARING: 'GATEWAY_CLEARING',
   TAX_PAYABLE: 'TAX_PAYABLE',
+  /// BD-1 — a fare whose collection attempts are exhausted becomes an asset
+  /// the customer still owes, not a loss. Debited when the receivable is
+  /// created; credited when it is either settled or written off.
+  CUSTOMER_RECEIVABLE: 'CUSTOMER_RECEIVABLE',
+  /// BD-1c — recognised ONLY at write-off, never when the receivable is
+  /// created. Booking bad debt early would understate what the platform is
+  /// still owed.
+  BAD_DEBT_EXPENSE: 'BAD_DEBT_EXPENSE',
 } as const;
 export type LedgerAccount = (typeof LEDGER_ACCOUNTS)[keyof typeof LEDGER_ACCOUNTS];
 export const LEDGER_DIRECTION = {

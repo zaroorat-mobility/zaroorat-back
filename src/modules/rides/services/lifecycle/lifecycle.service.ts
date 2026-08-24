@@ -16,6 +16,7 @@ import { NotificationService } from '@modules/notifications';
 import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
 import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
 import { VehicleAssignmentRepository } from '@modules/vehicles/repositories/vehicle-assignment.repository.js';
+import { cashConfirmationRequired } from '@config';
 import { logger } from '@shared/logger/index.js';
 import {
   InvalidRideStateTransitionError,
@@ -448,7 +449,12 @@ export class LifecycleService {
         waitingMinutes,
       });
       const completedAt = new Date();
-      const paymentStatus = ride.paymentMethod === 'CASH' ? 'PAID' : 'PENDING';
+      // BD-5. With the flag off this is byte-identical to before: a cash ride
+      // is PAID the moment it ends. With it on, cash waits for someone to say
+      // the money changed hands, so it completes PENDING like every other
+      // method and `RideCollectionService` resolves it.
+      const cashSettlesHere = ride.paymentMethod === 'CASH' && !cashConfirmationRequired();
+      const paymentStatus = cashSettlesHere ? 'PAID' : 'PENDING';
       if (
         !(await this.rideRepo.updateStatusIf(
           rideId,
@@ -484,18 +490,29 @@ export class LifecycleService {
         },
         tx,
       );
-      await this.ledgerService.recordTripPayment(
-        {
-          totalFare: new Decimal(itemizedFare.totalFare),
-          driverPayable: new Decimal(itemizedFare.driverEarning),
-          platformCommission: new Decimal(itemizedFare.platformCommission),
-          customerUserId: ride.customerId,
-          driverId: ride.driverId,
-          rideId,
-          paymentMethod: ride.paymentMethod,
-        },
-        tx,
-      );
+      // Cash only (transition 4c). A cash ride is paid the moment it ends —
+      // the driver is holding the money — so its commission group is
+      // recognised here, in the completion transaction, exactly as before.
+      //
+      // Every other method now posts nothing at completion. The ledger used to
+      // record a wallet debit, driver earnings and platform commission for a
+      // ride nobody had paid for yet, asserting a payment that had not
+      // happened (FR-038). `RideCollectionService` posts that group when the
+      // money actually moves.
+      if (cashSettlesHere) {
+        await this.ledgerService.recordTripPayment(
+          {
+            totalFare: new Decimal(itemizedFare.totalFare),
+            driverPayable: new Decimal(itemizedFare.driverEarning),
+            platformCommission: new Decimal(itemizedFare.platformCommission),
+            customerUserId: ride.customerId,
+            driverId: ride.driverId,
+            rideId,
+            paymentMethod: ride.paymentMethod,
+          },
+          tx,
+        );
+      }
       await this.driverStatusRepository.updateStatus(driverId, 'ONLINE', {}, tx);
       await this.statusEventRepo.record(
         {

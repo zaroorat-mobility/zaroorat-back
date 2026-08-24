@@ -22,7 +22,6 @@ export class IntentController {
           amount: new Decimal(body.amount),
           methodType: body.methodType,
           idempotencyKey: idempotencyKey as string,
-          ...(body.rideId !== undefined ? { rideId: body.rideId } : {}),
           ...(body.paymentMethodId !== undefined ? { paymentMethodId: body.paymentMethodId } : {}),
         });
         return {
@@ -44,21 +43,33 @@ export class IntentController {
     const { intentId } = req.params as {
       intentId: string;
     };
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     const existing = await this.paymentService.intent.findById(intentId);
     if (!existing) throw new PaymentNotFoundError(intentId);
     assertOwnerOrStaff(req, existing.userId);
-    const intent = await this.paymentService.intent.confirmIntent(intentId);
-    const view: IntentView = {
-      id: intent.id,
-      userId: intent.userId,
-      rideId: intent.rideId,
-      amount: intent.amount.toNumber(),
-      currency: intent.currency,
-      status: intent.status,
-      gateway: intent.gateway,
-      gatewayIntentId: intent.gatewayIntentId,
-      createdAt: intent.createdAt,
-    };
-    reply.send({ data: view });
+    // The one mutating payment route that was not idempotent (FR-040). It
+    // matters more now than it did before: confirmation is what moves the
+    // balance, so a retried confirm is a retried credit.
+    const result = await this.paymentService.withIdempotency(
+      callerId(req),
+      '/payments/intents/confirm',
+      idempotencyKey,
+      { intentId },
+      async () => {
+        const intent = await this.paymentService.intent.confirmIntent(intentId);
+        return {
+          id: intent.id,
+          userId: intent.userId,
+          rideId: intent.rideId,
+          amount: intent.amount.toNumber(),
+          currency: intent.currency,
+          status: intent.status,
+          gateway: intent.gateway,
+          gatewayIntentId: intent.gatewayIntentId,
+          createdAt: intent.createdAt,
+        } satisfies IntentView;
+      },
+    );
+    reply.send({ data: result });
   }
 }

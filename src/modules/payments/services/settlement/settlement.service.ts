@@ -33,8 +33,21 @@ export class SettlementService {
       data.periodEnd,
     );
     const grossEarnings = earned.collectedFare;
-    const commission = earned.commission;
-    const adjustments = data.adjustments ?? new Decimal(0);
+    // Commission a confirmed cash ride already took out of the driver's wallet
+    // (BD-5). Netting it here too would recover the same rupees twice; with
+    // the flag off nothing qualifies and this is zero.
+    const alreadyRecovered = await this.settlementRepo.alreadyRecoveredCommission(
+      data.driverId,
+      data.periodStart,
+      data.periodEnd,
+    );
+    const commission = earned.commission.sub(alreadyRecovered);
+    // A period that ended owing carries into the next one and is deducted
+    // before anything is payable (FR-020/FR-021). `adjustments` was a
+    // parameter nothing ever supplied; an explicit value still wins, so a
+    // finance correction can override the carry.
+    const carried = Decimal.min(0, await this.settlementRepo.cumulativeNetPayable(data.driverId));
+    const adjustments = data.adjustments ?? carried;
     const netPayable = grossEarnings.sub(commission).add(adjustments);
     return this.txManager.execute(async (tx) => {
       const settlement = await this.settlementRepo.create(

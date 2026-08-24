@@ -3,11 +3,31 @@ import { randomUUID } from 'node:crypto';
 import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
-import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
-import { grantRole, makeDriver, makeVehicle, makeVehicleType } from './helpers/fixtures.js';
+import {
+  bootApp,
+  bootEventConsumers,
+  db,
+  drainOutbox,
+  loginAs,
+  resetState,
+  type LoggedInUser,
+} from './helpers/harness.js';
+import { grantRole } from './helpers/fixtures.js';
+import {
+  accountBalance,
+  completeRide as flowCompleteRide,
+  fundWallet,
+  rideWorld,
+  type FareRow,
+  type RideWorld,
+} from './helpers/ride-flow.js';
+import type { Unsubscribe } from '../../src/core/events/index.js';
 import { container } from '../../src/core/di.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { SettlementService } from '../../src/modules/payments/services/settlement/settlement.service.js';
+import type { RideCollectionService } from '../../src/modules/payments/services/collection/collection.service.js';
+import type { PaymentGatewayProvider } from '../../src/modules/payments/services/gateway/gateway.provider.js';
+import { paymentConfig } from '../../src/config/payment/payment.config.js';
 
 const CUSTOMER = '+919876603001';
 const DRIVER = '+919876603002';
@@ -15,19 +35,27 @@ const FINANCE = '+919876603003';
 
 describe('driver earnings pipeline (integration, real HTTP)', () => {
   let app: FastifyInstance;
+  let stopConsumers: Unsubscribe;
 
   before(async () => {
     app = await bootApp();
-
+    // The collection consumer is what charges a completed ride, so without it
+    // subscribed nothing in this suite would ever reach the ledger.
+    stopConsumers = bootEventConsumers();
     await resetState();
   });
   after(async () => {
+    stopConsumers();
     await app.close();
   });
 
   afterEach(async () => {
+    restoreGateway?.();
+    restoreGateway = null;
     await resetState();
   });
+
+  const world = () => rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
 
   async function loginWithRole(phone: string, role: string): Promise<LoggedInUser> {
     const user = await loginAs(app, phone);
@@ -35,106 +63,37 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
     return loginAs(app, phone);
   }
 
-  interface World {
-    customer: LoggedInUser;
-    driver: LoggedInUser;
-    driverId: string;
-    vehicleId: string;
-    vehicleTypeId: string;
-  }
-
-  async function world(): Promise<World> {
-    const customer = await loginAs(app, CUSTOMER);
-    const driver = await loginWithRole(DRIVER, 'driver');
-    const driverId = await makeDriver(driver.userId, { verified: true });
-    const vehicleTypeId = await makeVehicleType();
-    const vehicleId = await makeVehicle(vehicleTypeId);
-    return { customer, driver, driverId, vehicleId, vehicleTypeId };
-  }
-
-  interface FareRow {
-    totalFare: Decimal;
-    driverEarning: Decimal;
-    platformCommission: Decimal;
-  }
-
   async function completeRide(
-    w: World,
+    w: RideWorld,
     options: { distanceKm: number; durationMin: number; paymentMethod?: string },
   ): Promise<{ rideId: string; fare: FareRow }> {
-    const requested = await app.inject({
-      method: 'POST',
-      url: '/api/v1/rides/requests',
-      headers: w.customer.authHeader,
-      payload: {
-        vehicleTypeId: w.vehicleTypeId,
-        pickupLat: 12.9716,
-        pickupLng: 77.5946,
-        dropLat: 12.9352,
-        dropLng: 77.6245,
-        paymentMethod: options.paymentMethod ?? 'CARD',
-      },
-    });
-    assert.equal(requested.statusCode, 200, requested.payload);
-    const requestId = requested.json().data.id;
-
-    const accepted = await app.inject({
-      method: 'POST',
-      url: '/api/v1/rides/accept',
-      headers: w.driver.authHeader,
-      payload: { requestId, vehicleId: w.vehicleId },
-    });
-    assert.equal(accepted.statusCode, 200, accepted.payload);
-
-    const rideId = accepted.json().data.ride.id;
-    const otpCode = accepted.json().data.plaintextOtp;
-
-    const arrived = await app.inject({
-      method: 'POST',
-      url: `/api/v1/rides/${rideId}/arrive`,
-      headers: w.driver.authHeader,
-      payload: {},
-    });
-    assert.equal(arrived.statusCode, 200, arrived.payload);
-
-    const started = await app.inject({
-      method: 'POST',
-      url: `/api/v1/rides/${rideId}/start`,
-      headers: w.driver.authHeader,
-      payload: { otpCode },
-    });
-    assert.equal(started.statusCode, 200, started.payload);
-
-    const completed = await app.inject({
-      method: 'POST',
-      url: `/api/v1/rides/${rideId}/complete`,
-      headers: w.driver.authHeader,
-      payload: { actualDistanceKm: options.distanceKm, actualDurationMin: options.durationMin },
-    });
-    assert.equal(completed.statusCode, 200, completed.payload);
-
-    const fare = await db().client.rideFare.findUniqueOrThrow({ where: { rideId } });
-    return { rideId, fare: fare as unknown as FareRow };
-  }
-
-  async function accountBalance(
-    account: string,
-    scope: { accountRefId?: string; rideId?: string } = {},
-  ): Promise<Decimal> {
-    const entries = await db().client.paymentLedgerEntry.findMany({
-      where: {
-        account,
-        ...(scope.accountRefId ? { accountRefId: scope.accountRefId } : {}),
-        ...(scope.rideId ? { referenceType: 'RIDE', referenceId: scope.rideId } : {}),
-      },
-    });
-    return entries.reduce(
-      (sum, e) => (e.direction === 'CREDIT' ? sum.add(e.amount) : sum.sub(e.amount)),
-      new Decimal(0),
-    );
+    const ride = await flowCompleteRide(app, w, options);
+    // Collection is a consumer now, not part of completion: the ledger must
+    // not assert a payment that has not happened (FR-038). So the money-path
+    // assertions below run after the relay has delivered `ride.completed` and
+    // `RideCollectionService` has actually charged the ride.
+    await drainOutbox();
+    return ride;
   }
 
   const settlements = () => container.resolve<SettlementService>('settlementService');
+  const collection = () => container.resolve<RideCollectionService>('rideCollectionService');
+
+  let restoreGateway: (() => void) | null = null;
+
+  /// Makes the gateway decline, so a ride can reach the receivable state.
+  function declineGateway(): void {
+    const gateway = container.resolve<PaymentGatewayProvider>(
+      'paymentGatewayProvider',
+    ) as unknown as {
+      confirmIntent: (id: string) => Promise<{ gatewayIntentId: string; status: string }>;
+    };
+    const original = gateway.confirmIntent.bind(gateway);
+    gateway.confirmIntent = async (id: string) => ({ gatewayIntentId: id, status: 'FAILED' });
+    restoreGateway = () => {
+      gateway.confirmIntent = original;
+    };
+  }
 
   function surroundingPeriod(): { periodStart: Date; periodEnd: Date } {
     return {
@@ -214,7 +173,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.ok(payable.lt(0));
     });
 
-    it('writes fare and ledger in one transaction — never one without the other', async () => {
+    it('posts exactly one entry group per ride, never a partial one', async () => {
       const w = await world();
       const { rideId } = await completeRide(w, { distanceKm: 5, durationMin: 10 });
 
@@ -350,7 +309,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
   describe('payout is bounded by the derived settlement', () => {
     async function settleAndPay(
-      w: World,
+      w: RideWorld,
       finance: LoggedInUser,
       amount: number,
       idempotencyKey = randomUUID(),
@@ -466,6 +425,88 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.equal(first.status, 200, first.body);
       assert.equal(second.status, 200, second.body);
       assert.equal(await db().client.driverPayout.count({ where: { driverId: w.driverId } }), 1);
+    });
+  });
+
+  describe('an uncollected ride still earns the driver their fare (BD-1)', () => {
+    it('includes the earning in full and parks the shortfall as a receivable', async () => {
+      const w = await world();
+      declineGateway();
+      const { rideId, fare } = await completeRide(w, { distanceKm: 11, durationMin: 24 });
+      for (let i = 1; i < paymentConfig.collectionMaxAttempts; i++) {
+        await collection().collect(rideId);
+      }
+      const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+      assert.equal(ride.paymentStatus, 'FAILED', 'precondition: nobody paid for this ride');
+
+      const { periodStart, periodEnd } = surroundingPeriod();
+      const settlement = await settlements().calculateSettlement({
+        driverId: w.driverId,
+        periodStart,
+        periodEnd,
+      });
+
+      // The driver drove the trip. Whether the rider paid is the platform's
+      // problem, not theirs -- a settlement query that filtered on collection
+      // success would be a defect, not an optimisation.
+      assert.equal(
+        new Decimal(settlement.netPayable).toFixed(2),
+        new Decimal(fare.driverEarning).toFixed(2),
+        'paid in full despite the collection failing',
+      );
+      assert.equal(
+        (await accountBalance('CUSTOMER_RECEIVABLE', { rideId })).toFixed(2),
+        new Decimal(fare.totalFare).neg().toFixed(2),
+        'the shortfall sits on the customer, not the driver',
+      );
+    });
+
+    it('does not pay the driver again when the rider settles later', async () => {
+      const w = await world();
+      declineGateway();
+      const { rideId, fare } = await completeRide(w, {
+        distanceKm: 9,
+        durationMin: 20,
+        paymentMethod: 'WALLET',
+      });
+      for (let i = 1; i < paymentConfig.collectionMaxAttempts; i++) {
+        await collection().collect(rideId);
+      }
+      // Two windows that do not overlap, so the ride belongs to the first one
+      // only -- otherwise the later settlement would legitimately count the
+      // same ride again and prove nothing.
+      const boundary = new Date();
+      const day = 24 * 60 * 60 * 1000;
+      const first = await settlements().calculateSettlement({
+        driverId: w.driverId,
+        periodStart: new Date(boundary.getTime() - day),
+        periodEnd: boundary,
+      });
+
+      restoreGateway?.();
+      restoreGateway = null;
+      await fundWallet(app, w.customer, 5000);
+      assert.equal(await collection().settleReceivable(rideId), 'COLLECTED');
+
+      // A later period. Earnings were recognised when the receivable was
+      // created (transition 6); settling it is transition 7b, which moves the
+      // balancing side only.
+      const later = await settlements().calculateSettlement({
+        driverId: w.driverId,
+        periodStart: boundary,
+        periodEnd: new Date(boundary.getTime() + day),
+      });
+      assert.equal(
+        new Decimal(later.netPayable).toFixed(2),
+        '0.00',
+        'the settlement does not grow because the rider finally paid',
+      );
+      assert.equal(
+        (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
+        new Decimal(fare.driverEarning).toFixed(2),
+        'and the driver is credited exactly once across both periods',
+      );
+      assert.ok(new Decimal(first.netPayable).gt(0));
     });
   });
 });

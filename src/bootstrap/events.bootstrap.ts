@@ -7,6 +7,7 @@ import type {
   RideNotificationConsumer,
   RideRealtimeConsumer,
 } from '@modules/rides';
+import type { RideCollectionConsumer } from '@modules/payments';
 import { logger } from '@shared/logger/index.js';
 
 /// Every consumer the platform runs, by container key. One list, so a new
@@ -18,6 +19,7 @@ const CONSUMER_KEYS = [
   'rideRequestedConsumer',
   'rideNotificationConsumer',
   'rideRealtimeConsumer',
+  'rideCollectionConsumer',
 ] as const;
 
 type Consumer =
@@ -25,7 +27,8 @@ type Consumer =
   | AuthDriverVerifiedConsumer
   | RideRequestedConsumer
   | RideNotificationConsumer
-  | RideRealtimeConsumer;
+  | RideRealtimeConsumer
+  | RideCollectionConsumer;
 
 /// Subscribing consumers to the in-process bus, and nothing else.
 ///

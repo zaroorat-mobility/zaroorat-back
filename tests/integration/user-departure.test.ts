@@ -57,7 +57,10 @@ describe('account departure (integration)', () => {
     return rows.map((row) => row.payload as unknown as { data: Record<string, unknown> });
   }
 
-  async function seedActiveRide(customerId: string): Promise<void> {
+  async function seedActiveRide(
+    customerId: string,
+    options: { status?: string; paymentStatus?: string } = {},
+  ): Promise<string> {
     const client = db().client;
     const driverAccount = await loginAs(app, DRIVER);
     const vehicleType = await client.vehicleType.create({
@@ -74,6 +77,7 @@ describe('account departure (integration)', () => {
     });
 
     const requestId = randomUUID();
+    const rideId = randomUUID();
     await client.$executeRaw`
       INSERT INTO ride_requests (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location)
       VALUES (
@@ -83,14 +87,16 @@ describe('account departure (integration)', () => {
     await client.$executeRaw`
       INSERT INTO rides (
         id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
-        status, payment_method, pickup_location, updated_at
+        status, payment_method, payment_status, pickup_location, updated_at
       ) VALUES (
-        ${randomUUID()}::uuid, ${`RIDE-${randomUUID().slice(0, 8)}`}, ${requestId}::uuid,
+        ${rideId}::uuid, ${`RIDE-${randomUUID().slice(0, 8)}`}, ${requestId}::uuid,
         ${customerId}::uuid, ${driver.id}::uuid, ${vehicle.id}::uuid, ${vehicleType.id}::uuid,
-        'IN_PROGRESS', 'CASH',
+        ${options.status ?? 'IN_PROGRESS'}::"RideStatus", 'CASH',
+        ${options.paymentStatus ?? 'PENDING'}::"PaymentStatus",
         ST_SetSRID(ST_MakePoint(77.5946, 12.9716), 4326)::geography,
         now()
       )`;
+    return rideId;
   }
 
   // ── Deactivation ──────────────────────────────────────────────────────────
@@ -189,25 +195,57 @@ describe('account departure (integration)', () => {
       assert.equal((await probe(user.accessToken)).statusCode, 200, 'and still usable');
     });
 
-    it('refuses while a wallet balance is unsettled, in either direction', async () => {
-      for (const balance of [250.5, -75] as const) {
-        const user = await loginAs(app, LEAVER);
-        await db().client.customerWallet.create({ data: { userId: user.userId, balance } });
+    it('refuses while a wallet balance is unsettled', async () => {
+      const user = await loginAs(app, LEAVER);
+      await db().client.customerWallet.create({ data: { userId: user.userId, balance: 250.5 } });
 
-        const response = await post(DEACTIVATE, user);
-        assert.equal(response.statusCode, 409, `balance ${balance}`);
-        assert.deepEqual(response.json().error.details, [
-          { field: 'wallet', code: 'BALANCE_UNSETTLED' },
-        ]);
-        await resetState();
-      }
+      const response = await post(DEACTIVATE, user);
+      assert.equal(response.statusCode, 409, response.payload);
+      assert.deepEqual(response.json().error.details, [
+        { field: 'wallet', code: 'BALANCE_UNSETTLED' },
+      ]);
     });
 
-    it('refuses while money is locked, even at a zero balance', async () => {
+    // The other direction — the customer owing the platform — used to be seeded
+    // here as `balance: -75`. It cannot be: the wallet balance floor added for
+    // FR-003 forbids a negative balance, and an outstanding fare is now the
+    // obligation state `Ride.paymentStatus = FAILED` (data-model §2A). Same
+    // assertion, current representation.
+    it('refuses while a completed ride is still unpaid', async () => {
       const user = await loginAs(app, LEAVER);
-      // A locked balance is a transaction still in flight, not settled funds.
+      await seedActiveRide(user.userId, { status: 'COMPLETED', paymentStatus: 'FAILED' });
+
+      const response = await post(DEACTIVATE, user);
+      assert.equal(response.statusCode, 409, response.payload);
+      assert.deepEqual(response.json().error.details, [
+        { field: 'payments', code: 'PAYMENT_UNSETTLED' },
+      ]);
+    });
+
+    it('lets a written-off receivable through — BD-1c closes the obligation', async () => {
+      const user = await loginAs(app, LEAVER);
+      const rideId = await seedActiveRide(user.userId, {
+        status: 'COMPLETED',
+        paymentStatus: 'FAILED',
+      });
+      await db().client.ridePayment.create({
+        data: { rideId, amount: 180, method: 'CASH', status: 'WRITTEN_OFF' },
+      });
+
+      assert.equal((await post(DEACTIVATE, user)).statusCode, 204);
+    });
+
+    it('refuses while every last rupee is committed to a hold', async () => {
+      const user = await loginAs(app, LEAVER);
+      // A hold is a transaction still in flight, not settled funds — the
+      // available balance here is zero even though the wallet is not empty.
+      //
+      // It used to be seeded as `balance: 0, lockedBalance: 100`, which the
+      // balance/hold invariant added for FR-003 now forbids, and rightly:
+      // `hold()` has always refused to lock funds that are not there, so no
+      // request could ever have produced that row.
       await db().client.customerWallet.create({
-        data: { userId: user.userId, balance: 0, lockedBalance: 100 },
+        data: { userId: user.userId, balance: 100, lockedBalance: 100 },
       });
       assert.equal((await post(DEACTIVATE, user)).statusCode, 409);
     });

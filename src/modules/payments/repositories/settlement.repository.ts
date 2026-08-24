@@ -47,6 +47,18 @@ export class SettlementRepository {
       },
     });
   }
+  /// The driver's earnings basis for a period, derived from `ride_fares` and
+  /// nothing else.
+  ///
+  /// **It must never join `ride_payments`.** BD-1 forbids deducting a
+  /// customer's payment failure from what a driver earned: the driver drove
+  /// the trip, and whether the rider paid is the platform's problem. A
+  /// settlement query that filtered on collection success would be a defect,
+  /// not an optimisation — the shortfall belongs in `CUSTOMER_RECEIVABLE`.
+  ///
+  /// Cash is filtered out of the fare basis for a different reason entirely:
+  /// the driver is already holding that money, so there is nothing to pay
+  /// them. Only the commission they owe on it belongs in the settlement.
   async aggregateEarnings(
     driverId: string,
     periodStart: Date,
@@ -128,5 +140,51 @@ export class SettlementRepository {
       where: { id },
       data: { status },
     });
+  }
+
+  /// The driver's cumulative position across every settlement so far.
+  ///
+  /// Each row's `netPayable` already includes whatever it carried in, so the
+  /// running sum is the outstanding balance: negative means a past period
+  /// ended owing and has not been worked off yet.
+  async cumulativeNetPayable(driverId: string, tx?: TransactionClient): Promise<Decimal> {
+    const client = tx ?? this.db.client;
+    const rows = await client.$queryRaw<{ total: Decimal | null }[]>`
+      SELECT COALESCE(SUM("net_payable"), 0) AS total
+      FROM "driver_settlements"
+      WHERE "driver_id" = ${driverId}::uuid
+    `;
+    return new Decimal(rows[0]?.total ?? 0);
+  }
+
+  /// Commission already taken out of the driver's wallet at cash confirmation
+  /// (BD-5), which the settlement must therefore not net a second time.
+  ///
+  /// Deliberately separate from `aggregateEarnings` rather than a filter
+  /// inside it: this is about *cash commission recovery*, and putting a
+  /// `ride_payments` reference in the earnings query — even a correct one —
+  /// invites the next reader to add the one BD-1 forbids.
+  async alreadyRecoveredCommission(
+    driverId: string,
+    periodStart: Date,
+    periodEnd: Date,
+    tx?: TransactionClient,
+  ): Promise<Decimal> {
+    const client = tx ?? this.db.client;
+    const rows = await client.$queryRaw<{ recovered: Decimal | null }[]>`
+      SELECT COALESCE(SUM(f."platform_commission"), 0) AS recovered
+      FROM "rides" r
+      JOIN "ride_fares" f ON f."ride_id" = r."id"
+      WHERE r."driver_id" = ${driverId}::uuid
+        AND r."payment_method" = 'CASH'
+        AND r."status" = 'COMPLETED'::"RideStatus"
+        AND r."completed_at" >= ${periodStart}
+        AND r."completed_at" <  ${periodEnd}
+        AND EXISTS (
+          SELECT 1 FROM "ride_payments" p
+          WHERE p."ride_id" = r."id" AND p."status" = 'SUCCEEDED'
+        )
+    `;
+    return new Decimal(rows[0]?.recovered ?? 0);
   }
 }

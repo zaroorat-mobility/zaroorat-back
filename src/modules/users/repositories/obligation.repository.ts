@@ -19,13 +19,27 @@ export class ObligationRepository extends BaseRepository {
   }
   async findOpenObligations(userId: string, tx?: TransactionClient): Promise<Obligation[]> {
     const client = tx ?? this.client;
-    const [ride, wallet, ticket] = await Promise.all([
+    const [ride, wallet, receivable, ticket] = await Promise.all([
       client.ride.findFirst({
         where: { customerId: userId, status: { in: [...ACTIVE_RIDE_STATES] } },
         select: { id: true },
       }),
       client.customerWallet.findFirst({
         where: { userId, NOT: { balance: 0, lockedBalance: 0 } },
+        select: { id: true },
+      }),
+      // Money the customer owes the platform. It used to be representable as a
+      // negative wallet balance; the balance floor added for FR-003 makes that
+      // impossible, and an outstanding fare is now the obligation state
+      // `Ride.paymentStatus = FAILED` with no write-off attempt behind it
+      // (data-model §2A). A written-off receivable is closed (BD-1c) and must
+      // not hold an account open forever.
+      client.ride.findFirst({
+        where: {
+          customerId: userId,
+          paymentStatus: 'FAILED',
+          NOT: { payments: { some: { status: 'WRITTEN_OFF' } } },
+        },
         select: { id: true },
       }),
       client.supportTicket.findFirst({
@@ -36,6 +50,7 @@ export class ObligationRepository extends BaseRepository {
     const obligations: Obligation[] = [];
     if (ride) obligations.push({ module: 'rides', code: 'RIDE_IN_PROGRESS' });
     if (wallet) obligations.push({ module: 'wallet', code: 'BALANCE_UNSETTLED' });
+    if (receivable) obligations.push({ module: 'payments', code: 'PAYMENT_UNSETTLED' });
     if (ticket) obligations.push({ module: 'support', code: 'DISPUTE_OPEN' });
     return obligations;
   }

@@ -63,6 +63,21 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
   },
   {
     queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
+    name: JOB_NAMES.PAYMENT_COLLECTION_SWEEP,
+    // Every five minutes. The completion consumer already collects the happy
+    // path within seconds; this only picks up what it could not finish, and
+    // each ride carries its own doubling backoff on top.
+    pattern: process.env.PAYMENT_COLLECTION_SWEEP_CRON ?? '*/5 * * * *',
+  },
+  {
+    queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
+    name: JOB_NAMES.PAYMENT_RECEIVABLE_WRITEOFF,
+    // Daily, and deliberately not more often: the thing it measures is how
+    // many days a debt has been outstanding.
+    pattern: process.env.PAYMENT_RECEIVABLE_WRITEOFF_CRON ?? '45 3 * * *',
+  },
+  {
+    queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
     name: JOB_NAMES.DRIVER_SETTLEMENT,
     // Once daily, well after midnight UTC, so the prior full day's rides
     // (the window this job settles) are all in.

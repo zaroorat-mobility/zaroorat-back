@@ -206,9 +206,9 @@ What the caller owes. A rider sees unpaid rides; a driver sees commission accrue
 
 ## Settlement and payout
 
-### `POST …/payouts` — **UNCHANGED behaviour · PATH UNSTABLE**
+### `POST /api/v1/admin/payments/payouts` — **UNCHANGED behaviour · RELOCATED**
 
-Staff-only, ceiling-bounded, idempotent. `PayoutService` is byte-unchanged. **The path is currently unsettled**: the in-flight admin work intends `/api/v1/admin/payments/payouts`, but `adminRoutes` omits the `/admin` prefix so the route mounts at `/api/v1/payments/payouts`. Must be resolved by the admin work before Payment tasks reference it. **Behaviour does not change**; only the settlement figure it bounds against becomes accurate. Called out because its ceiling and concurrency tests are correct today and must stay green **unmodified**.
+Staff-only, ceiling-bounded, idempotent. `PayoutService` is byte-unchanged. **Relocated** to the admin module by the in-flight work and verified serving at `/api/v1/admin/payments/payouts`; `payout-authorization` is 20/20 green. **Behaviour does not change**; only the settlement figure it bounds against becomes accurate. Called out because its ceiling and concurrency tests are correct today and must stay green **unmodified**.
 
 ### `POST /refunds` — **UNCHANGED**
 

@@ -17,7 +17,7 @@ export class AdminDriverManagementController {
     const reviewerId = callerId(req);
     const body = reviewDriverDocumentSchema.parse(req.body);
 
-    const doc = await this.driverService.onboarding.reviewDocument(
+    const doc = await this.driverService.documents.reviewDocument(
       documentId,
       driverId,
       body.status,

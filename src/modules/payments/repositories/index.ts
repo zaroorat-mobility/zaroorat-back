@@ -9,3 +9,4 @@ export * from './refund.repository.js';
 export * from './chargeback.repository.js';
 export * from './webhook.repository.js';
 export * from './idempotency.repository.js';
+export * from './ride-payment.repository.js';

@@ -4,14 +4,12 @@ import { DriverRepository } from '@modules/drivers/repositories/driver.repositor
 import { RideService } from '../services/ride.service.js';
 import { RideDispatchRepository } from '../repositories/ride-dispatch.repository.js';
 import { DispatchService } from '../services/dispatch/dispatch.service.js';
-import { RatingService } from '../services/rating/rating.service.js';
 import {
   acceptRideRequestSchema,
   rejectOfferSchema,
   startRideSchema,
   completeRideSchema,
   cancelRideSchema,
-  submitRatingSchema,
 } from '../schemas/ride.schemas.js';
 import { DriverNotFoundError } from '@modules/drivers/errors/driver.errors.js';
 export class RideStateController {
@@ -20,7 +18,6 @@ export class RideStateController {
     private readonly driverRepository: DriverRepository,
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly dispatchService: DispatchService,
-    private readonly ratingService: RatingService,
   ) {}
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
@@ -121,19 +118,5 @@ export class RideStateController {
       body.reasonText,
     );
     return reply.send({ data: ride });
-  }
-  async submitRating(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
-    const body = submitRatingSchema.parse(req.body);
-    const ratedBy = callerHasRole(req, 'driver') ? 'DRIVER' : 'CUSTOMER';
-    const rating = await this.ratingService.submitRating(
-      id,
-      ratedBy,
-      callerId(req),
-      body.rating,
-      body.tags,
-      body.comment,
-    );
-    reply.send({ data: rating });
   }
 }

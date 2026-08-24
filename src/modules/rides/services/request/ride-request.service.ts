@@ -20,6 +20,8 @@ import {
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
+import { DebtService } from '@modules/payments/services/debt/debt.service.js';
+import { RiderDebtLimitExceededError } from '@modules/payments/errors/payment.errors.js';
 import type { RideRequest } from '../../types';
 import type { ItemizedFareResult } from '@modules/pricing';
 
@@ -56,6 +58,7 @@ export class RideRequestService {
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
+    private readonly debtService: DebtService,
   ) {}
   /// One request, every category. `vehicleTypeId` narrows the result to a
   /// single option; omitting it prices every active type so the customer app
@@ -147,6 +150,17 @@ export class RideRequestService {
     const profile = await this.userProfileRepository.findByUserId(input.customerId);
     if (!profile?.firstName || !profile.lastName) {
       throw new IncompleteProfileError();
+    }
+    // BD-2. Blocks a *new* ride, never settling an existing one — refusing
+    // someone permission to pay what they owe would be self-defeating, so
+    // `POST /rides/:rideId/payment/retry` deliberately does not consult this.
+    //
+    // No lock and no transaction here: the boundary that stops a rider opening
+    // several rides at once is the existing `rides_active_customer_key` partial
+    // unique index, and a debt check that raced it would add nothing.
+    const debt = await this.debtService.riderDebt(input.customerId);
+    if (debt.blocked) {
+      throw new RiderDebtLimitExceededError(debt.outstanding.toFixed(2), debt.limit.toFixed(2));
     }
     const activeRide = await this.rideRepo.findActiveByCustomer(input.customerId);
     if (activeRide) {

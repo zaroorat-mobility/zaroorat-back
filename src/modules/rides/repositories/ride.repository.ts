@@ -143,6 +143,33 @@ export class RideRepository {
     });
     return count === 1;
   }
+  /// Conditional claim on the *payment* status, as `updateStatusIf` is for the
+  /// ride status.
+  ///
+  /// The two are not interchangeable and that distinction is the whole reason
+  /// this exists: `updateStatusIf` claims on `status` and can only *set*
+  /// `paymentStatus` as a side effect, so nothing could claim on the payment
+  /// status itself. Every collection transition needs exactly that — one
+  /// winner decided by the database, whether the contenders are two retries,
+  /// a retry racing the sweep, or a driver's cash confirmation racing the
+  /// automatic resolution.
+  ///
+  /// Returns false when someone else already moved the row. The caller turns
+  /// that into the right outcome — usually a harmless no-op — rather than
+  /// overwriting a decision that has already been made.
+  async claimPaymentStatusIf(
+    id: string,
+    expectedPaymentStatus: 'PENDING' | 'AUTHORIZED' | 'PAID' | 'FAILED' | 'REFUNDED',
+    paymentStatus: 'PENDING' | 'AUTHORIZED' | 'PAID' | 'FAILED' | 'REFUNDED',
+    tx?: TransactionClient,
+  ): Promise<boolean> {
+    const client = tx ?? this.db.client;
+    const { count } = await client.ride.updateMany({
+      where: { id, paymentStatus: expectedPaymentStatus },
+      data: { paymentStatus },
+    });
+    return count === 1;
+  }
   async listCustomerRides(customerId: string, limit = 20, tx?: TransactionClient): Promise<Ride[]> {
     const client = tx ?? this.db.client;
     return client.ride.findMany({

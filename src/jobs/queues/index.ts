@@ -22,6 +22,8 @@ export const JOB_NAMES = Object.freeze({
   DRIVER_HEARTBEAT_TIMEOUT: 'driver-heartbeat-timeout',
   DRIVER_DOC_EXPIRATION: 'driver-doc-expiration',
   PAYMENT_RECONCILIATION: 'payment-reconciliation',
+  PAYMENT_COLLECTION_SWEEP: 'payment-collection-sweep',
+  PAYMENT_RECEIVABLE_WRITEOFF: 'payment-receivable-writeoff',
   DRIVER_SETTLEMENT: 'driver-settlement',
   OTP_SEND: 'otp-send',
 } as const);

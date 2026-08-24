@@ -263,3 +263,26 @@ export async function markDriverOnline(driverId: string): Promise<void> {
     update: { status: 'ONLINE', lastOnlineAt: new Date() },
   });
 }
+
+/// Gives a user the profile name that ride booking requires.
+///
+/// `RideRequestService.createRequest` refuses with 422 INCOMPLETE_PROFILE
+/// unless both `firstName` and `lastName` are set. Without this, a freshly
+/// logged-in user cannot book, and every assertion after the booking step in a
+/// suite is unreachable — which is exactly why 15 integration tests appeared to
+/// "fail on payments" while never reaching a payment assertion at all.
+///
+/// Called from `loginAs`, so every test user can book by default. Any suite
+/// that needs to exercise the incomplete-profile path should clear the names
+/// explicitly rather than relying on the absence of this.
+export async function completeProfile(
+  userId: string,
+  firstName = 'Test',
+  lastName = 'Rider',
+): Promise<void> {
+  await db().client.userProfile.upsert({
+    where: { userId },
+    create: { userId, firstName, lastName },
+    update: { firstName, lastName },
+  });
+}

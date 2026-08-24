@@ -5,6 +5,7 @@ import { EventPublisher } from '@core/events';
 import { IntentRepository } from '../../repositories/intent.repository.js';
 import { PaymentGatewayProvider } from '../gateway/gateway.provider.js';
 import { LedgerService } from '../ledger/ledger.service.js';
+import { WalletService } from '../wallet/wallet.service.js';
 import { InvalidStateTransitionError, PaymentNotFoundError } from '../../errors/payment.errors.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import { PaymentMetrics } from '../../metrics/payment.metrics.js';
@@ -28,6 +29,7 @@ export class IntentService {
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly paymentMetrics: PaymentMetrics,
+    private readonly walletService: WalletService,
   ) {}
   validateTransition(fromState: string, toState: string): void {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
@@ -157,6 +159,21 @@ export class IntentService {
         ],
         tx,
       );
+      // The balance moves here, in the same transaction as the ledger credit
+      // above, and nowhere else. Previously `POST /wallet/topup` raised the
+      // balance directly while this group was the only thing a provider
+      // payment produced, so a request with no payment behind it minted
+      // spendable balance and the two records could not agree (FR-036).
+      //
+      // Unconditional, because after this change no intent carries a rideId: a
+      // client cannot declare one (FR-012) and nothing server-side raises one
+      // yet. When ride-scoped intents arrive they must split this branch AND
+      // the ledger group together, or the balance stops matching the books.
+      await this.walletService.creditInTx(intent.userId, intent.amount, tx, {
+        referenceType: 'PAYMENT_INTENT',
+        referenceId: intentId,
+        description: `Wallet funded by payment intent ${intentId}`,
+      });
       await this.eventPublisher.publish(
         paymentEvent(PAYMENT_EVENT_CATALOG.PAYMENT_SUCCEEDED, intent.userId, {
           intentId,

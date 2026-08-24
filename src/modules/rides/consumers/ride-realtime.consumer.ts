@@ -9,6 +9,7 @@ import {
 } from '@modules/realtime/events.js';
 import { RideRepository } from '../repositories/ride.repository.js';
 import { RIDE_EVENT_CATALOG } from '../events/catalog.js';
+import { PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
 
 /// Ride-scoped domain events, and the client event each becomes. Every one of
 /// these carries a `rideId`, so the bridge can resolve the participants from the
@@ -23,6 +24,12 @@ const RIDE_EVENTS: Record<string, { socketEvent: SocketEventName; terminal?: boo
   [RIDE_EVENT_CATALOG.STARTED]: { socketEvent: SOCKET_EVENT.RIDE_STARTED },
   [RIDE_EVENT_CATALOG.COMPLETED]: { socketEvent: SOCKET_EVENT.RIDE_COMPLETED, terminal: true },
   [RIDE_EVENT_CATALOG.CANCELLED]: { socketEvent: SOCKET_EVENT.RIDE_CANCELLED, terminal: true },
+  // Collection outcomes land here rather than being emitted from the payment
+  // service, so a client message is impossible to send for a charge that
+  // rolled back. Not terminal: the ride room stays open because a failed
+  // collection can still be retried and settled.
+  [PAYMENT_EVENT_CATALOG.RIDE_COLLECTED]: { socketEvent: SOCKET_EVENT.PAYMENT_SETTLED },
+  [PAYMENT_EVENT_CATALOG.RIDE_COLLECTION_FAILED]: { socketEvent: SOCKET_EVENT.PAYMENT_FAILED },
 };
 
 /// Offer-scoped domain events. These carry a `driverId` and no ride yet, so they
