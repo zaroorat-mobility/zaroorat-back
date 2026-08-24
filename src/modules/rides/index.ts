@@ -9,17 +9,14 @@ import {
   RideOtpRepository,
   RideStatusEventRepository,
   RideReceiptRepository,
-  RideRatingRepository,
 } from './repositories/index.js';
 import {
   RideRequestService,
   RideOtpService,
   CancellationService,
   DispatchService,
-  MatchingService,
   LifecycleService,
   ReceiptService,
-  RatingService,
   RideService,
 } from './services/index.js';
 import {
@@ -59,16 +56,13 @@ export function registerRidesModule(container: AwilixContainer): void {
     rideOtpRepository: asClass(RideOtpRepository).singleton(),
     rideStatusEventRepository: asClass(RideStatusEventRepository).singleton(),
     rideReceiptRepository: asClass(RideReceiptRepository).singleton(),
-    rideRatingRepository: asClass(RideRatingRepository).singleton(),
     rideRequestService: asClass(RideRequestService).singleton(),
 
     rideOtpService: asClass(RideOtpService).singleton(),
     cancellationService: asClass(CancellationService).singleton(),
     dispatchService: asClass(DispatchService).singleton(),
-    matchingService: asClass(MatchingService).singleton(),
     lifecycleService: asClass(LifecycleService).singleton(),
     receiptService: asClass(ReceiptService).singleton(),
-    ratingService: asClass(RatingService).singleton(),
     rideService: asClass(RideService)
       .singleton()
       .inject((c) => ({
@@ -103,7 +97,6 @@ export function registerRidesModule(container: AwilixContainer): void {
     dispatchRepo: aliasTo('rideDispatchRepository'),
     cancellationRepo: aliasTo('rideCancellationRepository'),
     receiptRepo: aliasTo('rideReceiptRepository'),
-    ratingRepo: aliasTo('rideRatingRepository'),
     txManager: aliasTo('transactionManager'),
   });
 }

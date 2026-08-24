@@ -110,3 +110,54 @@ export class LedgerImbalanceError extends PaymentError {
     this.name = 'LedgerImbalanceError';
   }
 }
+
+/// Feature 002 — ride collection, receivables and cash confirmation.
+///
+/// All extend PaymentError so `handlePaymentError` surfaces them with their
+/// real code and status; nothing about the envelope changes.
+
+export class RidePaymentNotFoundError extends PaymentError {
+  constructor(rideId: string) {
+    super(`No payment record for ride "${rideId}"`, 'RIDE_PAYMENT_NOT_FOUND', 404);
+    this.name = 'RidePaymentNotFoundError';
+  }
+}
+
+export class CollectionNotRetryableError extends PaymentError {
+  constructor(message = 'This ride has no outstanding amount to settle') {
+    super(message, 'COLLECTION_NOT_RETRYABLE', 409);
+    this.name = 'CollectionNotRetryableError';
+  }
+}
+
+/// BD-1c: "outstanding until collected **or** written off" — a written-off
+/// receivable is no longer outstanding, so it can no longer be settled.
+/// Recovery of written-off debt is a separate flow, not in V1.
+export class ObligationWrittenOffError extends PaymentError {
+  constructor(message = 'This obligation was written off and can no longer be settled') {
+    super(message, 'OBLIGATION_WRITTEN_OFF', 409);
+    this.name = 'ObligationWrittenOffError';
+  }
+}
+
+export class CashConfirmationNotApplicableError extends PaymentError {
+  constructor(message = 'This ride is not awaiting cash confirmation') {
+    super(message, 'CASH_CONFIRMATION_NOT_APPLICABLE', 409);
+    this.name = 'CashConfirmationNotApplicableError';
+  }
+}
+
+/// BD-2. Raised only when creating a NEW ride request — never when settling an
+/// existing obligation, because refusing someone permission to pay you is
+/// self-defeating.
+export class RiderDebtLimitExceededError extends PaymentError {
+  constructor(outstanding: string, limit: string) {
+    super(
+      `Outstanding balance of ${outstanding} reaches the ${limit} limit. ` +
+        'Settle an unpaid ride to request a new one.',
+      'RIDER_DEBT_LIMIT_EXCEEDED',
+      409,
+    );
+    this.name = 'RiderDebtLimitExceededError';
+  }
+}

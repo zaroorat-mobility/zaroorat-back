@@ -22,6 +22,11 @@ export const SOCKET_EVENT = {
   RIDE_COMPLETED: 'ride.completed',
   RIDE_CANCELLED: 'ride.cancelled',
 
+  /// Server -> ride room. The outcome of collecting the fare, which happens
+  /// after the ride is already over.
+  PAYMENT_SETTLED: 'ride.payment.settled',
+  PAYMENT_FAILED: 'ride.payment.failed',
+
   /// Server → ride room. The assigned driver's position, for one ride.
   DRIVER_LOCATION: 'ride.driver.location',
 } as const;

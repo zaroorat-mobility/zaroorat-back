@@ -13,6 +13,7 @@ import {
   ChargebackRepository,
   WebhookRepository,
   IdempotencyRepository,
+  RidePaymentRepository,
 } from './repositories/index.js';
 import {
   MockGatewayProvider,
@@ -27,6 +28,9 @@ import {
   PayoutService,
   WebhookService,
   PaymentService,
+  RideCollectionService,
+  DebtService,
+  WriteOffService,
 } from './services/index.js';
 import {
   PaymentMethodController,
@@ -36,8 +40,15 @@ import {
   RefundController,
   WebhookController,
   PaymentController,
+  RidePaymentController,
 } from './controllers/index.js';
-import { SettlementJob, ReconciliationJob } from './jobs/index.js';
+import {
+  SettlementJob,
+  ReconciliationJob,
+  CollectionSweepJob,
+  ReceivableWriteOffJob,
+} from './jobs/index.js';
+import { RideCollectionConsumer } from './consumers/index.js';
 export * from './controllers/index.js';
 export * from './routes/index.js';
 export * from './schemas/index.js';
@@ -46,6 +57,7 @@ export * from './repositories/index.js';
 export * from './jobs/index.js';
 export * from './metrics/index.js';
 export * from './plugins/index.js';
+export * from './consumers/index.js';
 export * from './events/index.js';
 export * from './errors/index.js';
 export * from './constants/index.js';
@@ -65,6 +77,7 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     chargebackRepository: asClass(ChargebackRepository).singleton(),
     webhookRepository: asClass(WebhookRepository).singleton(),
     idempotencyRepository: asClass(IdempotencyRepository).singleton(),
+    ridePaymentRepository: asClass(RidePaymentRepository).singleton(),
     paymentGatewayProvider: asFunction((): PaymentGatewayProvider => {
       const mode = paymentConfig.defaultGateway;
       if (mode === 'razorpay') {
@@ -79,6 +92,9 @@ export function registerPaymentsModule(container: AwilixContainer): void {
       return new MockGatewayProvider();
     }).singleton(),
     ledgerService: asClass(LedgerService).singleton(),
+    rideCollectionService: asClass(RideCollectionService).singleton(),
+    debtService: asClass(DebtService).singleton(),
+    writeOffService: asClass(WriteOffService).singleton(),
     walletService: asClass(WalletService).singleton(),
     intentService: asClass(IntentService).singleton(),
     refundService: asClass(RefundService).singleton(),
@@ -102,6 +118,7 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     payoutController: asClass(PayoutController).singleton(),
     refundController: asClass(RefundController).singleton(),
     webhookController: asClass(WebhookController).singleton(),
+    ridePaymentController: asClass(RidePaymentController).singleton(),
     paymentController: asClass(PaymentController)
       .singleton()
       .inject((c) => ({
@@ -111,8 +128,12 @@ export function registerPaymentsModule(container: AwilixContainer): void {
         payout: c.resolve('payoutController'),
         refund: c.resolve('refundController'),
         webhook: c.resolve('webhookController'),
+        ridePayment: c.resolve('ridePaymentController'),
       })),
+    rideCollectionConsumer: asClass(RideCollectionConsumer).singleton(),
     settlementJob: asClass(SettlementJob).singleton(),
+    collectionSweepJob: asClass(CollectionSweepJob).singleton(),
+    receivableWriteOffJob: asClass(ReceivableWriteOffJob).singleton(),
     reconciliationJob: asClass(ReconciliationJob).singleton(),
     gateway: aliasTo('paymentGatewayProvider'),
     intentRepo: aliasTo('intentRepository'),
@@ -124,6 +145,7 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     settlementWalletRepo: aliasTo('settlementWalletRepository'),
     paymentMethodRepo: aliasTo('paymentMethodRepository'),
     idempotencyRepo: aliasTo('idempotencyRepository'),
+    ridePaymentRepo: aliasTo('ridePaymentRepository'),
     txManager: aliasTo('transactionManager'),
   });
 }

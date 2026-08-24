@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { container } from '@core/di';
 import { AdminVehicleManagementController } from './vehicle-management.controller.js';
+import { handleVehicleError } from '@modules/vehicles/schemas/error-response.js';
 import {
   vehicleDocumentParamSchema,
   vehicleIdParamSchema,
@@ -15,6 +16,12 @@ const commonErrors = { 400: err, 401: err, 403: err, 500: err } as const;
 const itemErrors = { ...commonErrors, 404: err } as const;
 
 export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void> {
+  // Error handlers are scoped to the Fastify plugin that registers them. These
+  // routes moved here from their domain module and left its handler behind, so
+  // coded domain errors were falling through to the global handler and losing
+  // their code/status/details. Restored per constitution S13.3.
+  fastify.setErrorHandler(handleVehicleError);
+
   const controller = container.resolve<AdminVehicleManagementController>(
     'adminVehicleManagementController',
   );

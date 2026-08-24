@@ -13,6 +13,8 @@ import { registerFileModule, registerFileRepositories } from '@modules/files';
 import { registerPaymentsModule } from '@modules/payments';
 import { registerPricingModule } from '@modules/pricing';
 import { registerAdminModule } from '@modules/admin';
+import { registerMatchingModule } from '@modules/matching';
+import { registerRatingModule } from '@modules/rating';
 import { registerRidesModule } from '@modules/rides';
 import { registerDriversModule } from '@modules/drivers';
 import { registerVehiclesModule } from '@modules/vehicles';
@@ -39,6 +41,8 @@ registerDriversModule(container);
 registerVehiclesModule(container);
 registerPricingModule(container);
 registerAdminModule(container);
+registerMatchingModule(container);
+registerRatingModule(container);
 registerRidesModule(container);
 container.register({
   db: aliasTo('databaseService'),

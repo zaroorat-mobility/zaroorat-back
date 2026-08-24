@@ -19,6 +19,8 @@ import type {
   WalletTransfer,
   WalletAdjustment,
   WalletReconciliation,
+  RidePayment,
+  RideFare,
 } from '../../../generated/prisma/index.js';
 export type Decimal = Prisma.Decimal;
 export const Decimal = Prisma.Decimal;
@@ -42,4 +44,6 @@ export type {
   WalletTransfer,
   WalletAdjustment,
   WalletReconciliation,
+  RidePayment,
+  RideFare,
 };

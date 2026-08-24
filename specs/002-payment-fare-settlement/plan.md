@@ -201,8 +201,12 @@ Dispatch, status transitions, driver release, OTP and plausibility checks, and t
 
 ## API Plan
 
-> **⚠️ Payout route path is currently unstable and must be settled before task generation.**
-> The in-flight admin work moved payouts out of `payment.routes.ts`. `adminRoutes` registers its sub-plugins **without an `/admin` prefix**, so the route actually mounts at `/api/v1/payments/payouts`, while `payout-authorization.test.ts` and the admin route file'''s intent both expect `/api/v1/admin/payments/payouts`. 18 of 20 payout tests are red (14 × 404) as a direct result. **This plan does not choose between the two paths** — that belongs to whoever owns the admin work. Payment tasks must not encode either path until it is resolved.
+> **Payout route path — RESOLVED and verified.** The in-flight admin work moved payouts out of
+> `payment.routes.ts`. `adminRoutes` was mounting its sub-plugins without an `/admin` prefix, so the
+> route landed at `/api/v1/payments/payouts` and 18 of 20 payout tests were red (14 × 404). The prefix
+> was corrected in `src/routes/register.ts`; the route now serves at
+> **`/api/v1/admin/payments/payouts`** and `payout-authorization` is **20/20 green with
+> `PayoutService` byte-unchanged**.
 
 Full contract: [contracts/http-api.md](./contracts/http-api.md).
 

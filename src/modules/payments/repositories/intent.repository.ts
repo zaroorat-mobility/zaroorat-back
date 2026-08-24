@@ -25,7 +25,12 @@ export class IntentRepository {
         methodType: input.methodType,
         paymentMethodId: input.paymentMethodId ?? null,
         idempotencyKey: input.idempotencyKey,
-        status: 'CREATED',
+        // PENDING, not CREATED: the only caller registers the intent with the
+        // gateway before this row exists, so it is already awaiting payment by
+        // the time it is written. Persisting CREATED left the row in a state
+        // the machine cannot move to SUCCEEDED, so a genuine gateway
+        // confirmation was rejected as an invalid transition.
+        status: 'PENDING',
         gateway: input.gateway ?? null,
         gatewayIntentId: input.gatewayIntentId ?? null,
       },

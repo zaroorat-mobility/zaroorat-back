@@ -6,9 +6,10 @@ import { registerAuthRoutes } from '@modules/auth/http';
 import { registerUserRoutes } from '@modules/users/routes';
 import { registerFileRoutes } from '@modules/files/routes';
 import { rideRoutes } from '@modules/rides/routes';
+import { ratingRoutes } from '@modules/rating/routes/rating.routes.js';
 import { driverRoutes } from '@modules/drivers/routes';
 import { vehicleRoutes, vehicleTypeRoutes } from '@modules/vehicles/routes';
-import { paymentRoutes } from '@modules/payments/routes';
+import { paymentRoutes, ridePaymentRoutes } from '@modules/payments/routes';
 import { adminRoutes } from '@modules/admin';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -21,6 +22,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(registerUserRoutes, { prefix: '/api/v1/users' });
   await app.register(registerFileRoutes, { prefix: '/api/v1/files' });
   await app.register(rideRoutes, { prefix: '/api/v1/rides' });
+  await app.register(ratingRoutes, { prefix: '/api/v1/rides' });
+  await app.register(ridePaymentRoutes, { prefix: '/api/v1/rides' });
   await app.register(driverRoutes, { prefix: '/api/v1/drivers' });
   await app.register(vehicleRoutes, { prefix: '/api/v1/vehicles' });
   await app.register(vehicleTypeRoutes, { prefix: '/api/v1/vehicle-types' });

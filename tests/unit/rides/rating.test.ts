@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { RatingService } from '../../../src/modules/rides/services/rating/rating.service.js';
+import { RatingService } from '../../../src/modules/rating/services/rating.service.js';
 import {
   RideCustomerMismatchError,
   RideDriverMismatchError,

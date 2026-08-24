@@ -40,7 +40,6 @@ describe('Wallet Concurrency & Over-spend Protection Tests', () => {
 
     const walletService = new WalletService(
       mockWalletRepo as never,
-      {} as never,
       mockTxManager as never,
       mockEvents as never,
       mockMetrics as never,

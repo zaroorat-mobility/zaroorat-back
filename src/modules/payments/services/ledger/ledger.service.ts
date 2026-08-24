@@ -53,10 +53,18 @@ export class LedgerService {
         tx,
       );
     }
+    // Where the fare actually came from. A card or UPI charge lands in the
+    // gateway's clearing account and never touches the rider's wallet balance;
+    // posting it to `CUSTOMER_WALLET` credited a wallet position for money
+    // that was never in the wallet, so the balance and the books disagreed by
+    // the fare of every card ride (FR-037).
+    const fundedFromWallet = data.paymentMethod === 'WALLET';
     const items: LedgerItemInput[] = [
       {
-        account: 'CUSTOMER_WALLET',
-        accountRefId: data.customerUserId,
+        account: fundedFromWallet ? 'CUSTOMER_WALLET' : 'GATEWAY_CLEARING',
+        // Only the wallet account is per-rider; `GATEWAY_CLEARING` is a single
+        // platform account, so tagging it with a user would fragment it.
+        ...(fundedFromWallet ? { accountRefId: data.customerUserId } : {}),
         direction: 'DEBIT',
         amount: data.totalFare,
         referenceType: 'RIDE',

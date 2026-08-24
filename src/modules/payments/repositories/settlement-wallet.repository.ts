@@ -59,4 +59,51 @@ export class SettlementWalletRepository {
     });
     return updated;
   }
+
+  /// Takes commission out of a driver's balance, and is allowed to leave it
+  /// negative.
+  ///
+  /// That negative is not an error state — it is the outstanding commission on
+  /// a cash ride, where the driver is holding 100% of a fare the platform has
+  /// a share of. It clears when the next settlement credits their earnings
+  /// (FR-020/FR-021), which is why there is no floor here to mirror the
+  /// customer wallet's.
+  async debit(
+    data: {
+      driverId: string;
+      amount: Decimal;
+      referenceType: string;
+      referenceId: string;
+      description: string;
+    },
+    tx: TransactionClient,
+  ): Promise<DriverWallet> {
+    await this.getOrCreateWallet(data.driverId, tx);
+    const wallet = await this.lockForUpdate(data.driverId, tx);
+    if (!wallet) throw new Error(`Driver wallet for driver "${data.driverId}" could not be locked`);
+    const newBalance = wallet.balance.sub(data.amount);
+    const updated = await tx.driverWallet.update({
+      where: { driverId: data.driverId },
+      data: { balance: newBalance, lastTransactionAt: new Date() },
+    });
+    await tx.driverWalletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        driverId: data.driverId,
+        // The enum has no COMMISSION member and this needs no migration to
+        // work: an amount the platform takes back off the driver is exactly
+        // what PENALTY already means here.
+        txnType: 'PENALTY',
+        // Negative, matching the customer wallet's convention: reconciliation
+        // sums this column, so a positive debit would report a mismatch on
+        // correct data.
+        amount: data.amount.neg(),
+        balanceAfter: newBalance,
+        referenceType: data.referenceType,
+        referenceId: data.referenceId,
+        description: data.description,
+      },
+    });
+    return updated;
+  }
 }

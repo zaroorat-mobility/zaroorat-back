@@ -3,7 +3,11 @@ import { logger } from '@shared/logger/index.js';
 import type { RetentionResult, SweepResult } from '@modules/files';
 import type { ErasureResult } from '@modules/users';
 import type { AuthRetentionResult } from '@modules/auth';
-import type { ReconciliationReport } from '@modules/payments';
+import type {
+  ReconciliationReport,
+  CollectionSweepReport,
+  WriteOffReport,
+} from '@modules/payments';
 import { container } from '../../core/di.js';
 import { JOB_NAMES, createQueueConnection, type JobName, type QueueName } from '../queues/index.js';
 import { JOB_SCHEDULES } from '../scheduler/index.js';
@@ -13,6 +17,8 @@ export type MaintenanceResult =
   | ErasureResult
   | AuthRetentionResult
   | ReconciliationReport
+  | CollectionSweepReport
+  | WriteOffReport
   | number;
 export interface MaintenanceRunner {
   run(now: Date): Promise<MaintenanceResult>;
@@ -31,6 +37,8 @@ export const MAINTENANCE_HANDLERS: Readonly<Record<MaintenanceJobName, string>> 
   [JOB_NAMES.DRIVER_HEARTBEAT_TIMEOUT]: 'heartbeatTimeoutJob',
   [JOB_NAMES.DRIVER_DOC_EXPIRATION]: 'docExpirationJob',
   [JOB_NAMES.PAYMENT_RECONCILIATION]: 'reconciliationJob',
+  [JOB_NAMES.PAYMENT_COLLECTION_SWEEP]: 'collectionSweepJob',
+  [JOB_NAMES.PAYMENT_RECEIVABLE_WRITEOFF]: 'receivableWriteOffJob',
   [JOB_NAMES.DRIVER_SETTLEMENT]: 'settlementJob',
 });
 export async function runMaintenanceJob(

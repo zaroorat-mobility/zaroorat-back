@@ -12,6 +12,7 @@ import {
 } from './repositories/index.js';
 import {
   OnboardingService,
+  DocumentsService,
   StatusService,
   LocationService,
   DriverWalletViewService,
@@ -21,6 +22,7 @@ import {
 } from './services/index.js';
 import {
   DriverOnboardingController,
+  DriverDocumentsController,
   DriverStatusController,
   DriverLocationController,
   DriverWalletController,
@@ -51,6 +53,7 @@ export function registerDriversModule(container: AwilixContainer): void {
     driverLocationRepository: asClass(DriverLocationRepository).singleton(),
     driverShiftRepository: asClass(DriverShiftRepository).singleton(),
     onboardingService: asClass(OnboardingService).singleton(),
+    documentsService: asClass(DocumentsService).singleton(),
     statusService: asClass(StatusService).singleton(),
     locationService: asClass(LocationService).singleton(),
     driverEligibilityService: asClass(DriverEligibilityService).singleton(),
@@ -61,12 +64,14 @@ export function registerDriversModule(container: AwilixContainer): void {
       .singleton()
       .inject((c) => ({
         onboarding: c.resolve('onboardingService'),
+        documents: c.resolve('documentsService'),
         status: c.resolve('statusService'),
         location: c.resolve('locationService'),
         wallet: c.resolve('driverWalletViewService'),
         shift: c.resolve('shiftService'),
       })),
     driverOnboardingController: asClass(DriverOnboardingController).singleton(),
+    driverDocumentsController: asClass(DriverDocumentsController).singleton(),
     driverStatusController: asClass(DriverStatusController).singleton(),
     driverLocationController: asClass(DriverLocationController).singleton(),
     driverWalletController: asClass(DriverWalletController).singleton(),
@@ -74,6 +79,7 @@ export function registerDriversModule(container: AwilixContainer): void {
       .singleton()
       .inject((c) => ({
         onboarding: c.resolve('driverOnboardingController'),
+        documents: c.resolve('driverDocumentsController'),
         status: c.resolve('driverStatusController'),
         location: c.resolve('driverLocationController'),
         wallet: c.resolve('driverWalletController'),

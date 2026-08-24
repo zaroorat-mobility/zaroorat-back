@@ -12,7 +12,7 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
     controller.onboarding.updateProfile(req, reply),
   );
   fastify.post('/:driverId/documents', (req, reply) =>
-    controller.onboarding.submitDocument(req, reply),
+    controller.documents.submitDocument(req, reply),
   );
 
   fastify.post(

@@ -3,7 +3,7 @@ import { callerId } from '@core/auth';
 import { Decimal } from '../types/index.js';
 import { PaymentService } from '../services/payment.service.js';
 import { topupWalletSchema, holdWalletSchema } from '../schemas/payment.schemas.js';
-import type { WalletView } from '../schemas/payment.responses.js';
+import type { WalletTopupView, WalletView } from '../schemas/payment.responses.js';
 export class WalletController {
   constructor(private readonly paymentService: PaymentService) {}
   async getBalance(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -31,12 +31,16 @@ export class WalletController {
       idempotencyKey,
       body,
       async () => {
-        const wallet = await this.paymentService.wallet.topup(
+        // A top-up now *starts* a payment rather than being one. The balance
+        // rises when the gateway confirms and not a moment sooner, so what
+        // comes back here is the current balance plus the intent to pay.
+        const intent = await this.paymentService.intent.createIntent({
           userId,
-          new Decimal(body.amount),
-          body.referenceId,
-          body.description,
-        );
+          amount: new Decimal(body.amount),
+          methodType: body.methodType ?? 'CARD',
+          idempotencyKey: idempotencyKey as string,
+        });
+        const wallet = await this.paymentService.wallet.getWallet(userId);
         const balanceNum = wallet.balance.toNumber();
         const lockedNum = wallet.lockedBalance.toNumber();
         return {
@@ -46,7 +50,12 @@ export class WalletController {
           lockedBalance: lockedNum,
           availableBalance: balanceNum - lockedNum,
           currency: wallet.currency,
-        } satisfies WalletView;
+          intentId: intent.id,
+          intentStatus: intent.status,
+          gateway: intent.gateway,
+          gatewayIntentId: intent.gatewayIntentId,
+          amount: intent.amount.toNumber(),
+        } satisfies WalletTopupView;
       },
     );
     reply.send({ data: result });

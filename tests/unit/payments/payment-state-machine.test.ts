@@ -11,6 +11,7 @@ describe('Payment State Machine Tests', () => {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
   );
 
   it('allows valid state transitions', () => {

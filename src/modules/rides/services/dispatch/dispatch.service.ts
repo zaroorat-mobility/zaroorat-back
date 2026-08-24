@@ -5,7 +5,7 @@ import { EventPublisher } from '@core/events';
 import { logger } from '@shared/logger/index.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { RideRequestRepository } from '../../repositories/ride-request.repository.js';
-import { MatchingService } from './matching.service.js';
+import { MatchingService } from '@modules/matching/index.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import {

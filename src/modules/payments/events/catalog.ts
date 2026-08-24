@@ -13,6 +13,17 @@ export const PAYMENT_EVENT_CATALOG = {
   PAYOUT_INITIATED: 'payment.payout.initiated',
   PAYOUT_COMPLETED: 'payment.payout.completed',
   RECONCILIATION_MISMATCH: 'payment.reconciliation.mismatch',
+  /// Every successful ride collection, whatever the method. Cash confirmation
+  /// is a collection too, which is why there is no separate cash event.
+  RIDE_COLLECTED: 'payment.ride.collected',
+  /// One per failed attempt. `willRetry: false` marks the attempt that
+  /// exhausts the budget — that same transaction posts the CUSTOMER_RECEIVABLE
+  /// debit, so this event IS the receivable-establishing signal. A separate
+  /// debt event would describe the same transition twice.
+  RIDE_COLLECTION_FAILED: 'payment.ride.collection_failed',
+  /// BD-1c — the ageing write-off. Published for finance and audit; there is
+  /// deliberately no rider notification.
+  RECEIVABLE_WRITTEN_OFF: 'payment.receivable.written_off',
 } as const;
 export function paymentEvent(
   name: (typeof PAYMENT_EVENT_CATALOG)[keyof typeof PAYMENT_EVENT_CATALOG],
@@ -27,7 +38,9 @@ export function paymentEvent(
       name.includes('credited') ||
       name.includes('debited') ||
       name.includes('completed') ||
-      name.includes('processed')
+      name.includes('processed') ||
+      name.includes('collected') ||
+      name.includes('written_off')
         ? 'audit'
         : 'domain',
     aggregateType: 'payment',

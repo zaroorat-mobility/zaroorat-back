@@ -8,6 +8,7 @@ export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<PaymentController>('paymentController');
   fastify.setErrorHandler(handlePaymentError);
   fastify.get('/methods', (req, reply) => controller.paymentMethod.listUserMethods(req, reply));
+  fastify.get('/me/debt', (req, reply) => controller.ridePayment.getMyDebt(req, reply));
   fastify.get('/wallet/balance', (req, reply) => controller.wallet.getBalance(req, reply));
   fastify.post(
     '/wallet/topup',
