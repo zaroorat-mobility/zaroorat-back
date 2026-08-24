@@ -1,8 +1,12 @@
 import { z } from 'zod';
-import { STAFF_ROLE_SLUGS } from '@modules/auth/constants/auth.constants.js';
 import { E164_PATTERN } from '@shared/validation/phone.js';
 
-export const staffRoleSchema = z.enum(STAFF_ROLE_SLUGS);
+export const staffRoleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9_]+$/, 'role must be a lowercase slug');
 
 export const createStaffBodySchema = z.object({
   firstName: z.string().trim().min(1).max(80),

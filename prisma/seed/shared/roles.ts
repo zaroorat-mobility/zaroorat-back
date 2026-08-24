@@ -12,6 +12,11 @@ export const ROLE_SEED = [
     name: 'Driver',
     description: 'Provides rides (operability gated by driver state)',
   },
+  {
+    slug: 'system_admin',
+    name: 'System Admin',
+    description: 'Platform owner — roles, permissions, and staff provisioning',
+  },
   { slug: 'admin', name: 'Admin', description: 'Operations staff — provisioned out-of-band' },
   { slug: 'support', name: 'Support', description: 'Support staff — provisioned out-of-band' },
   {
@@ -49,7 +54,31 @@ export type RoleSlug = (typeof ROLE_SEED)[number]['slug'];
  * permission codes is a separate change and is deliberately not done here.
  */
 export const PERMISSION_SEED = [
+  {
+    code: 'rbac:manage',
+    resource: 'rbac',
+    action: 'manage',
+    description: 'Manage roles and permission grants — system admin only',
+  },
+  {
+    code: 'staff:write',
+    resource: 'staff',
+    action: 'write',
+    description: 'Provision and deactivate staff accounts — system admin only',
+  },
   { code: 'users:read', resource: 'users', action: 'read', description: 'Read any user profile' },
+  {
+    code: 'riders:read',
+    resource: 'riders',
+    action: 'read',
+    description: 'View rider directory and rider detail in the admin panel',
+  },
+  {
+    code: 'drivers:read',
+    resource: 'drivers',
+    action: 'read',
+    description: 'View driver applications and driver directory',
+  },
   {
     code: 'drivers:verify',
     resource: 'drivers',
@@ -61,6 +90,30 @@ export const PERMISSION_SEED = [
     resource: 'drivers',
     action: 'suspend',
     description: 'Suspend or reinstate a driver',
+  },
+  {
+    code: 'vehicles:read',
+    resource: 'vehicles',
+    action: 'read',
+    description: 'Review vehicles and vehicle documents',
+  },
+  {
+    code: 'pricing:read',
+    resource: 'pricing',
+    action: 'read',
+    description: 'View fare, surge, and pricing configuration',
+  },
+  {
+    code: 'pricing:write',
+    resource: 'pricing',
+    action: 'write',
+    description: 'Create or change fare, surge, and pricing configuration',
+  },
+  {
+    code: 'operations:read',
+    resource: 'operations',
+    action: 'read',
+    description: 'View live rides, complaints, and operations consoles',
   },
   {
     code: 'safety:read',
@@ -81,6 +134,18 @@ export const PERMISSION_SEED = [
     description: "Read any ride, not only one's own",
   },
   {
+    code: 'finance:read',
+    resource: 'finance',
+    action: 'read',
+    description: 'View financial operations, settlements, and payouts',
+  },
+  {
+    code: 'finance:execute',
+    resource: 'finance',
+    action: 'execute',
+    description: 'Execute payouts, refunds, and other money-moving admin actions',
+  },
+  {
     code: 'payouts:execute',
     resource: 'payouts',
     action: 'execute',
@@ -91,6 +156,36 @@ export const PERMISSION_SEED = [
     resource: 'refunds',
     action: 'process_any',
     description: 'Refund a transaction belonging to another user',
+  },
+  {
+    code: 'school:read',
+    resource: 'school',
+    action: 'read',
+    description: 'View school mobility configuration',
+  },
+  {
+    code: 'campaigns:read',
+    resource: 'campaigns',
+    action: 'read',
+    description: 'View campaigns and coupons',
+  },
+  {
+    code: 'documents:read',
+    resource: 'documents',
+    action: 'read',
+    description: 'View document-controller expiry and compliance queues',
+  },
+  {
+    code: 'carpooling:read',
+    resource: 'carpooling',
+    action: 'read',
+    description: 'View carpooling rules',
+  },
+  {
+    code: 'audit:read',
+    resource: 'audit',
+    action: 'read',
+    description: 'View platform audit logs',
   },
 ] as const;
 
@@ -104,24 +199,34 @@ export type PermissionCode = (typeof PERMISSION_SEED)[number]['code'];
  * capability grant. Listing them explicitly means a reader can tell "no
  * privileges" from "nobody thought about this role".
  */
+const ALL_PERMISSION_CODES = PERMISSION_SEED.map((permission) => permission.code);
+const LOCKED_PERMISSION_CODES: readonly PermissionCode[] = ['rbac:manage', 'staff:write'];
+const MODULE_PERMISSION_CODES = ALL_PERMISSION_CODES.filter(
+  (code) => !LOCKED_PERMISSION_CODES.includes(code),
+);
+
 export const ROLE_PERMISSIONS: Readonly<Record<RoleSlug, readonly PermissionCode[]>> =
   Object.freeze({
     customer: Object.freeze([] as const),
     driver: Object.freeze([] as const),
-    admin: Object.freeze([
-      'users:read',
-      'drivers:verify',
-      'drivers:suspend',
+    system_admin: Object.freeze(ALL_PERMISSION_CODES),
+    admin: Object.freeze(MODULE_PERMISSION_CODES),
+    support: Object.freeze([
+      'riders:read',
+      'operations:read',
       'safety:read',
       'support:read',
       'rides:read_any',
-      'payouts:execute',
-      'refunds:process_any',
     ] as const),
-    support: Object.freeze(['support:read', 'safety:read', 'rides:read_any'] as const),
     // Deliberately NOT drivers:verify or drivers:suspend — finance moves money,
     // it does not decide operability.
-    finance: Object.freeze(['payouts:execute', 'refunds:process_any', 'rides:read_any'] as const),
+    finance: Object.freeze([
+      'finance:read',
+      'finance:execute',
+      'payouts:execute',
+      'refunds:process_any',
+      'rides:read_any',
+    ] as const),
   });
 
 /**

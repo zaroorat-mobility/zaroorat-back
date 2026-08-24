@@ -60,7 +60,7 @@ export async function seedDevelopment(prisma: Prisma) {
     {
       phone: '+10000000000',
       profile: { firstName: 'Admin', lastName: 'User' },
-      roles: ['admin'],
+      roles: ['system_admin'],
       extra: {
         email: (process.env.ADMIN_SEED_EMAIL ?? 'admin@zaroorat.com').toLowerCase(),
         passwordHash: hashPassword(process.env.ADMIN_SEED_PASSWORD ?? 'Admin@12345'),

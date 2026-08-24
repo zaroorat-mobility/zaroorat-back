@@ -206,6 +206,7 @@ export const adminLoginResponse = {
         id: { type: 'string', format: 'uuid' },
         status: { type: 'string', enum: ['UNVERIFIED', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED'] },
         roles: { type: 'array', items: { type: 'string' } },
+        permissions: { type: 'array', items: { type: 'string' } },
         isNew: { type: 'boolean' },
         email: { type: ['string', 'null'] },
         phoneNumber: { type: 'string' },

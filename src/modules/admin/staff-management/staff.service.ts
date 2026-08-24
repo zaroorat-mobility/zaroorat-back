@@ -1,7 +1,12 @@
 import { DatabaseService, TransactionManager } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { User, UserRoleAssignment, Role } from '@core/database/types';
-import { STAFF_ROLE_SLUGS, type StaffRoleSlug } from '@modules/auth/constants/auth.constants.js';
+import {
+  END_USER_ROLE_SLUGS,
+  type StaffRoleSlug,
+  isAssignableStaffRoleSlug,
+  isStaffRoleSlug,
+} from '@modules/auth/constants/auth.constants.js';
 import { PermissionRepository } from '@modules/auth/repositories/permission.repository.js';
 import { RoleRepository } from '@modules/auth/repositories/role.repository.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
@@ -20,7 +25,7 @@ export interface StaffUserDto {
   name: string;
   email: string;
   phone: string;
-  role: StaffRoleSlug;
+  role: string;
   status: 'active' | 'inactive';
   lastLogin: string | null;
   permissions: string[];
@@ -28,13 +33,13 @@ export interface StaffUserDto {
   updatedAt: string;
 }
 
-const STAFF_PRIORITY: StaffRoleSlug[] = ['admin', 'support', 'finance'];
+const STAFF_PRIORITY: StaffRoleSlug[] = ['system_admin', 'admin', 'support', 'finance'];
 
-function pickStaffRole(slugs: string[]): StaffRoleSlug | null {
+function pickStaffRole(slugs: string[]): string | null {
   for (const role of STAFF_PRIORITY) {
     if (slugs.includes(role)) return role;
   }
-  return null;
+  return slugs.find((slug) => isStaffRoleSlug(slug)) ?? null;
 }
 
 function displayName(
@@ -91,6 +96,9 @@ export class AdminStaffService {
     const phoneTaken = await this.userRepository.findActiveByPhone(input.phoneNumber);
     if (phoneTaken) throw new StaffConflictError('That phone number is already in use');
 
+    if (!isAssignableStaffRoleSlug(input.role)) {
+      throw new StaffForbiddenError('That role cannot be assigned to staff');
+    }
     const role = await this.roleRepository.findBySlug(input.role);
     if (!role) throw new StaffConflictError(`Unknown staff role '${input.role}'`);
 
@@ -127,7 +135,7 @@ export class AdminStaffService {
 
     await this.transactionManager.execute(async (tx: TransactionClient) => {
       for (const assignment of row.roleAssignments) {
-        if (STAFF_ROLE_SLUGS.includes(assignment.role.slug as StaffRoleSlug)) {
+        if (isStaffRoleSlug(assignment.role.slug)) {
           await this.roleRepository.revoke(id, assignment.roleId, new Date(), tx);
         }
       }
@@ -142,7 +150,7 @@ export class AdminStaffService {
         some: {
           revokedAt: null,
           OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-          role: { slug: { in: [...STAFF_ROLE_SLUGS] } },
+          role: { slug: { notIn: [...END_USER_ROLE_SLUGS] } },
         },
       },
     };
