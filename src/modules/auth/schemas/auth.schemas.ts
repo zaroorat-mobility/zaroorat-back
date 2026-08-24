@@ -28,6 +28,14 @@ export const verifyOtpSchema = z.object({
 export const refreshSchema = z.object({
   refreshToken: z.string().min(1),
 });
+export const adminPasswordLoginSchema = z.object({
+  email: z
+    .string()
+    .email()
+    .max(100)
+    .transform((value) => value.trim().toLowerCase()),
+  password: z.string().min(8).max(128),
+});
 export const logoutSchema = z
   .object({
     allDevices: z.boolean().optional(),
@@ -36,3 +44,4 @@ export const logoutSchema = z
 export type SendOtpBody = z.infer<typeof sendOtpSchema>;
 export type VerifyOtpBody = z.infer<typeof verifyOtpSchema>;
 export type RefreshBody = z.infer<typeof refreshSchema>;
+export type AdminPasswordLoginBody = z.infer<typeof adminPasswordLoginSchema>;

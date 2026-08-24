@@ -19,7 +19,7 @@ export async function adminPaymentRoutes(fastify: FastifyInstance): Promise<void
     '/payments/payouts',
     {
       preHandler: [
-        fastify.authorize({ roles: ['admin', 'finance'] }),
+        fastify.authorize({ permissions: ['finance:execute'] }),
         fastify.rateLimit(rateLimits.payment),
       ],
     },

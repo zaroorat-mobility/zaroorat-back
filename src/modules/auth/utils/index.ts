@@ -1,1 +1,1 @@
-export {};
+export { hashPassword, verifyPassword } from './password';

@@ -10,6 +10,7 @@ import {
   verifyOtpSchema,
   refreshSchema,
   logoutSchema,
+  adminPasswordLoginSchema,
 } from '../schemas/auth.schemas';
 function toDeviceContext(device: z.infer<typeof verifyOtpSchema>['device']): DeviceContext {
   if (!device) return {};
@@ -70,6 +71,76 @@ export class AuthController {
         ...(parsed.data.device?.fingerprint != null
           ? { deviceFingerprint: parsed.data.device.fingerprint }
           : {}),
+      });
+      return reply.status(200).send(result);
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
+  };
+  sendAdminOtp = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const parsed = sendOtpSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return replyAuthError(request, reply, 'VALIDATION', 'Request validation failed', {
+        details: parsed.error.issues,
+      });
+    }
+    try {
+      const result = await this.authService.sendAdminOtp({
+        phoneNumber: parsed.data.phoneNumber,
+        ip: request.ip,
+        userAgent: request.headers['user-agent'] ?? null,
+        ...(parsed.data.device?.deviceId != null ? { deviceId: parsed.data.device.deviceId } : {}),
+        ...(parsed.data.device?.fingerprint != null
+          ? { deviceFingerprint: parsed.data.device.fingerprint }
+          : {}),
+      });
+      return reply.status(200).send(result);
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
+  };
+  verifyAdminOtp = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const idempotencyKey = this.requireIdempotencyKey(request, reply);
+    if (!idempotencyKey) return reply;
+    const parsed = verifyOtpSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return replyAuthError(request, reply, 'VALIDATION', 'Request validation failed', {
+        details: parsed.error.issues,
+      });
+    }
+    try {
+      const result = await this.authService.verifyAdminOtp(
+        {
+          phoneNumber: parsed.data.phoneNumber,
+          code: parsed.data.code,
+          device: { platform: 'WEB', ...toDeviceContext(parsed.data.device) },
+          ip: request.ip,
+          userAgent: request.headers['user-agent'] ?? null,
+          ...(parsed.data.challengeId != null ? { challengeId: parsed.data.challengeId } : {}),
+        },
+        idempotencyKey,
+      );
+      return reply.status(200).send(result);
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
+  };
+  loginAdminPassword = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<FastifyReply> => {
+    const parsed = adminPasswordLoginSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return replyAuthError(request, reply, 'VALIDATION', 'Request validation failed', {
+        details: parsed.error.issues,
+      });
+    }
+    try {
+      const result = await this.authService.loginAdminPassword({
+        email: parsed.data.email,
+        password: parsed.data.password,
+        ip: request.ip,
+        userAgent: request.headers['user-agent'] ?? null,
       });
       return reply.status(200).send(result);
     } catch (err) {
@@ -175,6 +246,16 @@ export class AuthController {
     const revoked = await this.authService.revokeDevice(auth.userId, id);
     if (revoked === null) return replyAuthError(request, reply, 'NOT_FOUND', 'Device not found');
     return reply.status(204).send();
+  };
+  getMe = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+    try {
+      const user = await this.authService.getMe(auth.userId);
+      return reply.status(200).send({ user });
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
   };
   private requireIdempotencyKey(request: FastifyRequest, reply: FastifyReply): string | null {
     const key = request.headers['idempotency-key'];

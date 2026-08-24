@@ -15,9 +15,12 @@ const uuidParams = {
 
 export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> {
   const adminSurgeController = container.resolve<AdminSurgeController>('adminSurgeController');
+  const canRead = { preHandler: fastify.authorize({ permissions: ['pricing:read'] }) };
+  const canWrite = { preHandler: fastify.authorize({ permissions: ['pricing:write'] }) };
 
   // Surge Zones
   fastify.post('/surge-zones', {
+    ...canWrite,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Create a new Surge Zone',
@@ -26,6 +29,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.get('/surge-zones', {
+    ...canRead,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'List Surge Zones',
@@ -34,6 +38,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.get('/surge-zones/:id', {
+    ...canRead,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Get Surge Zone by ID',
@@ -43,6 +48,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.patch('/surge-zones/:id', {
+    ...canWrite,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Update Surge Zone',
@@ -52,6 +58,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.delete('/surge-zones/:id', {
+    ...canWrite,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Deactivate Surge Zone',
@@ -62,6 +69,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
 
   // Surge Windows
   fastify.post('/surge-windows', {
+    ...canWrite,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Create a new Surge Window',
@@ -70,6 +78,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.get('/surge-windows', {
+    ...canRead,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'List Surge Windows',
@@ -78,6 +87,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.get('/surge-windows/:id', {
+    ...canRead,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Get Surge Window by ID',
@@ -87,6 +97,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.patch('/surge-windows/:id', {
+    ...canWrite,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Update Surge Window',
@@ -96,6 +107,7 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   });
 
   fastify.delete('/surge-windows/:id', {
+    ...canWrite,
     schema: {
       tags: ['Admin', 'Surge'],
       summary: 'Deactivate Surge Window',

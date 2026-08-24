@@ -9,19 +9,27 @@ import { UserProfileRepository } from '@modules/users/repositories';
 import { userEvent } from '@modules/users/events';
 import { UserRepository } from '../repositories/user.repository';
 import { RoleRepository } from '../repositories/role.repository';
+import { PermissionRepository } from '../repositories/permission.repository';
 import { OtpService, type SendOtpResult } from './otp/otp.service';
 import { TokenService } from './token/token.service';
 import { EpochService } from './token/epoch.service';
 import type { TokenPair } from './token/token.service';
 import { SessionService } from './session/session.service';
 import { DeviceService } from './session/device.service';
-import { AccountDeactivatedError, AccountSuspendedError } from '../errors/auth.errors';
+import {
+  AccountDeactivatedError,
+  AccountSuspendedError,
+  InvalidCredentialsError,
+} from '../errors/auth.errors';
 import { authEvent } from '../events';
 import {
   AUTH_OTP_PURPOSE,
   IDEMPOTENCY_TTL_SECONDS,
   DEFAULT_ROLE_SLUG,
+  isStaffRoleSlug,
 } from '../constants/auth.constants';
+import { uuidV7 } from '@shared/crypto';
+import { verifyPassword } from '../utils/password';
 function isPhoneAlreadyTakenError(err: unknown): boolean {
   const code = (
     err as {
@@ -74,8 +82,18 @@ export interface AuthLoginResult extends TokenPair {
     id: string;
     status: string;
     roles: string[];
+    permissions?: string[];
     isNew: boolean;
+    email?: string | null;
+    phoneNumber?: string;
+    name?: string | null;
   };
+}
+export interface AdminPasswordLoginInput {
+  email: string;
+  password: string;
+  ip?: string | null;
+  userAgent?: string | null;
 }
 export class AuthService {
   constructor(
@@ -83,6 +101,7 @@ export class AuthService {
     private readonly userRepository: UserRepository,
     private readonly userProfileRepository: UserProfileRepository,
     private readonly roleRepository: RoleRepository,
+    private readonly permissionRepository: PermissionRepository,
     private readonly deviceService: DeviceService,
     private readonly sessionService: SessionService,
     private readonly tokenService: TokenService,
@@ -102,6 +121,48 @@ export class AuthService {
       ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
       ...(input.deviceFingerprint != null ? { deviceFingerprint: input.deviceFingerprint } : {}),
     });
+  }
+  async sendAdminOtp(input: SendOtpInput): Promise<SendOtpResult> {
+    const user = await this.userRepository.findActiveByPhone(input.phoneNumber);
+    if (!user) return this.opaqueOtpAck();
+    try {
+      this.assertAuthenticatable(user);
+    } catch {
+      return this.opaqueOtpAck();
+    }
+    const roles = await this.roleRepository.findActiveRoleSlugs(user.id);
+    if (!this.isStaff(roles)) return this.opaqueOtpAck();
+    return this.otpService.send({
+      phoneNumber: input.phoneNumber,
+      purpose: AUTH_OTP_PURPOSE,
+      userId: user.id,
+      ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
+      ...(input.ip != null ? { ip: input.ip } : {}),
+      ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+      ...(input.deviceFingerprint != null ? { deviceFingerprint: input.deviceFingerprint } : {}),
+    });
+  }
+  async verifyAdminOtp(input: VerifyOtpInput, idempotencyKey?: string): Promise<AuthLoginResult> {
+    if (!idempotencyKey) return this.runVerifyAdminOtp(input);
+    return this.redisService.idempotency.runOnce(
+      IDEMPOTENCY_OPERATIONS.ADMIN_LOGIN,
+      idempotencyKey,
+      IDEMPOTENCY_TTL_SECONDS,
+      () => this.runVerifyAdminOtp(input),
+    );
+  }
+  async loginAdminPassword(
+    input: AdminPasswordLoginInput,
+    idempotencyKey?: string,
+  ): Promise<AuthLoginResult> {
+    const run = (): Promise<AuthLoginResult> => this.runLoginAdminPassword(input);
+    if (!idempotencyKey) return run();
+    return this.redisService.idempotency.runOnce(
+      IDEMPOTENCY_OPERATIONS.ADMIN_LOGIN,
+      idempotencyKey,
+      IDEMPOTENCY_TTL_SECONDS,
+      run,
+    );
   }
   async verifyOtp(input: VerifyOtpInput, idempotencyKey?: string): Promise<AuthLoginResult> {
     if (!idempotencyKey) return this.runVerifyOtp(input);
@@ -419,9 +480,169 @@ export class AuthService {
     return this.roleRepository.findActiveRoleSlugs(userId);
   }
   private capForRoles(roles: string[]): number {
-    const privileged = roles.includes('admin') || roles.includes('support');
+    const privileged = this.isStaff(roles);
     return privileged
       ? this.sessionConfig.privilegedMaxConcurrentSessions
       : this.sessionConfig.maxConcurrentSessions;
+  }
+  private isStaff(roles: string[]): boolean {
+    return roles.some((role) => isStaffRoleSlug(role));
+  }
+  private opaqueOtpAck(): SendOtpResult {
+    return {
+      challengeId: uuidV7(),
+      expiresInSec: 300,
+      resendAvailableInSec: 60,
+    };
+  }
+  private async runVerifyAdminOtp(input: VerifyOtpInput): Promise<AuthLoginResult> {
+    await this.otpService.verify({
+      phoneNumber: input.phoneNumber,
+      purpose: AUTH_OTP_PURPOSE,
+      code: input.code,
+      ...(input.challengeId ? { challengeId: input.challengeId } : {}),
+    });
+    const user = await this.userRepository.findActiveByPhone(input.phoneNumber);
+    if (!user) throw new InvalidCredentialsError();
+    this.assertAuthenticatable(user);
+    const roles = await this.roleRepository.findActiveRoleSlugs(user.id);
+    if (!this.isStaff(roles)) throw new InvalidCredentialsError();
+    return this.openAdminSession({
+      user,
+      roles,
+      loginMethod: 'admin_otp',
+      ...(input.device != null ? { device: input.device } : {}),
+      ...(input.ip !== undefined ? { ip: input.ip } : {}),
+      ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+    });
+  }
+  private async runLoginAdminPassword(input: AdminPasswordLoginInput): Promise<AuthLoginResult> {
+    const email = input.email.trim().toLowerCase();
+    const user = await this.userRepository.findActiveByEmail(email);
+    const ok = verifyPassword(input.password, user?.passwordHash);
+    if (!user || !ok) throw new InvalidCredentialsError();
+    this.assertAuthenticatable(user);
+    const roles = await this.roleRepository.findActiveRoleSlugs(user.id);
+    if (!this.isStaff(roles)) throw new InvalidCredentialsError();
+    return this.openAdminSession({
+      user,
+      roles,
+      loginMethod: 'admin_password',
+      device: { platform: 'WEB' },
+      ...(input.ip !== undefined ? { ip: input.ip } : {}),
+      ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+    });
+  }
+  private async openAdminSession(input: {
+    user: User;
+    roles: string[];
+    loginMethod: string;
+    device?: DeviceContext;
+    ip?: string | null;
+    userAgent?: string | null;
+  }): Promise<AuthLoginResult> {
+    const outcome = await this.transactionManager.execute(async (tx) => {
+      if (await this.userProfileRepository.ensureExists(input.user.id, tx)) {
+        await this.eventPublisher.publish(
+          userEvent('user.profile.created', {
+            subjectUserId: input.user.id,
+            data: { userId: input.user.id },
+          }),
+          tx,
+        );
+      }
+      const device = await this.deviceService.register(
+        { userId: input.user.id, platform: 'WEB', ...input.device },
+        tx,
+      );
+      const session = await this.sessionService.createInTransaction(
+        {
+          userId: input.user.id,
+          deviceId: device.id,
+          loginMethod: input.loginMethod,
+          expiresAt: new Date(Date.now() + this.jwtConfig.refreshTtlSeconds * 1000),
+          ...(input.ip != null ? { ipAddress: input.ip } : {}),
+          ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+        },
+        tx,
+      );
+      await this.userRepository.updateLastLoginAt(input.user.id, new Date(), tx);
+      const pair = await this.tokenService.issuePair(
+        { userId: input.user.id, sessionId: session.id, roles: input.roles },
+        tx,
+      );
+      await this.eventPublisher.publish(
+        authEvent('auth.login.succeeded', {
+          subjectUserId: input.user.id,
+          sessionId: session.id,
+          data: {
+            userId: input.user.id,
+            sessionId: session.id,
+            deviceId: device.id,
+            isNewAccount: false,
+            loginMethod: input.loginMethod,
+          },
+        }),
+        tx,
+      );
+      await this.eventPublisher.publish(
+        authEvent('auth.session.created', {
+          aggregateId: session.id,
+          subjectUserId: input.user.id,
+          sessionId: session.id,
+          data: {
+            userId: input.user.id,
+            sessionId: session.id,
+            deviceId: device.id,
+            expiresAt: session.expiresAt.toISOString(),
+          },
+        }),
+        tx,
+      );
+      const profile = await this.userProfileRepository.findByUserId(input.user.id, tx);
+      const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || null;
+      return { session, pair, name };
+    });
+    await this.sessionService.enforceCap(
+      input.user.id,
+      this.capForRoles(input.roles),
+      outcome.session.id,
+    );
+    const permissions = await this.permissionRepository.findAllowedCodesForUser(input.user.id);
+    return {
+      ...outcome.pair,
+      user: {
+        id: input.user.id,
+        status: input.user.status,
+        roles: input.roles,
+        permissions,
+        isNew: false,
+        email: input.user.email,
+        phoneNumber: input.user.phoneNumber,
+        name: outcome.name,
+      },
+    };
+  }
+
+  async getMe(userId: string): Promise<AuthLoginResult['user']> {
+    const user = await this.userRepository.findById(userId);
+    if (!user || user.deletedAt) throw new InvalidCredentialsError();
+    this.assertAuthenticatable(user);
+    const [roles, permissions, profile] = await Promise.all([
+      this.roleRepository.findActiveRoleSlugs(user.id),
+      this.permissionRepository.findAllowedCodesForUser(user.id),
+      this.userProfileRepository.findByUserId(user.id),
+    ]);
+    const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || null;
+    return {
+      id: user.id,
+      status: user.status,
+      roles,
+      permissions,
+      isNew: false,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      name,
+    };
   }
 }

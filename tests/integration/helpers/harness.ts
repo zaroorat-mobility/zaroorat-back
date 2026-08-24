@@ -1,3 +1,4 @@
+import './load-test-env.js';
 import { randomUUID } from 'node:crypto';
 import { after } from 'node:test';
 import type { FastifyInstance } from 'fastify';
@@ -9,6 +10,7 @@ import { closeQueues } from '../../../src/jobs/queues/index.js';
 import type { DatabaseService } from '../../../src/core/database/DatabaseService.js';
 import type { PrismaClientProvider } from '../../../src/core/database/client/PrismaClientProvider.js';
 import type { OtpGenerator } from '../../../src/modules/auth/services/otp/otp.generator.js';
+import { seedRoles } from '../../../prisma/seed/shared/roles.js';
 import { seedVehicleTypes } from '../../../prisma/seed/shared/vehicle-types.js';
 import { registerEventConsumers } from '../../../src/bootstrap/events.bootstrap.js';
 import type { Unsubscribe } from '../../../src/core/events/index.js';
@@ -38,7 +40,18 @@ export function db(): DatabaseService {
   return container.resolve<DatabaseService>('databaseService');
 }
 
+function assertTestDatabase(): void {
+  const url = process.env.DATABASE_URL ?? '';
+  if (!url.includes('_test') && !url.includes('zaroorat_test')) {
+    throw new Error(
+      `resetState() refused to TRUNCATE a non-test database (${url || 'DATABASE_URL unset'}). ` +
+        'Integration tests must use APP_ENV=test / .env.test.',
+    );
+  }
+}
+
 export async function resetState(): Promise<void> {
+  assertTestDatabase();
   await db().client.$executeRawUnsafe(
     'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
       '"account_deletion_requests", ' +
@@ -51,6 +64,7 @@ export async function resetState(): Promise<void> {
   // throwaway types. Re-seeding here keeps the canonical catalog present for
   // every test the way the roles table is, so GET /vehicle-types is never empty
   // and no test has to seed the platform's own catalog itself.
+  await seedRoles(db().client);
   await seedVehicleTypes(db().client);
   await redis.flushdb();
 }

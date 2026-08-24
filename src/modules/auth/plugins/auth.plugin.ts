@@ -7,10 +7,13 @@ import { EpochService } from '../services/token/epoch.service';
 import { SessionService } from '../services/session/session.service';
 import { DriverAccessRepository } from '../repositories/driver-access.repository';
 import { DeviceRepository } from '../repositories/device.repository';
+import { PermissionRepository } from '../repositories/permission.repository';
+import { SYSTEM_ADMIN_ROLE_SLUG } from '../constants/auth.constants';
 import { AuthError, TokenInvalidError } from '../errors/auth.errors';
 import { replyAuthError } from '../schemas/error-response';
 export interface AuthorizeOptions {
   roles?: string[];
+  permissions?: string[];
   requireOperableDriver?: boolean;
   requireUntamperedDevice?: boolean;
 }
@@ -28,6 +31,7 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
   const sessionService = container.resolve<SessionService>('sessionService');
   const driverAccess = container.resolve<DriverAccessRepository>('driverAccessRepository');
   const deviceRepository = container.resolve<DeviceRepository>('deviceRepository');
+  const permissionRepository = container.resolve<PermissionRepository>('permissionRepository');
   app.decorateRequest('auth', null);
   app.decorate(
     'authenticate',
@@ -55,7 +59,7 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
           'Authentication is temporarily unavailable',
         );
       }
-      request.auth = { userId: claims.sub, sid: claims.sid, roles: claims.roles };
+      request.auth = { userId: claims.sub, sid: claims.sid, roles: claims.roles ?? [] };
       await sessionService.touchLastSeenThrottled(claims.sid);
     },
   );
@@ -65,9 +69,30 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
       if (!auth) {
         return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
       }
-      const required = options.roles ?? [];
-      if (required.length > 0 && !required.some((role) => auth.roles.includes(role))) {
-        return replyAuthError(request, reply, 'FORBIDDEN', 'Insufficient role');
+      const requiredRoles = options.roles ?? [];
+      const requiredPermissions = options.permissions ?? [];
+      const isSystemAdmin = auth.roles.includes(SYSTEM_ADMIN_ROLE_SLUG);
+      if (!isSystemAdmin) {
+        if (requiredRoles.length > 0 && !requiredRoles.some((role) => auth.roles.includes(role))) {
+          return replyAuthError(request, reply, 'FORBIDDEN', 'Insufficient role');
+        }
+        if (requiredPermissions.length > 0) {
+          let held: string[];
+          try {
+            held = await permissionRepository.findAllowedCodesForUser(auth.userId);
+          } catch (err) {
+            request.log.error({ err }, '[auth] permission lookup failed \u2014 failing closed');
+            return replyAuthError(
+              request,
+              reply,
+              'SERVICE_UNAVAILABLE',
+              'Authorization is temporarily unavailable',
+            );
+          }
+          if (!requiredPermissions.some((code) => held.includes(code))) {
+            return replyAuthError(request, reply, 'FORBIDDEN', 'Insufficient permission');
+          }
+        }
       }
       if (options.requireUntamperedDevice) {
         try {

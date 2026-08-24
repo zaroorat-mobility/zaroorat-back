@@ -16,6 +16,7 @@ import {
   AccountSuspendedError,
   AccountDeactivatedError,
   NotFoundError,
+  InvalidCredentialsError,
 } from '../../../src/modules/auth/errors/auth.errors.js';
 import {
   AUTH_ERROR_STATUS,
@@ -37,6 +38,7 @@ describe('auth errors — stable codes', () => {
     [new RateLimitedError(60), 'RATE_LIMITED'],
     [new AccountSuspendedError(), 'ACCOUNT_SUSPENDED'],
     [new AccountDeactivatedError(), 'ACCOUNT_DEACTIVATED'],
+    [new InvalidCredentialsError(), 'INVALID_CREDENTIALS'],
     [new NotFoundError(), 'NOT_FOUND'],
   ];
 

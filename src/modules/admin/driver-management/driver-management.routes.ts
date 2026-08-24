@@ -16,19 +16,19 @@ export async function adminDriverRoutes(fastify: FastifyInstance): Promise<void>
 
   fastify.post(
     '/drivers/:driverId/documents/:documentId/review',
-    { preHandler: fastify.authorize({ roles: ['admin'] }) },
+    { preHandler: fastify.authorize({ permissions: ['drivers:verify'] }) },
     (req, reply) => controller.reviewDocument(req, reply),
   );
 
   fastify.post(
     '/drivers/:id/verify',
-    { preHandler: fastify.authorize({ roles: ['admin'] }) },
+    { preHandler: fastify.authorize({ permissions: ['drivers:verify'] }) },
     (req, reply) => controller.reviewVerification(req, reply),
   );
 
   fastify.post(
     '/drivers/:id/suspend',
-    { preHandler: fastify.authorize({ roles: ['admin'] }) },
+    { preHandler: fastify.authorize({ permissions: ['drivers:suspend'] }) },
     (req, reply) => controller.suspend(req, reply),
   );
 }

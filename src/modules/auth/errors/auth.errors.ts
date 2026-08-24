@@ -73,6 +73,11 @@ export class AccountDeactivatedError extends AuthError {
     super('ACCOUNT_DEACTIVATED', message);
   }
 }
+export class InvalidCredentialsError extends AuthError {
+  constructor(message = 'Invalid credentials') {
+    super('INVALID_CREDENTIALS', message);
+  }
+}
 export class NotFoundError extends AuthError {
   constructor(message = 'The requested resource was not found') {
     super('NOT_FOUND', message);

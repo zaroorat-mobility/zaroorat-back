@@ -16,6 +16,7 @@ declare module 'fastify' {
     authenticate: preHandlerHookHandler;
     authorize: (options?: {
       roles?: string[];
+      permissions?: string[];
       requireOperableDriver?: boolean;
       requireUntamperedDevice?: boolean;
     }) => preHandlerHookHandler;

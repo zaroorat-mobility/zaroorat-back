@@ -5,7 +5,9 @@ export interface CreateUserInput {
   phoneNumber: string;
   status?: UserStatus;
   isPhoneVerified?: boolean;
+  isEmailVerified?: boolean;
   email?: string | null;
+  passwordHash?: string | null;
 }
 export class UserRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
@@ -17,13 +19,20 @@ export class UserRepository extends BaseRepository {
   async findActiveByPhone(phoneNumber: string, tx?: TransactionClient): Promise<User | null> {
     return (tx ?? this.client).user.findFirst({ where: { phoneNumber, deletedAt: null } });
   }
+  async findActiveByEmail(email: string, tx?: TransactionClient): Promise<User | null> {
+    return (tx ?? this.client).user.findFirst({
+      where: { email, deletedAt: null },
+    });
+  }
   async create(input: CreateUserInput, tx?: TransactionClient): Promise<User> {
     return (tx ?? this.client).user.create({
       data: {
         phoneNumber: input.phoneNumber,
         isPhoneVerified: input.isPhoneVerified ?? false,
+        ...(input.isEmailVerified !== undefined ? { isEmailVerified: input.isEmailVerified } : {}),
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.email != null ? { email: input.email } : {}),
+        ...(input.passwordHash != null ? { passwordHash: input.passwordHash } : {}),
       },
     });
   }
