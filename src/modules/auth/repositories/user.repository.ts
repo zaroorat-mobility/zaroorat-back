@@ -5,6 +5,7 @@ export interface CreateUserInput {
   phoneNumber: string;
   status?: UserStatus;
   isPhoneVerified?: boolean;
+  isEmailVerified?: boolean;
   email?: string | null;
   passwordHash?: string | null;
 }
@@ -28,6 +29,7 @@ export class UserRepository extends BaseRepository {
       data: {
         phoneNumber: input.phoneNumber,
         isPhoneVerified: input.isPhoneVerified ?? false,
+        ...(input.isEmailVerified !== undefined ? { isEmailVerified: input.isEmailVerified } : {}),
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.email != null ? { email: input.email } : {}),
         ...(input.passwordHash != null ? { passwordHash: input.passwordHash } : {}),

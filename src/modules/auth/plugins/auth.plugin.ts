@@ -55,7 +55,7 @@ export async function authPlugin(app: FastifyInstance): Promise<void> {
           'Authentication is temporarily unavailable',
         );
       }
-      request.auth = { userId: claims.sub, sid: claims.sid, roles: claims.roles };
+      request.auth = { userId: claims.sub, sid: claims.sid, roles: claims.roles ?? [] };
       await sessionService.touchLastSeenThrottled(claims.sid);
     },
   );
