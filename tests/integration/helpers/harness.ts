@@ -52,12 +52,20 @@ function assertTestDatabase(): void {
 
 export async function resetState(): Promise<void> {
   assertTestDatabase();
+  // `wallet_reconciliations` is in the list for the same reason
+  // `payment_ledger_entries` is: its wallet id is a plain uuid column with no
+  // foreign key, so TRUNCATE "users" CASCADE never reaches it. Left out, the
+  // table is the one thing in the test database that survives every reset, and
+  // a run's rows are still there for the next one — which turns any assertion
+  // that counts reconciliation rows into a count of every run since the table
+  // was created.
   await db().client.$executeRawUnsafe(
     'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
       '"account_deletion_requests", ' +
       '"files", "otp_verifications", "outbox_events", "vehicle_types", ' +
       '"vehicles", "vehicle_assignments", "vehicle_documents", ' +
-      '"payment_ledger_entries", "gateway_events" RESTART IDENTITY CASCADE',
+      '"payment_ledger_entries", "wallet_reconciliations", "gateway_events" ' +
+      'RESTART IDENTITY CASCADE',
   );
   // Vehicle types are reference data, like the RBAC roles — except `roles` is
   // not in the TRUNCATE list and `vehicle_types` has to be, because tests create
