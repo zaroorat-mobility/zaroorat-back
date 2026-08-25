@@ -193,11 +193,16 @@ export class LifecycleService {
     }
   }
   /// Not a GPS cross-check — no trip location trail is persisted anywhere in
-  /// this codebase (DriverLocation holds only a driver's current position,
-  /// overwritten on every update; driver_location_history is a raw-SQL
-  /// partitioned table nothing writes to). The one real reference point that
-  /// does exist is the quote this ride was requested against — a driver
-  /// submitting actuals wildly beyond it is rejected rather than trusted.
+  /// this codebase. `DriverLocation` holds only a driver's current position,
+  /// overwritten on every update, and `driver_location_history` does not exist:
+  /// no migration creates it and `to_regclass` returns null, so the schema
+  /// comment naming it describes a table that was never built. The one real
+  /// reference point that does exist is the quote this ride was requested
+  /// against — a driver submitting actuals wildly beyond it is rejected rather
+  /// than trusted.
+  ///
+  /// Duration no longer relies on this bound at all: it is measured from the
+  /// server's own clocks (see `measuredDurationMin`). Distance still does.
   private assertPlausibleTripData(
     request: RideRequest | null,
     actualDistanceKm: number,
@@ -228,6 +233,34 @@ export class LifecycleService {
       }
     }
   }
+  /// Trip duration, measured rather than declared.
+  ///
+  /// `startedAt` is stamped by `startRide` and `completedAt` by `completeRide`,
+  /// both from the server's clock, so elapsed time is a fact the platform
+  /// already owns — it never had to ask the driver's phone for it. It did ask:
+  /// `actualDurationMin` came off the request body and went straight into the
+  /// fare, so a client reporting four times the real duration was paid for four
+  /// times the real duration, bounded only by `assertPlausibleTripData`.
+  ///
+  /// The declared value is still accepted and still cross-checked against the
+  /// quote. It simply no longer decides what anybody is billed.
+  private measuredDurationMin(ride: Ride, completedAt: Date, quotedMin: number | null): number {
+    if (!ride.startedAt) {
+      // Unreachable while IN_PROGRESS is only entered through `startRide`,
+      // which stamps `startedAt` inside the same conditional claim that sets
+      // the status. Falling back to the quote rather than to the client's
+      // figure keeps the billed number server-derived even if that invariant is
+      // ever broken.
+      logger.warn(
+        { rideId: ride.id },
+        '[rides] completed ride had no startedAt; billing the quoted duration',
+      );
+      return quotedMin ?? 0;
+    }
+    const elapsedMs = completedAt.getTime() - ride.startedAt.getTime();
+    return Math.max(0, Math.round(elapsedMs / 60_000));
+  }
+
   async acceptRideRequest(data: {
     requestId: string;
     driverId: string;
@@ -440,6 +473,12 @@ export class LifecycleService {
       );
       const request = await this.requestRepo.findById(ride.requestId, tx);
       this.assertPlausibleTripData(request, actualDistanceKm, actualDurationMin);
+      const completedAt = new Date();
+      const billedDurationMin = this.measuredDurationMin(
+        ride,
+        completedAt,
+        request?.estimatedDurationMin ?? null,
+      );
       const waitingMinutes = ride.waitTimeMin ?? 0;
       // The surge the customer accepted when they booked, not whatever is in
       // force now. `RideRequest.surgeMultiplier` exists precisely to be this
@@ -454,12 +493,11 @@ export class LifecycleService {
       const surgeMultiplier = Number(request?.surgeMultiplier ?? 1);
       const itemizedFare = await this.pricingService.calculateFinalFare({
         actualDistanceKm,
-        actualDurationMin,
+        actualDurationMin: billedDurationMin,
         vehicleTypeId: ride.vehicleTypeId,
         surgeMultiplier,
         waitingMinutes,
       });
-      const completedAt = new Date();
       // BD-5. With the flag off this is byte-identical to before: a cash ride
       // is PAID the moment it ends. With it on, cash waits for someone to say
       // the money changed hands, so it completes PENDING like every other
@@ -474,7 +512,7 @@ export class LifecycleService {
           {
             completedAt,
             actualDistanceKm: new Decimal(actualDistanceKm),
-            actualDurationMin,
+            actualDurationMin: billedDurationMin,
             paymentStatus,
           },
           tx,
@@ -549,7 +587,7 @@ export class LifecycleService {
         status: 'COMPLETED' as RideStatus,
         completedAt,
         actualDistanceKm: new Decimal(actualDistanceKm),
-        actualDurationMin,
+        actualDurationMin: billedDurationMin,
       };
     });
   }

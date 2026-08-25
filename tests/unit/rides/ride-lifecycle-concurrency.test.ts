@@ -478,7 +478,29 @@ describe('Ride lifecycle concurrency', () => {
     seedRide(world, 'IN_PROGRESS');
 
     await world.service.completeRide('ride_1', 'driver_1', 30, 60);
-    assert.equal(world.rides.get('ride_1')?.actualDurationMin, 60);
+    assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '30');
+  });
+
+  /// This assertion used to read `actualDurationMin === 60` — the number the
+  /// driver's client declared. That was the defect, not the contract: the fare
+  /// was computed from a value the client chose. Both ends of a trip are
+  /// stamped by the server, so the duration is now measured and the declared
+  /// figure decides nothing.
+  it('records the duration it measured, not the one the driver declared', async () => {
+    const world = makeWorld();
+    seedRide(world, 'IN_PROGRESS');
+    // A ride that genuinely started 25 minutes ago, reported as 60.
+    const startedAt = new Date(Date.now() - 25 * 60_000);
+    world.rides.set('ride_1', { ...world.rides.get('ride_1'), startedAt });
+
+    await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+
+    const measured = world.rides.get('ride_1')?.actualDurationMin as number;
+    assert.ok(
+      measured >= 24 && measured <= 26,
+      `expected roughly 25 measured minutes, got ${measured}`,
+    );
+    assert.notEqual(measured, 60, 'the declared duration must not be what is stored');
   });
 
   it('rejects a final distance wildly beyond the original quote', async () => {
