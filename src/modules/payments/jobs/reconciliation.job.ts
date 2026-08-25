@@ -1,6 +1,8 @@
 import { DatabaseService } from '@core/database';
 import { RedisService } from '@core/cache/RedisService.js';
 import { PaymentMetrics } from '../metrics/payment.metrics.js';
+import { EventPublisher } from '@core/events';
+import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../events/catalog.js';
 import { logger } from '@shared/logger/index.js';
 import { paymentConfig } from '@config';
 import { Decimal } from '../types/index.js';
@@ -19,6 +21,7 @@ export class ReconciliationJob {
     private readonly db: DatabaseService,
     private readonly redis: RedisService,
     private readonly paymentMetrics: PaymentMetrics,
+    private readonly eventPublisher: EventPublisher,
   ) {}
   async run(): Promise<ReconciliationReport> {
     const lockToken = await this.redis.lock.acquire('job:reconciliation', 60000);
@@ -76,6 +79,12 @@ export class ReconciliationJob {
             },
             'Reconciliation mismatch detected',
           );
+          // A metric moves a dashboard and a log line waits to be read; neither
+          // reaches anything that can act. The catalog has declared this event
+          // since the module was written and nothing ever emitted it, so a
+          // divergence between a balance and the ledger — the one thing this
+          // job exists to find — notified no one.
+          await this.publishMismatch(wallet.id, 'CUSTOMER', stored, computed, ledger.live);
         } else {
           matched++;
         }
@@ -120,6 +129,7 @@ export class ReconciliationJob {
             },
             'Driver wallet reconciliation mismatch detected',
           );
+          await this.publishMismatch(wallet.id, 'DRIVER', wallet.balance, computed, computed);
         } else {
           matched++;
         }
@@ -164,5 +174,28 @@ export class ReconciliationJob {
       else historical = historical.add(signed);
     }
     return { live, historical };
+  }
+
+  /// Published without a transaction on purpose: the job writes one
+  /// `wallet_reconciliations` row per wallet outside any transaction, so there
+  /// is none to join. A mismatch that is recorded but not announced is the
+  /// failure mode this closes, and an outbox row is the only delivery here
+  /// that survives the process dying mid-scan.
+  private async publishMismatch(
+    walletId: string,
+    walletType: 'CUSTOMER' | 'DRIVER',
+    stored: Decimal,
+    computed: Decimal,
+    ledger: Decimal,
+  ): Promise<void> {
+    await this.eventPublisher.publish(
+      paymentEvent(PAYMENT_EVENT_CATALOG.RECONCILIATION_MISMATCH, walletId, {
+        walletId,
+        walletType,
+        stored: stored.toNumber(),
+        computed: computed.toNumber(),
+        ledger: ledger.toNumber(),
+      }),
+    );
   }
 }
