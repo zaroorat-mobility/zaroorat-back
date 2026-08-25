@@ -40,7 +40,7 @@ import {
 } from '../../constants/ride.constants.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { LedgerService } from '@modules/payments/services/ledger/ledger.service.js';
-import type { Ride, RideStatus } from '../../types';
+import type { Ride, RideRequest, RideStatus } from '../../types';
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   ACCEPTED: [
     'DRIVER_ARRIVING',
@@ -198,13 +198,11 @@ export class LifecycleService {
   /// partitioned table nothing writes to). The one real reference point that
   /// does exist is the quote this ride was requested against — a driver
   /// submitting actuals wildly beyond it is rejected rather than trusted.
-  private async assertPlausibleTripData(
-    requestId: string,
+  private assertPlausibleTripData(
+    request: RideRequest | null,
     actualDistanceKm: number,
     actualDurationMin: number,
-    tx: TransactionClient,
-  ): Promise<void> {
-    const request = await this.requestRepo.findById(requestId, tx);
+  ): void {
     const estimatedDistanceKm = request?.estimatedDistanceKm
       ? Number(request.estimatedDistanceKm)
       : null;
@@ -440,12 +438,25 @@ export class LifecycleService {
         'COMPLETED',
         tx,
       );
-      await this.assertPlausibleTripData(ride.requestId, actualDistanceKm, actualDurationMin, tx);
+      const request = await this.requestRepo.findById(ride.requestId, tx);
+      this.assertPlausibleTripData(request, actualDistanceKm, actualDurationMin);
       const waitingMinutes = ride.waitTimeMin ?? 0;
+      // The surge the customer accepted when they booked, not whatever is in
+      // force now. `RideRequest.surgeMultiplier` exists precisely to be this
+      // snapshot; leaving it out let `price()` fall back to its `?? 1` default,
+      // so a ride quoted at 1.8x was invoiced at 1.0x and `RideFare` recorded a
+      // surge of 1 with an amount of 0 — the premium silently vanished from the
+      // customer's bill, the driver's earning and the platform's commission.
+      //
+      // Re-resolving surge here instead would be worse than either: the price
+      // would then depend on when the trip happened to end, which is outside
+      // the customer's control and not what they agreed to.
+      const surgeMultiplier = Number(request?.surgeMultiplier ?? 1);
       const itemizedFare = await this.pricingService.calculateFinalFare({
         actualDistanceKm,
         actualDurationMin,
         vehicleTypeId: ride.vehicleTypeId,
+        surgeMultiplier,
         waitingMinutes,
       });
       const completedAt = new Date();

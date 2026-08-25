@@ -509,4 +509,112 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.ok(new Decimal(first.netPayable).gt(0));
     });
   });
+
+  /// C-2. `RideRequest.surgeMultiplier` is written at booking precisely so the
+  /// price the customer agreed to survives the trip. `completeRide` never read
+  /// it back, so `PricingService.price` fell through to its `?? 1` default and
+  /// a ride quoted at 1.8x was invoiced at 1.0x — the premium vanished from the
+  /// bill, the driver's earning and the platform's commission at once, and
+  /// `RideFare` recorded a surge of 1 with an amount of 0, so nothing in the
+  /// books showed it had ever applied.
+  describe('the surge the customer agreed to (C-2)', () => {
+    async function surgePickup(multiplier: string, vehicleTypeId?: string): Promise<void> {
+      const zoneId = randomUUID();
+      await db().client.$executeRawUnsafe(
+        `INSERT INTO surge_zones (id, city_code, name, boundary, is_active, created_at)
+         VALUES ($1::uuid, 'GLOBAL', 'test-surge',
+                 ST_GeogFromText('SRID=4326;POLYGON((77.50 12.90, 77.70 12.90, 77.70 13.05, 77.50 13.05, 77.50 12.90))'),
+                 true, now())`,
+        zoneId,
+      );
+      await db().client.surgeWindow.create({
+        data: {
+          zoneId,
+          multiplier: new Decimal(multiplier),
+          startsAt: new Date(Date.now() - 60_000),
+          endsAt: new Date(Date.now() + 3_600_000),
+          isActive: true,
+          ...(vehicleTypeId !== undefined ? { vehicleTypeId } : {}),
+        },
+      });
+    }
+
+    it('invoices a surged ride at the multiplier quoted at booking', async () => {
+      const world = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      await surgePickup('1.80');
+
+      const { rideId } = await flowCompleteRide(app, world, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+
+      const request = await db().client.rideRequest.findFirstOrThrow({
+        where: { rides: { some: { id: rideId } } },
+      });
+      assert.equal(request.surgeMultiplier.toString(), '1.8', 'the quote carried the surge');
+
+      const fare = await db().client.rideFare.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(
+        fare.surgeMultiplier.toString(),
+        '1.8',
+        'and the invoice charges the same multiplier, not the 1.0 default',
+      );
+      assert.ok(
+        fare.surgeAmount.gt(0),
+        `a surged ride must carry a surge amount, got ${fare.surgeAmount.toString()}`,
+      );
+    });
+
+    /// The premium is not cosmetic: it has to reach the two parties who split
+    /// the fare, or the platform has quietly absorbed it.
+    it('carries the premium into the driver earning and the commission', async () => {
+      const plain = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      const flat = await flowCompleteRide(app, plain, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+      const flatFare = await db().client.rideFare.findUniqueOrThrow({
+        where: { rideId: flat.rideId },
+      });
+
+      await resetState();
+      const surged = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      await surgePickup('1.80');
+      const peak = await flowCompleteRide(app, surged, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+      const peakFare = await db().client.rideFare.findUniqueOrThrow({
+        where: { rideId: peak.rideId },
+      });
+
+      assert.ok(
+        peakFare.totalFare.gt(flatFare.totalFare),
+        `surged ${peakFare.totalFare} must exceed flat ${flatFare.totalFare}`,
+      );
+      assert.ok(
+        peakFare.driverEarning.gt(flatFare.driverEarning),
+        'the driver shares in the premium',
+      );
+      assert.ok(
+        peakFare.platformCommission.gt(flatFare.platformCommission),
+        'and so does the platform',
+      );
+    });
+
+    it('leaves a ride booked outside any surge window at 1.0', async () => {
+      const world = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      const { rideId } = await flowCompleteRide(app, world, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+      const fare = await db().client.rideFare.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(fare.surgeMultiplier.toString(), '1', 'no surge zone means no surge');
+      assert.equal(fare.surgeAmount.toString(), '0');
+    });
+  });
 });

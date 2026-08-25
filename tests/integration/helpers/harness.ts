@@ -52,6 +52,11 @@ function assertTestDatabase(): void {
 
 export async function resetState(): Promise<void> {
   assertTestDatabase();
+  // `surge_zones` is here for the same reason as the two below, plus one of its
+  // own: a leaked surge zone does not merely accumulate rows, it silently
+  // multiplies the fare of every ride any later suite books near that point.
+  // CASCADE takes `surge_windows` with it.
+  //
   // `wallet_reconciliations` is in the list for the same reason
   // `payment_ledger_entries` is: its wallet id is a plain uuid column with no
   // foreign key, so TRUNCATE "users" CASCADE never reaches it. Left out, the
@@ -64,8 +69,8 @@ export async function resetState(): Promise<void> {
       '"account_deletion_requests", ' +
       '"files", "otp_verifications", "outbox_events", "vehicle_types", ' +
       '"vehicles", "vehicle_assignments", "vehicle_documents", ' +
-      '"payment_ledger_entries", "wallet_reconciliations", "gateway_events" ' +
-      'RESTART IDENTITY CASCADE',
+      '"payment_ledger_entries", "wallet_reconciliations", "gateway_events", ' +
+      '"surge_zones" RESTART IDENTITY CASCADE',
   );
   // Vehicle types are reference data, like the RBAC roles — except `roles` is
   // not in the TRUNCATE list and `vehicle_types` has to be, because tests create
