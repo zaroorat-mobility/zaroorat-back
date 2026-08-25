@@ -3,6 +3,42 @@ import { numericEnv } from '../env/numeric.js';
 export type PaymentGatewayName = 'mock' | 'razorpay' | 'stripe';
 const GATEWAYS: readonly PaymentGatewayName[] = ['mock', 'razorpay', 'stripe'];
 const LIVE_GATEWAYS: readonly PaymentGatewayName[] = ['razorpay', 'stripe'];
+
+/// Gateways whose provider class is a placeholder rather than an integration.
+///
+/// `MockGatewayProvider` is honestly named, but `RazorpayGatewayProvider` and
+/// `StripeGatewayProvider` are not: both mint a plausible-looking id and return
+/// `SUCCEEDED` unconditionally, and neither makes a single network call. Nothing
+/// downstream can tell them from a real gateway, so a deployment that selected
+/// one would record every card and UPI charge as collected, credit the driver,
+/// and settle the rider's obligation, without money moving.
+///
+/// **Remove a name from this list in the same change that gives its provider a
+/// real implementation.** Adding a class is not enough; this list is what
+/// decides whether the platform is allowed to take money with it.
+const UNIMPLEMENTED_GATEWAYS: readonly PaymentGatewayName[] = ['mock', 'razorpay', 'stripe'];
+
+/// Refuses, at boot, to run a money-taking environment on a placeholder gateway.
+///
+/// Deliberately has no override. An escape hatch here is precisely how a
+/// placeholder reaches production: the one time someone needs staging up in a
+/// hurry becomes the permanent configuration. Development and test are
+/// unaffected — the mock gateway is what the whole test suite runs against.
+///
+/// Exported and pure so it can be tested against every environment: the running
+/// process reads `APP_ENV` once at import, so a test cannot reach this branch by
+/// setting an environment variable.
+export function assertGatewayImplemented(gateway: PaymentGatewayName, environment: string): void {
+  if (environment !== 'production' && environment !== 'staging') return;
+  if (!UNIMPLEMENTED_GATEWAYS.includes(gateway)) return;
+  throw new Error(
+    `PAYMENT_DEFAULT_GATEWAY=${gateway} cannot be used in ${environment}: its provider is a ` +
+      'placeholder that performs no network call and reports every charge as successful. ' +
+      'Running it here would report money as collected that was never collected. ' +
+      'Implement the provider and remove it from UNIMPLEMENTED_GATEWAYS in ' +
+      'src/config/payment/payment.config.ts before deploying to this environment.',
+  );
+}
 export const MOCK_WEBHOOK_SECRET = 'mock-gateway-webhook-secret-not-for-live-use';
 export interface PaymentConfig {
   defaultCurrency: string;
@@ -45,11 +81,15 @@ function readGateway(): PaymentGatewayName {
   const raw = process.env.PAYMENT_DEFAULT_GATEWAY;
   const environment = config.app.environment;
   if (raw == null || raw === '') {
-    return environment === 'production' || environment === 'staging' ? 'razorpay' : 'mock';
+    const implied: PaymentGatewayName =
+      environment === 'production' || environment === 'staging' ? 'razorpay' : 'mock';
+    assertGatewayImplemented(implied, environment);
+    return implied;
   }
   if (!GATEWAYS.includes(raw as PaymentGatewayName)) {
     throw new Error(`PAYMENT_DEFAULT_GATEWAY must be one of ${GATEWAYS.join(', ')}`);
   }
+  assertGatewayImplemented(raw as PaymentGatewayName, environment);
   return raw as PaymentGatewayName;
 }
 function readWebhookSecret(gateway: PaymentGatewayName): string {

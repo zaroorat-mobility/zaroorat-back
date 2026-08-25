@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it, afterEach } from 'node:test';
 
 import {
+  assertGatewayImplemented,
   getPaymentConfig,
   MOCK_WEBHOOK_SECRET,
 } from '../../../src/config/payment/payment.config.js';
@@ -191,5 +192,65 @@ describe('Payment configuration — ledger cut-over (BD-7)', () => {
     const before = Date.now();
     const cutover = getPaymentConfig().ledgerCutoverAt.getTime();
     assert.ok(cutover >= before - 1000 && cutover <= Date.now() + 1000);
+  });
+});
+
+/// C-1. Every provider in `services/gateway/` is a placeholder: none makes a
+/// network call and all report `SUCCEEDED` unconditionally. `readGateway` used
+/// to *default* to `razorpay` in production and staging, so a deployment that
+/// simply never set `PAYMENT_DEFAULT_GATEWAY` would report every card and UPI
+/// charge as collected without money moving.
+///
+/// Tested against the pure guard rather than through `getPaymentConfig()`,
+/// because `config.app.environment` is read once when the process imports its
+/// configuration — no environment variable set inside a test can reach the
+/// production branch.
+describe('Payment configuration — placeholder gateways cannot take money (C-1)', () => {
+  const MONEY_TAKING = ['production', 'staging'] as const;
+  const SAFE = ['development', 'test'] as const;
+
+  for (const environment of MONEY_TAKING) {
+    for (const gateway of ['mock', 'razorpay', 'stripe'] as const) {
+      it(`refuses ${gateway} in ${environment}`, () => {
+        assert.throws(
+          () => assertGatewayImplemented(gateway, environment),
+          /placeholder that performs no network call/,
+          `${gateway} must not be selectable in ${environment}`,
+        );
+      });
+    }
+  }
+
+  for (const environment of SAFE) {
+    it(`still allows the mock gateway in ${environment}`, () => {
+      assert.doesNotThrow(() => assertGatewayImplemented('mock', environment));
+    });
+  }
+
+  it('names the environment and the variable, so the failure is actionable', () => {
+    assert.throws(
+      () => assertGatewayImplemented('razorpay', 'production'),
+      (err: unknown) => {
+        const message = (err as Error).message;
+        assert.match(message, /PAYMENT_DEFAULT_GATEWAY=razorpay/);
+        assert.match(message, /production/);
+        assert.match(message, /UNIMPLEMENTED_GATEWAYS/);
+        return true;
+      },
+    );
+  });
+
+  /// The unset case is the one that actually shipped: no variable set, and
+  /// `readGateway` silently implied `razorpay`.
+  it('guards the implied default, not just an explicit value', () => {
+    assert.throws(() => assertGatewayImplemented('razorpay', 'production'));
+  });
+
+  /// Guards the guard. If someone implements a provider and removes it from
+  /// UNIMPLEMENTED_GATEWAYS, this test is what tells them the whole test suite
+  /// still runs on the mock — it must keep passing, and it only can while the
+  /// mock stays listed.
+  it('keeps the mock listed, because the suite runs on it', () => {
+    assert.throws(() => assertGatewayImplemented('mock', 'production'));
   });
 });
