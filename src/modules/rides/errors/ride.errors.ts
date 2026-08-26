@@ -146,3 +146,14 @@ export class RideOfferDriverMismatchError extends RideError {
     this.name = 'RideOfferDriverMismatchError';
   }
 }
+/// A driver accepting a request they themselves booked. Never a real trip: it
+/// mints a completed ride, a driver earning and a commission entry out of a
+/// journey nobody took. Given its own code rather than folded into
+/// `DRIVER_NOT_AVAILABLE` because the two want opposite responses — a busy
+/// driver is a race worth retrying, this is an attempt worth alerting on.
+export class SelfRideNotAllowedError extends RideError {
+  constructor() {
+    super('You cannot accept a ride you requested yourself', 'SELF_RIDE_NOT_ALLOWED', 403);
+    this.name = 'SelfRideNotAllowedError';
+  }
+}

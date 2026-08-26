@@ -4,7 +4,13 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
-import { grantRole, makeAssignedVehicle, makeDriver, makeVehicleType } from './helpers/fixtures.js';
+import {
+  completeProfile,
+  grantRole,
+  makeAssignedVehicle,
+  makeDriver,
+  makeVehicleType,
+} from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { OutboxRelay } from '../../src/core/events/OutboxRelay.js';
@@ -955,6 +961,53 @@ describe('ride dispatch, offers and assignment (integration)', () => {
         headers: driver.authHeader,
       });
       assert.equal(offers.json().data.length, 1);
+    });
+  });
+
+  /// A driver holds the `customer` role too — `ensureDefaultRole` grants it on
+  /// every phone login — so nothing on the booking route distinguishes them
+  /// from a rider, and dispatch ranks their own record as the nearest driver to
+  /// their own pickup point. Both halves are legitimate on their own; the
+  /// combination lets one account manufacture a completed ride, a fare, a driver
+  /// earning and a commission entry for a journey nobody took.
+  describe('a driver may not ride with themselves (H-1)', () => {
+    it('offers the request back to the driver who booked it, then refuses the accept', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `SELF_${randomUUID().slice(0, 6)}` });
+      const driver = await onlineDriver('+919876730101', vehicleTypeId);
+      // Booking needs a profile name, same as any rider's would.
+      await completeProfile(driver.userId, 'Dee', 'Driver');
+
+      // The same token books the ride. This is the step no role gate can catch.
+      const { requestId, offers } = await requestRide(driver, vehicleTypeId);
+      const own = offerOf(offers, driver);
+      assert.ok(own, 'dispatch does offer a driver their own request — accept is the gate');
+
+      const accepted = await accept(driver, requestId);
+      assert.equal(accepted.statusCode, 403, accepted.payload);
+      assert.equal(accepted.json().error.code, 'SELF_RIDE_NOT_ALLOWED');
+
+      // Nothing may have been minted, and the request must stay open for a real
+      // driver rather than being burnt by the attempt.
+      assert.equal(await db().client.ride.count({ where: { requestId } }), 0);
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.equal(request.status, 'SEARCHING');
+      assert.equal(await responseOf(own.id), 'PENDING');
+    });
+
+    it('still lets a different driver accept that same request', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `SELF2_${randomUUID().slice(0, 6)}` });
+      const booking = await onlineDriver('+919876730102', vehicleTypeId);
+      const other = await onlineDriver('+919876730103', vehicleTypeId);
+      await completeProfile(booking.userId, 'Dee', 'Driver');
+
+      const { requestId, offers } = await requestRide(booking, vehicleTypeId);
+      assert.equal((await accept(booking, requestId)).statusCode, 403);
+
+      const accepted = await accept(other, requestId);
+      assert.equal(accepted.statusCode, 200, accepted.payload);
+      const ride = await db().client.ride.findFirstOrThrow({ where: { requestId } });
+      assert.equal(ride.driverId, other.driverId);
+      assert.equal(await responseOf(offerOf(offers, other).id), 'ACCEPTED');
     });
   });
 });

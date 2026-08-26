@@ -9,6 +9,7 @@ import {
   InvalidRideStateTransitionError,
   RideDriverMismatchError,
   RideRequestAlreadyMatchedError,
+  SelfRideNotAllowedError,
 } from '../../../src/modules/rides/errors/ride.errors.js';
 
 function makeWorld() {
@@ -106,6 +107,16 @@ function makeWorld() {
     async updateStatus(driverId: string, status: string) {
       driverStatuses.push({ driverId, status });
       driverStatusById.set(driverId, status);
+    },
+  };
+
+  // Accepting now checks who owns the driver record, so that a driver cannot
+  // accept a request they booked themselves. Every driver in this file maps to
+  // a distinct user id; a test that wants the self-accept case seeds the
+  // matching `customerId` on the request.
+  const driverRepository = {
+    async findById(driverId: string) {
+      return { id: driverId, userId: `user_of_${driverId}` };
     },
   };
 
@@ -210,6 +221,7 @@ function makeWorld() {
       },
     } as never,
     driverStatusRepository as never,
+    driverRepository as never,
     userRepository as never,
     notificationService as never,
     vehicleRepository as never,
@@ -304,6 +316,37 @@ describe('Ride lifecycle concurrency', () => {
     assert.equal(lost.length, 1);
     assert.ok((lost[0] as PromiseRejectedResult).reason instanceof RideRequestAlreadyMatchedError);
     assert.equal(world.rides.size, 1, 'only one ride row may exist for one request');
+  });
+
+  /// A driver holds the `customer` role like everybody else — `ensureDefaultRole`
+  /// grants it on every phone login — so nothing on the booking route can stop
+  /// one from requesting a ride, and dispatch will happily offer that request
+  /// back to them as the nearest online driver to their own pickup point.
+  /// Accepting is where it has to be refused, because accepting is what mints
+  /// the ride, the fare and the driver earning.
+  it('refuses a driver accepting the request they booked themselves', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'user_of_d1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+    world.offer('req_1', 'd1');
+
+    await assert.rejects(
+      world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v1' }),
+      SelfRideNotAllowedError,
+    );
+    assert.equal(world.rides.size, 0, 'no ride may be created');
+    assert.equal(world.fares.length, 0);
+    assert.equal(
+      world.requests.get('req_1')?.status,
+      'SEARCHING',
+      'the request must stay open for a real driver',
+    );
   });
 
   it('accepting a request resolves its offers and puts the driver ON_TRIP', async () => {

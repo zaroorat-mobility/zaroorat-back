@@ -11,6 +11,7 @@ import { PricingService } from '@modules/pricing';
 import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
+import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { NotificationService } from '@modules/notifications';
 import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
@@ -30,6 +31,7 @@ import {
   ImplausibleTripDataError,
   RideOfferNotFoundError,
   RideOfferNotActionableError,
+  SelfRideNotAllowedError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import {
@@ -86,6 +88,7 @@ export class LifecycleService {
     private readonly cancellationService: CancellationService,
     private readonly ledgerService: LedgerService,
     private readonly driverStatusRepository: DriverStatusRepository,
+    private readonly driverRepository: DriverRepository,
     private readonly userRepository: UserRepository,
     private readonly notificationService: NotificationService,
     private readonly vehicleRepository: VehicleRepository,
@@ -273,6 +276,19 @@ export class LifecycleService {
       const request = await this.requestRepo.lockForUpdate(data.requestId, tx);
       if (!request) throw new RideNotFoundError(data.requestId);
       await this.assertOfferActionable(data.requestId, data.driverId, tx);
+      // A driver must not accept a request they booked themselves. Nothing
+      // upstream stops it: `ensureDefaultRole` grants the `customer` role to
+      // every phone login, drivers included, so no role gate on the booking
+      // route can tell the two apart — and dispatch ranks an online driver's own
+      // record as the nearest candidate to their own pickup point, so the offer
+      // arrives unprompted. The result is a ride, a fare, a driver earning and a
+      // commission entry for a journey nobody took. Checked here rather than in
+      // matching because this is where a ride is actually created: every path
+      // that mints one — first offer, timeout redispatch, rejection redispatch —
+      // comes through this transaction.
+      const acceptingDriver = await this.driverRepository.findById(data.driverId, tx);
+      if (!acceptingDriver) throw new DriverNotAvailableError('Driver record not found');
+      if (acceptingDriver.userId === request.customerId) throw new SelfRideNotAllowedError();
       const existingDriverRide = await this.rideRepo.findActiveByDriver(data.driverId, tx);
       if (existingDriverRide) {
         throw new DriverNotAvailableError('Driver already has an active ride in progress');
