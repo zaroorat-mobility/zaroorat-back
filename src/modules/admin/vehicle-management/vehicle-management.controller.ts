@@ -3,9 +3,42 @@ import { callerId } from '@core/auth';
 import { VehicleVerificationService } from '@modules/vehicles/services/vehicle-verification.service.js';
 import { reviewVehicleSchema } from '@modules/vehicles/schemas/vehicle.schemas.js';
 import { toVehicleView } from '@modules/vehicles/controllers/vehicle.controller.js';
+import { AdminVehicleService } from './vehicle.service.js';
+import {
+  flagRenewalBodySchema,
+  listVehiclesQuerySchema,
+  vehicleIdParamSchema,
+} from './vehicle.schemas.js';
 
 export class AdminVehicleManagementController {
-  constructor(private readonly vehicleVerificationService: VehicleVerificationService) {}
+  constructor(
+    private readonly vehicleVerificationService: VehicleVerificationService,
+    private readonly adminVehicleService: AdminVehicleService,
+  ) {}
+
+  async list(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = listVehiclesQuerySchema.parse(req.query);
+    const result = await this.adminVehicleService.list(query);
+    reply.send(result);
+  }
+
+  async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = vehicleIdParamSchema.parse(req.params);
+    const vehicle = await this.adminVehicleService.getById(id);
+    reply.send({ data: vehicle });
+  }
+
+  async flagForRenewal(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = vehicleIdParamSchema.parse(req.params);
+    const body = flagRenewalBodySchema.parse(req.body ?? {});
+    const actorId = callerId(req);
+    const vehicle = await this.adminVehicleService.flagForRenewal(id, actorId, body.notes);
+    req.log.warn(
+      { vehicleId: id, actorUserId: actorId },
+      '[admin-vehicles] vehicle flagged for renewal',
+    );
+    reply.send({ data: vehicle });
+  }
 
   async getForReview(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as { id: string };

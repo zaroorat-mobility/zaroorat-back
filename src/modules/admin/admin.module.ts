@@ -9,10 +9,13 @@ import {
 import {
   driverManagementRoutes,
   AdminDriverManagementController,
+  AdminDriverService,
+  AdminApplicationService,
 } from './driver-management/index.js';
 import {
   vehicleManagementRoutes,
   AdminVehicleManagementController,
+  AdminVehicleService,
 } from './vehicle-management/index.js';
 import {
   paymentManagementRoutes,
@@ -38,7 +41,10 @@ export function registerAdminModule(container: AwilixContainer): void {
   container.register({
     adminSurgeService: asClass(AdminSurgeService).singleton(),
     adminSurgeController: asClass(AdminSurgeController).singleton(),
+    adminDriverService: asClass(AdminDriverService).singleton(),
+    adminApplicationService: asClass(AdminApplicationService).singleton(),
     adminDriverManagementController: asClass(AdminDriverManagementController).singleton(),
+    adminVehicleService: asClass(AdminVehicleService).singleton(),
     adminVehicleManagementController: asClass(AdminVehicleManagementController).singleton(),
     adminPaymentManagementController: asClass(AdminPaymentManagementController).singleton(),
     adminStaffService: asClass(AdminStaffService).singleton(),

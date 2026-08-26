@@ -273,7 +273,7 @@ No test was deleted, skipped, or weakened to obtain these results.
 | `support`            | 3 — `rides:read_any`, `safety:read`, `support:read`                 |
 | `customer`, `driver` | 0 — ordinary principals; access is by **ownership**, not capability |
 
-`finance` deliberately holds neither `drivers:verify` nor `drivers:suspend`: finance moves money, it does not decide who may carry passengers. Asserted in both directions by integration tests.
+`finance` deliberately holds neither `drivers:verify` nor `drivers:write`: finance moves money, it does not decide who may carry passengers. Asserted in both directions by integration tests.
 
 The seed converges rather than only adding — grants no longer in the declared map are revoked, so a capability can actually be taken away.
 

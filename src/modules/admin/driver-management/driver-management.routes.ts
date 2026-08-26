@@ -13,22 +13,39 @@ export async function adminDriverRoutes(fastify: FastifyInstance): Promise<void>
   const controller = container.resolve<AdminDriverManagementController>(
     'adminDriverManagementController',
   );
+  const canRead = { preHandler: fastify.authorize({ permissions: ['drivers:read'] }) };
+  const canVerify = { preHandler: fastify.authorize({ permissions: ['drivers:verify'] }) };
+  const canWrite = { preHandler: fastify.authorize({ permissions: ['drivers:write'] }) };
 
-  fastify.post(
-    '/drivers/:driverId/documents/:documentId/review',
-    { preHandler: fastify.authorize({ permissions: ['drivers:verify'] }) },
-    (req, reply) => controller.reviewDocument(req, reply),
+  fastify.get('/applications', canRead, (req, reply) => controller.listApplications(req, reply));
+  fastify.get('/applications/:id', canRead, (req, reply) =>
+    controller.getApplicationById(req, reply),
+  );
+  fastify.post('/applications/:id/approve', canVerify, (req, reply) =>
+    controller.approveApplication(req, reply),
+  );
+  fastify.post('/applications/:id/reject', canVerify, (req, reply) =>
+    controller.rejectApplication(req, reply),
+  );
+  fastify.post('/applications/:id/request-resubmission', canVerify, (req, reply) =>
+    controller.requestApplicationResubmission(req, reply),
+  );
+  fastify.post('/applications/:id/documents/:documentId/review', canVerify, (req, reply) =>
+    controller.reviewApplicationDocument(req, reply),
   );
 
-  fastify.post(
-    '/drivers/:id/verify',
-    { preHandler: fastify.authorize({ permissions: ['drivers:verify'] }) },
-    (req, reply) => controller.reviewVerification(req, reply),
+  fastify.get('/drivers', canRead, (req, reply) => controller.list(req, reply));
+  fastify.get('/drivers/:id', canRead, (req, reply) => controller.getById(req, reply));
+
+  fastify.post('/drivers/:driverId/documents/:documentId/review', canVerify, (req, reply) =>
+    controller.reviewDocument(req, reply),
   );
 
-  fastify.post(
-    '/drivers/:id/suspend',
-    { preHandler: fastify.authorize({ permissions: ['drivers:suspend'] }) },
-    (req, reply) => controller.suspend(req, reply),
+  fastify.post('/drivers/:id/verify', canVerify, (req, reply) =>
+    controller.reviewVerification(req, reply),
   );
+
+  fastify.post('/drivers/:id/suspend', canWrite, (req, reply) => controller.suspend(req, reply));
+  fastify.post('/drivers/:id/block', canWrite, (req, reply) => controller.block(req, reply));
+  fastify.post('/drivers/:id/activate', canWrite, (req, reply) => controller.activate(req, reply));
 }

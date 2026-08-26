@@ -5,9 +5,104 @@ import {
   reviewDriverDocumentSchema,
   reviewVerificationSchema,
 } from '@modules/drivers/schemas/driver.schemas.js';
+import { AdminDriverService } from './driver.service.js';
+import { AdminApplicationService } from './application.service.js';
+import {
+  driverIdParamSchema,
+  listDriversQuerySchema,
+  suspendDriverBodySchema,
+} from './driver.schemas.js';
+import {
+  applicationDocumentParamSchema,
+  applicationIdParamSchema,
+  applicationNotesBodySchema,
+  listApplicationsQuerySchema,
+} from './application.schemas.js';
 
 export class AdminDriverManagementController {
-  constructor(private readonly driverService: DriverService) {}
+  constructor(
+    private readonly driverService: DriverService,
+    private readonly adminDriverService: AdminDriverService,
+    private readonly adminApplicationService: AdminApplicationService,
+  ) {}
+
+  async list(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = listDriversQuerySchema.parse(req.query);
+    const result = await this.adminDriverService.list(query);
+    reply.send(result);
+  }
+
+  async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = driverIdParamSchema.parse(req.params);
+    const driver = await this.adminDriverService.getById(id);
+    reply.send({ data: driver });
+  }
+
+  async listApplications(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = listApplicationsQuerySchema.parse(req.query);
+    const result = await this.adminApplicationService.list(query);
+    reply.send(result);
+  }
+
+  async getApplicationById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = applicationIdParamSchema.parse(req.params);
+    const application = await this.adminApplicationService.getById(id);
+    reply.send({ data: application });
+  }
+
+  async approveApplication(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = applicationIdParamSchema.parse(req.params);
+    const body = applicationNotesBodySchema.parse(req.body ?? {});
+    const actorId = callerId(req);
+    const application = await this.adminApplicationService.approve(id, actorId, body.notes);
+    req.log.info(
+      { applicationId: id, actorUserId: actorId },
+      '[admin-applications] application approved',
+    );
+    reply.send({ data: application });
+  }
+
+  async rejectApplication(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = applicationIdParamSchema.parse(req.params);
+    const body = applicationNotesBodySchema.parse(req.body ?? {});
+    const actorId = callerId(req);
+    const application = await this.adminApplicationService.reject(id, actorId, body.notes);
+    req.log.info(
+      { applicationId: id, actorUserId: actorId },
+      '[admin-applications] application rejected',
+    );
+    reply.send({ data: application });
+  }
+
+  async requestApplicationResubmission(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = applicationIdParamSchema.parse(req.params);
+    const body = applicationNotesBodySchema.parse(req.body ?? {});
+    const actorId = callerId(req);
+    const application = await this.adminApplicationService.requestResubmission(
+      id,
+      actorId,
+      body.notes,
+    );
+    req.log.info(
+      { applicationId: id, actorUserId: actorId },
+      '[admin-applications] resubmission requested',
+    );
+    reply.send({ data: application });
+  }
+
+  async reviewApplicationDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id, documentId } = applicationDocumentParamSchema.parse(req.params);
+    const body = reviewDriverDocumentSchema.parse(req.body);
+    const actorId = callerId(req);
+    const application = await this.adminApplicationService.reviewDocument(
+      id,
+      documentId,
+      body.status,
+      actorId,
+      body.rejectionReason,
+    );
+    reply.send({ data: application });
+  }
 
   async reviewDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { driverId, documentId } = req.params as {
@@ -52,15 +147,44 @@ export class AdminDriverManagementController {
   }
 
   async suspend(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
-    const { isSuspended } = req.body as { isSuspended: boolean };
-
-    await this.driverService.status.setSuspended(id, isSuspended);
+    const { id } = driverIdParamSchema.parse(req.params);
+    const body = suspendDriverBodySchema.parse(req.body ?? {});
+    const actorId = callerId(req);
+    const driver =
+      body.isSuspended === false
+        ? await this.adminDriverService.activate(id, actorId, body.notes)
+        : await this.adminDriverService.suspend(id, actorId, body.notes);
 
     req.log.warn(
-      { driverId: id, isSuspended, actorUserId: callerId(req) },
+      { driverId: id, isSuspended: body.isSuspended !== false, actorUserId: actorId },
       '[admin-drivers] suspension state changed by operator',
     );
-    reply.send({ data: { success: true } });
+    reply.send({ data: driver });
+  }
+
+  async block(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = driverIdParamSchema.parse(req.params);
+    const body = suspendDriverBodySchema.parse(req.body ?? {});
+    const actorId = callerId(req);
+    const driver = await this.adminDriverService.block(id, actorId, body.notes);
+
+    req.log.warn(
+      { driverId: id, actorUserId: actorId },
+      '[admin-drivers] driver blocked by operator',
+    );
+    reply.send({ data: driver });
+  }
+
+  async activate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = driverIdParamSchema.parse(req.params);
+    const body = suspendDriverBodySchema.parse(req.body ?? {});
+    const actorId = callerId(req);
+    const driver = await this.adminDriverService.activate(id, actorId, body.notes);
+
+    req.log.warn(
+      { driverId: id, isSuspended: false, actorUserId: actorId },
+      '[admin-drivers] driver reactivated by operator',
+    );
+    reply.send({ data: driver });
   }
 }
