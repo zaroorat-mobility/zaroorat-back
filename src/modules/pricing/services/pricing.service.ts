@@ -1,4 +1,5 @@
 import { pricingConfig, type PricingRateCard } from '@config';
+import { GLOBAL_PRICING_CITY_CODE } from '../constants.js';
 import type { PricingRule } from '../../../generated/prisma/index.js';
 import { PricingRuleRepository } from '../repositories/pricing-rule.repository.js';
 import { calculateHaversineDistanceKm } from '../utils/distance.util.js';
@@ -47,9 +48,26 @@ export class PricingService {
       rule = await this.pricingRuleRepository.findActiveRule(vehicleTypeId, cityCode);
     }
     if (!rule) {
-      rule = await this.pricingRuleRepository.findActiveRule(vehicleTypeId, 'GLOBAL');
+      rule = await this.pricingRuleRepository.findActiveRule(
+        vehicleTypeId,
+        GLOBAL_PRICING_CITY_CODE,
+      );
     }
     return this.rateCardFor(rule);
+  }
+
+  /// Rate cards for many categories at once, for the catalog. A type with no
+  /// rule of its own gets `rateCardFor(null)` — the default card — which is
+  /// exactly what `rateCardForTypeId` would have priced its rides at, so the
+  /// catalog cannot advertise one number and the quote charge another.
+  async rateCardsForTypeIds(
+    vehicleTypeIds: readonly string[],
+    cityCode = GLOBAL_PRICING_CITY_CODE,
+  ): Promise<Map<string, PricingRateCard>> {
+    const rules = await this.pricingRuleRepository.findGlobalRules(vehicleTypeIds, cityCode);
+    return new Map(
+      vehicleTypeIds.map((id) => [id, this.rateCardFor(rules.get(id) ?? null)] as const),
+    );
   }
 
   private price(

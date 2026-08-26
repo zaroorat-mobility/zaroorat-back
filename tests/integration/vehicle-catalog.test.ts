@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
 import { grantRole, makeDriver, makeVehicleType } from './helpers/fixtures.js';
+import { seedVehicleTypes } from '../../prisma/seed/shared/vehicle-types.js';
 
 const CUSTOMER = '+919876710001';
 const DRIVER = '+919876710002';
@@ -299,6 +300,91 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
       assert.equal(response.statusCode, 409, response.payload);
       assert.equal(response.json().error.code, 'VEHICLE_TYPE_INACTIVE');
       assert.equal(await db().client.vehicle.count(), 0);
+    });
+  });
+
+  /// Every category was priced identically for as long as `pricing_rules` had
+  /// no rows in it — which was always, because nothing in the codebase wrote
+  /// any. `rateCardForTypeId` found nothing, fell back to
+  /// `pricingConfig.defaultRateCard`, and billed a bike as an economy cab.
+  describe('each category is priced on its own rate card (M-1)', () => {
+    const LADDER = ['BIKE', 'AUTO', 'CAB_ECONOMY', 'CAB_PREMIUM'];
+
+    it('seeds one GLOBAL rule per category, and re-seeding does not duplicate them', async () => {
+      const rules = await db().client.pricingRule.findMany({ where: { cityCode: 'GLOBAL' } });
+      assert.equal(rules.length, LADDER.length);
+
+      // `resetState` re-seeds after every test, so this table is written
+      // repeatedly against a database that already has it. `pricing_rules` has
+      // no unique key to lean on, so idempotency is the seed's own job.
+      await seedVehicleTypes(db().client);
+      const after = await db().client.pricingRule.findMany({ where: { cityCode: 'GLOBAL' } });
+      assert.equal(after.length, LADDER.length, 're-seeding must not stack duplicate rules');
+    });
+
+    it('quotes the whole ladder in ascending order, not four identical fares', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+
+      const options = (await post('/api/v1/rides/quote', customer, { ...PICKUP, ...DROP })).json()
+        .data.options as { vehicleTypeCode: string; estimatedFare: number }[];
+
+      const fares = LADDER.map((code) => {
+        const option = options.find((entry) => entry.vehicleTypeCode === code);
+        assert.ok(option, `no quote for ${code}`);
+        return option.estimatedFare;
+      });
+      assert.deepEqual(
+        fares,
+        [...fares].sort((a, b) => a - b),
+        `expected an ascending ladder, got ${LADDER.map((c, i) => `${c}=${fares[i]}`).join(', ')}`,
+      );
+      assert.equal(new Set(fares).size, fares.length, 'four categories, four different prices');
+    });
+
+    it('advertises the same per-km rate in the catalog that it charges in a quote', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+      const types = (await get('/api/v1/vehicle-types', customer)).json().data as {
+        id: string;
+        code: string;
+        perKmRate: number;
+      }[];
+      const premium = types.find((type) => type.code === 'CAB_PREMIUM')!;
+      const bike = types.find((type) => type.code === 'BIKE')!;
+      assert.ok(premium.perKmRate > bike.perKmRate, 'the catalog must show the ladder too');
+
+      // The catalog reads its numbers through the same `rateCardFor` the quote
+      // prices with, so the two cannot drift into advertising one rate and
+      // billing another.
+      const breakdown = (
+        await post('/api/v1/rides/quote', customer, {
+          ...PICKUP,
+          ...DROP,
+          vehicleTypeId: premium.id,
+        })
+      ).json().data.options[0].fareBreakdown as {
+        estimatedDistanceKm: number;
+        distanceFare: number;
+      };
+      assert.equal(
+        breakdown.distanceFare,
+        Math.round(breakdown.estimatedDistanceKm * premium.perKmRate * 100) / 100,
+      );
+    });
+
+    it('still prices a category with no rule of its own at the default card', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+      const orphanId = await makeVehicleType({ code: `ORPHAN_${randomUUID().slice(0, 6)}` });
+
+      const option = (
+        await post('/api/v1/rides/quote', customer, {
+          ...PICKUP,
+          ...DROP,
+          vehicleTypeId: orphanId,
+        })
+      ).json().data.options[0] as { estimatedFare: number };
+      // Not an error and not zero: the documented fallback still applies, which
+      // is what every throwaway type in every other suite relies on.
+      assert.ok(option.estimatedFare > 0);
     });
   });
 });

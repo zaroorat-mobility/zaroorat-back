@@ -93,7 +93,15 @@ export class RideRequestService {
 
     const options: QuoteOption[] = [];
     for (const vehicleType of vehicleTypes) {
-      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id, params.cityId);
+      // Deliberately not passed a city: `rateCardForTypeId`'s second argument is
+      // a `PricingRule.cityCode` — a short string like 'BLR' — and `params.cityId`
+      // is a `City` UUID. Feeding one to the other could never match, so the
+      // city-specific lookup was a guaranteed miss that fell through to GLOBAL
+      // and cost a query to do it. `City.code` makes the translation available
+      // whenever per-city rate cards are actually wanted; until something writes
+      // one, resolving it here would be a second query for a table that has only
+      // GLOBAL rows in it.
+      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id);
       const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
         params.pickupLat,
         params.pickupLng,
@@ -109,7 +117,7 @@ export class RideRequestService {
         surgeMultiplier,
         rateCard,
       });
-      const view = toVehicleTypeView(vehicleType);
+      const view = toVehicleTypeView(vehicleType, rateCard);
       options.push({
         vehicleTypeId: vehicleType.id,
         vehicleTypeCode: view.code,
