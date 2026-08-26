@@ -280,6 +280,9 @@ function seedRide(world: ReturnType<typeof makeWorld>, status: string) {
   world.rides.set('ride_1', {
     id: 'ride_1',
     status,
+    // Points at the request the plausibility bound is read from. Tests that do
+    // not seed `req_1` get a null request, which is the no-estimate path.
+    requestId: 'req_1',
     driverId: 'driver_1',
     customerId: 'cust_1',
     vehicleTypeId: 'v1',
@@ -522,6 +525,52 @@ describe('Ride lifecycle concurrency', () => {
 
     await world.service.completeRide('ride_1', 'driver_1', 30, 60);
     assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '30');
+  });
+
+  /// The distance bound is the only thing standing over a driver-declared
+  /// `actualDistanceKm` (C-3b is still open), and it is skipped whenever the
+  /// request carries no quoted estimate — a nullable column. It used to be
+  /// skipped on a *truthiness* test too, which a legitimate estimate of 0 would
+  /// have silently satisfied.
+  it('still refuses an implausible distance when the quote is present', async () => {
+    const world = makeWorld();
+    seedRide(world, 'IN_PROGRESS');
+    world.requests.set('req_1', { id: 'req_1', estimatedDistanceKm: 10, estimatedDurationMin: 30 });
+
+    await assert.rejects(
+      world.service.completeRide('ride_1', 'driver_1', 10_000, 30),
+      /Reported distance/,
+    );
+    assert.equal(world.rides.get('ride_1')?.status, 'IN_PROGRESS', 'the ride is not completed');
+  });
+
+  it('checks a zero-kilometre estimate rather than treating it as no estimate', async () => {
+    const world = makeWorld();
+    seedRide(world, 'IN_PROGRESS');
+    // 0 is a real quoted distance, not a missing one. Read as a boolean it is
+    // false, which used to switch the bound off entirely.
+    world.requests.set('req_1', { id: 'req_1', estimatedDistanceKm: 0, estimatedDurationMin: 0 });
+
+    await assert.rejects(
+      world.service.completeRide('ride_1', 'driver_1', 500, 1),
+      /Reported distance/,
+    );
+  });
+
+  it('still completes a ride whose request carries no estimate at all', async () => {
+    const world = makeWorld();
+    seedRide(world, 'IN_PROGRESS');
+    world.requests.set('req_1', {
+      id: 'req_1',
+      estimatedDistanceKm: null,
+      estimatedDurationMin: null,
+    });
+
+    // The driver has finished driving; a completion must not be refused over
+    // missing reference data. It is logged instead, so a ride billed with no
+    // bound over it is visible rather than silently unguarded.
+    await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+    assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
   });
 
   /// This assertion used to read `actualDurationMin === 60` — the number the

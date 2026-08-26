@@ -210,11 +210,33 @@ export class LifecycleService {
     request: RideRequest | null,
     actualDistanceKm: number,
     actualDurationMin: number,
+    rideId: string,
   ): void {
-    const estimatedDistanceKm = request?.estimatedDistanceKm
-      ? Number(request.estimatedDistanceKm)
-      : null;
+    // `!= null`, not truthiness. `estimatedDistanceKm` is a nullable
+    // `Decimal(8,2)`: a Prisma Decimal is an object and therefore always truthy,
+    // so the old test happened to work — but the moment that column is read as a
+    // plain number, a legitimate estimate of 0 would be falsy and silently
+    // disable the only bound on a driver-declared distance. A guard that can be
+    // switched off by a valid value is not a guard.
+    const estimatedDistanceKm =
+      request?.estimatedDistanceKm != null ? Number(request.estimatedDistanceKm) : null;
     const estimatedDurationMin = request?.estimatedDurationMin ?? null;
+    if (estimatedDistanceKm == null || estimatedDurationMin == null) {
+      // Not fatal: the driver has finished driving and a completion must not be
+      // refused over missing reference data (FR-014). But distance is still
+      // whatever the driver's client declared (C-3b), and this bound is the only
+      // thing standing over it — so a ride billed without it should be visible
+      // rather than silently unguarded.
+      logger.warn(
+        {
+          rideId,
+          requestId: request?.id ?? null,
+          hasDistanceEstimate: estimatedDistanceKm != null,
+          hasDurationEstimate: estimatedDurationMin != null,
+        },
+        '[rides] completing a ride with no quoted estimate to check the reported trip against',
+      );
+    }
     if (estimatedDistanceKm != null) {
       const maxPlausibleKm =
         estimatedDistanceKm * TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER +
@@ -488,7 +510,7 @@ export class LifecycleService {
         tx,
       );
       const request = await this.requestRepo.findById(ride.requestId, tx);
-      this.assertPlausibleTripData(request, actualDistanceKm, actualDurationMin);
+      this.assertPlausibleTripData(request, actualDistanceKm, actualDurationMin, rideId);
       const completedAt = new Date();
       const billedDurationMin = this.measuredDurationMin(
         ride,
