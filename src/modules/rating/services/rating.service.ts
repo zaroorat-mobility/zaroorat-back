@@ -7,6 +7,7 @@ import {
   RideNotRatableError,
   AlreadyRatedError,
 } from '../../rides/errors/ride.errors.js';
+import { ridePartyIds } from '../../rides/types/ride-party.js';
 import type { RideRating } from '../../rides/types/index.js';
 export class RatingService {
   constructor(
@@ -26,9 +27,8 @@ export class RatingService {
     if (ratedBy === 'CUSTOMER' && ride.customerId !== actorId) {
       throw new RideCustomerMismatchError(rideId);
     }
-    if (ratedBy === 'DRIVER') {
-      const driverUserId = (ride as { driver?: { userId?: string } }).driver?.userId;
-      if (driverUserId !== actorId) throw new RideDriverMismatchError(rideId);
+    if (ratedBy === 'DRIVER' && ridePartyIds(ride).driverUserId !== actorId) {
+      throw new RideDriverMismatchError(rideId);
     }
     if (ride.status !== 'COMPLETED') {
       throw new RideNotRatableError(ride.status);

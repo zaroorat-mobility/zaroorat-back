@@ -1,8 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { callerHasRole, callerId } from '@core/auth';
+import { callerId } from '@core/auth';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { RideService } from '../services/ride.service.js';
 import { RideDispatchRepository } from '../repositories/ride-dispatch.repository.js';
+import { RideRepository } from '../repositories/ride.repository.js';
+import { rideParty } from '../types/ride-party.js';
 import { DispatchService } from '../services/dispatch/dispatch.service.js';
 import {
   acceptRideRequestSchema,
@@ -18,6 +20,7 @@ export class RideStateController {
     private readonly driverRepository: DriverRepository,
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly dispatchService: DispatchService,
+    private readonly rideRepo: RideRepository,
   ) {}
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
@@ -94,29 +97,43 @@ export class RideStateController {
     );
     reply.send({ data: ride });
   }
+  /// Which side of the ride is cancelling comes from the ride, not from the
+  /// caller's roles.
+  ///
+  /// This branched on `callerHasRole(req, 'driver')`. A verified driver keeps
+  /// that role off duty, so a driver riding as a passenger was routed down the
+  /// driver path, `lockAndValidate` found the ride assigned to somebody else,
+  /// and they were refused with 403 RIDE_DRIVER_MISMATCH — permanently unable
+  /// to cancel their own ride.
+  ///
+  /// Everyone else is unaffected, including a caller who is party to nothing:
+  /// `rideParty` returns null, the customer path runs exactly as before, and
+  /// `cancelRide` refuses it with the same RIDE_CUSTOMER_MISMATCH. A missing
+  /// ride likewise still reaches `cancelRide` and still 404s there, so this
+  /// read adds no new failure mode of its own.
   async cancel(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as {
       id: string;
     };
     const body = cancelRideSchema.parse(req.body);
-    if (callerHasRole(req, 'driver')) {
-      const driverId = await this.actingDriverId(req);
-      const ride = await this.rideService.lifecycle.cancelRide(
+    const ride = await this.rideRepo.findById(id);
+    if (ride && rideParty(callerId(req), ride) === 'DRIVER') {
+      const cancelled = await this.rideService.lifecycle.cancelRide(
         id,
         'DRIVER',
-        driverId,
+        await this.actingDriverId(req),
         body.reasonCode,
         body.reasonText,
       );
-      return reply.send({ data: ride });
+      return reply.send({ data: cancelled });
     }
-    const ride = await this.rideService.lifecycle.cancelRide(
+    const cancelled = await this.rideService.lifecycle.cancelRide(
       id,
       'CUSTOMER',
       callerId(req),
       body.reasonCode,
       body.reasonText,
     );
-    return reply.send({ data: ride });
+    return reply.send({ data: cancelled });
   }
 }
