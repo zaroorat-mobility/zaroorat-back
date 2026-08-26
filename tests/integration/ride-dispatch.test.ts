@@ -1071,6 +1071,57 @@ describe('ride dispatch, offers and assignment (integration)', () => {
     });
   });
 
+  /// `Promotion` and `PromotionRedemption` are fully modelled and referenced
+  /// nowhere in `src`. Redeeming them is out of scope by decision, but the API
+  /// accepted a code anyway, stored it on the request and billed the customer
+  /// in full — a rider who typed a code was quietly charged the undiscounted
+  /// fare with nothing in the response to tell them.
+  describe('a promo code the platform cannot honour (M-3)', () => {
+    it('refuses the booking rather than charging full price in silence', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `PROMO_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730120');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP, promoCode: 'SUMMER50' },
+      });
+
+      assert.equal(response.statusCode, 422, response.payload);
+      assert.equal(response.json().error.code, 'PROMOTIONS_UNAVAILABLE');
+      assert.equal(await db().client.rideRequest.count(), 0, 'nothing may be written');
+    });
+
+    it('treats an empty code as no code, so a client sending one is not broken', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `BLANK_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730121');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP, promoCode: '   ' },
+      });
+
+      assert.equal(response.statusCode, 200, response.payload);
+      const request = await db().client.rideRequest.findUniqueOrThrow({
+        where: { id: response.json().data.id as string },
+      });
+      // Whitespace is not a promotion, and must not be recorded as one.
+      assert.equal(request.promoCode, null);
+    });
+
+    it('still books normally with no code at all', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NOPRM_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730122');
+
+      const { requestId } = await requestRide(customer, vehicleTypeId);
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.equal(request.promoCode, null);
+    });
+  });
+
   /// `dropLat`/`dropLng` were `.optional()` on both schemas while everything
   /// behind them required a drop, so a body the schema advertised as valid died
   /// on a bare `Error` inside pricing and came back as 500 INTERNAL — the server

@@ -17,6 +17,7 @@ import {
   RideCustomerMismatchError,
   RideRequestNotCancellableError,
   IncompleteProfileError,
+  PromotionsUnavailableError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
@@ -152,6 +153,13 @@ export class RideRequestService {
     paymentMethod?: string;
     promoCode?: string;
   }): Promise<RideRequest> {
+    // Refused before anything is written, and before the debt and active-ride
+    // checks, because it is a fact about the request itself rather than about
+    // the rider: nothing in this codebase can apply a promotion, so a booking
+    // carrying a code would be billed in full without ever saying so.
+    if (input.promoCode !== undefined && input.promoCode.trim() !== '') {
+      throw new PromotionsUnavailableError();
+    }
     const profile = await this.userProfileRepository.findByUserId(input.customerId);
     if (!profile?.firstName || !profile.lastName) {
       throw new IncompleteProfileError();
@@ -214,7 +222,6 @@ export class RideRequestService {
       if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
       if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
       if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
-      if (input.promoCode !== undefined) createInput.promoCode = input.promoCode;
       const request = await this.requestRepo.create(createInput, tx);
       this.rideMetrics.requestCreated({ requestId: request.id });
       await this.eventPublisher.publish(

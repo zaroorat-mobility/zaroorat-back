@@ -157,3 +157,28 @@ export class SelfRideNotAllowedError extends RideError {
     this.name = 'SelfRideNotAllowedError';
   }
 }
+/// A promo code the platform cannot honour.
+///
+/// `Promotion` and `PromotionRedemption` are fully modelled — discount type,
+/// caps, validity window, per-user limits — and referenced nowhere in `src`.
+/// Redeeming them is an explicit non-goal of the payment feature
+/// (`specs/002-payment-fare-settlement/spec.md` lists promotions and coupons
+/// out of scope; `data-model.md` records that `discountAmount` stays zero).
+///
+/// The API accepted the code anyway, stored it on the request, and billed the
+/// customer in full without ever mentioning it. Refusing is the honest answer
+/// until something can apply one: a rider who typed a code and is quietly
+/// charged the undiscounted fare has been overcharged from where they sit.
+///
+/// Delete this the day a redemption path exists; the field and the column are
+/// already in place for it.
+export class PromotionsUnavailableError extends RideError {
+  constructor() {
+    super(
+      'Promotional codes cannot be applied yet. Remove the code to book at the quoted fare.',
+      'PROMOTIONS_UNAVAILABLE',
+      422,
+    );
+    this.name = 'PromotionsUnavailableError';
+  }
+}
