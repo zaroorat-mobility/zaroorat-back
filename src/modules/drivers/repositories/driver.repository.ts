@@ -112,6 +112,15 @@ export class DriverRepository {
       },
     });
   }
+  /// `Driver.rating` is a stored aggregate over `RideRating`, not a value
+  /// anybody sets directly. It defaulted to 5.00 and was written by nothing, so
+  /// every driver's profile reported a perfect score forever, however they were
+  /// actually rated.
+  async setRating(id: string, rating: number, tx?: TransactionClient): Promise<Driver> {
+    const client = tx ?? this.db.client;
+    return client.driver.update({ where: { id }, data: { rating } });
+  }
+
   async setSuspended(id: string, isSuspended: boolean, tx?: TransactionClient): Promise<Driver> {
     const client = tx ?? this.db.client;
     return client.driver.update({

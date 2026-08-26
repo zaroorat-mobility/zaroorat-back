@@ -181,6 +181,56 @@ describe('a driver riding as a passenger is still the passenger (H-6)', () => {
     });
   });
 
+  /// `Driver.rating` defaults to 5.00 and was written by nothing, so every
+  /// driver's profile reported a perfect score forever however they were rated —
+  /// and `GET /drivers/me` hands that row straight to the driver.
+  describe("and the driver's score actually moves (M-5)", () => {
+    it('recomputes the stored average from the ratings a driver has received', async () => {
+      const world = await worldWithDriverRider({
+        customer: '+919876740020',
+        driver: '+919876740021',
+      });
+      const before = await db().client.driver.findUniqueOrThrow({
+        where: { id: world.driverId },
+      });
+      assert.equal(before.rating.toString(), '5', 'every driver starts at the column default');
+
+      const { rideId } = await completeRide(app, world, { distanceKm: 5, durationMin: 15 });
+      const rated = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/rating`,
+        headers: world.customer.authHeader,
+        payload: { rating: 3 },
+      });
+      assert.equal(rated.statusCode, 200, rated.payload);
+
+      const after = await db().client.driver.findUniqueOrThrow({ where: { id: world.driverId } });
+      assert.equal(after.rating.toString(), '3', 'one 3-star ride makes the average 3');
+    });
+
+    it("leaves the driver's score alone when the driver rates the customer", async () => {
+      const world = await worldWithDriverRider({
+        customer: '+919876740022',
+        driver: '+919876740023',
+      });
+      const { rideId } = await completeRide(app, world, { distanceKm: 5, durationMin: 15 });
+
+      const rated = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/rating`,
+        headers: world.driver.authHeader,
+        payload: { rating: 1 },
+      });
+      assert.equal(rated.statusCode, 200, rated.payload);
+
+      // No customer rating column exists anywhere, so this rating still goes
+      // nowhere — but a driver must not be able to lower their own score, or
+      // raise it, by rating the person they drove.
+      const after = await db().client.driver.findUniqueOrThrow({ where: { id: world.driverId } });
+      assert.equal(after.rating.toString(), '5');
+    });
+  });
+
   describe('and a stranger is still refused', () => {
     it('refuses a cancel and a rating from someone party to neither side', async () => {
       const world = await worldWithDriverRider({
