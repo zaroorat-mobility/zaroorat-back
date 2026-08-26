@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { pricingConfig } from '../../../src/config/pricing/pricing.config.js';
 import { PricingService } from '../../../src/modules/pricing';
 import type { PricingRuleRepository } from '../../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import type { PricingRule } from '../../../src/generated/prisma/index.js';
@@ -213,5 +214,64 @@ describe('Final fare (billed on actual trip values)', () => {
         `${field} carries sub-paise precision: ${value}`,
       );
     }
+  });
+});
+
+/// `Ride.waitTimeMin` is read by `completeRide` and written by nothing, so
+/// `waitingMinutes` is 0 on every fare the platform has ever computed and none
+/// of this is reachable today. It is tested because the formula has to be right
+/// *before* something starts measuring the wait — otherwise the first rider
+/// billed for waiting is overcharged for the grace period they were promised.
+describe('waiting charges honour the free period', () => {
+  const rateCard = {
+    ...pricingConfig.defaultRateCard,
+    freeWaitingMinutes: 3,
+    perWaitingMinute: 3,
+  };
+
+  async function waitingChargeFor(waitingMinutes: number): Promise<number> {
+    const result = await pricingService.calculateFinalFare({
+      actualDistanceKm: 5,
+      actualDurationMin: 10,
+      vehicleTypeId: 'v-type-1',
+      waitingMinutes,
+      rateCard,
+    });
+    return result.waitingCharge;
+  }
+
+  it('charges nothing for a wait inside the free period', async () => {
+    assert.equal(await waitingChargeFor(0), 0);
+    assert.equal(await waitingChargeFor(2), 0);
+    // The boundary: three free minutes means the third is still free.
+    assert.equal(await waitingChargeFor(3), 0);
+  });
+
+  it('charges only the minutes beyond the free period', async () => {
+    // 10 minutes waited, 3 free, 7 billable at 3/min.
+    assert.equal(await waitingChargeFor(10), 21);
+    assert.equal(await waitingChargeFor(4), 3);
+  });
+
+  it('never returns a negative charge for a short wait', async () => {
+    assert.equal(await waitingChargeFor(1), 0);
+  });
+
+  it('adds the waiting charge to the total, once', async () => {
+    const withoutWait = await pricingService.calculateFinalFare({
+      actualDistanceKm: 5,
+      actualDurationMin: 10,
+      vehicleTypeId: 'v-type-1',
+      rateCard,
+    });
+    const withWait = await pricingService.calculateFinalFare({
+      actualDistanceKm: 5,
+      actualDurationMin: 10,
+      vehicleTypeId: 'v-type-1',
+      waitingMinutes: 10,
+      rateCard,
+    });
+    assert.equal(withWait.waitingCharge, 21);
+    assert.ok(withWait.totalFare > withoutWait.totalFare);
   });
 });

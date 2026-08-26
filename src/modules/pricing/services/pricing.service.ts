@@ -32,6 +32,10 @@ export class PricingService {
       baseFare: decimal(rule.baseFare) ?? fallback.baseFare,
       perKm: decimal(rule.perKmRate) ?? fallback.perKm,
       perMinute: decimal(rule.perMinuteRate) ?? fallback.perMinute,
+      // `freeWaitingMin` is on every rule and was read by nothing: the rate card
+      // it maps into had no field for it, so the grace period an operator set was
+      // dropped between the rule and the price.
+      freeWaitingMinutes: decimal(rule.freeWaitingMin) ?? fallback.freeWaitingMinutes,
       perWaitingMinute: decimal(rule.waitingPerMin) ?? fallback.perWaitingMinute,
       minimumFare: decimal(rule.minimumFare) ?? fallback.minimumFare,
       platformFee: fallback.platformFee,
@@ -84,7 +88,12 @@ export class PricingService {
     const billableDurationMin = Math.max(0, durationMin);
     const distanceFare = money(billableDistanceKm * card.perKm);
     const timeFare = money(billableDurationMin * card.perMinute);
-    const waitingCharge = money(Math.max(0, params.waitingMinutes ?? 0) * card.perWaitingMinute);
+    // Only the wait beyond the free grace period is billable. Without this the
+    // first minute of waiting was charged at full rate, so the day anything
+    // starts writing `Ride.waitTimeMin` every rider would have been overcharged
+    // by `freeWaitingMinutes * perWaitingMinute` on top of the real wait.
+    const billableWaitingMin = Math.max(0, (params.waitingMinutes ?? 0) - card.freeWaitingMinutes);
+    const waitingCharge = money(billableWaitingMin * card.perWaitingMinute);
     const rawSubtotal = card.baseFare + distanceFare + timeFare + waitingCharge;
     const surgeMultiplier = params.surgeMultiplier ?? 1;
     const surgeAmount = money(rawSubtotal * (surgeMultiplier - 1));
