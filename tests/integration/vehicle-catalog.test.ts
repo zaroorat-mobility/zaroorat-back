@@ -371,6 +371,125 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
       );
     });
 
+    /// `isActive` was the only filter on a rule, so neither end of its
+    /// effective window was honoured. An operator could not retire a rate card
+    /// by dating it out, and — worse — could not schedule one either: a
+    /// future-dated rule was ordered ahead of the current one and applied the
+    /// moment it was written.
+    describe('and only while it is actually in force (M-2)', () => {
+      const LOUD = { baseFare: 500, perKmRate: 99, perMinuteRate: 50, minimumFare: 500 };
+
+      function addRule(
+        vehicleTypeId: string,
+        window: { effectiveFrom?: Date; effectiveTo?: Date | null },
+      ) {
+        return db().client.pricingRule.create({
+          data: {
+            vehicleTypeId,
+            cityCode: 'GLOBAL',
+            ...LOUD,
+            ...(window.effectiveFrom ? { effectiveFrom: window.effectiveFrom } : {}),
+            ...(window.effectiveTo !== undefined ? { effectiveTo: window.effectiveTo } : {}),
+          },
+        });
+      }
+
+      async function quotedFare(customer: LoggedInUser, vehicleTypeId: string): Promise<number> {
+        const response = await post('/api/v1/rides/quote', customer, {
+          ...PICKUP,
+          ...DROP,
+          vehicleTypeId,
+        });
+        assert.equal(response.statusCode, 200, response.payload);
+        return (response.json().data.options[0] as { estimatedFare: number }).estimatedFare;
+      }
+
+      const DAY = 24 * 60 * 60 * 1000;
+
+      /// The control. Without this the two cases below would pass even if rules
+      /// were ignored entirely, which is exactly the bug M-1 fixed.
+      it('honours a rule whose window is open right now', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `NOW_${randomUUID().slice(0, 6)}` });
+        const withoutRule = await quotedFare(customer, typeId);
+
+        await addRule(typeId, { effectiveFrom: new Date(Date.now() - DAY), effectiveTo: null });
+
+        assert.ok(
+          (await quotedFare(customer, typeId)) > withoutRule,
+          'an in-force rule must actually change the price',
+        );
+      });
+
+      it('ignores a rule whose window has closed', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `PAST_${randomUUID().slice(0, 6)}` });
+        const withoutRule = await quotedFare(customer, typeId);
+
+        await addRule(typeId, {
+          effectiveFrom: new Date(Date.now() - 30 * DAY),
+          effectiveTo: new Date(Date.now() - DAY),
+        });
+
+        assert.equal(
+          await quotedFare(customer, typeId),
+          withoutRule,
+          'a retired rate card must stop pricing rides',
+        );
+      });
+
+      it('ignores a rule dated into the future instead of applying it early', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `SOON_${randomUUID().slice(0, 6)}` });
+        const withoutRule = await quotedFare(customer, typeId);
+
+        await addRule(typeId, {
+          effectiveFrom: new Date(Date.now() + 30 * DAY),
+          effectiveTo: null,
+        });
+
+        // Ordered by `effectiveFrom` descending, this row sorted ahead of every
+        // current one — so scheduling a rate change used to enact it at once.
+        assert.equal(
+          await quotedFare(customer, typeId),
+          withoutRule,
+          'a scheduled rate card must wait for its start date',
+        );
+      });
+
+      it('keeps the catalog and the quote on the same rule when one expires', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `BOTH_${randomUUID().slice(0, 6)}` });
+        await addRule(typeId, {
+          effectiveFrom: new Date(Date.now() - 30 * DAY),
+          effectiveTo: new Date(Date.now() - DAY),
+        });
+
+        // The catalog reads through `findGlobalRules`, the quote through
+        // `findActiveRule`. Both had the same gap, so both had to be closed —
+        // otherwise the picker advertises a retired rate the quote no longer
+        // charges.
+        const types = (await get('/api/v1/vehicle-types', customer)).json().data as {
+          id: string;
+          perKmRate: number;
+        }[];
+        const listed = types.find((type) => type.id === typeId);
+        assert.ok(listed, 'the throwaway type must be in the catalog');
+        assert.notEqual(listed.perKmRate, LOUD.perKmRate, 'the catalog must drop the expired rule');
+
+        const breakdown = (
+          await post('/api/v1/rides/quote', customer, { ...PICKUP, ...DROP, vehicleTypeId: typeId })
+        ).json().data.options[0].fareBreakdown as {
+          estimatedDistanceKm: number;
+          distanceFare: number;
+        };
+        assert.equal(
+          breakdown.distanceFare,
+          Math.round(breakdown.estimatedDistanceKm * listed.perKmRate * 100) / 100,
+        );
+      });
+    });
+
     it('still prices a category with no rule of its own at the default card', async () => {
       const customer = await loginAs(app, CUSTOMER);
       const orphanId = await makeVehicleType({ code: `ORPHAN_${randomUUID().slice(0, 6)}` });
