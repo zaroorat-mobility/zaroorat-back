@@ -28,6 +28,11 @@ import {
   AdminRbacController,
   AdminRbacService,
 } from './rbac-management/index.js';
+import {
+  riderManagementRoutes,
+  AdminRiderController,
+  AdminRiderService,
+} from './rider-management/index.js';
 
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
@@ -40,6 +45,8 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminStaffController: asClass(AdminStaffController).singleton(),
     adminRbacService: asClass(AdminRbacService).singleton(),
     adminRbacController: asClass(AdminRbacController).singleton(),
+    adminRiderService: asClass(AdminRiderService).singleton(),
+    adminRiderController: asClass(AdminRiderController).singleton(),
   });
 }
 
@@ -51,4 +58,5 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   await app.register(paymentManagementRoutes);
   await app.register(staffManagementRoutes);
   await app.register(rbacManagementRoutes);
+  await app.register(riderManagementRoutes);
 }

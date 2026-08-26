@@ -74,6 +74,12 @@ export const PERMISSION_SEED = [
     description: 'View rider directory and rider detail in the admin panel',
   },
   {
+    code: 'riders:write',
+    resource: 'riders',
+    action: 'write',
+    description: 'Suspend, block, or reactivate rider accounts',
+  },
+  {
     code: 'drivers:read',
     resource: 'drivers',
     action: 'read',
