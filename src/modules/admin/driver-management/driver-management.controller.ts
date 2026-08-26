@@ -16,6 +16,7 @@ import {
   applicationDocumentParamSchema,
   applicationIdParamSchema,
   applicationNotesBodySchema,
+  createManualApplicationBodySchema,
   listApplicationsQuerySchema,
 } from './application.schemas.js';
 
@@ -42,6 +43,17 @@ export class AdminDriverManagementController {
     const query = listApplicationsQuerySchema.parse(req.query);
     const result = await this.adminApplicationService.list(query);
     reply.send(result);
+  }
+
+  async createApplication(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = createManualApplicationBodySchema.parse(req.body);
+    const actorId = callerId(req);
+    const application = await this.adminApplicationService.create(body, actorId);
+    req.log.info(
+      { applicationId: application.id, actorUserId: actorId },
+      '[admin-applications] manual application created',
+    );
+    reply.status(201).send({ data: application });
   }
 
   async getApplicationById(req: FastifyRequest, reply: FastifyReply): Promise<void> {

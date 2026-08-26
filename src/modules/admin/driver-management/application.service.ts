@@ -1,15 +1,22 @@
+import { DatabaseService } from '@core/database';
+import { AuthService } from '@modules/auth/services/auth.service.js';
 import { DriverService } from '@modules/drivers/services/driver.service.js';
+import { DRIVER_DOCUMENT_TYPE } from '@modules/drivers/constants/driver.constants.js';
 import type { VerificationStatus } from '@modules/drivers/types/index.js';
+import { generateDriverCode } from '@modules/drivers/utils/driver-code.util.js';
+import { VEHICLE_DOCUMENT_TYPE } from '@config/vehicle/vehicle.config.js';
 import { AdminDriverNotFoundError, AdminDriverConflictError } from './driver.errors.js';
 import {
   AdminDriverService,
   type DriverDetailsDto,
   type DriverListItemDto,
 } from './driver.service.js';
-import type { ListApplicationsQuery } from './application.schemas.js';
+import type { CreateManualApplicationBody, ListApplicationsQuery } from './application.schemas.js';
 
 export type ApplicationStatusDto =
   'pending_review' | 'under_review' | 'approved' | 'rejected' | 'resubmission_required';
+
+export type ApplicationSourceDto = 'driver_app' | 'admin_manual';
 
 export interface ApplicationListItemDto {
   id: string;
@@ -19,7 +26,7 @@ export interface ApplicationListItemDto {
   mobileNumber: string;
   vehicleType: string;
   applicationStatus: ApplicationStatusDto;
-  source: 'driver_app';
+  source: ApplicationSourceDto;
   submittedAt: string;
   createdAt: string;
   updatedAt: string;
@@ -49,6 +56,31 @@ export interface ApplicationDetailsDto extends ApplicationListItemDto {
   auditLogs: DriverDetailsDto['auditLogs'];
 }
 
+const VEHICLE_TYPE_CODE: Record<CreateManualApplicationBody['vehicleType'], string> = {
+  cab: 'CAB_ECONOMY',
+  auto: 'AUTO',
+  bike: 'BIKE',
+  carpool: 'CAB_ECONOMY',
+};
+
+function normalizePhone(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('+')) return trimmed;
+  if (/^\d{10}$/.test(trimmed)) return `+91${trimmed}`;
+  return `+${trimmed}`;
+}
+
+function normalizePlate(raw: string): string {
+  return raw.trim().toUpperCase().replace(/\s+/g, '');
+}
+
+function splitName(fullName: string): { firstName: string; lastName: string } {
+  const parts = fullName.trim().split(/\s+/);
+  const firstName = parts[0] || fullName;
+  const lastName = parts.slice(1).join(' ') || firstName;
+  return { firstName, lastName };
+}
+
 function toApplicationStatus(verificationStatus: string): ApplicationStatusDto {
   const status = verificationStatus.toUpperCase();
   if (status === 'VERIFIED') return 'approved';
@@ -57,7 +89,10 @@ function toApplicationStatus(verificationStatus: string): ApplicationStatusDto {
   return 'pending_review';
 }
 
-function toListItem(driver: DriverListItemDto): ApplicationListItemDto {
+function toListItem(
+  driver: DriverListItemDto,
+  source: ApplicationSourceDto = 'driver_app',
+): ApplicationListItemDto {
   return {
     id: driver.id,
     applicationId:
@@ -67,15 +102,18 @@ function toListItem(driver: DriverListItemDto): ApplicationListItemDto {
     mobileNumber: driver.mobileNumber,
     vehicleType: driver.vehicleType,
     applicationStatus: toApplicationStatus(driver.verificationStatus),
-    source: 'driver_app',
+    source,
     submittedAt: driver.joinedAt || driver.createdAt,
     createdAt: driver.createdAt,
     updatedAt: driver.updatedAt,
   };
 }
 
-function toDetails(driver: DriverDetailsDto): ApplicationDetailsDto {
-  const base = toListItem(driver);
+function toDetails(
+  driver: DriverDetailsDto,
+  source: ApplicationSourceDto = 'driver_app',
+): ApplicationDetailsDto {
+  const base = toListItem(driver, source);
   return {
     ...base,
     ...(driver.email ? { email: driver.email } : {}),
@@ -102,18 +140,25 @@ function toDetails(driver: DriverDetailsDto): ApplicationDetailsDto {
   };
 }
 
+function pickUrl(...urls: Array<string | undefined>): string | undefined {
+  for (const url of urls) {
+    if (url && url.trim().length > 0) return url.trim();
+  }
+  return undefined;
+}
+
 export class AdminApplicationService {
   constructor(
     private readonly adminDriverService: AdminDriverService,
     private readonly driverService: DriverService,
+    private readonly databaseService: DatabaseService,
+    private readonly authService: AuthService,
   ) {}
 
   async list(query: ListApplicationsQuery): Promise<{
     data: ApplicationListItemDto[];
     meta: { currentPage: number; totalPages: number; pageSize: number; totalCount: number };
   }> {
-    // Applications are unverified drivers. Fetch a wide page from the driver
-    // catalog, then shape + filter for the applications vocabulary.
     const drivers = await this.adminDriverService.list({
       page: 1,
       limit: 100,
@@ -121,9 +166,11 @@ export class AdminApplicationService {
       status: 'all',
     });
 
+    const sourceByDriverId = await this.resolveSources(drivers.data.map((row) => row.id));
+
     let applications = drivers.data
       .filter((row) => row.verificationStatus.toUpperCase() !== 'VERIFIED')
-      .map(toListItem);
+      .map((row) => toListItem(row, sourceByDriverId.get(row.id) ?? 'driver_app'));
 
     if (query.status && query.status !== 'all') {
       applications = applications.filter((row) => row.applicationStatus === query.status);
@@ -150,15 +197,327 @@ export class AdminApplicationService {
     if (driver.verificationStatus.toUpperCase() === 'VERIFIED') {
       throw new AdminDriverConflictError('Driver is already verified; not an open application');
     }
-    return toDetails(driver);
+    const source = (await this.resolveSources([id])).get(id) ?? 'driver_app';
+    return toDetails(driver, source);
+  }
+
+  async create(
+    input: CreateManualApplicationBody,
+    actorId: string,
+  ): Promise<ApplicationDetailsDto> {
+    const phone = normalizePhone(input.mobileNumber);
+    const plate = normalizePlate(input.registrationNumber);
+    const approveImmediately = input.registrationAction === 'approve_immediately';
+    const docStatus = approveImmediately ? 'VERIFIED' : 'PENDING';
+    const { firstName, lastName } = splitName(input.fullName);
+
+    const existingUser = await this.databaseService.client.user.findFirst({
+      where: { phoneNumber: phone, deletedAt: null },
+      include: { driver: true },
+    });
+    if (existingUser?.driver) {
+      throw new AdminDriverConflictError('A driver already exists for this phone number');
+    }
+
+    const existingPlate = await this.databaseService.client.vehicle.findUnique({
+      where: { registrationNumber: plate },
+    });
+    if (existingPlate) {
+      throw new AdminDriverConflictError('A vehicle with this registration number already exists');
+    }
+
+    const vehicleTypeCode = VEHICLE_TYPE_CODE[input.vehicleType];
+    const vehicleType = await this.databaseService.client.vehicleType.findUnique({
+      where: { code: vehicleTypeCode },
+    });
+    if (!vehicleType) {
+      throw new AdminDriverConflictError(`Vehicle type ${vehicleTypeCode} is not configured`);
+    }
+
+    const driverId = await this.databaseService.client.$transaction(async (tx) => {
+      const user =
+        existingUser ??
+        (await tx.user.create({
+          data: {
+            phoneNumber: phone,
+            status: 'ACTIVE',
+            isPhoneVerified: true,
+            ...(input.email && input.email.length > 0
+              ? { email: input.email, isEmailVerified: false }
+              : {}),
+            profile: {
+              create: { firstName, lastName },
+            },
+          },
+        }));
+
+      if (existingUser && input.email && input.email.length > 0 && !existingUser.email) {
+        await tx.user.update({
+          where: { id: existingUser.id },
+          data: { email: input.email },
+        });
+      }
+
+      if (existingUser) {
+        await tx.userProfile.upsert({
+          where: { userId: existingUser.id },
+          create: { userId: existingUser.id, firstName, lastName },
+          update: { firstName, lastName },
+        });
+      }
+
+      const driver = await tx.driver.create({
+        data: {
+          userId: user.id,
+          driverCode: generateDriverCode(),
+          verificationStatus: approveImmediately ? 'VERIFIED' : 'PENDING',
+          ...(approveImmediately ? { approvedAt: new Date(), approvedBy: actorId } : {}),
+          profile: {
+            create: {
+              fullLegalName: input.fullName,
+              dateOfBirth: new Date(input.dateOfBirth),
+              gender: input.gender,
+              addressLine: [input.addressLine1, input.addressLine2].filter(Boolean).join(', '),
+              city: input.city,
+              state: input.state,
+              country: input.country,
+              postalCode: input.postcode,
+              preferredLanguage: input.preferredLanguage || 'English',
+              profilePhoto: pickUrl(input.profilePhotoUrl, input.driverSelfieUrl) ?? null,
+              alternatePhone: input.emergencyContactNumber
+                ? normalizePhone(input.emergencyContactNumber)
+                : null,
+            },
+          },
+          wallet: {
+            create: { balance: 0, lockedBalance: 0 },
+          },
+        },
+      });
+
+      type DriverDocInput = {
+        documentType: (typeof DRIVER_DOCUMENT_TYPE)[keyof typeof DRIVER_DOCUMENT_TYPE];
+        documentNumber?: string;
+        fileUrl?: string;
+        issuedAt?: Date;
+        expiresAt?: Date;
+      };
+
+      const driverDocs: DriverDocInput[] = [];
+      const pushDriverDoc = (doc: DriverDocInput) => {
+        driverDocs.push(doc);
+      };
+
+      const licenseUrl = pickUrl(input.licenseFrontUrl, input.licenseBackUrl);
+      pushDriverDoc({
+        documentType: DRIVER_DOCUMENT_TYPE.DRIVING_LICENSE,
+        documentNumber: input.licenseNo,
+        issuedAt: new Date(input.licenseIssueDate),
+        expiresAt: new Date(input.licenseExpiry),
+        ...(licenseUrl ? { fileUrl: licenseUrl } : {}),
+      });
+      const aadhaarUrl = pickUrl(input.aadhaarFrontUrl, input.aadhaarBackUrl);
+      pushDriverDoc({
+        documentType: DRIVER_DOCUMENT_TYPE.AADHAAR,
+        documentNumber: input.aadhaarNumber,
+        ...(aadhaarUrl ? { fileUrl: aadhaarUrl } : {}),
+      });
+      const panUrl = pickUrl(input.panUrl);
+      pushDriverDoc({
+        documentType: DRIVER_DOCUMENT_TYPE.PAN,
+        documentNumber: input.panNumber,
+        ...(panUrl ? { fileUrl: panUrl } : {}),
+      });
+      const photoUrl = pickUrl(input.driverSelfieUrl, input.profilePhotoUrl);
+      pushDriverDoc({
+        documentType: DRIVER_DOCUMENT_TYPE.PROFILE_PHOTO,
+        ...(photoUrl ? { fileUrl: photoUrl } : {}),
+      });
+      const rcUrl = pickUrl(input.rcUrl);
+      pushDriverDoc({
+        documentType: DRIVER_DOCUMENT_TYPE.RC,
+        documentNumber: input.rcNumber,
+        ...(rcUrl ? { fileUrl: rcUrl } : {}),
+      });
+      const insuranceUrl = pickUrl(input.insuranceUrl);
+      pushDriverDoc({
+        documentType: DRIVER_DOCUMENT_TYPE.INSURANCE,
+        documentNumber: input.insuranceNo,
+        expiresAt: new Date(input.insuranceExpiry),
+        ...(insuranceUrl ? { fileUrl: insuranceUrl } : {}),
+      });
+
+      for (const doc of driverDocs) {
+        await tx.driverDocument.create({
+          data: {
+            driverId: driver.id,
+            documentType: doc.documentType,
+            verificationStatus: docStatus,
+            ...(doc.documentNumber ? { documentNumber: doc.documentNumber } : {}),
+            ...(doc.fileUrl ? { fileUrl: doc.fileUrl } : {}),
+            ...(doc.issuedAt ? { issuedAt: doc.issuedAt } : {}),
+            ...(doc.expiresAt ? { expiresAt: doc.expiresAt } : {}),
+            ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
+          },
+        });
+      }
+
+      const vehicle = await tx.vehicle.create({
+        data: {
+          registrationNumber: plate,
+          vehicleTypeId: vehicleType.id,
+          make: input.brand,
+          model: input.model,
+          color: input.color,
+          seatingCapacity: input.seatCapacity,
+          manufacturingYear: input.manufacturingYear,
+          currentDriverId: driver.id,
+          isActive: true,
+          verificationStatus: docStatus,
+          ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
+        },
+      });
+
+      type VehicleDocInput = {
+        documentType: string;
+        documentNumber?: string;
+        fileUrl?: string;
+        expiresAt?: Date;
+      };
+      const vehicleDocs: VehicleDocInput[] = [];
+      const pushVehicleDoc = (doc: VehicleDocInput) => {
+        vehicleDocs.push(doc);
+      };
+
+      pushVehicleDoc({
+        documentType: VEHICLE_DOCUMENT_TYPE.RC,
+        documentNumber: input.rcNumber,
+        ...(rcUrl ? { fileUrl: rcUrl } : {}),
+      });
+      pushVehicleDoc({
+        documentType: VEHICLE_DOCUMENT_TYPE.INSURANCE,
+        documentNumber: input.insuranceNo,
+        expiresAt: new Date(input.insuranceExpiry),
+        ...(insuranceUrl ? { fileUrl: insuranceUrl } : {}),
+      });
+      const permitUrl = pickUrl(input.permitUrl);
+      pushVehicleDoc({
+        documentType: VEHICLE_DOCUMENT_TYPE.PERMIT,
+        documentNumber: input.permitNo,
+        expiresAt: new Date(input.permitExpiry),
+        ...(permitUrl ? { fileUrl: permitUrl } : {}),
+      });
+      const pollutionUrl = pickUrl(input.pollutionUrl);
+      pushVehicleDoc({
+        documentType: VEHICLE_DOCUMENT_TYPE.PUC,
+        documentNumber: input.pollutionNo,
+        expiresAt: new Date(input.pollutionExpiry),
+        ...(pollutionUrl ? { fileUrl: pollutionUrl } : {}),
+      });
+
+      if (input.fitnessNo || input.fitnessUrl || input.fitnessExpiry) {
+        const fitnessUrl = pickUrl(input.fitnessUrl);
+        pushVehicleDoc({
+          documentType: VEHICLE_DOCUMENT_TYPE.FITNESS,
+          ...(input.fitnessNo ? { documentNumber: input.fitnessNo } : {}),
+          ...(fitnessUrl ? { fileUrl: fitnessUrl } : {}),
+          ...(input.fitnessExpiry ? { expiresAt: new Date(input.fitnessExpiry) } : {}),
+        });
+      }
+
+      for (const doc of vehicleDocs) {
+        await tx.vehicleDocument.create({
+          data: {
+            vehicleId: vehicle.id,
+            documentType: doc.documentType,
+            verificationStatus: docStatus,
+            ...(doc.documentNumber ? { documentNumber: doc.documentNumber } : {}),
+            ...(doc.fileUrl ? { fileUrl: doc.fileUrl } : {}),
+            ...(doc.expiresAt ? { expiresAt: doc.expiresAt } : {}),
+            ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
+          },
+        });
+      }
+
+      await tx.vehicleAssignment.create({
+        data: {
+          driverId: driver.id,
+          vehicleId: vehicle.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      await tx.driver.update({
+        where: { id: driver.id },
+        data: { currentVehicleId: vehicle.id },
+      });
+
+      await tx.driverBankAccount.create({
+        data: {
+          driverId: driver.id,
+          accountHolderName: input.bankAccountName,
+          bankName: input.bankName,
+          ifscCode: input.bankIfsc.toUpperCase(),
+          accountNumberEnc: input.bankAccountNumber,
+          ...(input.upiId && input.upiId.length > 0 ? { upiId: input.upiId } : {}),
+          isDefault: true,
+          payoutEnabled: false,
+          verificationStatus: docStatus,
+          ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
+        },
+      });
+
+      await tx.adminActivityLog.create({
+        data: {
+          actorId,
+          action: 'CREATE',
+          entityType: 'driver',
+          entityId: driver.id,
+          summary: approveImmediately
+            ? 'Application Created & Immediately Approved by Admin'
+            : 'Application Manually Created by Admin',
+          metadata: {
+            source: 'admin_manual',
+            registrationAction: input.registrationAction,
+            registrationPlate: plate,
+          },
+        },
+      });
+
+      return driver.id;
+    });
+
+    await this.authService.grantRole(
+      (
+        await this.databaseService.client.driver.findUniqueOrThrow({
+          where: { id: driverId },
+          select: { userId: true },
+        })
+      ).userId,
+      'customer',
+    );
+
+    if (approveImmediately) {
+      const userId = (
+        await this.databaseService.client.driver.findUniqueOrThrow({
+          where: { id: driverId },
+          select: { userId: true },
+        })
+      ).userId;
+      await this.authService.grantRole(userId, 'driver');
+    }
+
+    const details = await this.adminDriverService.getById(driverId);
+    return toDetails(details, 'admin_manual');
   }
 
   async approve(id: string, actorId: string, notes?: string): Promise<ApplicationDetailsDto> {
+    await this.ensureDocumentsVerifiedForApproval(id, actorId);
     await this.driverService.onboarding.reviewDriverVerification(id, 'VERIFIED', actorId, notes);
-    // Approved applications leave the queue — return the mapped driver snapshot
-    // before conflict on getById.
+    await this.verifyLinkedVehicle(id, actorId, notes);
+    const source = (await this.resolveSources([id])).get(id) ?? 'driver_app';
     const driver = await this.adminDriverService.getById(id);
-    return toDetails(driver);
+    return toDetails(driver, source);
   }
 
   async reject(id: string, actorId: string, notes?: string): Promise<ApplicationDetailsDto> {
@@ -203,5 +562,102 @@ export class AdminApplicationService {
       rejectionReason,
     );
     return this.getById(applicationId);
+  }
+
+  private async resolveSources(driverIds: string[]): Promise<Map<string, ApplicationSourceDto>> {
+    const map = new Map<string, ApplicationSourceDto>();
+    if (driverIds.length === 0) return map;
+
+    const logs = await this.databaseService.client.adminActivityLog.findMany({
+      where: {
+        entityType: 'driver',
+        entityId: { in: driverIds },
+        action: 'CREATE',
+      },
+      select: { entityId: true, metadata: true },
+    });
+
+    for (const log of logs) {
+      const metadata = log.metadata as { source?: string } | null;
+      if (metadata?.source === 'admin_manual' && log.entityId) {
+        map.set(log.entityId, 'admin_manual');
+      }
+    }
+    return map;
+  }
+
+  private async ensureDocumentsVerifiedForApproval(
+    driverId: string,
+    actorId: string,
+  ): Promise<void> {
+    const pending = await this.databaseService.client.driverDocument.findMany({
+      where: {
+        driverId,
+        verificationStatus: { not: 'VERIFIED' },
+      },
+    });
+    if (pending.length === 0) return;
+
+    // Admin overall approve after reviewing docs in UI — promote remaining
+    // required docs so eligibility can pass when the operator already audited them.
+    await this.databaseService.client.driverDocument.updateMany({
+      where: {
+        driverId,
+        verificationStatus: { not: 'VERIFIED' },
+      },
+      data: {
+        verificationStatus: 'VERIFIED',
+        verifiedAt: new Date(),
+        verifiedBy: actorId,
+        rejectionReason: null,
+      },
+    });
+  }
+
+  private async verifyLinkedVehicle(
+    driverId: string,
+    actorId: string,
+    notes?: string,
+  ): Promise<void> {
+    const driver = await this.databaseService.client.driver.findUnique({
+      where: { id: driverId },
+      select: { currentVehicleId: true },
+    });
+    const vehicleId = driver?.currentVehicleId;
+    if (!vehicleId) return;
+
+    await this.databaseService.client.$transaction(async (tx) => {
+      await tx.vehicle.update({
+        where: { id: vehicleId },
+        data: {
+          verificationStatus: 'VERIFIED',
+          verifiedAt: new Date(),
+          verifiedBy: actorId,
+          rejectionReason: null,
+        },
+      });
+      await tx.vehicleDocument.updateMany({
+        where: { vehicleId },
+        data: {
+          verificationStatus: 'VERIFIED',
+          verifiedAt: new Date(),
+          verifiedBy: actorId,
+          rejectionReason: null,
+        },
+      });
+      await tx.adminActivityLog.create({
+        data: {
+          actorId,
+          action: 'UPDATE',
+          entityType: 'vehicle',
+          entityId: vehicleId,
+          summary: 'Vehicle Verified with Driver Application Approval',
+          metadata: {
+            driverId,
+            ...(notes ? { notes } : {}),
+          },
+        },
+      });
+    });
   }
 }

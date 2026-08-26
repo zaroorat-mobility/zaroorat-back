@@ -18,6 +18,9 @@ export async function adminDriverRoutes(fastify: FastifyInstance): Promise<void>
   const canWrite = { preHandler: fastify.authorize({ permissions: ['drivers:write'] }) };
 
   fastify.get('/applications', canRead, (req, reply) => controller.listApplications(req, reply));
+  fastify.post('/applications', canVerify, (req, reply) =>
+    controller.createApplication(req, reply),
+  );
   fastify.get('/applications/:id', canRead, (req, reply) =>
     controller.getApplicationById(req, reply),
   );

@@ -201,4 +201,125 @@ describe('admin applications (integration)', () => {
     });
     assert.equal(approved.statusCode, 403, approved.payload);
   });
+
+  it('creates a manual application that appears in apps, drivers, and vehicles after approve', async () => {
+    const admin = await loginStaff(ADMIN_PHONE, 'system_admin');
+    const nextYear = new Date().getFullYear() + 1;
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/applications',
+      headers: admin.authHeader,
+      payload: {
+        fullName: 'Manual Applicant',
+        mobileNumber: '+919876544088',
+        email: 'manual.applicant@zaroorat.test',
+        gender: 'MALE',
+        dateOfBirth: '1994-05-20',
+        preferredLanguage: 'English',
+        country: 'India',
+        state: 'Jammu & Kashmir',
+        city: 'Srinagar',
+        postcode: '190001',
+        addressLine1: 'Residency Road 12',
+        emergencyContactName: 'Brother',
+        emergencyContactNumber: '+919876544089',
+        profilePhotoUrl: 'https://example.invalid/profile.jpg',
+        aadhaarNumber: '123412341234',
+        aadhaarFrontUrl: 'https://example.invalid/aadhaar-front.jpg',
+        aadhaarBackUrl: 'https://example.invalid/aadhaar-back.jpg',
+        panNumber: 'ABCDE1234F',
+        panUrl: 'https://example.invalid/pan.jpg',
+        driverSelfieUrl: 'https://example.invalid/selfie.jpg',
+        vehicleType: 'cab',
+        vehicleCategory: 'Sedan',
+        brand: 'Maruti Suzuki',
+        model: 'Swift',
+        color: 'White',
+        registrationNumber: 'JK-01-MN-8899',
+        manufacturingYear: 2022,
+        seatCapacity: 4,
+        licenseNo: 'JK1420150001234',
+        licenseIssueDate: '2020-01-01',
+        licenseExpiry: `${nextYear}-01-01`,
+        licenseFrontUrl: 'https://example.invalid/license-front.jpg',
+        licenseBackUrl: 'https://example.invalid/license-back.jpg',
+        rcNumber: 'RC-JK01MN8899',
+        rcUrl: 'https://example.invalid/rc.jpg',
+        insuranceNo: 'INS-8899',
+        insuranceExpiry: `${nextYear}-06-01`,
+        insuranceUrl: 'https://example.invalid/insurance.jpg',
+        permitNo: 'PRM-8899',
+        permitExpiry: `${nextYear}-06-01`,
+        permitUrl: 'https://example.invalid/permit.jpg',
+        pollutionNo: 'PUC-8899',
+        pollutionExpiry: `${nextYear}-06-01`,
+        pollutionUrl: 'https://example.invalid/puc.jpg',
+        bankAccountName: 'Manual Applicant',
+        bankAccountNumber: '123456789012',
+        bankIfsc: 'SBIN0001234',
+        bankName: 'State Bank of India',
+        registrationAction: 'submit_for_review',
+      },
+    });
+    assert.equal(created.statusCode, 201, created.payload);
+    const application = created.json().data;
+    assert.equal(application.applicationStatus, 'pending_review');
+    assert.equal(application.source, 'admin_manual');
+    assert.ok(
+      application.documents.some((d: { fileUrl: string }) => d.fileUrl.includes('license-front')),
+    );
+    assert.equal(application.vehicle?.registrationPlate, 'JK-01-MN-8899');
+
+    const apps = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/applications',
+      headers: admin.authHeader,
+    });
+    assert.equal(apps.statusCode, 200, apps.payload);
+    assert.ok(apps.json().data.some((row: { id: string }) => row.id === application.id));
+
+    const vehiclesBefore = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/vehicles',
+      headers: admin.authHeader,
+    });
+    assert.equal(vehiclesBefore.statusCode, 200, vehiclesBefore.payload);
+    assert.ok(
+      vehiclesBefore
+        .json()
+        .data.some(
+          (row: { registrationPlate: string }) => row.registrationPlate === 'JK-01-MN-8899',
+        ),
+    );
+
+    const approved = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/applications/${application.id}/approve`,
+      headers: admin.authHeader,
+      payload: { notes: 'Manual KYC clear' },
+    });
+    assert.equal(approved.statusCode, 200, approved.payload);
+    assert.equal(approved.json().data.applicationStatus, 'approved');
+
+    const drivers = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/drivers?status=active',
+      headers: admin.authHeader,
+    });
+    assert.equal(drivers.statusCode, 200, drivers.payload);
+    assert.ok(drivers.json().data.some((row: { id: string }) => row.id === application.id));
+
+    const vehiclesAfter = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/vehicles',
+      headers: admin.authHeader,
+    });
+    assert.equal(vehiclesAfter.statusCode, 200, vehiclesAfter.payload);
+    const vehicle = vehiclesAfter
+      .json()
+      .data.find((row: { registrationPlate: string }) => row.registrationPlate === 'JK-01-MN-8899');
+    assert.ok(vehicle);
+    assert.equal(vehicle.verificationStatus, 'VERIFIED');
+  });
 });
