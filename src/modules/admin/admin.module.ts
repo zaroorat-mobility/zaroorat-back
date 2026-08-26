@@ -9,10 +9,13 @@ import {
 import {
   driverManagementRoutes,
   AdminDriverManagementController,
+  AdminDriverService,
+  AdminApplicationService,
 } from './driver-management/index.js';
 import {
   vehicleManagementRoutes,
   AdminVehicleManagementController,
+  AdminVehicleService,
 } from './vehicle-management/index.js';
 import {
   paymentManagementRoutes,
@@ -28,18 +31,28 @@ import {
   AdminRbacController,
   AdminRbacService,
 } from './rbac-management/index.js';
+import {
+  riderManagementRoutes,
+  AdminRiderController,
+  AdminRiderService,
+} from './rider-management/index.js';
 
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
     adminSurgeService: asClass(AdminSurgeService).singleton(),
     adminSurgeController: asClass(AdminSurgeController).singleton(),
+    adminDriverService: asClass(AdminDriverService).singleton(),
+    adminApplicationService: asClass(AdminApplicationService).singleton(),
     adminDriverManagementController: asClass(AdminDriverManagementController).singleton(),
+    adminVehicleService: asClass(AdminVehicleService).singleton(),
     adminVehicleManagementController: asClass(AdminVehicleManagementController).singleton(),
     adminPaymentManagementController: asClass(AdminPaymentManagementController).singleton(),
     adminStaffService: asClass(AdminStaffService).singleton(),
     adminStaffController: asClass(AdminStaffController).singleton(),
     adminRbacService: asClass(AdminRbacService).singleton(),
     adminRbacController: asClass(AdminRbacController).singleton(),
+    adminRiderService: asClass(AdminRiderService).singleton(),
+    adminRiderController: asClass(AdminRiderController).singleton(),
   });
 }
 
@@ -51,4 +64,5 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   await app.register(paymentManagementRoutes);
   await app.register(staffManagementRoutes);
   await app.register(rbacManagementRoutes);
+  await app.register(riderManagementRoutes);
 }

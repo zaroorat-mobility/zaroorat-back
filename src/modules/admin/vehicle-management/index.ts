@@ -1,2 +1,3 @@
 export * from './vehicle-management.controller.js';
+export { AdminVehicleService } from './vehicle.service.js';
 export { adminVehicleRoutes as vehicleManagementRoutes } from './vehicle-management.routes.js';

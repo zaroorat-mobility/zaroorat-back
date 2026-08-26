@@ -1,4 +1,5 @@
 import { TransactionManager } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import { EventPublisher } from '@core/events';
 import { DriverRepository } from '../../repositories/driver.repository.js';
 import { DriverStatusRepository } from '../../repositories/driver-status.repository.js';
@@ -82,38 +83,47 @@ export class StatusService {
     });
   }
   async setOffline(driverId: string, reason = 'DRIVER_REQUESTED'): Promise<DriverOnlineStatus> {
-    const status = await this.txManager.execute(async (tx) => {
-      const driver = await this.driverRepo.lockForUpdate(driverId, tx);
-      if (!driver) throw new DriverNotFoundError(driverId);
-      const currentStatus = await this.statusRepo.getStatus(driverId, tx);
-      if (currentStatus?.status === 'ON_TRIP') {
-        throw new DriverOnTripError();
-      }
-      const activeShift = await this.shiftRepo.findActiveShift(driverId, tx);
-      if (activeShift) {
-        await this.shiftRepo.endShift(activeShift.id, tx);
-      }
-      await this.driverRepo.updateAvailability(driverId, false, tx);
-      const offlineStatus = await this.statusRepo.updateStatus(
-        driverId,
-        'OFFLINE',
-        { currentShiftId: null },
-        tx,
-      );
-      this.driverMetrics.driverOffline({ driverId, reason });
-      await this.eventPublisher.publish(
-        driverEvent(DRIVER_EVENT_CATALOG.STATUS_CHANGED, driverId, {
-          driverId,
-          status: 'OFFLINE',
-          reason,
-        }),
-        tx,
-      );
-      return offlineStatus;
-    });
+    const status = await this.txManager.execute(async (tx) =>
+      this.setOfflineInTx(driverId, reason, tx),
+    );
     await this.geoService.forgetDriverPosition(driverId);
     return status;
   }
+
+  private async setOfflineInTx(
+    driverId: string,
+    reason: string,
+    tx: TransactionClient,
+  ): Promise<DriverOnlineStatus> {
+    const driver = await this.driverRepo.lockForUpdate(driverId, tx);
+    if (!driver) throw new DriverNotFoundError(driverId);
+    const currentStatus = await this.statusRepo.getStatus(driverId, tx);
+    if (currentStatus?.status === 'ON_TRIP') {
+      throw new DriverOnTripError();
+    }
+    const activeShift = await this.shiftRepo.findActiveShift(driverId, tx);
+    if (activeShift) {
+      await this.shiftRepo.endShift(activeShift.id, tx);
+    }
+    await this.driverRepo.updateAvailability(driverId, false, tx);
+    const offlineStatus = await this.statusRepo.updateStatus(
+      driverId,
+      'OFFLINE',
+      { currentShiftId: null },
+      tx,
+    );
+    this.driverMetrics.driverOffline({ driverId, reason });
+    await this.eventPublisher.publish(
+      driverEvent(DRIVER_EVENT_CATALOG.STATUS_CHANGED, driverId, {
+        driverId,
+        status: 'OFFLINE',
+        reason,
+      }),
+      tx,
+    );
+    return offlineStatus;
+  }
+
   async recordHeartbeat(
     driverId: string,
     metadata?: {
@@ -131,7 +141,29 @@ export class StatusService {
       await this.driverRepo.lockForUpdate(driverId, tx);
       await this.driverRepo.setSuspended(driverId, isSuspended, tx);
       if (isSuspended) {
-        await this.setOffline(driverId, 'ADMIN_SUSPENSION');
+        const currentStatus = await this.statusRepo.getStatus(driverId, tx);
+        if (currentStatus && currentStatus.status !== 'OFFLINE') {
+          if (currentStatus.status === 'ON_TRIP') {
+            // Force offline path is blocked on trip; still mark suspended and
+            // leave trip status — eligibility gates will refuse new offers.
+          } else {
+            const activeShift = await this.shiftRepo.findActiveShift(driverId, tx);
+            if (activeShift) {
+              await this.shiftRepo.endShift(activeShift.id, tx);
+            }
+            await this.driverRepo.updateAvailability(driverId, false, tx);
+            await this.statusRepo.updateStatus(driverId, 'OFFLINE', { currentShiftId: null }, tx);
+            this.driverMetrics.driverOffline({ driverId, reason: 'ADMIN_SUSPENSION' });
+            await this.eventPublisher.publish(
+              driverEvent(DRIVER_EVENT_CATALOG.STATUS_CHANGED, driverId, {
+                driverId,
+                status: 'OFFLINE',
+                reason: 'ADMIN_SUSPENSION',
+              }),
+              tx,
+            );
+          }
+        }
         this.driverMetrics.driverSuspended({ driverId });
         await this.eventPublisher.publish(
           driverEvent(DRIVER_EVENT_CATALOG.SUSPENDED, driverId, { driverId }),
@@ -139,5 +171,8 @@ export class StatusService {
         );
       }
     });
+    if (isSuspended) {
+      await this.geoService.forgetDriverPosition(driverId);
+    }
   }
 }
