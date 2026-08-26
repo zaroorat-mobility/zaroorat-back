@@ -12,6 +12,7 @@ import {
   makeVehicleType,
 } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
+import { rideConfig } from '../../src/config/ride/ride.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { OutboxRelay } from '../../src/core/events/OutboxRelay.js';
 import type { DispatchTimeoutJob } from '../../src/modules/rides/jobs/dispatch-timeout.job.js';
@@ -797,6 +798,65 @@ describe('ride dispatch, offers and assignment (integration)', () => {
         where: { driverId: driver.driverId },
       });
       assert.equal(status.status, 'ONLINE', 'the driver is freed again');
+    });
+
+    /// The fee a post-arrival customer cancellation attracts is *assessed*, and
+    /// the row has to say so. Collecting it is an explicit non-goal of the
+    /// payment feature (spec.md non-goals; decisions.md scopes collection to a
+    /// COMPLETED ride), and `feeCharged: true` asserted money had changed hands
+    /// that nothing had taken.
+    it('records a post-arrival cancellation fee as assessed, not charged', async () => {
+      const { driver, customer, rideId } = await acceptedRide(
+        { driver: '+919876730104', customer: '+919876730105' },
+        `FEE_${randomUUID().slice(0, 6)}`,
+      );
+      const arrived = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/arrive`,
+        headers: driver.authHeader,
+        payload: {},
+      });
+      assert.equal(arrived.statusCode, 200, arrived.payload);
+
+      const cancelled = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/cancel`,
+        headers: customer.authHeader,
+        payload: { reasonCode: 'CHANGED_MIND' },
+      });
+      assert.equal(cancelled.statusCode, 200, cancelled.payload);
+
+      const row = await db().client.rideCancellation.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(row.cancellationFee.toString(), String(rideConfig.defaultCancellationFee));
+      assert.equal(row.feeCharged, false, 'nothing charged this fee');
+
+      // And the record must match reality: no payment attempt, no ledger entry,
+      // and the ride's own obligation untouched.
+      assert.equal(await db().client.ridePayment.count({ where: { rideId } }), 0);
+      assert.equal(
+        await db().client.paymentLedgerEntry.count({ where: { referenceId: rideId } }),
+        0,
+      );
+      const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+      assert.equal(ride.paymentStatus, 'PENDING');
+    });
+
+    it('assesses no fee when the customer cancels before the driver arrives', async () => {
+      const { customer, rideId } = await acceptedRide(
+        { driver: '+919876730106', customer: '+919876730107' },
+        `NOFEE_${randomUUID().slice(0, 6)}`,
+      );
+      const cancelled = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/cancel`,
+        headers: customer.authHeader,
+        payload: { reasonCode: 'CHANGED_MIND' },
+      });
+      assert.equal(cancelled.statusCode, 200, cancelled.payload);
+
+      const row = await db().client.rideCancellation.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(row.cancellationFee.toString(), '0');
+      assert.equal(row.feeCharged, false);
     });
   });
 

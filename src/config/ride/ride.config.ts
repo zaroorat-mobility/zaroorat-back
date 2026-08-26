@@ -29,6 +29,10 @@ export const rideConfig: RideConfig = Object.freeze({
   }),
   requestExpiryMinutes: numericEnv('RIDE_REQUEST_EXPIRY_MIN', 5, { min: 1 }),
   requireStartOtp: process.env.RIDE_REQUIRE_START_OTP !== 'false',
-  cancellationGraceMinutes: Number(process.env.RIDE_CANCELLATION_GRACE_MIN ?? 2),
-  defaultCancellationFee: Number(process.env.RIDE_DEFAULT_CANCELLATION_FEE ?? 50),
+  cancellationGraceMinutes: numericEnv('RIDE_CANCELLATION_GRACE_MIN', 2, { min: 0 }),
+  // Money, and now actually read (`CancellationService`). A raw `Number()` here
+  // turned a typo into `NaN`, which `new Decimal(NaN)` carries all the way to
+  // the insert — the same fail-open every other value in this file already
+  // refuses at boot.
+  defaultCancellationFee: numericEnv('RIDE_DEFAULT_CANCELLATION_FEE', 50, { min: 0 }),
 });
