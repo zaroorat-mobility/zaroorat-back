@@ -48,6 +48,7 @@ describe('event consumer registration and delivery (integration)', () => {
       // ride event has no listener, this is what notices.
       for (const type of [
         'ride.requested',
+        'ride.request.expired',
         'ride.dispatch.offered',
         'ride.accepted',
         'ride.driver_arriving',

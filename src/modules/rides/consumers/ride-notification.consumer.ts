@@ -44,6 +44,10 @@ export class RideNotificationConsumer {
         this.onRideEvent(e, 'Trip started', 'Your trip is now in progress.'),
       ),
       this.eventBus.on(RIDE_EVENT_CATALOG.COMPLETED, (e) => this.onCompleted(e)),
+      // The one terminal outcome with no ride behind it: the search ran out of
+      // time. Addressed by `customerId` straight from the payload, because
+      // there is no ride row to resolve a participant from.
+      this.eventBus.on(RIDE_EVENT_CATALOG.REQUEST_EXPIRED, (e) => this.onRequestExpired(e)),
       // Collection outcomes, which land after the ride is already over.
       //
       // `payment.ride.collected` only — never `payment.succeeded`. The two are
@@ -84,6 +88,20 @@ export class RideNotificationConsumer {
       `You have arrived at your destination.${fareText}`,
       envelope,
     );
+  }
+  private async onRequestExpired(envelope: EventEnvelope): Promise<void> {
+    const data = envelope.data as { customerId?: string };
+    if (!data.customerId) return;
+    try {
+      await this.pushToUser(
+        data.customerId,
+        'No drivers available',
+        'We could not find a driver for your trip. Please try booking again.',
+        envelope,
+      );
+    } catch (err) {
+      logger.warn({ err, customerId: data.customerId }, '[rides] failed to push-notify customer');
+    }
   }
   private async onCollected(envelope: EventEnvelope): Promise<void> {
     const data = envelope.data as { rideId?: string; amount?: number };

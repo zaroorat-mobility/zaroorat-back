@@ -16,6 +16,8 @@ import {
 import { grantRole, makeAssignedVehicle, makeDriver, makeVehicleType } from './helpers/fixtures.js';
 import { realtimeConfig } from '../../src/config/realtime/realtime.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
+import { container } from '../../src/core/di.js';
+import type { RequestExpiryJob } from '../../src/modules/rides/jobs/request-expiry.job.js';
 
 const CENTRE = { latitude: 12.9716, longitude: 77.5946 };
 const TRIP = {
@@ -367,6 +369,39 @@ describe('realtime socket gateway (integration)', () => {
 
       const event = await requested;
       assert.equal((event.data as Record<string, unknown>).vehicleTypeId, vehicleTypeId);
+    });
+
+    /// The other way a search can end. `RequestExpiryJob` used to flip the row
+    /// to EXPIRED and publish nothing, so the rider's app sat on "searching for
+    /// a driver" with no server-side event that would ever move it off.
+    it('tells the customer when their search ran out of time', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `EXP_${randomUUID().slice(0, 6)}` });
+      const rider = await customer('+919876770040');
+      const riderSocket = await connect(rider.accessToken);
+
+      const created = await server.app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: rider.authHeader,
+        payload: { vehicleTypeId, ...TRIP },
+      });
+      assert.equal(created.statusCode, 200, created.payload);
+      const requestId = created.json().data.id as string;
+      await drainOutbox();
+
+      const expired = waitFor(riderSocket, 'ride.request.expired');
+      // Drag the window shut rather than waiting five minutes for it.
+      await db().client.rideRequest.update({
+        where: { id: requestId },
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+      await container.resolve<RequestExpiryJob>('requestExpiryJob').run();
+      await drainOutbox();
+
+      const event = await expired;
+      assert.equal(event.type, 'ride.request.expired');
+      assert.equal((event.data as Record<string, unknown>).requestId, requestId);
+      assert.equal(typeof event.eventId, 'string', 'carries the outbox id for de-duplication');
     });
 
     it('delivers the whole ride lifecycle to both participants', async () => {
