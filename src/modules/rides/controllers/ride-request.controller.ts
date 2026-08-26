@@ -14,10 +14,10 @@ export class RideRequestController {
     const quote = await this.rideService.request.createQuote({
       pickupLat: body.pickupLat,
       pickupLng: body.pickupLng,
+      dropLat: body.dropLat,
+      dropLng: body.dropLng,
       ...(body.vehicleTypeId !== undefined ? { vehicleTypeId: body.vehicleTypeId } : {}),
       ...(body.cityId !== undefined ? { cityId: body.cityId } : {}),
-      ...(body.dropLat !== undefined ? { dropLat: body.dropLat } : {}),
-      ...(body.dropLng !== undefined ? { dropLng: body.dropLng } : {}),
     });
     reply.send({ data: quote });
   }
@@ -30,9 +30,9 @@ export class RideRequestController {
         vehicleTypeId: body.vehicleTypeId,
         pickupLat: body.pickupLat,
         pickupLng: body.pickupLng,
+        dropLat: body.dropLat,
+        dropLng: body.dropLng,
         ...(body.pickupAddress !== undefined ? { pickupAddress: body.pickupAddress } : {}),
-        ...(body.dropLat !== undefined ? { dropLat: body.dropLat } : {}),
-        ...(body.dropLng !== undefined ? { dropLng: body.dropLng } : {}),
         ...(body.dropAddress !== undefined ? { dropAddress: body.dropAddress } : {}),
         ...(body.paymentMethod !== undefined ? { paymentMethod: body.paymentMethod } : {}),
         ...(body.promoCode !== undefined ? { promoCode: body.promoCode } : {}),

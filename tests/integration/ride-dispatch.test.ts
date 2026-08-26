@@ -1070,4 +1070,80 @@ describe('ride dispatch, offers and assignment (integration)', () => {
       assert.equal(await responseOf(offerOf(offers, other).id), 'ACCEPTED');
     });
   });
+
+  /// `dropLat`/`dropLng` were `.optional()` on both schemas while everything
+  /// behind them required a drop, so a body the schema advertised as valid died
+  /// on a bare `Error` inside pricing and came back as 500 INTERNAL — the server
+  /// blaming itself for the client following its own contract.
+  describe('a ride needs somewhere to go (H-4)', () => {
+    it('refuses a quote with no drop, as a validation error and not a 500', async () => {
+      const customer = await customerWithProfile('+919876730110');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: { pickupLat: 12.9716, pickupLng: 77.5946 },
+      });
+
+      assert.equal(response.statusCode, 400, response.payload);
+      assert.equal(response.json().error.code, 'VALIDATION');
+      // The point of a 400 over a 500 is that it says which fields are wrong.
+      const paths = (response.json().error.details as { path: string[] }[]).map((issue) =>
+        issue.path.join('.'),
+      );
+      assert.deepEqual(paths.sort(), ['dropLat', 'dropLng']);
+    });
+
+    it('refuses a booking with no drop, and writes nothing', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NODROP_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730111');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, pickupLat: 12.9716, pickupLng: 77.5946 },
+      });
+
+      assert.equal(response.statusCode, 400, response.payload);
+      assert.equal(response.json().error.code, 'VALIDATION');
+      assert.equal(await db().client.rideRequest.count(), 0);
+    });
+
+    it('refuses half a drop, so a dropped field cannot be read as no destination', async () => {
+      const customer = await customerWithProfile('+919876730112');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: { pickupLat: 12.9716, pickupLng: 77.5946, dropLat: 12.9352 },
+      });
+
+      assert.equal(response.statusCode, 400, response.payload);
+      const paths = (response.json().error.details as { path: string[] }[]).map((issue) =>
+        issue.path.join('.'),
+      );
+      assert.deepEqual(paths, ['dropLng']);
+    });
+
+    it('still quotes and books a trip that has a drop', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `DROP_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730113');
+
+      const quoted = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP },
+      });
+      assert.equal(quoted.statusCode, 200, quoted.payload);
+      assert.ok(quoted.json().data.estimatedDistanceKm > 0);
+
+      const { requestId } = await requestRide(customer, vehicleTypeId);
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.ok(request.dropLat !== null && request.dropLng !== null);
+    });
+  });
 });

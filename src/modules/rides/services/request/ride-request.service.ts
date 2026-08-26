@@ -69,18 +69,15 @@ export class RideRequestService {
   async createQuote(params: {
     pickupLat: number;
     pickupLng: number;
-    dropLat?: number;
-    dropLng?: number;
+    dropLat: number;
+    dropLng: number;
     vehicleTypeId?: string;
     cityId?: string;
   }): Promise<RideQuote> {
-    if (params.dropLat == null || params.dropLng == null) {
-      throw new Error(
-        'A fare quote requires drop coordinates. Quoting an open-ended ride at a ' +
-          'fixed default distance produced a price unrelated to the trip.',
-      );
-    }
-
+    // The `dropLat == null` guard that used to stand here was a second copy of
+    // the one in `calculateFareQuote`, and both threw a bare `Error` that
+    // surfaced as 500. `quoteFareSchema` now requires the coordinates, so this
+    // is unreachable input rather than an error path.
     const vehicleTypes = params.vehicleTypeId
       ? [await this.vehicleTypeService.requireActive(params.vehicleTypeId)]
       : await this.vehicleTypeService.listActive(
@@ -141,8 +138,8 @@ export class RideRequestService {
     pickupLat: number;
     pickupLng: number;
     pickupAddress?: string;
-    dropLat?: number;
-    dropLng?: number;
+    dropLat: number;
+    dropLng: number;
     dropAddress?: string;
     paymentMethod?: string;
     promoCode?: string;
@@ -187,10 +184,10 @@ export class RideRequestService {
     const fareQuote = await this.pricingService.calculateFareQuote({
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
+      dropLat: input.dropLat,
+      dropLng: input.dropLng,
       vehicleTypeId: input.vehicleTypeId,
       surgeMultiplier,
-      ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
-      ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
     });
     return this.txManager.execute(async (tx) => {
       const createInput: CreateRideRequestInput = {
@@ -204,9 +201,9 @@ export class RideRequestService {
         surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
         expiresAt: new Date(Date.now() + 5 * 60 * 1000),
       };
+      createInput.dropLat = new Decimal(input.dropLat);
+      createInput.dropLng = new Decimal(input.dropLng);
       if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
-      if (input.dropLat !== undefined) createInput.dropLat = new Decimal(input.dropLat);
-      if (input.dropLng !== undefined) createInput.dropLng = new Decimal(input.dropLng);
       if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
       if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
       if (input.promoCode !== undefined) createInput.promoCode = input.promoCode;

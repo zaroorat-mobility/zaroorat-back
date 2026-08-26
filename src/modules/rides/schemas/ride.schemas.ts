@@ -1,11 +1,21 @@
 import { z } from 'zod';
 import { latitudeSchema, longitudeSchema } from '@modules/geo';
 import { RIDE_OTP_LENGTH } from '../constants/ride.constants.js';
+/// Drop coordinates are required, not optional.
+///
+/// They were optional here while every path behind them insisted on having
+/// them: `calculateFareQuote` refuses to price an open-ended trip rather than
+/// assume a default distance, and `RideQuote` has no shape for a missing drop.
+/// So a request that this schema accepted died on a bare `Error` deeper in, and
+/// `handleRideError` — which only maps coded errors — turned it into **500
+/// INTERNAL**. A client sending exactly what the schema advertised was told the
+/// server had broken. Required here, it is a 400 VALIDATION naming the fields,
+/// like every other required field on these routes.
 export const quoteFareSchema = z.object({
   pickupLat: latitudeSchema,
   pickupLng: longitudeSchema,
-  dropLat: latitudeSchema.optional(),
-  dropLng: longitudeSchema.optional(),
+  dropLat: latitudeSchema,
+  dropLng: longitudeSchema,
   /// Optional: omit to price every active category in one call (the customer
   /// app's picker), supply one to price just that category.
   vehicleTypeId: z.string().uuid().optional(),
@@ -17,8 +27,11 @@ export const createRideRequestSchema = z.object({
   pickupLat: latitudeSchema,
   pickupLng: longitudeSchema,
   pickupAddress: z.string().max(255).optional(),
-  dropLat: latitudeSchema.optional(),
-  dropLng: longitudeSchema.optional(),
+  // Required for the same reason as on `quoteFareSchema`: booking priced the
+  // ride through the same `calculateFareQuote`, so a request without a drop was
+  // a 500 too. `dropAddress` stays optional — a label is not a location.
+  dropLat: latitudeSchema,
+  dropLng: longitudeSchema,
   dropAddress: z.string().max(255).optional(),
   paymentMethod: z.enum(['CASH', 'WALLET', 'CARD', 'UPI']).optional(),
   promoCode: z.string().max(50).optional(),
