@@ -18,5 +18,6 @@ export const RedisKeys = {
   rateLimit: (scope: string, id: string): string => `ratelimit:${scope}:${id}`,
   idempotency: (operation: IdempotencyOperation, key: string): string => `idem:${operation}:${key}`,
   lock: (resource: string): string => `lock:${resource}`,
+  tripDistance: (driverId: string): string => `ride:distance:${driverId}`,
 } as const;
 export type RedisKeys = typeof RedisKeys;

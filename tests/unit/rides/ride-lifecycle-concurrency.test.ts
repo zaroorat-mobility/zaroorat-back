@@ -114,6 +114,23 @@ function makeWorld() {
   // accept a request they booked themselves. Every driver in this file maps to
   // a distinct user id; a test that wants the self-accept case seeds the
   // matching `customerId` on the request.
+  /// The server's own trip meter, standing in for Redis. Seed it to say how far
+  /// the driver was actually measured to have travelled.
+  const tripMeter = new Map<string, number>();
+  const redisService = {
+    tripDistance: {
+      async add(driverId: string, km: number) {
+        tripMeter.set(driverId, (tripMeter.get(driverId) ?? 0) + km);
+      },
+      async read(driverId: string) {
+        return tripMeter.get(driverId) ?? 0;
+      },
+      async reset(driverId: string) {
+        tripMeter.delete(driverId);
+      },
+    },
+  };
+
   const completionCounters = new Map<
     string,
     { totalRides: number; totalDistanceKm: number; lastRideAt: Date }
@@ -254,6 +271,7 @@ function makeWorld() {
       },
     } as never,
     { rideStarted() {}, rideCompleted() {}, rideCancelled() {}, driverArriving() {} } as never,
+    redisService as never,
   );
 
   /// Puts a live PENDING offer in front of a driver, the way a dispatch round
@@ -290,6 +308,7 @@ function makeWorld() {
     activeRideByDriver,
     sentOtpSms,
     completionCounters,
+    tripMeter,
   };
 }
 
@@ -590,12 +609,80 @@ describe('Ride lifecycle concurrency', () => {
     assert.deepEqual(world.ledgerPostings, [], 'and nothing may reach the books');
   });
 
-  it('bills the completed ride for its actual distance', async () => {
-    const world = makeWorld();
-    seedRide(world, 'IN_PROGRESS');
+  /// C-3b. `actualDistanceKm` arrives in the completion request from the
+  /// driver's own app, and billing on it made the client the authority on the
+  /// fare — a modified app could name its own price. The server now adds the
+  /// journey up itself from the location fixes it already receives and bills
+  /// the greater of that and the distance the customer was quoted.
+  describe('the fare is billed on the distance the server measured (C-3b)', () => {
+    function quotedRide(world: ReturnType<typeof makeWorld>, estimatedDistanceKm: number) {
+      seedRide(world, 'IN_PROGRESS');
+      world.requests.set('req_1', {
+        id: 'req_1',
+        status: 'MATCHED',
+        customerId: 'cust_1',
+        vehicleTypeId: 'v1',
+        estimatedDistanceKm,
+        estimatedDurationMin: 60,
+      });
+    }
 
-    await world.service.completeRide('ride_1', 'driver_1', 30, 60);
-    assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '30');
+    it('ignores a distance the app inflated', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 12);
+
+      // The app claims 30km for a trip the server watched cover 12.
+      await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '12');
+    });
+
+    it('bills the measured distance when it exceeds the quote', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 18);
+
+      // A genuine detour must still be paid for.
+      await world.service.completeRide('ride_1', 'driver_1', 18, 60);
+
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '18');
+    });
+
+    it('falls back to the quote when the meter recorded less', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // A gappy trail — tunnel, dead battery, backgrounded app.
+      world.tripMeter.set('driver_1', 3);
+
+      await world.service.completeRide('ride_1', 'driver_1', 10, 60);
+
+      assert.equal(
+        world.rides.get('ride_1')?.actualDistanceKm?.toString(),
+        '10',
+        'the quote is the floor, so a lost trail never bills a real journey as a short one',
+      );
+    });
+
+    it('falls back to the quote when the meter was lost entirely', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // Nothing seeded: a Redis flush mid-ride.
+
+      await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '10');
+    });
+
+    it('clears the meter so the next trip starts from zero', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 12);
+
+      await world.service.completeRide('ride_1', 'driver_1', 12, 60);
+
+      assert.equal(world.tripMeter.get('driver_1'), undefined);
+    });
   });
 
   /// The distance bound is the only thing standing over a driver-declared

@@ -41,6 +41,7 @@ import {
   TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN,
 } from '../../constants/ride.constants.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
+import { RedisService } from '@core/cache/RedisService.js';
 import { LedgerService } from '@modules/payments/services/ledger/ledger.service.js';
 import type { Ride, RideRequest, RideStatus } from '../../types';
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
@@ -97,6 +98,7 @@ export class LifecycleService {
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
+    private readonly redisService: RedisService,
   ) {}
   validateTransition(fromState: string, toState: string): void {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
@@ -464,7 +466,7 @@ export class LifecycleService {
     });
   }
   async startRide(rideId: string, driverId: string, otpCode: string): Promise<Ride> {
-    return this.txManager.execute(async (tx) => {
+    const started = await this.txManager.execute(async (tx) => {
       const ride = await this.lockAndValidate(
         rideId,
         { kind: 'driver', driverId },
@@ -495,6 +497,50 @@ export class LifecycleService {
       );
       return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt };
     });
+    // Outside the transaction: Redis does not roll back with it, and a counter
+    // zeroed for a start that never committed would only ever discard distance
+    // from before the trip. Anything accumulated from here to `completeRide` is
+    // this trip.
+    await this.resetTripMeter(driverId);
+    return started;
+  }
+
+  /// Never allowed to fail a lifecycle transition. A meter that would not clear
+  /// leaves the previous trip's distance in place, and `max(measured, quoted)`
+  /// is what stops that becoming a fare nobody drove — see `billedDistanceKm`.
+  private async resetTripMeter(driverId: string): Promise<void> {
+    try {
+      await this.redisService.tripDistance.reset(driverId);
+    } catch (err) {
+      logger.warn({ err, driverId }, '[rides] could not reset the trip distance meter');
+    }
+  }
+
+  /// What the ride is actually billed for.
+  ///
+  /// `actualDistanceKm` arrives in the completion request from the driver's own
+  /// app, and billing on it made the client the authority on the fare: a
+  /// modified app could name its own price. The server now adds the journey up
+  /// itself from the location fixes it already receives (`accrueTripDistance`),
+  /// and bills the greater of that and the distance the customer was quoted.
+  ///
+  /// The greater, rather than the measured figure alone, because the fixes are
+  /// best-effort: a driver through a tunnel, on a dead battery or with the app
+  /// backgrounded produces a gappy trail that *under*-counts, and the quote is
+  /// the floor that stops a real journey being billed as a short one. It also
+  /// makes the Redis counter safe to lose — losing it bills the quote, which is
+  /// the price the customer already agreed to.
+  ///
+  /// A detour longer than the quote is still paid for, because a measurement
+  /// above the quote wins.
+  private async billedDistanceKm(driverId: string, quotedKm: number | null): Promise<number> {
+    let measuredKm = 0;
+    try {
+      measuredKm = await this.redisService.tripDistance.read(driverId);
+    } catch (err) {
+      logger.warn({ err, driverId }, '[rides] could not read the trip distance meter');
+    }
+    return Math.max(measuredKm, quotedKm ?? 0);
   }
   async completeRide(
     rideId: string,
@@ -502,7 +548,7 @@ export class LifecycleService {
     actualDistanceKm: number,
     actualDurationMin: number,
   ): Promise<Ride> {
-    return this.txManager.execute(async (tx) => {
+    const completed = await this.txManager.execute(async (tx) => {
       const ride = await this.lockAndValidate(
         rideId,
         { kind: 'driver', driverId },
@@ -512,6 +558,18 @@ export class LifecycleService {
       const request = await this.requestRepo.findById(ride.requestId, tx);
       this.assertPlausibleTripData(request, actualDistanceKm, actualDurationMin, rideId);
       const completedAt = new Date();
+      // C-3b. `actualDistanceKm` above is still checked for plausibility, but it
+      // no longer decides the fare: the server bills what it measured, floored
+      // at what the customer was quoted.
+      const quotedDistanceKm =
+        request?.estimatedDistanceKm != null ? Number(request.estimatedDistanceKm) : null;
+      const billedDistanceKm = await this.billedDistanceKm(driverId, quotedDistanceKm);
+      if (Math.abs(billedDistanceKm - actualDistanceKm) > 1) {
+        logger.info(
+          { rideId, driverId, billedDistanceKm, claimedDistanceKm: actualDistanceKm },
+          '[rides] billing a measured distance that differs from the one the app reported',
+        );
+      }
       const billedDurationMin = this.measuredDurationMin(
         ride,
         completedAt,
@@ -530,7 +588,7 @@ export class LifecycleService {
       // the customer's control and not what they agreed to.
       const surgeMultiplier = Number(request?.surgeMultiplier ?? 1);
       const itemizedFare = await this.pricingService.calculateFinalFare({
-        actualDistanceKm,
+        actualDistanceKm: billedDistanceKm,
         actualDurationMin: billedDurationMin,
         vehicleTypeId: ride.vehicleTypeId,
         surgeMultiplier,
@@ -549,7 +607,7 @@ export class LifecycleService {
           'COMPLETED',
           {
             completedAt,
-            actualDistanceKm: new Decimal(actualDistanceKm),
+            actualDistanceKm: new Decimal(billedDistanceKm),
             actualDurationMin: billedDurationMin,
             paymentStatus,
           },
@@ -632,10 +690,15 @@ export class LifecycleService {
         ...ride,
         status: 'COMPLETED' as RideStatus,
         completedAt,
-        actualDistanceKm: new Decimal(actualDistanceKm),
+        actualDistanceKm: new Decimal(billedDistanceKm),
         actualDurationMin: billedDurationMin,
       };
     });
+    // After the commit, for the same reason `startRide` resets after its own:
+    // a meter cleared for a completion that rolled back would lose a trip's
+    // distance that is still being driven.
+    await this.resetTripMeter(driverId);
+    return completed;
   }
   async cancelRide(
     rideId: string,

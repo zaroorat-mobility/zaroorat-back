@@ -26,6 +26,7 @@ describe('Ride State Machine Tests', () => {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
   );
 
   it('allows valid ride state transitions', () => {
