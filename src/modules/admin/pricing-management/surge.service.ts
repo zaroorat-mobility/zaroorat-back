@@ -96,14 +96,67 @@ export class AdminSurgeService {
     });
   }
 
-  async listSurgeWindows(): Promise<SurgeWindow[]> {
-    return this.db.client.surgeWindow.findMany({
+  async listSurgeWindows(): Promise<
+    Array<
+      SurgeWindow & {
+        zoneName?: string;
+        vehicleTypeCode?: string | null;
+      }
+    >
+  > {
+    const windows = await this.db.client.surgeWindow.findMany({
+      include: {
+        zone: { select: { name: true } },
+        vehicleType: { select: { code: true } },
+      },
       orderBy: { createdAt: 'desc' },
     });
+
+    return windows.map((row) => ({
+      id: row.id,
+      zoneId: row.zoneId,
+      vehicleTypeId: row.vehicleTypeId,
+      multiplier: row.multiplier,
+      source: row.source,
+      reason: row.reason,
+      startsAt: row.startsAt,
+      endsAt: row.endsAt,
+      isActive: row.isActive,
+      createdAt: row.createdAt,
+      zoneName: row.zone.name,
+      vehicleTypeCode: row.vehicleType?.code ?? null,
+    }));
   }
 
-  async getSurgeWindow(id: string): Promise<SurgeWindow | null> {
-    return this.db.client.surgeWindow.findUnique({ where: { id } });
+  async getSurgeWindow(id: string): Promise<
+    | (SurgeWindow & {
+        zoneName?: string;
+        vehicleTypeCode?: string | null;
+      })
+    | null
+  > {
+    const row = await this.db.client.surgeWindow.findUnique({
+      where: { id },
+      include: {
+        zone: { select: { name: true } },
+        vehicleType: { select: { code: true } },
+      },
+    });
+    if (!row) return null;
+    return {
+      id: row.id,
+      zoneId: row.zoneId,
+      vehicleTypeId: row.vehicleTypeId,
+      multiplier: row.multiplier,
+      source: row.source,
+      reason: row.reason,
+      startsAt: row.startsAt,
+      endsAt: row.endsAt,
+      isActive: row.isActive,
+      createdAt: row.createdAt,
+      zoneName: row.zone.name,
+      vehicleTypeCode: row.vehicleType?.code ?? null,
+    };
   }
 
   async updateSurgeWindow(

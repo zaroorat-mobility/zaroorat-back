@@ -5,7 +5,29 @@ import {
   pricingManagementRoutes,
   AdminSurgeController,
   AdminSurgeService,
+  AdminFareController,
+  AdminFareService,
+  AdminCancellationController,
+  AdminCancellationService,
 } from './pricing-management/index.js';
+import {
+  promotionsManagementRoutes,
+  AdminPromotionsController,
+  AdminPromotionService,
+  AdminCampaignService,
+  AdminSegmentService,
+  AdminCouponService,
+  AdminBannerService,
+  AdminPromoReportService,
+  AdminCityService,
+} from './promotions-management/index.js';
+import {
+  referralManagementRoutes,
+  AdminReferralController,
+  AdminReferralProgramService,
+  AdminReferralCodeService,
+  AdminReferralHistoryService,
+} from './referral-management/index.js';
 import {
   driverManagementRoutes,
   AdminDriverManagementController,
@@ -41,6 +63,22 @@ export function registerAdminModule(container: AwilixContainer): void {
   container.register({
     adminSurgeService: asClass(AdminSurgeService).singleton(),
     adminSurgeController: asClass(AdminSurgeController).singleton(),
+    adminFareService: asClass(AdminFareService).singleton(),
+    adminFareController: asClass(AdminFareController).singleton(),
+    adminCancellationService: asClass(AdminCancellationService).singleton(),
+    adminCancellationController: asClass(AdminCancellationController).singleton(),
+    adminPromotionService: asClass(AdminPromotionService).singleton(),
+    adminCampaignService: asClass(AdminCampaignService).singleton(),
+    adminSegmentService: asClass(AdminSegmentService).singleton(),
+    adminCouponService: asClass(AdminCouponService).singleton(),
+    adminBannerService: asClass(AdminBannerService).singleton(),
+    adminPromoReportService: asClass(AdminPromoReportService).singleton(),
+    adminCityService: asClass(AdminCityService).singleton(),
+    adminPromotionsController: asClass(AdminPromotionsController).singleton(),
+    adminReferralProgramService: asClass(AdminReferralProgramService).singleton(),
+    adminReferralCodeService: asClass(AdminReferralCodeService).singleton(),
+    adminReferralHistoryService: asClass(AdminReferralHistoryService).singleton(),
+    adminReferralController: asClass(AdminReferralController).singleton(),
     adminDriverService: asClass(AdminDriverService).singleton(),
     adminApplicationService: asClass(AdminApplicationService).singleton(),
     adminDriverManagementController: asClass(AdminDriverManagementController).singleton(),
@@ -57,8 +95,9 @@ export function registerAdminModule(container: AwilixContainer): void {
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
-  // Aggregate all admin routes under this module
   await app.register(pricingManagementRoutes);
+  await app.register(promotionsManagementRoutes);
+  await app.register(referralManagementRoutes);
   await app.register(driverManagementRoutes);
   await app.register(vehicleManagementRoutes);
   await app.register(paymentManagementRoutes);

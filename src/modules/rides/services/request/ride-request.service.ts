@@ -8,6 +8,7 @@ import {
 import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { PricingService, SurgeService } from '@modules/pricing';
+import { PromotionService } from '@modules/promotions';
 import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
 import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
 import { toVehicleTypeView } from '@modules/vehicles/controllers/vehicle-type.controller.js';
@@ -35,6 +36,10 @@ export interface QuoteOption {
   estimatedFare: number;
   minimumFare: number;
   fareBreakdown: ItemizedFareResult;
+  promoApplied: boolean;
+  promoDiscountAmount: number;
+  promoErrorCode?: string;
+  promoErrorMessage?: string;
 }
 
 export interface RideQuote {
@@ -53,6 +58,7 @@ export class RideRequestService {
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly pricingService: PricingService,
     private readonly surgeService: SurgeService,
+    private readonly promotionService: PromotionService,
     private readonly vehicleTypeService: VehicleTypeService,
     private readonly userProfileRepository: UserProfileRepository,
     private readonly txManager: TransactionManager,
@@ -73,6 +79,9 @@ export class RideRequestService {
     dropLng?: number;
     vehicleTypeId?: string;
     cityId?: string;
+    cityCode?: string;
+    promoCode?: string;
+    userId?: string;
   }): Promise<RideQuote> {
     if (params.dropLat == null || params.dropLng == null) {
       throw new Error(
@@ -103,7 +112,7 @@ export class RideRequestService {
         vehicleType.id,
       );
 
-      const fare = await this.pricingService.calculateFareQuote({
+      const baseFare = await this.pricingService.calculateFareQuote({
         pickupLat: params.pickupLat,
         pickupLng: params.pickupLng,
         dropLat: params.dropLat,
@@ -112,6 +121,29 @@ export class RideRequestService {
         surgeMultiplier,
         rateCard,
       });
+
+      const promoResult = await this.promotionService.quotePromo(params.promoCode, {
+        ...(params.userId !== undefined ? { userId: params.userId } : {}),
+        cityCode: params.cityCode ?? null,
+        vehicleTypeId: vehicleType.id,
+        subtotal: baseFare.subtotal,
+        softUserChecks: params.userId == null,
+      });
+
+      const fare =
+        promoResult.applied && promoResult.discountAmount > 0
+          ? await this.pricingService.calculateFareQuote({
+              pickupLat: params.pickupLat,
+              pickupLng: params.pickupLng,
+              dropLat: params.dropLat,
+              dropLng: params.dropLng,
+              vehicleTypeId: vehicleType.id,
+              surgeMultiplier,
+              rateCard,
+              discountAmount: promoResult.discountAmount,
+            })
+          : baseFare;
+
       const view = toVehicleTypeView(vehicleType);
       options.push({
         vehicleTypeId: vehicleType.id,
@@ -123,6 +155,12 @@ export class RideRequestService {
         estimatedFare: fare.totalFare,
         minimumFare: rateCard.minimumFare,
         fareBreakdown: fare,
+        promoApplied: promoResult.applied,
+        promoDiscountAmount: promoResult.discountAmount,
+        ...(promoResult.errorCode !== undefined ? { promoErrorCode: promoResult.errorCode } : {}),
+        ...(promoResult.errorMessage !== undefined
+          ? { promoErrorMessage: promoResult.errorMessage }
+          : {}),
       });
     }
 
@@ -146,6 +184,7 @@ export class RideRequestService {
     dropAddress?: string;
     paymentMethod?: string;
     promoCode?: string;
+    cityCode?: string;
   }): Promise<RideRequest> {
     const profile = await this.userProfileRepository.findByUserId(input.customerId);
     if (!profile?.firstName || !profile.lastName) {
@@ -184,7 +223,7 @@ export class RideRequestService {
       input.vehicleTypeId,
     );
 
-    const fareQuote = await this.pricingService.calculateFareQuote({
+    const baseFare = await this.pricingService.calculateFareQuote({
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
       vehicleTypeId: input.vehicleTypeId,
@@ -192,6 +231,31 @@ export class RideRequestService {
       ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
       ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
     });
+
+    let discountAmount = 0;
+    if (input.promoCode?.trim()) {
+      const resolved = await this.promotionService.validateAndResolve(input.promoCode.trim(), {
+        userId: input.customerId,
+        cityCode: input.cityCode ?? null,
+        vehicleTypeId: input.vehicleTypeId,
+        subtotal: baseFare.subtotal,
+      });
+      discountAmount = resolved.discountAmount;
+    }
+
+    const fareQuote =
+      discountAmount > 0
+        ? await this.pricingService.calculateFareQuote({
+            pickupLat: input.pickupLat,
+            pickupLng: input.pickupLng,
+            vehicleTypeId: input.vehicleTypeId,
+            surgeMultiplier,
+            discountAmount,
+            ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
+            ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
+          })
+        : baseFare;
+
     return this.txManager.execute(async (tx) => {
       const createInput: CreateRideRequestInput = {
         customerId: input.customerId,
@@ -209,7 +273,8 @@ export class RideRequestService {
       if (input.dropLng !== undefined) createInput.dropLng = new Decimal(input.dropLng);
       if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
       if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
-      if (input.promoCode !== undefined) createInput.promoCode = input.promoCode;
+      if (input.promoCode !== undefined)
+        createInput.promoCode = input.promoCode.trim().toUpperCase();
       const request = await this.requestRepo.create(createInput, tx);
       this.rideMetrics.requestCreated({ requestId: request.id });
       await this.eventPublisher.publish(

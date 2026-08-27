@@ -182,6 +182,24 @@ export const PERMISSION_SEED = [
     description: 'View campaigns and coupons',
   },
   {
+    code: 'campaigns:write',
+    resource: 'campaigns',
+    action: 'write',
+    description: 'Create and manage campaigns and coupons',
+  },
+  {
+    code: 'referrals:read',
+    resource: 'referrals',
+    action: 'read',
+    description: 'View referral programs, codes, and history',
+  },
+  {
+    code: 'referrals:write',
+    resource: 'referrals',
+    action: 'write',
+    description: 'Create and manage referral programs and codes',
+  },
+  {
     code: 'documents:read',
     resource: 'documents',
     action: 'read',

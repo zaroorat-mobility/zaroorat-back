@@ -1,4 +1,11 @@
 export * from './surge.controller.js';
 export * from './surge.service.js';
 export * from './surge.schema.js';
+export * from './fare.controller.js';
+export * from './fare.service.js';
+export * from './fare.schemas.js';
+export * from './cancellation.controller.js';
+export * from './cancellation.service.js';
+export * from './cancellation.schemas.js';
+export * from './pricing.errors.js';
 export { adminSurgeRoutes as pricingManagementRoutes } from './pricing-management.routes.js';
