@@ -114,7 +114,11 @@ function makeWorld(
     },
   };
 
-  const matchingCalls: { excluded: string[]; limit: number; radiusMeters?: number }[] = [];
+  // `radiusMeters: number | undefined` rather than an optional property: the
+  // push below always supplies the key, and under `exactOptionalPropertyTypes` an
+  // optional property does not accept an explicit `undefined`.
+  const matchingCalls: { excluded: string[]; limit: number; radiusMeters: number | undefined }[] =
+    [];
   const matchingService = {
     async findEligibleCandidates(
       _origin: unknown,
