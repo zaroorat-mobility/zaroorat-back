@@ -1,5 +1,5 @@
 import { Decimal } from '../../types/index.js';
-import { TransactionManager } from '@core/database';
+import { TransactionManager, UniqueConstraintError } from '@core/database';
 import { EventPublisher } from '@core/events';
 import {
   RideRequestRepository,
@@ -205,36 +205,56 @@ export class RideRequestService {
       vehicleTypeId: input.vehicleTypeId,
       surgeMultiplier,
     });
-    return this.txManager.execute(async (tx) => {
-      const createInput: CreateRideRequestInput = {
-        customerId: input.customerId,
-        vehicleTypeId: input.vehicleTypeId,
-        pickupLat: new Decimal(input.pickupLat),
-        pickupLng: new Decimal(input.pickupLng),
-        estimatedDistanceKm: new Decimal(fareQuote.estimatedDistanceKm),
-        estimatedDurationMin: fareQuote.estimatedDurationMin,
-        quotedFare: new Decimal(fareQuote.totalFare),
-        surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      };
-      createInput.dropLat = new Decimal(input.dropLat);
-      createInput.dropLng = new Decimal(input.dropLng);
-      if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
-      if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
-      if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
-      const request = await this.requestRepo.create(createInput, tx);
-      this.rideMetrics.requestCreated({ requestId: request.id });
-      await this.eventPublisher.publish(
-        rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
-          requestId: request.id,
+    // The `findActiveByCustomer` check above is a read outside this write's
+    // transaction, so it cannot see a sibling booking that has not committed
+    // yet — the `ride_requests_active_customer_key` partial index is what
+    // actually stops the second row, exactly as its migration says.
+    try {
+      return await this.txManager.execute(async (tx) => {
+        const createInput: CreateRideRequestInput = {
           customerId: input.customerId,
           vehicleTypeId: input.vehicleTypeId,
-          quotedFare: fareQuote.totalFare,
-        }),
-        tx,
-      );
-      return request;
-    });
+          pickupLat: new Decimal(input.pickupLat),
+          pickupLng: new Decimal(input.pickupLng),
+          estimatedDistanceKm: new Decimal(fareQuote.estimatedDistanceKm),
+          estimatedDurationMin: fareQuote.estimatedDurationMin,
+          quotedFare: new Decimal(fareQuote.totalFare),
+          surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        };
+        createInput.dropLat = new Decimal(input.dropLat);
+        createInput.dropLng = new Decimal(input.dropLng);
+        if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
+        if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
+        if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
+        const request = await this.requestRepo.create(createInput, tx);
+        this.rideMetrics.requestCreated({ requestId: request.id });
+        await this.eventPublisher.publish(
+          rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
+            requestId: request.id,
+            customerId: input.customerId,
+            vehicleTypeId: input.vehicleTypeId,
+            quotedFare: fareQuote.totalFare,
+          }),
+          tx,
+        );
+        return request;
+      });
+    } catch (err) {
+      // That index is the only unique constraint this insert can violate — the
+      // id is a uuid7 and the outbox event id is freshly generated — so
+      // reaching here means the rider booked twice at once and lost the race.
+      //
+      // They used to be told what the database was told: nothing.
+      // `UniqueConstraintError` carries no `code` and no `statusCode`, so
+      // `handleRideError` could only call it 500 — a server fault reported to a
+      // rider who tapped Book twice, where the identical sequential retry gets
+      // a clean 409. Same intent, same end state, two different answers.
+      if (err instanceof UniqueConstraintError) {
+        throw new ActiveRideExistsError('Customer already has an active ride request');
+      }
+      throw err;
+    }
   }
   /// A request nobody has accepted yet has no `Ride` row, so `LifecycleService`'s
   /// cancel path (which acts on a `Ride`) can't reach it — this is the only

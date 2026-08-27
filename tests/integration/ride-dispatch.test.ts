@@ -179,6 +179,63 @@ describe('ride dispatch, offers and assignment (integration)', () => {
 
   // ------------------------------------------------------------ the scenarios
 
+  /// Nothing in the suite covered the "one active request per customer" guard
+  /// at all, in either shape.
+  describe('booking twice at once (M-10)', () => {
+    function book(customer: LoggedInUser, vehicleTypeId: string) {
+      return app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP },
+      });
+    }
+
+    async function requestRows(customerId: string): Promise<number> {
+      return db().client.rideRequest.count({
+        where: { customerId, status: { in: ['CREATED', 'SEARCHING'] } },
+      });
+    }
+
+    it('refuses a second booking while one is still open', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `DUP1_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730901');
+
+      assert.equal((await book(customer, vehicleTypeId)).statusCode, 200);
+      const second = await book(customer, vehicleTypeId);
+
+      assert.equal(second.statusCode, 409, second.payload);
+      assert.equal(second.json().error.code, 'ACTIVE_RIDE_EXISTS');
+      assert.equal(await requestRows(customer.userId), 1);
+    });
+
+    /// The lost race, staged deterministically. Two overlapping bookings cannot
+    /// be interleaved through `app.inject` — they serialise, and the read guard
+    /// catches the second every time — so the guard is blinded instead, which is
+    /// precisely what losing the race does to it: it looks, and the sibling
+    /// request has not committed yet. The insert that follows meets the real
+    /// `ride_requests_active_customer_key` index in Postgres.
+    it('answers a lost race the same way it answers a retry', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `DUP2_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730902');
+      assert.equal((await book(customer, vehicleTypeId)).statusCode, 200);
+
+      const repo = container.resolve<{ findActiveByCustomer: unknown }>('rideRequestRepository');
+      const original = repo.findActiveByCustomer;
+      repo.findActiveByCustomer = async () => null;
+      let refused;
+      try {
+        refused = await book(customer, vehicleTypeId);
+      } finally {
+        repo.findActiveByCustomer = original;
+      }
+
+      assert.equal(refused.statusCode, 409, refused.payload);
+      assert.equal(refused.json().error.code, 'ACTIVE_RIDE_EXISTS');
+      assert.equal(await requestRows(customer.userId), 1, 'exactly one request may exist');
+    });
+  });
+
   /// One degree of longitude is about 108.5km at this latitude, which is all the
   /// arithmetic needed to put a driver a chosen distance due east of the pickup.
   function eastOfCentre(metres: number): { latitude: number; longitude: number } {
