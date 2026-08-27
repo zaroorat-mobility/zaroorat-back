@@ -600,6 +600,14 @@ export class LifecycleService {
           tx,
         );
       }
+      // Behind the conditional claim above, so only the completion that
+      // actually won counts. `totalEarnings` is left alone on purpose: the
+      // settlement pipeline owns what a driver has earned, and adding to it
+      // here would double-count against `DriverSettlement` and the wallet. The
+      // acceptance, completion and cancellation rates are left alone too —
+      // each needs a window (lifetime? rolling 30 days?) that is a product
+      // decision, not something to invent inside a completion.
+      await this.driverRepository.recordCompletedRide(driverId, actualDistanceKm, completedAt, tx);
       await this.driverStatusRepository.updateStatus(driverId, 'ONLINE', {}, tx);
       await this.statusEventRepo.record(
         {

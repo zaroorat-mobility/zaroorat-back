@@ -114,9 +114,25 @@ function makeWorld() {
   // accept a request they booked themselves. Every driver in this file maps to
   // a distinct user id; a test that wants the self-accept case seeds the
   // matching `customerId` on the request.
+  const completionCounters = new Map<
+    string,
+    { totalRides: number; totalDistanceKm: number; lastRideAt: Date }
+  >();
   const driverRepository = {
     async findById(driverId: string) {
       return { id: driverId, userId: `user_of_${driverId}` };
+    },
+    async recordCompletedRide(driverId: string, distanceKm: number, completedAt: Date) {
+      const current = completionCounters.get(driverId) ?? {
+        totalRides: 0,
+        totalDistanceKm: 0,
+        lastRideAt: completedAt,
+      };
+      completionCounters.set(driverId, {
+        totalRides: current.totalRides + 1,
+        totalDistanceKm: current.totalDistanceKm + distanceKm,
+        lastRideAt: completedAt,
+      });
     },
   };
 
@@ -273,6 +289,7 @@ function makeWorld() {
     driverStatuses,
     activeRideByDriver,
     sentOtpSms,
+    completionCounters,
   };
 }
 
@@ -476,6 +493,60 @@ describe('Ride lifecycle concurrency', () => {
       'exactly one ledger posting — the books must not double-count the trip either',
     );
     assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
+    assert.equal(
+      world.completionCounters.get('driver_1')?.totalRides,
+      1,
+      'and the driver is credited with one ride, not two',
+    );
+  });
+
+  /// `GET /drivers/me` has always sent `totalRides`, `totalDistanceKm` and
+  /// `lastRideAt` straight off the `drivers` row, and nothing has ever written
+  /// them — so a driver five hundred rides in read `0`, `0` and `null`.
+  describe('driver completion counters (M-11)', () => {
+    it('credits the driver with the ride and the distance actually driven', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+
+      await world.service.completeRide('ride_1', 'driver_1', 12, 25);
+
+      const counters = world.completionCounters.get('driver_1');
+      assert.equal(counters?.totalRides, 1);
+      assert.equal(counters?.totalDistanceKm, 12);
+    });
+
+    it('accumulates across rides rather than overwriting', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+      await world.service.completeRide('ride_1', 'driver_1', 12, 25);
+      world.rides.set('ride_1', { ...world.rides.get('ride_1')!, status: 'IN_PROGRESS' });
+      await world.service.completeRide('ride_1', 'driver_1', 8, 20);
+
+      const counters = world.completionCounters.get('driver_1');
+      assert.equal(counters?.totalRides, 2);
+      assert.equal(counters?.totalDistanceKm, 20);
+    });
+
+    it('stamps the completion time as the driver’s last ride', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+      const before = Date.now();
+
+      await world.service.completeRide('ride_1', 'driver_1', 12, 25);
+
+      const lastRideAt = world.completionCounters.get('driver_1')?.lastRideAt;
+      assert.ok(lastRideAt instanceof Date);
+      assert.ok(lastRideAt.getTime() >= before && lastRideAt.getTime() <= Date.now());
+    });
+
+    it('credits nobody when the completion is refused', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+
+      await assert.rejects(() => world.service.completeRide('ride_1', 'someone_else', 5, 10));
+
+      assert.equal(world.completionCounters.size, 0, 'a rejected completion counts for nothing');
+    });
   });
 
   it('allows only one terminal transition when cancel races complete', async () => {

@@ -231,6 +231,66 @@ describe('a driver riding as a passenger is still the passenger (H-6)', () => {
     });
   });
 
+  /// `GET /drivers/me` sends the `drivers` row straight to the driver's app, and
+  /// three of its columns were written by nothing at all: a driver five hundred
+  /// rides in still read `totalRides: 0`, `totalDistanceKm: 0` and
+  /// `lastRideAt: null`.
+  describe('and the driver is credited for the ride (M-11)', () => {
+    it('counts the ride, the distance and when it happened', async () => {
+      const world = await worldWithDriverRider({
+        customer: '+919876740030',
+        driver: '+919876740031',
+      });
+      const before = await db().client.driver.findUniqueOrThrow({ where: { id: world.driverId } });
+      assert.equal(before.totalRides, 0, 'every driver starts at the column defaults');
+      assert.equal(before.totalDistanceKm.toString(), '0');
+      assert.equal(before.lastRideAt, null);
+
+      const startedAt = Date.now();
+      await completeRide(app, world, { distanceKm: 7.5, durationMin: 20 });
+
+      const after = await db().client.driver.findUniqueOrThrow({ where: { id: world.driverId } });
+      assert.equal(after.totalRides, 1);
+      assert.equal(after.totalDistanceKm.toString(), '7.5', 'the distance actually driven');
+      assert.ok(after.lastRideAt !== null);
+      assert.ok(after.lastRideAt.getTime() >= startedAt);
+    });
+
+    it('shows the driver their own count through the API they read it from', async () => {
+      const world = await worldWithDriverRider({
+        customer: '+919876740032',
+        driver: '+919876740033',
+      });
+      await completeRide(app, world, { distanceKm: 4, durationMin: 12 });
+
+      const me = await app.inject({
+        method: 'GET',
+        url: '/api/v1/drivers/me',
+        headers: world.driver.authHeader,
+      });
+      assert.equal(me.statusCode, 200, me.payload);
+      assert.equal(me.json().data.totalRides, 1);
+    });
+
+    it('leaves the columns nothing computes untouched', async () => {
+      const world = await worldWithDriverRider({
+        customer: '+919876740034',
+        driver: '+919876740035',
+      });
+      await completeRide(app, world, { distanceKm: 4, durationMin: 12 });
+
+      // `totalEarnings` belongs to the settlement pipeline; adding to it here
+      // would double-count against `DriverSettlement` and the wallet. The three
+      // rates each need a window nobody has chosen. Asserted so that whoever
+      // wires them has to come through this test rather than past it.
+      const after = await db().client.driver.findUniqueOrThrow({ where: { id: world.driverId } });
+      assert.equal(after.totalEarnings.toString(), '0');
+      assert.equal(after.acceptanceRate, null);
+      assert.equal(after.completionRate, null);
+      assert.equal(after.cancellationRate, null);
+    });
+  });
+
   describe('and a stranger is still refused', () => {
     it('refuses a cancel and a rating from someone party to neither side', async () => {
       const world = await worldWithDriverRider({
