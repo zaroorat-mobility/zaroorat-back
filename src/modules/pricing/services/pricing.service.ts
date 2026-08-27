@@ -9,6 +9,19 @@ import type {
   ItemizedFareResult,
 } from '../domain/pricing.types.js';
 
+/// Shaped so `handleRideError` recognises it: that handler duck-types on
+/// `code` + `statusCode` + `message` rather than on any base class, so pricing
+/// can refuse a request without the pricing module having to depend on the ride
+/// module's error hierarchy.
+export class ZeroDistanceTripError extends Error {
+  readonly code = 'TRIP_HAS_NO_DISTANCE';
+  readonly statusCode = 400;
+  constructor() {
+    super('Pickup and drop are the same place — there is no journey to price');
+    this.name = 'ZeroDistanceTripError';
+  }
+}
+
 function money(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -139,6 +152,23 @@ export class PricingService {
       params.dropLng,
     );
     const distanceKm = money(straightLineKm * 1.3);
+    // A booking whose drop is its pickup used to price at the minimum fare and
+    // go out to dispatch: a driver was sent to a customer already standing at
+    // their destination, and the customer paid the floor for a journey that
+    // could not happen. The realistic cause is a client that never set the drop
+    // and sent the pickup twice, or a second GPS read of the same spot — so the
+    // test is "zero at the precision we price in", not exact equality of the
+    // coordinates.
+    //
+    // Guarded here rather than in the two request schemas because this is the
+    // one place both quoting and booking pass through, and it is the only place
+    // that knows the road factor and the rounding that decide when a distance
+    // has vanished.
+    //
+    // Deliberately not applied to `calculateFinalFare`: a *completed* ride
+    // reporting no distance is a different situation entirely, and refusing it
+    // would leave a driver who has finished driving unable to close the ride.
+    if (distanceKm <= 0) throw new ZeroDistanceTripError();
     return { distanceKm, durationMin: Math.max(1, Math.round(distanceKm * 3)) };
   }
 

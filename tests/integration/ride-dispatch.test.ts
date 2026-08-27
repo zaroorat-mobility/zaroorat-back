@@ -191,6 +191,58 @@ describe('ride dispatch, offers and assignment (integration)', () => {
 
   // ------------------------------------------------------------ the scenarios
 
+  /// A drop that is the pickup priced at the minimum fare and went out to
+  /// dispatch — a driver sent to somebody already standing at their
+  /// destination. The realistic cause is a client that never set the drop and
+  /// sent the pickup twice.
+  describe('a trip with nowhere to go (L-6)', () => {
+    it('refuses the booking with a code, not a server error', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NOWHERE_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730910');
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: {
+          vehicleTypeId,
+          pickupLat: CENTRE.latitude,
+          pickupLng: CENTRE.longitude,
+          dropLat: CENTRE.latitude,
+          dropLng: CENTRE.longitude,
+        },
+      });
+
+      assert.equal(created.statusCode, 400, created.payload);
+      assert.equal(created.json().error.code, 'TRIP_HAS_NO_DISTANCE');
+      // And nothing was written or dispatched on the way to refusing it.
+      assert.equal(
+        await db().client.rideRequest.count({ where: { customerId: customer.userId } }),
+        0,
+      );
+    });
+
+    it('refuses the quote too, so the app finds out before it books', async () => {
+      await makeVehicleType({ code: `NOWHQ_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730911');
+
+      const quoted = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: {
+          pickupLat: CENTRE.latitude,
+          pickupLng: CENTRE.longitude,
+          dropLat: CENTRE.latitude,
+          dropLng: CENTRE.longitude,
+        },
+      });
+
+      assert.equal(quoted.statusCode, 400, quoted.payload);
+      assert.equal(quoted.json().error.code, 'TRIP_HAS_NO_DISTANCE');
+    });
+  });
+
   /// Nothing in the suite covered the "one active request per customer" guard
   /// at all, in either shape.
   describe('booking twice at once (M-10)', () => {

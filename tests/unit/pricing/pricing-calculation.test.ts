@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { pricingConfig } from '../../../src/config/pricing/pricing.config.js';
-import { PricingService } from '../../../src/modules/pricing';
+import { PricingService, ZeroDistanceTripError } from '../../../src/modules/pricing';
 import type { PricingRuleRepository } from '../../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import type { PricingRule } from '../../../src/generated/prisma/index.js';
 
@@ -273,5 +273,64 @@ describe('waiting charges honour the free period', () => {
     });
     assert.equal(withWait.waitingCharge, 21);
     assert.ok(withWait.totalFare > withoutWait.totalFare);
+  });
+});
+
+/// A booking whose drop was its pickup priced at the minimum fare and went out
+/// to dispatch: a driver sent to a customer already standing at their
+/// destination, and the customer charged the floor for a journey that could not
+/// happen.
+describe('a trip with nowhere to go (L-6)', () => {
+  const BLR = { latitude: 12.9716, longitude: 77.5946 };
+
+  function estimate(drop: { latitude: number; longitude: number }) {
+    return pricingService.estimateTrip({
+      pickupLat: BLR.latitude,
+      pickupLng: BLR.longitude,
+      dropLat: drop.latitude,
+      dropLng: drop.longitude,
+    });
+  }
+
+  it('refuses a drop that is the pickup', () => {
+    assert.throws(() => estimate(BLR), ZeroDistanceTripError);
+  });
+
+  it('refuses a drop too close to price, not only an exact match', () => {
+    // ~1m north — a second GPS read of the same spot, which rounds to no
+    // distance at all once the road factor and 2dp rounding are applied.
+    assert.throws(
+      () => estimate({ latitude: BLR.latitude + 0.00001, longitude: BLR.longitude }),
+      ZeroDistanceTripError,
+    );
+  });
+
+  it('is refused with a code a client can act on, not a 500', () => {
+    try {
+      estimate(BLR);
+      assert.fail('expected a refusal');
+    } catch (err) {
+      const coded = err as { code?: string; statusCode?: number };
+      assert.equal(coded.code, 'TRIP_HAS_NO_DISTANCE');
+      assert.equal(coded.statusCode, 400, 'a client mistake, not a server fault');
+    }
+  });
+
+  it('still prices a real trip', () => {
+    // ~1km north.
+    const trip = estimate({ latitude: BLR.latitude + 0.009, longitude: BLR.longitude });
+    assert.ok(trip.distanceKm > 0);
+    assert.ok(trip.durationMin >= 1);
+  });
+
+  it('never refuses a completed ride that reports no distance', async () => {
+    // The driver has finished driving; refusing here would leave them unable to
+    // close the ride. Guarding the quote is not the same as guarding the bill.
+    const fare = await pricingService.calculateFinalFare({
+      actualDistanceKm: 0,
+      actualDurationMin: 5,
+      vehicleTypeId: 'v-type-1',
+    });
+    assert.ok(fare.totalFare > 0);
   });
 });
