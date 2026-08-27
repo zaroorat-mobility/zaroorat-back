@@ -213,6 +213,8 @@ export class LifecycleService {
     actualDistanceKm: number,
     actualDurationMin: number,
     rideId: string,
+    billedDistanceKm: number,
+    billedDurationMin: number,
   ): void {
     // `!= null`, not truthiness. `estimatedDistanceKm` is a nullable
     // `Decimal(8,2)`: a Prisma Decimal is an object and therefore always truthy,
@@ -239,23 +241,36 @@ export class LifecycleService {
         '[rides] completing a ride with no quoted estimate to check the reported trip against',
       );
     }
+    // Measured against what the server itself believes the trip was, not
+    // against the quote alone. Both billed figures are server-derived — the
+    // distance from the trip meter (C-3b), the duration from the server's own
+    // clocks (C-3a) — and either can legitimately exceed the quote when a
+    // driver is sent the long way round. Bounding a driver's report by the
+    // quote alone refused those completions, and refused them for a number
+    // that no longer decides anybody's fare: the driver had finished driving
+    // and could not close the ride.
+    //
+    // Still bounded, and still refuses a claim the server has no support for
+    // at all. The reference is only ever raised by the server's own
+    // measurement, never by anything the client sent.
     if (estimatedDistanceKm != null) {
+      const referenceKm = Math.max(estimatedDistanceKm, billedDistanceKm);
       const maxPlausibleKm =
-        estimatedDistanceKm * TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER +
-        TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM;
+        referenceKm * TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER + TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM;
       if (actualDistanceKm > maxPlausibleKm) {
         throw new ImplausibleTripDataError(
-          `Reported distance (${actualDistanceKm}km) is far beyond the quoted estimate (${estimatedDistanceKm}km)`,
+          `Reported distance (${actualDistanceKm}km) is far beyond the trip the server measured (${referenceKm}km)`,
         );
       }
     }
     if (estimatedDurationMin != null) {
+      const referenceMin = Math.max(estimatedDurationMin, billedDurationMin);
       const maxPlausibleMin =
-        estimatedDurationMin * TRIP_DURATION_PLAUSIBILITY_MULTIPLIER +
+        referenceMin * TRIP_DURATION_PLAUSIBILITY_MULTIPLIER +
         TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN;
       if (actualDurationMin > maxPlausibleMin) {
         throw new ImplausibleTripDataError(
-          `Reported duration (${actualDurationMin}min) is far beyond the quoted estimate (${estimatedDurationMin}min)`,
+          `Reported duration (${actualDurationMin}min) is far beyond the trip the server measured (${referenceMin}min)`,
         );
       }
     }
@@ -556,25 +571,35 @@ export class LifecycleService {
         tx,
       );
       const request = await this.requestRepo.findById(ride.requestId, tx);
-      this.assertPlausibleTripData(request, actualDistanceKm, actualDurationMin, rideId);
       const completedAt = new Date();
-      // C-3b. `actualDistanceKm` above is still checked for plausibility, but it
+      // C-3b. `actualDistanceKm` is still checked for plausibility below, but it
       // no longer decides the fare: the server bills what it measured, floored
       // at what the customer was quoted.
       const quotedDistanceKm =
         request?.estimatedDistanceKm != null ? Number(request.estimatedDistanceKm) : null;
       const billedDistanceKm = await this.billedDistanceKm(driverId, quotedDistanceKm);
+      const billedDurationMin = this.measuredDurationMin(
+        ride,
+        completedAt,
+        request?.estimatedDurationMin ?? null,
+      );
+      // After the server has worked out its own figures, so the bound can be
+      // measured against the trip that actually happened rather than against
+      // the quote alone.
+      this.assertPlausibleTripData(
+        request,
+        actualDistanceKm,
+        actualDurationMin,
+        rideId,
+        billedDistanceKm,
+        billedDurationMin,
+      );
       if (Math.abs(billedDistanceKm - actualDistanceKm) > 1) {
         logger.info(
           { rideId, driverId, billedDistanceKm, claimedDistanceKm: actualDistanceKm },
           '[rides] billing a measured distance that differs from the one the app reported',
         );
       }
-      const billedDurationMin = this.measuredDurationMin(
-        ride,
-        completedAt,
-        request?.estimatedDurationMin ?? null,
-      );
       const waitingMinutes = ride.waitTimeMin ?? 0;
       // The surge the customer accepted when they booked, not whatever is in
       // force now. `RideRequest.surgeMultiplier` exists precisely to be this

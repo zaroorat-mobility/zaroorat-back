@@ -685,6 +685,60 @@ describe('Ride lifecycle concurrency', () => {
     });
   });
 
+  /// M-15. The bound used to be drawn from the quote alone. Once the server
+  /// measured the trip itself, a driver sent the long way round reported a
+  /// distance the quote could not justify and was refused — for a number that
+  /// no longer decides anybody's fare, leaving a driver who had finished
+  /// driving unable to close the ride.
+  describe('the plausibility bound follows the trip the server measured (M-15)', () => {
+    function quotedRide(world: ReturnType<typeof makeWorld>, estimatedDistanceKm: number) {
+      seedRide(world, 'IN_PROGRESS');
+      world.requests.set('req_1', {
+        id: 'req_1',
+        status: 'MATCHED',
+        customerId: 'cust_1',
+        vehicleTypeId: 'v1',
+        estimatedDistanceKm,
+        estimatedDurationMin: 20,
+      });
+    }
+
+    it('accepts a long detour the meter actually recorded', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // 10km quoted, 40km genuinely driven. The old bound was 10*3+5 = 35km,
+      // so this completion was refused outright.
+      world.tripMeter.set('driver_1', 40);
+
+      await world.service.completeRide('ride_1', 'driver_1', 40, 60);
+
+      assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '40');
+    });
+
+    it('still refuses a claim the server saw no support for', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 12);
+
+      // 12km measured, 10km quoted -> bound is 12*3+5 = 41km.
+      await assert.rejects(
+        () => world.service.completeRide('ride_1', 'driver_1', 500, 60),
+        (err: unknown) => (err as { code?: string }).code === 'IMPLAUSIBLE_TRIP_DATA',
+      );
+    });
+
+    it('never lowers the bound below the quote', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // A lost meter must not shrink the allowance to nothing: the quote is
+      // still the reference, exactly as before.
+      await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+
+      assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
+    });
+  });
+
   /// The distance bound is the only thing standing over a driver-declared
   /// `actualDistanceKm` (C-3b is still open), and it is skipped whenever the
   /// request carries no quoted estimate — a nullable column. It used to be
