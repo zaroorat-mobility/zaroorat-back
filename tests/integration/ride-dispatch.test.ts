@@ -168,6 +168,18 @@ describe('ride dispatch, offers and assignment (integration)', () => {
     return container.resolve<DispatchTimeoutJob>('dispatchTimeoutJob').run();
   }
 
+  /// Drags a ride's accept back past `RIDE_CANCELLATION_GRACE_MIN`, so a
+  /// cancellation lands outside the free window without the test sleeping
+  /// through it.
+  async function ageBeyondGrace(rideId: string): Promise<void> {
+    await db().client.ride.update({
+      where: { id: rideId },
+      data: {
+        acceptedAt: new Date(Date.now() - (rideConfig.cancellationGraceMinutes + 1) * 60_000),
+      },
+    });
+  }
+
   /// Drags every live offer for a request back past its window, so the timeout
   /// job has something to sweep without the test sleeping for 30 seconds.
   async function expireOffers(requestId: string): Promise<void> {
@@ -944,6 +956,9 @@ describe('ride dispatch, offers and assignment (integration)', () => {
         payload: {},
       });
       assert.equal(arrived.statusCode, 200, arrived.payload);
+      // Outside the free window, which is what this case is about — the grace
+      // period has its own test below.
+      await ageBeyondGrace(rideId);
 
       const cancelled = await app.inject({
         method: 'POST',
@@ -966,6 +981,37 @@ describe('ride dispatch, offers and assignment (integration)', () => {
       );
       const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
       assert.equal(ride.paymentStatus, 'PENDING');
+    });
+
+    /// `RIDE_CANCELLATION_GRACE_MIN` was declared, defaulted to 2 minutes and
+    /// read by nothing, so the free window it describes did not exist: a
+    /// customer who changed their mind seconds after a driver accepted was
+    /// assessed the full fee the moment that driver reached them.
+    it('charges nobody who cancels inside the grace window', async () => {
+      const { driver, customer, rideId } = await acceptedRide(
+        { driver: '+919876730106', customer: '+919876730107' },
+        `GRACE_${randomUUID().slice(0, 6)}`,
+      );
+      const arrived = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/arrive`,
+        headers: driver.authHeader,
+        payload: {},
+      });
+      assert.equal(arrived.statusCode, 200, arrived.payload);
+      // Deliberately no ageBeyondGrace: the accept just happened.
+
+      const cancelled = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/cancel`,
+        headers: customer.authHeader,
+        payload: { reasonCode: 'CHANGED_MIND' },
+      });
+      assert.equal(cancelled.statusCode, 200, cancelled.payload);
+
+      const row = await db().client.rideCancellation.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(row.cancellationFee.toString(), '0', 'the free window must be free');
+      assert.equal(row.feeCharged, false);
     });
 
     it('assesses no fee when the customer cancels before the driver arrives', async () => {

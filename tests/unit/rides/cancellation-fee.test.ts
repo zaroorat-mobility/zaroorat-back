@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { CancellationService } from '../../../src/modules/rides/services/cancellation/cancellation.service.js';
+import { rideConfig } from '../../../src/config/ride/ride.config.js';
 
 type CreatedRow = {
   rideId: string;
@@ -16,10 +17,19 @@ type CreatedRow = {
   feeCharged: boolean;
 };
 
+const MINUTE = 60_000;
+
+/// Well outside `RIDE_CANCELLATION_GRACE_MIN` unless a case says otherwise —
+/// without this every fee case below would sit inside the free window and the
+/// suite would be testing the grace period by accident.
+const LONG_AGO_MIN = 60;
+
 async function cancel(input: {
   cancelledBy: 'CUSTOMER' | 'DRIVER' | 'SYSTEM';
   status: string;
   arrivedAt?: Date | null;
+  /// How long before the cancellation the driver accepted.
+  acceptedMinutesAgo?: number;
 }): Promise<CreatedRow> {
   let created: CreatedRow | undefined;
   const repo = {
@@ -29,12 +39,17 @@ async function cancel(input: {
     },
   };
   const service = new CancellationService(repo as never);
+  const cancelledAt = new Date();
   await service.processCancellation({
     ride: {
       id: 'ride_1',
       status: input.status,
       arrivedAt: input.arrivedAt ?? null,
+      acceptedAt: new Date(
+        cancelledAt.getTime() - (input.acceptedMinutesAgo ?? LONG_AGO_MIN) * MINUTE,
+      ),
     } as never,
+    cancelledAt,
     cancelledBy: input.cancelledBy,
     reasonCode: 'CHANGED_MIND',
   });
@@ -83,5 +98,44 @@ describe('cancellation fees are assessed, not collected (H-2)', () => {
       assert.equal(row.cancellationFee.toString(), '0', `${cancelledBy} cancellation`);
       assert.equal(row.feeCharged, false);
     }
+  });
+});
+
+/// `RIDE_CANCELLATION_GRACE_MIN` was declared, defaulted to 2, validated at
+/// boot, and read by nothing — so the free window it describes did not exist.
+describe('the cancellation grace period (L-1)', () => {
+  it('charges nobody who changes their mind inside the window', async () => {
+    const row = await cancel({
+      cancelledBy: 'CUSTOMER',
+      status: 'DRIVER_ARRIVED',
+      acceptedMinutesAgo: 0,
+    });
+    assert.equal(row.cancellationFee.toString(), '0');
+  });
+
+  it('charges once the window has passed', async () => {
+    const row = await cancel({
+      cancelledBy: 'CUSTOMER',
+      status: 'DRIVER_ARRIVED',
+      acceptedMinutesAgo: rideConfig.cancellationGraceMinutes + 1,
+    });
+    assert.equal(row.cancellationFee.toString(), '73');
+  });
+
+  it('measures the window from the accept, not from the arrival', async () => {
+    // A driver who reaches the pickup point inside the grace window does not
+    // end it — otherwise a short pickup would quietly cost the customer their
+    // free cancellation.
+    const row = await cancel({
+      cancelledBy: 'CUSTOMER',
+      status: 'DRIVER_ARRIVED',
+      arrivedAt: new Date(),
+      acceptedMinutesAgo: 0,
+    });
+    assert.equal(row.cancellationFee.toString(), '0');
+  });
+
+  it('takes the window from the configured value, not a literal', async () => {
+    assert.ok(rideConfig.cancellationGraceMinutes > 0, 'the default must be a real window');
   });
 });

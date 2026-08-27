@@ -25,6 +25,7 @@ export class CancellationService {
   async processCancellation(
     data: {
       ride: Ride;
+      cancelledAt: Date;
       cancelledBy: 'CUSTOMER' | 'DRIVER' | 'SYSTEM';
       actorId?: string;
       reasonCode: string;
@@ -32,8 +33,21 @@ export class CancellationService {
     },
     tx?: TransactionClient,
   ): Promise<RideCancellation> {
+    // `RIDE_CANCELLATION_GRACE_MIN` existed, defaulted to the 2 minutes the
+    // industry converged on, was validated at boot — and was read by nothing, so
+    // a customer who changed their mind seconds after a driver accepted was
+    // assessed the full fee the moment that driver reached them. Measured from
+    // the accept because that is when the customer's commitment begins; a short
+    // pickup that arrives inside the window is still free, which is the point.
+    const graceEndsAt = new Date(
+      data.ride.acceptedAt.getTime() + rideConfig.cancellationGraceMinutes * 60_000,
+    );
+    // `cancelledAt` rather than the clock: this runs inside the transaction that
+    // just stamped it, and the fee should follow the recorded time.
+    const withinGrace = data.cancelledAt < graceEndsAt;
     const feeApplies =
       data.cancelledBy === 'CUSTOMER' &&
+      !withinGrace &&
       (data.ride.status === 'DRIVER_ARRIVED' || data.ride.arrivedAt !== null);
     // Was a hardcoded 50 while `RIDE_DEFAULT_CANCELLATION_FEE` — which exists
     // for exactly this and defaults to the same 50 — went unread, so an

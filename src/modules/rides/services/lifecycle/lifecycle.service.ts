@@ -667,6 +667,7 @@ export class LifecycleService {
       await this.cancellationService.processCancellation(
         {
           ride,
+          cancelledAt,
           cancelledBy,
           reasonCode,
           ...(actorId !== undefined ? { actorId } : {}),

@@ -1,4 +1,5 @@
 import { Decimal } from '../../types/index.js';
+import { rideConfig } from '@config';
 import { TransactionManager, UniqueConstraintError } from '@core/database';
 import { EventPublisher } from '@core/events';
 import {
@@ -220,7 +221,10 @@ export class RideRequestService {
           estimatedDurationMin: fareQuote.estimatedDurationMin,
           quotedFare: new Decimal(fareQuote.totalFare),
           surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+          // Was a hardcoded five minutes while `RIDE_REQUEST_EXPIRY_MIN` — which
+          // exists for exactly this, defaults to the same five, and is what
+          // `.env.example` tells an operator bounds the search — went unread.
+          expiresAt: new Date(Date.now() + rideConfig.requestExpiryMinutes * 60_000),
         };
         createInput.dropLat = new Decimal(input.dropLat);
         createInput.dropLng = new Decimal(input.dropLng);

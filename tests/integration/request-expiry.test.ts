@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
 import { makeVehicleType } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
+import { rideConfig } from '../../src/config/ride/ride.config.js';
 import type { RequestExpiryJob } from '../../src/modules/rides/jobs/request-expiry.job.js';
 
 const TRIP = {
@@ -72,6 +73,24 @@ describe('a ride request that finds no driver (H-3)', () => {
     });
     return rows.map((row) => (row.payload as { data?: Record<string, unknown> }).data ?? {});
   }
+
+  /// `RIDE_REQUEST_EXPIRY_MIN` is documented as what bounds the search — and
+  /// what bounds the number of dispatch rounds with it — while `createRequest`
+  /// carried a hardcoded five minutes, so an operator setting it changed
+  /// nothing at all.
+  it('gives the request the configured search window, not a literal', async () => {
+    const bookedAt = Date.now();
+    const { requestId } = await bookedRequest('+919876750005');
+
+    const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+    assert.ok(request.expiresAt !== null);
+    const windowMs = request.expiresAt.getTime() - bookedAt;
+    const expected = rideConfig.requestExpiryMinutes * 60_000;
+    assert.ok(
+      Math.abs(windowMs - expected) < 5_000,
+      `window ${windowMs}ms should track RIDE_REQUEST_EXPIRY_MIN (${expected}ms)`,
+    );
+  });
 
   it('expires the request and announces it, in one transaction', async () => {
     const { requestId, rider } = await bookedRequest('+919876750001');
