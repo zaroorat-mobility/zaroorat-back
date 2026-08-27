@@ -8,6 +8,7 @@ import { RideStatusEventRepository } from '../../repositories/ride-status-event.
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { RideOtpService } from '../otp/ride-otp.service.js';
 import { PricingService } from '@modules/pricing';
+import { PromotionService } from '@modules/promotions';
 import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
@@ -82,6 +83,7 @@ export class LifecycleService {
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly rideOtpService: RideOtpService,
     private readonly pricingService: PricingService,
+    private readonly promotionService: PromotionService,
     private readonly fareRepo: RideFareRepository,
     private readonly cancellationService: CancellationService,
     private readonly ledgerService: LedgerService,
@@ -442,11 +444,41 @@ export class LifecycleService {
       );
       await this.assertPlausibleTripData(ride.requestId, actualDistanceKm, actualDurationMin, tx);
       const waitingMinutes = ride.waitTimeMin ?? 0;
+
+      const request = ride.requestId ? await this.requestRepo.findById(ride.requestId, tx) : null;
+      let discountAmount = 0;
+      let resolvedPromo: Awaited<ReturnType<PromotionService['validateAndResolve']>> | null = null;
+      if (request?.promoCode) {
+        const preview = await this.pricingService.calculateFinalFare({
+          actualDistanceKm,
+          actualDurationMin,
+          vehicleTypeId: ride.vehicleTypeId,
+          waitingMinutes,
+        });
+        try {
+          resolvedPromo = await this.promotionService.validateAndResolve(
+            request.promoCode,
+            {
+              userId: ride.customerId,
+              vehicleTypeId: ride.vehicleTypeId,
+              subtotal: preview.subtotal,
+            },
+            tx,
+          );
+          discountAmount = resolvedPromo.discountAmount;
+        } catch {
+          // Promo may have expired between request and completion — complete without discount.
+          discountAmount = 0;
+          resolvedPromo = null;
+        }
+      }
+
       const itemizedFare = await this.pricingService.calculateFinalFare({
         actualDistanceKm,
         actualDurationMin,
         vehicleTypeId: ride.vehicleTypeId,
         waitingMinutes,
+        ...(discountAmount > 0 ? { discountAmount } : {}),
       });
       const completedAt = new Date();
       // BD-5. With the flag off this is byte-identical to before: a cash ride
@@ -490,6 +522,15 @@ export class LifecycleService {
         },
         tx,
       );
+
+      if (resolvedPromo && resolvedPromo.discountAmount > 0) {
+        await this.promotionService.redeem({
+          promo: resolvedPromo,
+          userId: ride.customerId,
+          rideId,
+          client: tx,
+        });
+      }
       // Cash only (transition 4c). A cash ride is paid the moment it ends —
       // the driver is holding the money — so its commission group is
       // recognised here, in the completion transaction, exactly as before.

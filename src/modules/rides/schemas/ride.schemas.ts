@@ -10,6 +10,8 @@ export const quoteFareSchema = z.object({
   /// app's picker), supply one to price just that category.
   vehicleTypeId: z.string().uuid().optional(),
   cityId: z.string().uuid().optional(),
+  promoCode: z.string().max(50).optional(),
+  cityCode: z.string().trim().max(40).optional(),
 });
 export type QuoteFareBody = z.infer<typeof quoteFareSchema>;
 export const createRideRequestSchema = z.object({

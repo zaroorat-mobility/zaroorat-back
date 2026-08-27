@@ -346,4 +346,548 @@ export async function seedDevelopment(prisma: Prisma) {
   console.log(
     '  -> Seeded verified driver DRV0001 + pending application DRV0002 with linked vehicles',
   );
+
+  await seedCities(prisma);
+  await seedPricingFixtures(prisma);
+  console.log('  -> Seeded GLOBAL fare rules, Srinagar surge zone/windows, cancellation policies');
+
+  await seedPromotionsFixtures(prisma);
+  await seedReferralFixtures(prisma);
+}
+
+async function seedCities(prisma: Prisma) {
+  const cities = [
+    { code: 'SGR', name: 'Srinagar', state: 'Jammu & Kashmir' },
+    { code: 'BLR', name: 'Bengaluru', state: 'Karnataka' },
+    { code: 'GLOBAL', name: 'All cities (global)', state: null as string | null },
+  ];
+  for (const city of cities) {
+    await prisma.city.upsert({
+      where: { code: city.code },
+      update: { name: city.name, state: city.state, isActive: true },
+      create: {
+        code: city.code,
+        name: city.name,
+        state: city.state,
+        country: 'India',
+        isActive: true,
+        launchedAt: new Date(),
+      },
+    });
+  }
+  console.log('  -> Seeded cities SGR, BLR, GLOBAL');
+}
+
+async function seedPricingFixtures(prisma: Prisma) {
+  const types = await prisma.vehicleType.findMany();
+  const byCode = Object.fromEntries(types.map((t) => [t.code, t]));
+
+  const fareSeeds: Array<{
+    code: string;
+    baseFare: number;
+    minimumFare: number;
+    perKmRate: number;
+    perMinuteRate: number;
+    freeWaitingMin: number;
+    waitingPerMin: number;
+    nightMultiplier: number;
+  }> = [
+    {
+      code: 'CAB_ECONOMY',
+      baseFare: 60,
+      minimumFare: 80,
+      perKmRate: 15,
+      perMinuteRate: 1.5,
+      freeWaitingMin: 5,
+      waitingPerMin: 3,
+      nightMultiplier: 1.25,
+    },
+    {
+      code: 'AUTO',
+      baseFare: 30,
+      minimumFare: 40,
+      perKmRate: 10,
+      perMinuteRate: 1,
+      freeWaitingMin: 3,
+      waitingPerMin: 2,
+      nightMultiplier: 1.2,
+    },
+    {
+      code: 'BIKE',
+      baseFare: 20,
+      minimumFare: 25,
+      perKmRate: 7,
+      perMinuteRate: 0.8,
+      freeWaitingMin: 2,
+      waitingPerMin: 1.5,
+      nightMultiplier: 1.15,
+    },
+  ];
+
+  for (const seed of fareSeeds) {
+    const vt = byCode[seed.code];
+    if (!vt) continue;
+    const existing = await prisma.pricingRule.findFirst({
+      where: { vehicleTypeId: vt.id, cityCode: 'GLOBAL', isActive: true },
+    });
+    if (existing) continue;
+    await prisma.pricingRule.create({
+      data: {
+        vehicleTypeId: vt.id,
+        cityCode: 'GLOBAL',
+        baseFare: seed.baseFare,
+        minimumFare: seed.minimumFare,
+        perKmRate: seed.perKmRate,
+        perMinuteRate: seed.perMinuteRate,
+        freeWaitingMin: seed.freeWaitingMin,
+        waitingPerMin: seed.waitingPerMin,
+        nightMultiplier: seed.nightMultiplier,
+        isActive: true,
+        version: 1,
+      },
+    });
+  }
+
+  // City-wide Srinagar polygon (approx bounding box as closed ring [lng, lat]).
+  const existingZones = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM surge_zones WHERE city_code = 'SGR' AND name = 'Srinagar Citywide' LIMIT 1
+  `;
+  let zoneId = existingZones[0]?.id;
+  if (!zoneId) {
+    const geoJson = JSON.stringify({
+      type: 'Polygon',
+      coordinates: [
+        [
+          [74.7, 34.0],
+          [75.0, 34.0],
+          [75.0, 34.2],
+          [74.7, 34.2],
+          [74.7, 34.0],
+        ],
+      ],
+    });
+    const created = await prisma.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO surge_zones (id, city_code, name, boundary, is_active, created_at)
+      VALUES (
+        gen_random_uuid(),
+        'SGR',
+        'Srinagar Citywide',
+        ST_GeomFromGeoJSON(${geoJson}),
+        true,
+        NOW()
+      )
+      RETURNING id
+    `;
+    zoneId = created[0]?.id;
+  }
+
+  if (zoneId) {
+    const cab = byCode['CAB_ECONOMY'];
+    const auto = byCode['AUTO'];
+    const tomorrow = new Date();
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    tomorrow.setUTCHours(8, 0, 0, 0);
+    const tomorrowEnd = new Date(tomorrow);
+    tomorrowEnd.setUTCHours(11, 0, 0, 0);
+    const evening = new Date();
+    evening.setUTCDate(evening.getUTCDate() + 1);
+    evening.setUTCHours(17, 0, 0, 0);
+    const eveningEnd = new Date(evening);
+    eveningEnd.setUTCHours(20, 0, 0, 0);
+
+    const windowCount = await prisma.surgeWindow.count({ where: { zoneId } });
+    if (windowCount === 0) {
+      if (cab) {
+        await prisma.surgeWindow.create({
+          data: {
+            zoneId,
+            vehicleTypeId: cab.id,
+            multiplier: 1.5,
+            startsAt: tomorrow,
+            endsAt: tomorrowEnd,
+            reason: 'Morning Peak Cab Surge',
+            source: 'MANUAL',
+            isActive: true,
+          },
+        });
+      }
+      if (auto) {
+        await prisma.surgeWindow.create({
+          data: {
+            zoneId,
+            vehicleTypeId: auto.id,
+            multiplier: 1.2,
+            startsAt: evening,
+            endsAt: eveningEnd,
+            reason: 'Evening Peak Auto Surge',
+            source: 'MANUAL',
+            isActive: true,
+          },
+        });
+      }
+    }
+  }
+
+  const cancelSeeds: Array<{
+    cancelledBy: string;
+    minStatus: string;
+    feeAmount: number;
+  }> = [
+    { cancelledBy: 'RIDER', minStatus: 'AFTER_ASSIGNMENT', feeAmount: 20 },
+    { cancelledBy: 'RIDER', minStatus: 'AFTER_ARRIVAL', feeAmount: 40 },
+    { cancelledBy: 'DRIVER', minStatus: 'AFTER_ASSIGNMENT', feeAmount: 30 },
+    { cancelledBy: 'RIDER', minStatus: 'NO_SHOW', feeAmount: 50 },
+  ];
+
+  for (const seed of cancelSeeds) {
+    const existing = await prisma.cancellationPolicy.findFirst({
+      where: {
+        cancelledBy: seed.cancelledBy,
+        minStatus: seed.minStatus,
+        cityCode: null,
+        vehicleTypeId: null,
+        isActive: true,
+      },
+    });
+    if (existing) continue;
+    await prisma.cancellationPolicy.create({
+      data: {
+        cancelledBy: seed.cancelledBy,
+        minStatus: seed.minStatus,
+        feeAmount: seed.feeAmount,
+        feeType: 'FLAT',
+        freeCancelWindowSec: 120,
+        isActive: true,
+      },
+    });
+  }
+}
+
+async function seedPromotionsFixtures(prisma: Prisma) {
+  const now = new Date();
+  const in90Days = new Date(now.getTime() + 90 * 86400000);
+  const in30Days = new Date(now.getTime() + 30 * 86400000);
+
+  const cab = await prisma.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+
+  const welcomePromo = await prisma.promotion.upsert({
+    where: { code: 'WELCOME20' },
+    update: {
+      title: 'Welcome 20% off',
+      isActive: true,
+      validFrom: now,
+      validTo: in90Days,
+    },
+    create: {
+      code: 'WELCOME20',
+      title: 'Welcome 20% off',
+      description: 'First-ride discount for new riders',
+      discountType: 'PERCENT',
+      discountValue: 20,
+      maxDiscount: 50,
+      minFare: 40,
+      applicableCity: null,
+      applicableVehicleType: cab?.id ?? null,
+      firstRideOnly: true,
+      usageLimitTotal: 5000,
+      usageLimitPerUser: 1,
+      validFrom: now,
+      validTo: in90Days,
+      isActive: true,
+    },
+  });
+
+  const sgrFlat = await prisma.promotion.upsert({
+    where: { code: 'SGRFLAT30' },
+    update: {
+      title: 'Srinagar ₹30 off',
+      isActive: true,
+      validFrom: now,
+      validTo: in90Days,
+    },
+    create: {
+      code: 'SGRFLAT30',
+      title: 'Srinagar ₹30 off',
+      description: 'Flat discount for Srinagar rides',
+      discountType: 'FIXED',
+      discountValue: 30,
+      maxDiscount: null,
+      minFare: 60,
+      applicableCity: 'SGR',
+      applicableVehicleType: null,
+      firstRideOnly: false,
+      usageLimitTotal: 2000,
+      usageLimitPerUser: 3,
+      validFrom: now,
+      validTo: in90Days,
+      isActive: true,
+    },
+  });
+
+  const sgrRiders = await prisma.audienceSegment.upsert({
+    where: { code: 'SGR_RIDERS' },
+    update: {
+      name: 'Srinagar riders',
+      rules: { cityCodes: ['SGR'] },
+      estimatedSize: 1200,
+      isDynamic: true,
+    },
+    create: {
+      code: 'SGR_RIDERS',
+      name: 'Srinagar riders',
+      description: 'Riders active in Srinagar',
+      rules: { cityCodes: ['SGR'] },
+      estimatedSize: 1200,
+      isDynamic: true,
+    },
+  });
+
+  const firstRideSeg = await prisma.audienceSegment.upsert({
+    where: { code: 'FIRST_RIDE' },
+    update: {
+      name: 'First-ride users',
+      rules: { firstRideOnly: true },
+      estimatedSize: 800,
+      isDynamic: true,
+    },
+    create: {
+      code: 'FIRST_RIDE',
+      name: 'First-ride users',
+      description: 'Users who have not completed a ride yet',
+      rules: { firstRideOnly: true },
+      estimatedSize: 800,
+      isDynamic: true,
+    },
+  });
+
+  const admin = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000000', deletedAt: null },
+  });
+
+  const campaign = await prisma.promoCampaign.upsert({
+    where: { code: 'LAUNCH2026' },
+    update: {
+      name: 'Launch acquisition 2026',
+      status: 'RUNNING',
+      budget: 100000,
+      startsAt: now,
+      endsAt: in90Days,
+    },
+    create: {
+      code: 'LAUNCH2026',
+      name: 'Launch acquisition 2026',
+      objective: 'ACQUISITION',
+      status: 'RUNNING',
+      budget: 100000,
+      spent: 2500,
+      startsAt: now,
+      endsAt: in90Days,
+      createdBy: admin?.id ?? null,
+    },
+  });
+
+  const existingTargets = await prisma.campaignTarget.count({
+    where: { campaignId: campaign.id },
+  });
+  if (existingTargets === 0) {
+    await prisma.campaignTarget.createMany({
+      data: [
+        {
+          campaignId: campaign.id,
+          segmentId: firstRideSeg.id,
+          promotionId: welcomePromo.id,
+        },
+        {
+          campaignId: campaign.id,
+          segmentId: sgrRiders.id,
+          promotionId: sgrFlat.id,
+        },
+      ],
+    });
+  }
+
+  let batch = await prisma.couponBatch.findFirst({
+    where: { promotionId: welcomePromo.id, name: 'Welcome launch batch' },
+  });
+  if (!batch) {
+    batch = await prisma.couponBatch.create({
+      data: {
+        campaignId: campaign.id,
+        promotionId: welcomePromo.id,
+        name: 'Welcome launch batch',
+        prefix: 'WLC',
+        totalCount: 10,
+        generatedCount: 0,
+        perUserLimit: 1,
+        expiresAt: in30Days,
+        isActive: true,
+      },
+    });
+  }
+
+  const existingCoupons = await prisma.coupon.count({ where: { batchId: batch.id } });
+  if (existingCoupons === 0) {
+    const codes = Array.from({ length: 5 }, (_, i) => ({
+      batchId: batch!.id,
+      code: `WLCSEED${String(i + 1).padStart(3, '0')}`,
+      status: 'ACTIVE' as const,
+      expiresAt: in30Days,
+    }));
+    await prisma.coupon.createMany({ data: codes });
+    await prisma.couponBatch.update({
+      where: { id: batch.id },
+      data: { generatedCount: codes.length },
+    });
+  }
+
+  const bannerExists = await prisma.promoBanner.findFirst({
+    where: { campaignId: campaign.id, title: 'Welcome offer' },
+  });
+  if (!bannerExists) {
+    await prisma.promoBanner.create({
+      data: {
+        campaignId: campaign.id,
+        title: 'Welcome offer',
+        imageUrl: 'https://example.invalid/banners/welcome-offer.png',
+        placement: 'HOME',
+        actionUrl: 'https://example.invalid/offers/welcome',
+        priority: 10,
+        startsAt: now,
+        endsAt: in90Days,
+        isActive: true,
+      },
+    });
+  }
+
+  console.log(
+    '  -> Seeded promotions WELCOME20/SGRFLAT30, segments, campaign LAUNCH2026, coupon batch, banner',
+  );
+}
+
+async function seedReferralFixtures(prisma: Prisma) {
+  const now = new Date();
+  const in180Days = new Date(now.getTime() + 180 * 86400000);
+
+  const program = await prisma.referralProgram.upsert({
+    where: { code: 'REFLAUNCH' },
+    update: {
+      name: 'Launch referral',
+      referrerReward: 50,
+      refereeReward: 50,
+      isActive: true,
+      validFrom: now,
+      validTo: in180Days,
+    },
+    create: {
+      code: 'REFLAUNCH',
+      name: 'Launch referral',
+      referrerReward: 50,
+      refereeReward: 50,
+      rewardType: 'WALLET',
+      qualifyingEvent: 'FIRST_RIDE',
+      qualifyingThreshold: 1,
+      maxReferralsPerUser: 25,
+      rewardExpiryDays: 60,
+      validFrom: now,
+      validTo: in180Days,
+      isActive: true,
+    },
+  });
+
+  const milestoneSeeds = [
+    { name: '5 friends', requiredReferrals: 5, bonusAmount: 100 },
+    { name: '10 friends', requiredReferrals: 10, bonusAmount: 250 },
+  ];
+  for (const m of milestoneSeeds) {
+    const existing = await prisma.referralMilestone.findFirst({
+      where: { programId: program.id, name: m.name },
+    });
+    if (existing) {
+      await prisma.referralMilestone.update({
+        where: { id: existing.id },
+        data: {
+          requiredReferrals: m.requiredReferrals,
+          bonusAmount: m.bonusAmount,
+          isActive: true,
+        },
+      });
+    } else {
+      await prisma.referralMilestone.create({
+        data: {
+          programId: program.id,
+          name: m.name,
+          requiredReferrals: m.requiredReferrals,
+          bonusAmount: m.bonusAmount,
+          rewardType: 'WALLET',
+          isActive: true,
+        },
+      });
+    }
+  }
+
+  const referrer = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000002', deletedAt: null },
+  });
+  const referee = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000001', deletedAt: null },
+  });
+
+  if (referrer) {
+    let code = await prisma.referralCode.findUnique({
+      where: {
+        userId_programId: { userId: referrer.id, programId: program.id },
+      },
+    });
+    if (!code) {
+      const byCode = await prisma.referralCode.findUnique({ where: { code: 'DEMOREF01' } });
+      if (byCode) {
+        code = await prisma.referralCode.update({
+          where: { id: byCode.id },
+          data: { userId: referrer.id, programId: program.id, isActive: true },
+        });
+      } else {
+        code = await prisma.referralCode.create({
+          data: {
+            userId: referrer.id,
+            programId: program.id,
+            code: 'DEMOREF01',
+            usesCount: 0,
+            maxUses: 25,
+            isActive: true,
+          },
+        });
+      }
+    } else if (!code.isActive) {
+      code = await prisma.referralCode.update({
+        where: { id: code.id },
+        data: { isActive: true },
+      });
+    }
+
+    if (referee) {
+      const existingReferral = await prisma.referral.findFirst({
+        where: { programId: program.id, refereeId: referee.id },
+      });
+      if (!existingReferral) {
+        await prisma.referral.create({
+          data: {
+            programId: program.id,
+            referrerId: referrer.id,
+            refereeId: referee.id,
+            referralCodeId: code.id,
+            status: 'SIGNED_UP',
+            qualifyingRides: 0,
+            signedUpAt: now,
+            expiresAt: in180Days,
+          },
+        });
+        await prisma.referralCode.update({
+          where: { id: code.id },
+          data: { usesCount: { increment: 1 } },
+        });
+      }
+    }
+  }
+
+  console.log('  -> Seeded referral program REFLAUNCH, milestones, code DEMOREF01, sample history');
 }
