@@ -79,6 +79,8 @@ describe('admin referral & rewards (integration)', () => {
     assert.equal(program.referrerReward, 50);
     assert.equal(program.refereeReward, 40);
     assert.equal(program.qualifyingEvent, 'FIRST_RIDE');
+    assert.equal(program.audience, 'RIDER');
+    assert.equal(program.rewardWallet, 'CUSTOMER');
     assert.equal(program.maxReferralsPerUser, 10);
     assert.equal(program.rewardExpiryDays, 30);
 
@@ -276,5 +278,58 @@ describe('admin referral & rewards (integration)', () => {
     });
     assert.equal(detail.statusCode, 200, detail.payload);
     assert.equal(detail.json().data.referralCode, 'ADMINREF1');
+  });
+
+  it('creates driver recruitment program with DRIVER audience and wallet', async () => {
+    const authHeader = await loginAdmin();
+    const now = new Date();
+    const later = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/referral-programs',
+      headers: authHeader,
+      payload: {
+        code: 'REFDRV01',
+        name: 'Driver recruit',
+        audience: 'DRIVER',
+        referrerReward: 500,
+        refereeReward: 200,
+        rewardWallet: 'DRIVER',
+        qualifyingEvent: 'DRIVER_APPROVED',
+        qualifyingThreshold: 1,
+        validFrom: now.toISOString(),
+        validTo: later.toISOString(),
+      },
+    });
+    assert.equal(created.statusCode, 201, created.payload);
+    const program = created.json().data;
+    assert.equal(program.audience, 'DRIVER');
+    assert.equal(program.rewardWallet, 'DRIVER');
+    assert.equal(program.qualifyingEvent, 'DRIVER_APPROVED');
+
+    const riderOnly = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/referral-programs',
+      headers: authHeader,
+      payload: {
+        code: 'BAD_MIX',
+        audience: 'RIDER',
+        rewardWallet: 'DRIVER',
+        qualifyingEvent: 'FIRST_RIDE',
+        validFrom: now.toISOString(),
+        validTo: later.toISOString(),
+      },
+    });
+    assert.equal(riderOnly.statusCode, 400, riderOnly.payload);
+
+    const filtered = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/referral-programs?audience=DRIVER',
+      headers: authHeader,
+    });
+    assert.equal(filtered.statusCode, 200, filtered.payload);
+    assert.ok(filtered.json().data.every((row: { audience: string }) => row.audience === 'DRIVER'));
+    assert.ok(filtered.json().data.some((row: { id: string }) => row.id === program.id));
   });
 });

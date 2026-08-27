@@ -5,6 +5,7 @@ import {
   createStaffBodySchema,
   listStaffQuerySchema,
   staffIdParamSchema,
+  updateStaffBodySchema,
 } from './staff.schemas.js';
 
 export class AdminStaffController {
@@ -27,6 +28,13 @@ export class AdminStaffController {
     const actorId = callerId(req);
     const user = await this.adminStaffService.create(body, actorId);
     reply.status(201).send({ data: user });
+  }
+
+  async update(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = staffIdParamSchema.parse(req.params);
+    const body = updateStaffBodySchema.parse(req.body);
+    const user = await this.adminStaffService.update(id, body, callerId(req));
+    reply.send({ data: user });
   }
 
   async remove(req: FastifyRequest, reply: FastifyReply): Promise<void> {

@@ -24,6 +24,7 @@ export interface ReferralHistoryDto {
   id: string;
   programId: string;
   programCode: string;
+  programAudience: string;
   referrerId: string;
   referrerEmail: string | null;
   referrerPhone: string | null;
@@ -56,7 +57,7 @@ export class AdminReferralHistoryService {
     rewardedAt: Date | null;
     expiresAt: Date | null;
     createdAt: Date;
-    program?: { code: string };
+    program?: { code: string; audience: string };
     referrer?: { email: string | null; phoneNumber: string };
     referee?: { email: string | null; phoneNumber: string } | null;
     referralCode?: { code: string } | null;
@@ -76,6 +77,7 @@ export class AdminReferralHistoryService {
       id: row.id,
       programId: row.programId,
       programCode: row.program?.code ?? '',
+      programAudience: row.program?.audience ?? 'RIDER',
       referrerId: row.referrerId,
       referrerEmail: row.referrer?.email ?? null,
       referrerPhone: row.referrer?.phoneNumber ?? null,
@@ -119,6 +121,7 @@ export class AdminReferralHistoryService {
     const where: Prisma.ReferralWhereInput = {};
     if (query.status !== 'all') where.status = query.status;
     if (query.programId) where.programId = query.programId;
+    if (query.audience) where.program = { audience: query.audience };
     if (query.search) {
       where.OR = [
         { referralCode: { code: { contains: query.search, mode: 'insensitive' } } },

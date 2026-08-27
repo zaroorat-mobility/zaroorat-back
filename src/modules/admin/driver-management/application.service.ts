@@ -5,6 +5,7 @@ import { DRIVER_DOCUMENT_TYPE } from '@modules/drivers/constants/driver.constant
 import type { VerificationStatus } from '@modules/drivers/types/index.js';
 import { generateDriverCode } from '@modules/drivers/utils/driver-code.util.js';
 import { VEHICLE_DOCUMENT_TYPE } from '@config/vehicle/vehicle.config.js';
+import { ReferralApplyService, ReferralError } from '@modules/referrals/index.js';
 import { AdminDriverNotFoundError, AdminDriverConflictError } from './driver.errors.js';
 import {
   AdminDriverService,
@@ -147,12 +148,24 @@ function pickUrl(...urls: Array<string | undefined>): string | undefined {
   return undefined;
 }
 
+function isFileId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function pickFileRef(...refs: Array<string | undefined>): { fileUrl?: string; fileId?: string } {
+  const ref = pickUrl(...refs);
+  if (!ref) return {};
+  if (isFileId(ref)) return { fileId: ref };
+  return { fileUrl: ref };
+}
+
 export class AdminApplicationService {
   constructor(
     private readonly adminDriverService: AdminDriverService,
     private readonly driverService: DriverService,
     private readonly databaseService: DatabaseService,
     private readonly authService: AuthService,
+    private readonly referralApplyService: ReferralApplyService,
   ) {}
 
   async list(query: ListApplicationsQuery): Promise<{
@@ -299,6 +312,7 @@ export class AdminApplicationService {
         documentType: (typeof DRIVER_DOCUMENT_TYPE)[keyof typeof DRIVER_DOCUMENT_TYPE];
         documentNumber?: string;
         fileUrl?: string;
+        fileId?: string;
         issuedAt?: Date;
         expiresAt?: Date;
       };
@@ -308,43 +322,43 @@ export class AdminApplicationService {
         driverDocs.push(doc);
       };
 
-      const licenseUrl = pickUrl(input.licenseFrontUrl, input.licenseBackUrl);
+      const licenseRef = pickFileRef(input.licenseFrontUrl, input.licenseBackUrl);
       pushDriverDoc({
         documentType: DRIVER_DOCUMENT_TYPE.DRIVING_LICENSE,
         documentNumber: input.licenseNo,
         issuedAt: new Date(input.licenseIssueDate),
         expiresAt: new Date(input.licenseExpiry),
-        ...(licenseUrl ? { fileUrl: licenseUrl } : {}),
+        ...licenseRef,
       });
-      const aadhaarUrl = pickUrl(input.aadhaarFrontUrl, input.aadhaarBackUrl);
+      const aadhaarRef = pickFileRef(input.aadhaarFrontUrl, input.aadhaarBackUrl);
       pushDriverDoc({
         documentType: DRIVER_DOCUMENT_TYPE.AADHAAR,
         documentNumber: input.aadhaarNumber,
-        ...(aadhaarUrl ? { fileUrl: aadhaarUrl } : {}),
+        ...aadhaarRef,
       });
-      const panUrl = pickUrl(input.panUrl);
+      const panRef = pickFileRef(input.panUrl);
       pushDriverDoc({
         documentType: DRIVER_DOCUMENT_TYPE.PAN,
         documentNumber: input.panNumber,
-        ...(panUrl ? { fileUrl: panUrl } : {}),
+        ...panRef,
       });
-      const photoUrl = pickUrl(input.driverSelfieUrl, input.profilePhotoUrl);
+      const photoRef = pickFileRef(input.driverSelfieUrl, input.profilePhotoUrl);
       pushDriverDoc({
         documentType: DRIVER_DOCUMENT_TYPE.PROFILE_PHOTO,
-        ...(photoUrl ? { fileUrl: photoUrl } : {}),
+        ...photoRef,
       });
-      const rcUrl = pickUrl(input.rcUrl);
+      const rcRef = pickFileRef(input.rcUrl);
       pushDriverDoc({
         documentType: DRIVER_DOCUMENT_TYPE.RC,
         documentNumber: input.rcNumber,
-        ...(rcUrl ? { fileUrl: rcUrl } : {}),
+        ...rcRef,
       });
-      const insuranceUrl = pickUrl(input.insuranceUrl);
+      const insuranceRef = pickFileRef(input.insuranceUrl);
       pushDriverDoc({
         documentType: DRIVER_DOCUMENT_TYPE.INSURANCE,
         documentNumber: input.insuranceNo,
         expiresAt: new Date(input.insuranceExpiry),
-        ...(insuranceUrl ? { fileUrl: insuranceUrl } : {}),
+        ...insuranceRef,
       });
 
       for (const doc of driverDocs) {
@@ -355,6 +369,7 @@ export class AdminApplicationService {
             verificationStatus: docStatus,
             ...(doc.documentNumber ? { documentNumber: doc.documentNumber } : {}),
             ...(doc.fileUrl ? { fileUrl: doc.fileUrl } : {}),
+            ...(doc.fileId ? { fileId: doc.fileId } : {}),
             ...(doc.issuedAt ? { issuedAt: doc.issuedAt } : {}),
             ...(doc.expiresAt ? { expiresAt: doc.expiresAt } : {}),
             ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
@@ -382,6 +397,7 @@ export class AdminApplicationService {
         documentType: string;
         documentNumber?: string;
         fileUrl?: string;
+        fileId?: string;
         expiresAt?: Date;
       };
       const vehicleDocs: VehicleDocInput[] = [];
@@ -392,35 +408,35 @@ export class AdminApplicationService {
       pushVehicleDoc({
         documentType: VEHICLE_DOCUMENT_TYPE.RC,
         documentNumber: input.rcNumber,
-        ...(rcUrl ? { fileUrl: rcUrl } : {}),
+        ...rcRef,
       });
       pushVehicleDoc({
         documentType: VEHICLE_DOCUMENT_TYPE.INSURANCE,
         documentNumber: input.insuranceNo,
         expiresAt: new Date(input.insuranceExpiry),
-        ...(insuranceUrl ? { fileUrl: insuranceUrl } : {}),
+        ...insuranceRef,
       });
-      const permitUrl = pickUrl(input.permitUrl);
+      const permitRef = pickFileRef(input.permitUrl);
       pushVehicleDoc({
         documentType: VEHICLE_DOCUMENT_TYPE.PERMIT,
         documentNumber: input.permitNo,
         expiresAt: new Date(input.permitExpiry),
-        ...(permitUrl ? { fileUrl: permitUrl } : {}),
+        ...permitRef,
       });
-      const pollutionUrl = pickUrl(input.pollutionUrl);
+      const pollutionRef = pickFileRef(input.pollutionUrl);
       pushVehicleDoc({
         documentType: VEHICLE_DOCUMENT_TYPE.PUC,
         documentNumber: input.pollutionNo,
         expiresAt: new Date(input.pollutionExpiry),
-        ...(pollutionUrl ? { fileUrl: pollutionUrl } : {}),
+        ...pollutionRef,
       });
 
       if (input.fitnessNo || input.fitnessUrl || input.fitnessExpiry) {
-        const fitnessUrl = pickUrl(input.fitnessUrl);
+        const fitnessRef = pickFileRef(input.fitnessUrl);
         pushVehicleDoc({
           documentType: VEHICLE_DOCUMENT_TYPE.FITNESS,
           ...(input.fitnessNo ? { documentNumber: input.fitnessNo } : {}),
-          ...(fitnessUrl ? { fileUrl: fitnessUrl } : {}),
+          ...fitnessRef,
           ...(input.fitnessExpiry ? { expiresAt: new Date(input.fitnessExpiry) } : {}),
         });
       }
@@ -433,6 +449,7 @@ export class AdminApplicationService {
             verificationStatus: docStatus,
             ...(doc.documentNumber ? { documentNumber: doc.documentNumber } : {}),
             ...(doc.fileUrl ? { fileUrl: doc.fileUrl } : {}),
+            ...(doc.fileId ? { fileId: doc.fileId } : {}),
             ...(doc.expiresAt ? { expiresAt: doc.expiresAt } : {}),
             ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
           },
@@ -466,6 +483,28 @@ export class AdminApplicationService {
           ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
         },
       });
+
+      if (input.referralCode?.trim()) {
+        try {
+          const applied = await this.referralApplyService.applyAtSignup(
+            {
+              code: input.referralCode,
+              refereeUserId: user.id,
+              audience: 'DRIVER',
+            },
+            tx,
+          );
+          await tx.driver.update({
+            where: { id: driver.id },
+            data: { referralCodeId: applied.referralCodeId },
+          });
+        } catch (err) {
+          if (err instanceof ReferralError) {
+            throw new AdminDriverConflictError(err.message);
+          }
+          throw err;
+        }
+      }
 
       await tx.adminActivityLog.create({
         data: {

@@ -276,6 +276,7 @@ export class AdminDriverService {
           docType: doc.documentType.toLowerCase(),
           ...(doc.documentNumber ? { docNumber: doc.documentNumber } : {}),
           fileUrl: doc.fileUrl ?? '',
+          ...(doc.fileId ? { fileId: doc.fileId } : {}),
           ...(doc.expiresAt ? { expiryDate: doc.expiresAt.toISOString().slice(0, 10) } : {}),
           verifyStatus: mapDocStatus(doc.verificationStatus),
           ...(comment ? { comment } : {}),
