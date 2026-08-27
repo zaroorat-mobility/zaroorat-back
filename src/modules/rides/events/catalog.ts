@@ -7,7 +7,6 @@ export const RIDE_EVENT_CATALOG = {
   /// and this is the only thing that tells them so.
   REQUEST_EXPIRED: 'ride.request.expired',
   DISPATCH_OFFERED: 'ride.dispatch.offered',
-  DISPATCH_ACCEPTED: 'ride.dispatch.accepted',
   DISPATCH_REJECTED: 'ride.dispatch.rejected',
   DISPATCH_EXPIRED: 'ride.dispatch.expired',
   ACCEPTED: 'ride.accepted',
