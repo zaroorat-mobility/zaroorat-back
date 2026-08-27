@@ -13,6 +13,7 @@ import {
 } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import { rideConfig } from '../../src/config/ride/ride.config.js';
+import { geoConfig } from '../../src/config/geo/geo.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { OutboxRelay } from '../../src/core/events/OutboxRelay.js';
 import type { DispatchTimeoutJob } from '../../src/modules/rides/jobs/dispatch-timeout.job.js';
@@ -61,7 +62,13 @@ describe('ride dispatch, offers and assignment (integration)', () => {
     await container.resolve<OutboxRelay>('outboxRelay').processBatch(200);
   }
 
-  async function onlineDriver(phone: string, vehicleTypeId: string): Promise<OnlineDriver> {
+  /// `at` places the driver somewhere other than the pickup point, which is how
+  /// a search radius becomes observable at all.
+  async function onlineDriver(
+    phone: string,
+    vehicleTypeId: string,
+    at: { latitude: number; longitude: number } = CENTRE,
+  ): Promise<OnlineDriver> {
     const seed = await loginAs(app, phone);
     await grantRole(seed.userId, 'driver');
     const user = await loginAs(app, phone);
@@ -80,7 +87,7 @@ describe('ride dispatch, offers and assignment (integration)', () => {
       method: 'POST',
       url: '/api/v1/drivers/location',
       headers: user.authHeader,
-      payload: CENTRE,
+      payload: at,
     });
     assert.equal(located.statusCode, 200, located.payload);
 
@@ -171,6 +178,69 @@ describe('ride dispatch, offers and assignment (integration)', () => {
   }
 
   // ------------------------------------------------------------ the scenarios
+
+  /// One degree of longitude is about 108.5km at this latitude, which is all the
+  /// arithmetic needed to put a driver a chosen distance due east of the pickup.
+  function eastOfCentre(metres: number): { latitude: number; longitude: number } {
+    return { latitude: CENTRE.latitude, longitude: CENTRE.longitude + metres / 108_500 };
+  }
+
+  /// The unit suite checks which radii dispatch asks for; this checks that the
+  /// radius reaches the geo query at all — the Redis cell cover and the PostGIS
+  /// `ST_DWithin` both have to honour it, and neither is exercised by a fake.
+  describe('a driver beyond the default search radius (M-7)', () => {
+    it('is found by widening, and is not found without it', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `FAR_${randomUUID().slice(0, 6)}` });
+      const far = await onlineDriver(
+        '+919876730801',
+        vehicleTypeId,
+        // Comfortably outside GEO_SEARCH_RADIUS_M, comfortably inside the maximum.
+        eastOfCentre(geoConfig.searchRadiusMeters + 2000),
+      );
+      const customer = await customerWithProfile('+919876730802');
+
+      const { requestId, offers } = await requestRide(customer, vehicleTypeId);
+
+      assert.deepEqual(
+        offers.map((offer) => offer.driverId),
+        [far.driverId],
+        'the only driver in the city was beyond the first circle, not beyond reach',
+      );
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.equal(request.status, 'SEARCHING');
+
+      // The control for the claim above: the same driver is genuinely outside
+      // the default radius, so this is widening finding them and not the
+      // default circle having been wide enough all along.
+      const geo = container.resolve<{
+        findNearbyDrivers(search: unknown): Promise<{ outcome: string; drivers?: unknown[] }>;
+      }>('geoService');
+      const atDefault = await geo.findNearbyDrivers({
+        origin: CENTRE,
+        radiusMeters: geoConfig.searchRadiusMeters,
+      });
+      assert.equal(atDefault.drivers?.length ?? 0, 0, 'not inside the default circle');
+    });
+
+    it('is left alone when a nearer driver can take the ride', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NEAR_${randomUUID().slice(0, 6)}` });
+      const near = await onlineDriver('+919876730803', vehicleTypeId);
+      await onlineDriver(
+        '+919876730804',
+        vehicleTypeId,
+        eastOfCentre(geoConfig.searchRadiusMeters + 2000),
+      );
+      const customer = await customerWithProfile('+919876730805');
+
+      const { offers } = await requestRide(customer, vehicleTypeId);
+
+      assert.deepEqual(
+        offers.map((offer) => offer.driverId),
+        [near.driverId],
+        'widening is a fallback, not a reason to drag a distant driver into round one',
+      );
+    });
+  });
 
   describe('parallel dispatch', () => {
     it('offers one request to several nearby drivers at once', async () => {
