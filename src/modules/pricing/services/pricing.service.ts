@@ -151,7 +151,7 @@ export class PricingService {
       params.dropLat,
       params.dropLng,
     );
-    const distanceKm = money(straightLineKm * 1.3);
+    const distanceKm = money(straightLineKm * pricingConfig.roadDistanceFactor);
     // A booking whose drop is its pickup used to price at the minimum fare and
     // go out to dispatch: a driver was sent to a customer already standing at
     // their destination, and the customer paid the floor for a journey that
@@ -169,7 +169,10 @@ export class PricingService {
     // reporting no distance is a different situation entirely, and refusing it
     // would leave a driver who has finished driving unable to close the ride.
     if (distanceKm <= 0) throw new ZeroDistanceTripError();
-    return { distanceKm, durationMin: Math.max(1, Math.round(distanceKm * 3)) };
+    return {
+      distanceKm,
+      durationMin: Math.max(1, Math.round(distanceKm * pricingConfig.minutesPerKm)),
+    };
   }
 
   async calculateFareQuote(params: FareCalculationParams): Promise<ItemizedFareResult> {
@@ -180,12 +183,17 @@ export class PricingService {
           'fixed default distance produced a price unrelated to the trip.',
       );
     }
-    const trip = this.estimateTrip({
-      pickupLat: params.pickupLat,
-      pickupLng: params.pickupLng,
-      dropLat: params.dropLat as number,
-      dropLng: params.dropLng as number,
-    });
+    // The multi-category quote estimates the trip once and passes it in: the
+    // journey does not change between a bike and a premium cab, and recomputing
+    // it inside that loop ran the same haversine once per category.
+    const trip =
+      params.trip ??
+      this.estimateTrip({
+        pickupLat: params.pickupLat,
+        pickupLng: params.pickupLng,
+        dropLat: params.dropLat as number,
+        dropLng: params.dropLng as number,
+      });
     const card =
       params.rateCard ?? (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode));
     return this.price(trip.distanceKm, trip.durationMin, card, params);

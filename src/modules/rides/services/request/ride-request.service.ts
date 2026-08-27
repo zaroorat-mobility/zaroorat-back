@@ -118,6 +118,10 @@ export class RideRequestService {
         vehicleTypeId: vehicleType.id,
         surgeMultiplier,
         rateCard,
+        // Estimated once above. The journey is the same whichever category
+        // prices it, so this loop was running the same haversine per category
+        // and could disagree with the `estimatedDistanceKm` it reports.
+        trip,
       });
       const view = toVehicleTypeView(vehicleType, rateCard);
       options.push({

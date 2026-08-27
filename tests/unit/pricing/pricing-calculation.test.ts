@@ -334,3 +334,51 @@ describe('a trip with nowhere to go (L-6)', () => {
     assert.ok(fare.totalFare > 0);
   });
 });
+
+/// `createQuote` estimates the journey once for the response, then priced every
+/// active category in a loop — and each pass re-ran the same haversine over the
+/// same two points. The journey does not change between a bike and a premium
+/// cab.
+describe('a quote estimates the journey once (L-4)', () => {
+  const BLR = { latitude: 12.9716, longitude: 77.5946 };
+  const NEARBY = { latitude: 12.9806, longitude: 77.5946 };
+
+  function quote(trip?: { distanceKm: number; durationMin: number }) {
+    return pricingService.calculateFareQuote({
+      pickupLat: BLR.latitude,
+      pickupLng: BLR.longitude,
+      dropLat: NEARBY.latitude,
+      dropLng: NEARBY.longitude,
+      vehicleTypeId: 'v-type-1',
+      ...(trip !== undefined ? { trip } : {}),
+    });
+  }
+
+  it('prices the trip it was handed rather than re-deriving one', async () => {
+    // Coordinates a kilometre apart, but the caller says fifty. If the supplied
+    // trip were ignored the fare would come out at the short one.
+    const supplied = await quote({ distanceKm: 50, durationMin: 100 });
+    const derived = await quote();
+
+    assert.ok(
+      supplied.totalFare > derived.totalFare * 5,
+      `supplied ${supplied.totalFare} should dwarf derived ${derived.totalFare}`,
+    );
+  });
+
+  it('agrees with the estimate it would have made when none is handed in', async () => {
+    const trip = pricingService.estimateTrip({
+      pickupLat: BLR.latitude,
+      pickupLng: BLR.longitude,
+      dropLat: NEARBY.latitude,
+      dropLng: NEARBY.longitude,
+    });
+
+    const supplied = await quote(trip);
+    const derived = await quote();
+
+    // The optimisation must be invisible in the price — passing the trip in is
+    // the same journey, not a different one.
+    assert.equal(supplied.totalFare, derived.totalFare);
+  });
+});

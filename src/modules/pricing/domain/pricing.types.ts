@@ -14,6 +14,15 @@ export interface FareCalculationParams {
   /// in one query and passes each card in, so pricing N categories stays one
   /// round trip rather than N.
   rateCard?: PricingRateCard;
+  /// Pre-estimated trip, for the same reason as `rateCard`: the multi-category
+  /// quote works out the journey once and prices every category against it,
+  /// rather than running the same haversine per category.
+  trip?: TripEstimate;
+}
+
+export interface TripEstimate {
+  distanceKm: number;
+  durationMin: number;
 }
 
 export interface FinalFareParams {
