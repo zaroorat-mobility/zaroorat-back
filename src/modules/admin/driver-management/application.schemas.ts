@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const optionalUrl = z.union([z.string().url(), z.literal('')]).optional();
+const optionalUrl = z.union([z.string().url(), z.string().uuid(), z.literal('')]).optional();
 const e164Phone = z
   .string()
   .trim()

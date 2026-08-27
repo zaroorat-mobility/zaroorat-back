@@ -58,6 +58,7 @@ export class AdminReferralCodeService {
     if (query.status === 'inactive') where.isActive = false;
     if (query.programId) where.programId = query.programId;
     if (query.userId) where.userId = query.userId;
+    if (query.audience) where.program = { audience: query.audience };
     if (query.search) {
       where.OR = [
         { code: { contains: query.search, mode: 'insensitive' } },

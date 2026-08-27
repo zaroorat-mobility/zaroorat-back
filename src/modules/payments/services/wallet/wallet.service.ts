@@ -33,7 +33,12 @@ export class WalletService {
     userId: string,
     amount: Decimal,
     tx: TransactionClient,
-    reference: { referenceType: string; referenceId?: string | null; description?: string } = {
+    reference: {
+      referenceType: string;
+      referenceId?: string | null;
+      description?: string;
+      txnType?: string;
+    } = {
       referenceType: 'TOPUP',
     },
   ): Promise<CustomerWallet> {
@@ -54,7 +59,7 @@ export class WalletService {
       {
         walletId: wallet.id,
         userId,
-        txnType: 'TOPUP',
+        txnType: reference.txnType ?? 'TOPUP',
         amount,
         balanceAfter: newBalance,
         referenceType: reference.referenceType,

@@ -13,7 +13,7 @@ import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { hashPassword } from '@modules/auth/utils/password.js';
 import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
 import { StaffConflictError, StaffForbiddenError, StaffNotFoundError } from './staff.errors.js';
-import type { CreateStaffBody, ListStaffQuery } from './staff.schemas.js';
+import type { CreateStaffBody, ListStaffQuery, UpdateStaffBody } from './staff.schemas.js';
 
 type StaffUserRow = User & {
   profile: { firstName: string | null; lastName: string | null } | null;
@@ -124,6 +124,81 @@ export class AdminStaffService {
     });
 
     return this.getById(created);
+  }
+
+  async update(id: string, input: UpdateStaffBody, actorId: string): Promise<StaffUserDto> {
+    const row = await this.findStaffRow(id);
+    if (!row) throw new StaffNotFoundError();
+
+    if (input.email && input.email !== row.email) {
+      const emailTaken = await this.userRepository.findActiveByEmail(input.email);
+      if (emailTaken && emailTaken.id !== id) {
+        throw new StaffConflictError('That email is already in use');
+      }
+    }
+
+    if (input.phoneNumber && input.phoneNumber !== row.phoneNumber) {
+      const phoneTaken = await this.userRepository.findActiveByPhone(input.phoneNumber);
+      if (phoneTaken && phoneTaken.id !== id) {
+        throw new StaffConflictError('That phone number is already in use');
+      }
+    }
+
+    if (input.role && !isAssignableStaffRoleSlug(input.role)) {
+      throw new StaffForbiddenError('That role cannot be assigned to staff');
+    }
+
+    const nextRole = input.role ? await this.roleRepository.findBySlug(input.role) : null;
+    if (input.role && !nextRole) {
+      throw new StaffConflictError(`Unknown staff role '${input.role}'`);
+    }
+
+    await this.transactionManager.execute(async (tx: TransactionClient) => {
+      if (input.firstName !== undefined || input.lastName !== undefined) {
+        await this.userProfileRepository.update(
+          id,
+          {
+            ...(input.firstName !== undefined ? { firstName: input.firstName } : {}),
+            ...(input.lastName !== undefined ? { lastName: input.lastName ?? null } : {}),
+          },
+          tx,
+        );
+      }
+
+      if (input.email !== undefined) {
+        await this.userRepository.updateEmail(id, input.email, tx);
+      }
+
+      if (input.phoneNumber !== undefined) {
+        await this.userRepository.updatePhoneNumber(id, input.phoneNumber, tx);
+      }
+
+      if (input.password) {
+        await (tx ?? this.databaseService.client).user.update({
+          where: { id },
+          data: { passwordHash: hashPassword(input.password) },
+        });
+      }
+
+      if (input.role && nextRole) {
+        const currentRole = pickStaffRole(
+          row.roleAssignments.map((assignment) => assignment.role.slug),
+        );
+        if (currentRole !== input.role) {
+          for (const assignment of row.roleAssignments) {
+            if (isStaffRoleSlug(assignment.role.slug)) {
+              await this.roleRepository.revoke(id, assignment.roleId, new Date(), tx);
+            }
+          }
+          await this.roleRepository.grant(
+            { userId: id, roleId: nextRole.id, grantedBy: actorId },
+            tx,
+          );
+        }
+      }
+    });
+
+    return this.getById(id);
   }
 
   async remove(id: string, actorId: string): Promise<void> {

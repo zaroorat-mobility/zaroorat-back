@@ -52,8 +52,9 @@ model User {
   referralCodes           ReferralCode[]
   referralsMade           Referral[]               @relation("Referrer")
   referralsReceived       Referral[]               @relation("Referee")
-  referralRewards         ReferralReward[]
-  referralFraudReviews    ReferralFraudFlag[]
+  referralRewards              ReferralReward[]
+  referralMilestoneAchievements ReferralMilestoneAchievement[]
+  referralFraudReviews         ReferralFraudFlag[]
   assignedCoupons         Coupon[]
   roleAssignments         UserRoleAssignment[]
   adminActivityLogs       AdminActivityLog[]

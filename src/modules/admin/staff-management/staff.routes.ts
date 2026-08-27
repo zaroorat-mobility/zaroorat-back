@@ -9,5 +9,6 @@ export async function adminStaffRoutes(fastify: FastifyInstance): Promise<void> 
   fastify.get('/users', adminOnly, (req, reply) => controller.list(req, reply));
   fastify.get('/users/:id', adminOnly, (req, reply) => controller.getById(req, reply));
   fastify.post('/users', adminOnly, (req, reply) => controller.create(req, reply));
+  fastify.patch('/users/:id', adminOnly, (req, reply) => controller.update(req, reply));
   fastify.delete('/users/:id', adminOnly, (req, reply) => controller.remove(req, reply));
 }

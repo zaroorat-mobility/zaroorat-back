@@ -297,6 +297,31 @@ export async function seedDevelopment(prisma: Prisma) {
       profile: { firstName: 'Pending', lastName: 'Applicant' },
       roles: ['customer', 'driver'],
     },
+    {
+      phone: '+10000000004',
+      profile: { firstName: 'Invite', lastName: 'Friend' },
+      roles: ['customer'],
+    },
+    {
+      phone: '+10000000005',
+      profile: { firstName: 'Referred', lastName: 'One' },
+      roles: ['customer'],
+    },
+    {
+      phone: '+10000000006',
+      profile: { firstName: 'Referred', lastName: 'Two' },
+      roles: ['customer'],
+    },
+    {
+      phone: '+10000000007',
+      profile: { firstName: 'Referred', lastName: 'Three' },
+      roles: ['customer'],
+    },
+    {
+      phone: '+10000000008',
+      profile: { firstName: 'Referred', lastName: 'Four' },
+      roles: ['customer'],
+    },
   ];
 
   for (const fixture of fixtures) {
@@ -768,12 +793,17 @@ async function seedReferralFixtures(prisma: Prisma) {
   const now = new Date();
   const in180Days = new Date(now.getTime() + 180 * 86400000);
 
-  const program = await prisma.referralProgram.upsert({
+  // ── Rider program (customer app: share + claim, reward on first ride) ──
+  const riderProgram = await prisma.referralProgram.upsert({
     where: { code: 'REFLAUNCH' },
     update: {
       name: 'Launch referral',
+      audience: 'RIDER',
       referrerReward: 50,
       refereeReward: 50,
+      rewardWallet: 'CUSTOMER',
+      qualifyingEvent: 'FIRST_RIDE',
+      qualifyingThreshold: 1,
       isActive: true,
       validFrom: now,
       validTo: in180Days,
@@ -781,9 +811,11 @@ async function seedReferralFixtures(prisma: Prisma) {
     create: {
       code: 'REFLAUNCH',
       name: 'Launch referral',
+      audience: 'RIDER',
       referrerReward: 50,
       refereeReward: 50,
       rewardType: 'WALLET',
+      rewardWallet: 'CUSTOMER',
       qualifyingEvent: 'FIRST_RIDE',
       qualifyingThreshold: 1,
       maxReferralsPerUser: 25,
@@ -794,13 +826,13 @@ async function seedReferralFixtures(prisma: Prisma) {
     },
   });
 
-  const milestoneSeeds = [
+  const riderMilestones = [
     { name: '5 friends', requiredReferrals: 5, bonusAmount: 100 },
     { name: '10 friends', requiredReferrals: 10, bonusAmount: 250 },
   ];
-  for (const m of milestoneSeeds) {
+  for (const m of riderMilestones) {
     const existing = await prisma.referralMilestone.findFirst({
-      where: { programId: program.id, name: m.name },
+      where: { programId: riderProgram.id, name: m.name },
     });
     if (existing) {
       await prisma.referralMilestone.update({
@@ -814,7 +846,7 @@ async function seedReferralFixtures(prisma: Prisma) {
     } else {
       await prisma.referralMilestone.create({
         data: {
-          programId: program.id,
+          programId: riderProgram.id,
           name: m.name,
           requiredReferrals: m.requiredReferrals,
           bonusAmount: m.bonusAmount,
@@ -825,69 +857,279 @@ async function seedReferralFixtures(prisma: Prisma) {
     }
   }
 
-  const referrer = await prisma.user.findFirst({
+  const riderReferrer = await prisma.user.findFirst({
     where: { phoneNumber: '+10000000002', deletedAt: null },
   });
-  const referee = await prisma.user.findFirst({
-    where: { phoneNumber: '+10000000001', deletedAt: null },
+  const inviteFriend = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000004', deletedAt: null },
   });
+  const referredHistoryPhones = ['+10000000005', '+10000000006', '+10000000007', '+10000000008'];
 
-  if (referrer) {
-    let code = await prisma.referralCode.findUnique({
-      where: {
-        userId_programId: { userId: referrer.id, programId: program.id },
-      },
+  if (riderReferrer) {
+    const riderCode = await ensureReferralCode(prisma, {
+      userId: riderReferrer.id,
+      programId: riderProgram.id,
+      code: 'DEMOREF01',
+      maxUses: 25,
     });
-    if (!code) {
-      const byCode = await prisma.referralCode.findUnique({ where: { code: 'DEMOREF01' } });
-      if (byCode) {
-        code = await prisma.referralCode.update({
-          where: { id: byCode.id },
-          data: { userId: referrer.id, programId: program.id, isActive: true },
-        });
-      } else {
-        code = await prisma.referralCode.create({
-          data: {
-            userId: referrer.id,
-            programId: program.id,
-            code: 'DEMOREF01',
-            usesCount: 0,
-            maxUses: 25,
-            isActive: true,
-          },
-        });
-      }
-    } else if (!code.isActive) {
-      code = await prisma.referralCode.update({
-        where: { id: code.id },
-        data: { isActive: true },
+
+    await prisma.userProfile.updateMany({
+      where: { userId: riderReferrer.id },
+      data: { referralCode: riderCode.code },
+    });
+
+    if (inviteFriend) {
+      await ensureReferralRow(prisma, {
+        programId: riderProgram.id,
+        referrerId: riderReferrer.id,
+        refereeId: inviteFriend.id,
+        referralCodeId: riderCode.id,
+        status: 'SIGNED_UP',
+        signedUpAt: now,
+        expiresAt: in180Days,
       });
     }
 
-    if (referee) {
-      const existingReferral = await prisma.referral.findFirst({
-        where: { programId: program.id, refereeId: referee.id },
+    for (const phone of referredHistoryPhones) {
+      const referee = await prisma.user.findFirst({
+        where: { phoneNumber: phone, deletedAt: null },
       });
-      if (!existingReferral) {
-        await prisma.referral.create({
-          data: {
-            programId: program.id,
-            referrerId: referrer.id,
-            refereeId: referee.id,
-            referralCodeId: code.id,
-            status: 'SIGNED_UP',
-            qualifyingRides: 0,
-            signedUpAt: now,
-            expiresAt: in180Days,
-          },
-        });
-        await prisma.referralCode.update({
-          where: { id: code.id },
-          data: { usesCount: { increment: 1 } },
-        });
-      }
+      if (!referee) continue;
+      await ensureReferralRow(prisma, {
+        programId: riderProgram.id,
+        referrerId: riderReferrer.id,
+        refereeId: referee.id,
+        referralCodeId: riderCode.id,
+        status: 'REWARDED',
+        signedUpAt: now,
+        qualifiedAt: now,
+        rewardedAt: now,
+        expiresAt: in180Days,
+      });
+    }
+
+    const usesCount = await prisma.referral.count({
+      where: { referralCodeId: riderCode.id },
+    });
+    await prisma.referralCode.update({
+      where: { id: riderCode.id },
+      data: { usesCount },
+    });
+  }
+
+  // ── Driver program (driver app: share + claim, reward on approval) ──
+  const driverProgram = await prisma.referralProgram.upsert({
+    where: { code: 'REFDRIVER' },
+    update: {
+      name: 'Driver recruitment',
+      audience: 'DRIVER',
+      referrerReward: 500,
+      refereeReward: 200,
+      rewardWallet: 'DRIVER',
+      qualifyingEvent: 'DRIVER_APPROVED',
+      qualifyingThreshold: 1,
+      isActive: true,
+      validFrom: now,
+      validTo: in180Days,
+    },
+    create: {
+      code: 'REFDRIVER',
+      name: 'Driver recruitment',
+      audience: 'DRIVER',
+      referrerReward: 500,
+      refereeReward: 200,
+      rewardType: 'WALLET',
+      rewardWallet: 'DRIVER',
+      qualifyingEvent: 'DRIVER_APPROVED',
+      qualifyingThreshold: 1,
+      maxReferralsPerUser: 50,
+      rewardExpiryDays: 90,
+      validFrom: now,
+      validTo: in180Days,
+      isActive: true,
+    },
+  });
+
+  const driverMilestones = [
+    { name: '3 drivers', requiredReferrals: 3, bonusAmount: 1000 },
+    { name: '10 drivers', requiredReferrals: 10, bonusAmount: 5000 },
+  ];
+  for (const m of driverMilestones) {
+    const existing = await prisma.referralMilestone.findFirst({
+      where: { programId: driverProgram.id, name: m.name },
+    });
+    if (existing) {
+      await prisma.referralMilestone.update({
+        where: { id: existing.id },
+        data: {
+          requiredReferrals: m.requiredReferrals,
+          bonusAmount: m.bonusAmount,
+          isActive: true,
+        },
+      });
+    } else {
+      await prisma.referralMilestone.create({
+        data: {
+          programId: driverProgram.id,
+          name: m.name,
+          requiredReferrals: m.requiredReferrals,
+          bonusAmount: m.bonusAmount,
+          rewardType: 'WALLET',
+          isActive: true,
+        },
+      });
     }
   }
 
-  console.log('  -> Seeded referral program REFLAUNCH, milestones, code DEMOREF01, sample history');
+  const referringDriverUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000001', deletedAt: null },
+  });
+  const pendingApplicant = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000003', deletedAt: null },
+  });
+
+  if (referringDriverUser) {
+    const driverRow = await prisma.driver.findUnique({ where: { userId: referringDriverUser.id } });
+    if (driverRow) {
+      const driverCode = await ensureReferralCode(prisma, {
+        userId: referringDriverUser.id,
+        programId: driverProgram.id,
+        code: 'DEMODRVREF',
+        maxUses: 50,
+      });
+
+      if (pendingApplicant) {
+        await ensureReferralRow(prisma, {
+          programId: driverProgram.id,
+          referrerId: referringDriverUser.id,
+          refereeId: pendingApplicant.id,
+          referralCodeId: driverCode.id,
+          status: 'SIGNED_UP',
+          signedUpAt: now,
+          expiresAt: in180Days,
+        });
+        await prisma.driver.updateMany({
+          where: { userId: pendingApplicant.id },
+          data: { referralCodeId: driverCode.id },
+        });
+      }
+
+      const driverUses = await prisma.referral.count({
+        where: { referralCodeId: driverCode.id },
+      });
+      await prisma.referralCode.update({
+        where: { id: driverCode.id },
+        data: { usesCount: driverUses },
+      });
+    }
+  }
+
+  console.log('');
+  console.log('  Referral dev workflow (RIDER lane — customer app)');
+  console.log('  ─────────────────────────────────────────────────');
+  console.log('  Referrer : Demo Passenger  +10000000002  code DEMOREF01');
+  console.log('  Pending  : Invite Friend   +10000000004  (SIGNED_UP — reward on first ride)');
+  console.log(
+    '  History  : 4 REWARDED invites (+10000000005–08) → 1 away from "5 friends" milestone',
+  );
+  console.log('  APIs     : GET/POST /api/v1/referrals/rider/me | /apply');
+  console.log('  Trigger  : complete a ride as +10000000004 → wallet credits + possible milestone');
+  console.log('');
+  console.log('  Referral dev workflow (DRIVER lane — driver app)');
+  console.log('  ─────────────────────────────────────────────────');
+  console.log('  Referrer : Demo Driver      +10000000001  code DEMODRVREF');
+  console.log(
+    '  Pending  : Pending Applicant +10000000003  (SIGNED_UP — reward on admin approval)',
+  );
+  console.log('  APIs     : GET/POST /api/v1/referrals/driver/me | /apply');
+  console.log('  Trigger  : POST /api/v1/admin/drivers/:id/verify { status: "VERIFIED" }');
+  console.log('');
+}
+
+async function ensureReferralCode(
+  prisma: Prisma,
+  input: { userId: string; programId: string; code: string; maxUses: number },
+) {
+  let code = await prisma.referralCode.findUnique({
+    where: { userId_programId: { userId: input.userId, programId: input.programId } },
+  });
+  if (!code) {
+    const byCode = await prisma.referralCode.findUnique({ where: { code: input.code } });
+    if (byCode) {
+      code = await prisma.referralCode.update({
+        where: { id: byCode.id },
+        data: {
+          userId: input.userId,
+          programId: input.programId,
+          maxUses: input.maxUses,
+          isActive: true,
+        },
+      });
+    } else {
+      code = await prisma.referralCode.create({
+        data: {
+          userId: input.userId,
+          programId: input.programId,
+          code: input.code,
+          usesCount: 0,
+          maxUses: input.maxUses,
+          isActive: true,
+        },
+      });
+    }
+  } else if (!code.isActive) {
+    code = await prisma.referralCode.update({
+      where: { id: code.id },
+      data: { isActive: true, maxUses: input.maxUses },
+    });
+  }
+  return code;
+}
+
+async function ensureReferralRow(
+  prisma: Prisma,
+  input: {
+    programId: string;
+    referrerId: string;
+    refereeId: string;
+    referralCodeId: string;
+    status: 'SIGNED_UP' | 'REWARDED';
+    signedUpAt: Date;
+    expiresAt: Date;
+    qualifiedAt?: Date;
+    rewardedAt?: Date;
+  },
+) {
+  const existing = await prisma.referral.findUnique({
+    where: { programId_refereeId: { programId: input.programId, refereeId: input.refereeId } },
+  });
+  if (existing) {
+    await prisma.referral.update({
+      where: { id: existing.id },
+      data: {
+        referrerId: input.referrerId,
+        referralCodeId: input.referralCodeId,
+        status: input.status,
+        signedUpAt: input.signedUpAt,
+        qualifiedAt: input.qualifiedAt ?? null,
+        rewardedAt: input.rewardedAt ?? null,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return;
+  }
+  await prisma.referral.create({
+    data: {
+      programId: input.programId,
+      referrerId: input.referrerId,
+      refereeId: input.refereeId,
+      referralCodeId: input.referralCodeId,
+      status: input.status,
+      qualifyingRides: input.status === 'REWARDED' ? 1 : 0,
+      signedUpAt: input.signedUpAt,
+      ...(input.qualifiedAt ? { qualifiedAt: input.qualifiedAt } : {}),
+      ...(input.rewardedAt ? { rewardedAt: input.rewardedAt } : {}),
+      expiresAt: input.expiresAt,
+    },
+  });
 }

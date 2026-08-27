@@ -224,6 +224,25 @@ enum AgentStatus {
   OFFLINE
 }
 
+enum ReferralProgramAudience {
+  RIDER
+  DRIVER
+}
+
+enum ReferralQualifyingEvent {
+  SIGNUP
+  FIRST_RIDE
+  NTH_RIDE
+  DRIVER_APPROVED
+  DRIVER_FIRST_RIDE
+  DRIVER_NTH_RIDE
+}
+
+enum ReferralRewardWallet {
+  CUSTOMER
+  DRIVER
+}
+
 enum ReferralStatus {
   PENDING
   SIGNED_UP
@@ -243,6 +262,7 @@ enum ReferralRewardStatus {
 enum ReferralRewardBeneficiary {
   REFERRER
   REFEREE
+  MILESTONE
 }
 
 enum ReferralFraudStatus {
