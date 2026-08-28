@@ -5,6 +5,8 @@ import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
 import { AdminSurgeController } from './surge.controller.js';
 import { AdminFareController } from './fare.controller.js';
 import { AdminCancellationController } from './cancellation.controller.js';
+import { AdminServiceZoneController } from './service-zone.controller.js';
+import { AdminInvoiceController } from './invoice.controller.js';
 
 const uuidParams = {
   type: 'object',
@@ -44,8 +46,18 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   const adminCancellationController = container.resolve<AdminCancellationController>(
     'adminCancellationController',
   );
+  const adminServiceZoneController = container.resolve<AdminServiceZoneController>(
+    'adminServiceZoneController',
+  );
+  const adminInvoiceController =
+    container.resolve<AdminInvoiceController>('adminInvoiceController');
   const canRead = { preHandler: fastify.authorize({ permissions: ['pricing:read'] }) };
   const canWrite = { preHandler: fastify.authorize({ permissions: ['pricing:write'] }) };
+
+  // Service zones (for fare rule scoping)
+  fastify.get('/service-zones', canRead, (req, reply) =>
+    adminServiceZoneController.list(req, reply),
+  );
 
   // Fare rules
   fastify.get('/fare-rules', canRead, (req, reply) => adminFareController.list(req, reply));
@@ -184,4 +196,29 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
     },
     handler: adminSurgeController.deleteSurgeWindow.bind(adminSurgeController),
   });
+
+  // Billing invoices
+  fastify.get('/invoices', canRead, (req, reply) =>
+    adminInvoiceController.listInvoices(req, reply),
+  );
+  fastify.get('/invoices/:id', canRead, (req, reply) =>
+    adminInvoiceController.getInvoiceById(req, reply),
+  );
+
+  // Invoice templates
+  fastify.get('/invoice-templates', canRead, (req, reply) =>
+    adminInvoiceController.listTemplates(req, reply),
+  );
+  fastify.post('/invoice-templates', canWrite, (req, reply) =>
+    adminInvoiceController.createTemplate(req, reply),
+  );
+  fastify.patch('/invoice-templates/:id', canWrite, (req, reply) =>
+    adminInvoiceController.updateTemplate(req, reply),
+  );
+  fastify.delete('/invoice-templates/:id', canWrite, (req, reply) =>
+    adminInvoiceController.deleteTemplate(req, reply),
+  );
+  fastify.post('/invoice-templates/:id/set-default', canWrite, (req, reply) =>
+    adminInvoiceController.setDefaultTemplate(req, reply),
+  );
 }

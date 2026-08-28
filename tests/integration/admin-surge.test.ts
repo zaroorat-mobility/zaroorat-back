@@ -107,4 +107,63 @@ describe('admin surge windows (integration)', () => {
     assert.equal(row!.vehicleTypeCode, 'CAB_ECONOMY');
     assert.equal(row!.reason, 'Morning Peak Cab Surge');
   });
+
+  it('creates a surge window with demand/supply thresholds and peak-hour rules', async () => {
+    const authHeader = await loginAdmin();
+    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+    assert.ok(cab);
+
+    const zone = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/surge-zones',
+      headers: authHeader,
+      payload: {
+        cityCode: 'SGR',
+        name: 'Threshold Zone',
+        coordinates: [
+          [
+            [74.7, 34.0],
+            [75.0, 34.0],
+            [75.0, 34.2],
+            [74.7, 34.2],
+            [74.7, 34.0],
+          ],
+        ],
+      },
+    });
+    assert.equal(zone.statusCode, 201, zone.payload);
+    const zoneId = zone.json().id as string;
+
+    const startsAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/surge-windows',
+      headers: authHeader,
+      payload: {
+        zoneId,
+        vehicleTypeId: cab!.id,
+        multiplier: 1.8,
+        startsAt,
+        reason: 'Peak Demand Surge',
+        demandThresholdPct: 75,
+        supplyThresholdPct: 25,
+        peakHourStart: '08:00',
+        peakHourEnd: '10:00',
+        isPeakHourOnly: true,
+      },
+    });
+    assert.equal(created.statusCode, 201, created.payload);
+    const body = created.json() as {
+      demandThresholdPct: string | number;
+      supplyThresholdPct: string | number;
+      peakHourStart: string;
+      peakHourEnd: string;
+      isPeakHourOnly: boolean;
+    };
+    assert.equal(Number(body.demandThresholdPct), 75);
+    assert.equal(Number(body.supplyThresholdPct), 25);
+    assert.equal(body.peakHourStart, '08:00');
+    assert.equal(body.peakHourEnd, '10:00');
+    assert.equal(body.isPeakHourOnly, true);
+  });
 });

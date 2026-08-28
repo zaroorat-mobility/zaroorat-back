@@ -24,6 +24,7 @@ describe('buildStorageKey', () => {
       VEHICLE_IMAGE: 'vi',
       SOS_EVIDENCE: 'se',
       DISPUTE_EVIDENCE: 'de',
+      PROMO_BANNER: 'pb',
     };
 
     for (const [purpose, prefix] of Object.entries(expected)) {

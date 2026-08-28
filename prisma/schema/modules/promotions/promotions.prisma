@@ -144,19 +144,20 @@ model Coupon {
 }
 
 model PromoBanner {
-  id         String          @id @default(uuid(7)) @db.Uuid
-  campaignId String?         @map("campaign_id") @db.Uuid
-  title      String?
-  imageUrl   String          @map("image_url")
-  placement  BannerPlacement @default(HOME)
-  actionUrl  String?         @map("action_url")
-  priority   Int             @default(0) @db.SmallInt
-  startsAt   DateTime?       @map("starts_at")
-  endsAt     DateTime?       @map("ends_at")
-  isActive   Boolean         @default(true) @map("is_active")
-  createdAt  DateTime        @default(now()) @map("created_at")
+  id          String          @id @default(uuid(7)) @db.Uuid
+  campaignId  String?         @map("campaign_id") @db.Uuid
+  title       String?
+  imageFileId String          @unique @map("image_file_id") @db.Uuid
+  placement   BannerPlacement @default(HOME)
+  actionUrl   String?         @map("action_url")
+  priority    Int             @default(0) @db.SmallInt
+  startsAt    DateTime?       @map("starts_at")
+  endsAt      DateTime?       @map("ends_at")
+  isActive    Boolean         @default(true) @map("is_active")
+  createdAt   DateTime        @default(now()) @map("created_at")
 
-  campaign PromoCampaign? @relation(fields: [campaignId], references: [id])
+  campaign  PromoCampaign? @relation(fields: [campaignId], references: [id])
+  imageFile File           @relation("BannerImage", fields: [imageFileId], references: [id])
 
   @@map("promo_banners")
 }

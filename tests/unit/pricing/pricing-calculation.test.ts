@@ -4,17 +4,6 @@ import { PricingService } from '../../../src/modules/pricing';
 import type { PricingRuleRepository } from '../../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import type { PricingRule } from '../../../src/generated/prisma/index.js';
 
-/// These cases exercise the pricing arithmetic, not the lookup, so the
-/// repository is stubbed: 'v-type-1' has no pricing columns set and therefore
-/// prices on the platform defaults.
-///
-/// Prisma types every money column as a non-nullable `Decimal`, but
-/// `PricingService` reads each one through a defensive `decimal()` helper that
-/// tolerates null and falls back to the platform default. These cases exist to
-/// exercise exactly that fallback, so the fixture must be able to leave a
-/// column unset and to pass a plain number where a `Decimal` is declared.
-/// One widening cast at the boundary keeps that honest and localised, rather
-/// than scattering `any` across every field.
 type PricingRuleOverrides = Partial<Record<keyof PricingRule, unknown>>;
 
 function pricingRule(overrides: PricingRuleOverrides = {}): PricingRule {
@@ -22,6 +11,8 @@ function pricingRule(overrides: PricingRuleOverrides = {}): PricingRule {
     id: 'rule-1',
     vehicleTypeId: 'v-type-1',
     cityCode: 'GLOBAL',
+    serviceType: null,
+    serviceZoneId: null,
     currency: 'INR',
     minimumFare: null,
     baseFare: null,
@@ -32,6 +23,8 @@ function pricingRule(overrides: PricingRuleOverrides = {}): PricingRule {
     includedKm: null,
     bookingFee: null,
     platformFeePct: null,
+    taxRatePct: null,
+    commissionRatePct: null,
     nightMultiplier: null,
     version: 1,
     isActive: true,
@@ -46,6 +39,18 @@ function pricingRule(overrides: PricingRuleOverrides = {}): PricingRule {
 const rules = new Map<string, PricingRule>([['v-type-1', pricingRule()]]);
 
 const pricingRuleRepository = {
+  findBestActiveRule: async ({
+    vehicleTypeId,
+    cityCode,
+  }: {
+    vehicleTypeId: string;
+    cityCode?: string;
+  }) => {
+    if (cityCode && cityCode !== 'GLOBAL') {
+      return null;
+    }
+    return rules.get(vehicleTypeId) ?? null;
+  },
   findActiveRule: async (vehicleTypeId: string, cityCode: string) => {
     if (cityCode === 'GLOBAL') {
       return rules.get(vehicleTypeId) ?? null;
@@ -88,6 +93,61 @@ describe('Itemized fare calculation', () => {
         }),
       /drop coordinates/i,
     );
+  });
+
+  it('includes booking fee and respects free waiting minutes', async () => {
+    rules.set(
+      'v-type-fees',
+      pricingRule({
+        vehicleTypeId: 'v-type-fees',
+        bookingFee: 10,
+        freeWaitingMin: 5,
+        waitingPerMin: 2,
+        baseFare: 50,
+        perKmRate: 0,
+        perMinuteRate: 0,
+        minimumFare: 0,
+        platformFeePct: 0,
+        taxRatePct: 0,
+        commissionRatePct: 10,
+      }),
+    );
+
+    const withWait = await pricingService.calculateFinalFare({
+      actualDistanceKm: 0,
+      actualDurationMin: 0,
+      waitingMinutes: 8,
+      vehicleTypeId: 'v-type-fees',
+    });
+    assert.equal(withWait.bookingFee, 10);
+    assert.equal(withWait.waitingCharge, 6);
+  });
+
+  it('applies tax and commission from the rate card', async () => {
+    rules.set(
+      'v-type-tax',
+      pricingRule({
+        vehicleTypeId: 'v-type-tax',
+        baseFare: 100,
+        perKmRate: 0,
+        perMinuteRate: 0,
+        minimumFare: 0,
+        bookingFee: 0,
+        platformFeePct: 10,
+        taxRatePct: 5,
+        commissionRatePct: 20,
+      }),
+    );
+
+    const result = await pricingService.calculateFinalFare({
+      actualDistanceKm: 0,
+      actualDurationMin: 0,
+      vehicleTypeId: 'v-type-tax',
+    });
+
+    assert.equal(result.taxAmount, 5);
+    assert.equal(result.platformFee, 10);
+    assert.equal(result.platformCommission, Math.round(result.totalFare * 0.2 * 100) / 100);
   });
 });
 
@@ -157,7 +217,7 @@ describe('Final fare (billed on actual trip values)', () => {
     assert.equal(partial.perKm, 99);
     assert.equal(partial.baseFare, fallback.baseFare);
     assert.equal(partial.minimumFare, fallback.minimumFare);
-    assert.equal(partial.commissionRate, fallback.commissionRate);
+    assert.equal(partial.commissionRatePct, fallback.commissionRatePct);
   });
 
   it('prices an unknown vehicle type on the platform default rather than throwing', async () => {

@@ -163,18 +163,28 @@ export type CreateCouponBatchBody = z.infer<typeof createCouponBatchBodySchema>;
 export type GenerateCouponsBody = z.infer<typeof generateCouponsBodySchema>;
 export type ListCouponsQuery = z.infer<typeof listCouponsQuerySchema>;
 
-const optionalHttpUrl = z.preprocess(
-  (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
-  z.string().url().max(2000).nullable().optional(),
+/** Deep link or in-app path (e.g. `/offers/welcome`) or absolute http(s) URL. */
+const optionalActionUrl = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? null : typeof v === 'string' ? v.trim() : v),
+  z
+    .union([
+      z.string().url().max(2000),
+      z
+        .string()
+        .regex(/^\/[^\s]*$/, 'Relative action URL must start with /')
+        .max(2000),
+    ])
+    .nullable()
+    .optional(),
 );
 
 export const listBannersQuerySchema = paginationQuerySchema;
 export const createBannerBodySchema = z.object({
   campaignId: z.string().uuid().optional().nullable(),
   title: z.string().trim().max(200).optional().nullable(),
-  imageUrl: z.string().url().max(2000),
+  imageFileId: z.string().uuid(),
   placement: z.enum(['HOME', 'RIDE', 'WALLET', 'SPLASH', 'OFFERS']).optional().default('HOME'),
-  actionUrl: optionalHttpUrl,
+  actionUrl: optionalActionUrl,
   priority: z.coerce.number().int().min(0).max(1000).optional().default(0),
   startsAt: z.coerce.date().optional().nullable(),
   endsAt: z.coerce.date().optional().nullable(),
@@ -184,9 +194,9 @@ export const createBannerBodySchema = z.object({
 export const updateBannerBodySchema = z.object({
   campaignId: z.string().uuid().optional().nullable(),
   title: z.string().trim().max(200).optional().nullable(),
-  imageUrl: z.string().url().max(2000).optional(),
+  imageFileId: z.string().uuid().optional(),
   placement: z.enum(['HOME', 'RIDE', 'WALLET', 'SPLASH', 'OFFERS']).optional(),
-  actionUrl: optionalHttpUrl,
+  actionUrl: optionalActionUrl,
   priority: z.coerce.number().int().min(0).max(1000).optional(),
   startsAt: z.coerce.date().optional().nullable(),
   endsAt: z.coerce.date().optional().nullable(),

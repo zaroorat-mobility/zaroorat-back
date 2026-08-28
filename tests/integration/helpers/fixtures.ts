@@ -286,3 +286,197 @@ export async function completeProfile(
     update: { firstName, lastName },
   });
 }
+
+export async function ensureCountry(code = 'IN', name = 'India'): Promise<string> {
+  const country = await db().client.country.upsert({
+    where: { code },
+    update: { name, isActive: true },
+    create: { code, name, isActive: true },
+  });
+  return country.id;
+}
+
+export async function ensureCity(
+  code: string,
+  name: string,
+  state: string | null = null,
+): Promise<string> {
+  const city = await db().client.city.upsert({
+    where: { code },
+    update: { name, state, isActive: true },
+    create: {
+      code,
+      name,
+      state,
+      country: 'India',
+      isActive: true,
+      launchedAt: new Date(),
+    },
+  });
+  return city.id;
+}
+
+export async function ensureServiceZone(
+  cityCode: string,
+  zoneCode: string,
+  name: string,
+  coordinates: number[][][],
+): Promise<string> {
+  const cityId = await ensureCity(cityCode, cityCode);
+  const existing = await db().client.serviceZone.findFirst({
+    where: { cityId, code: zoneCode },
+  });
+  if (existing) return existing.id;
+
+  const geoJson = JSON.stringify({ type: 'Polygon', coordinates });
+  const rows = await db().client.$queryRaw<Array<{ id: string }>>`
+    INSERT INTO service_zones (id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at)
+    VALUES (
+      gen_random_uuid(),
+      ${cityId}::uuid,
+      ${zoneCode},
+      ${name},
+      'SERVICE'::"ServiceZoneType",
+      ST_GeomFromGeoJSON(${geoJson}),
+      true,
+      true,
+      true,
+      NOW(),
+      NOW()
+    )
+    RETURNING id
+  `;
+  return rows[0]!.id;
+}
+
+export async function createPricingRuleDirect(data: {
+  vehicleTypeId: string;
+  cityCode: string;
+  baseFare: number;
+  serviceType?: 'INSTANT' | 'SCHEDULED' | 'RENTAL' | 'OUTSTATION' | null;
+  serviceZoneId?: string | null;
+  minimumFare?: number;
+  perKmRate?: number;
+  perMinuteRate?: number;
+  bookingFee?: number;
+  taxRatePct?: number;
+  commissionRatePct?: number;
+  isActive?: boolean;
+}): Promise<string> {
+  const row = await db().client.pricingRule.create({
+    data: {
+      vehicleTypeId: data.vehicleTypeId,
+      cityCode: data.cityCode,
+      serviceType: data.serviceType ?? null,
+      serviceZoneId: data.serviceZoneId ?? null,
+      baseFare: data.baseFare,
+      minimumFare: data.minimumFare ?? data.baseFare,
+      perKmRate: data.perKmRate ?? 0,
+      perMinuteRate: data.perMinuteRate ?? 0,
+      bookingFee: data.bookingFee ?? 0,
+      ...(data.taxRatePct !== undefined ? { taxRatePct: data.taxRatePct } : {}),
+      ...(data.commissionRatePct !== undefined
+        ? { commissionRatePct: data.commissionRatePct }
+        : {}),
+      isActive: data.isActive ?? true,
+      effectiveFrom: new Date(),
+    },
+  });
+  return row.id;
+}
+
+export async function seedBillingInvoiceFixtures(): Promise<void> {
+  const customer = await db().client.user.create({
+    data: {
+      phoneNumber: `+9199${randomUUID().slice(0, 8)}`,
+      profile: { create: { firstName: 'Demo', lastName: 'Passenger' } },
+    },
+  });
+  const driverUser = await db().client.user.create({
+    data: {
+      phoneNumber: `+9198${randomUUID().slice(0, 8)}`,
+      profile: { create: { firstName: 'Demo', lastName: 'Driver' } },
+    },
+  });
+  const driverId = await makeDriver(driverUser.id, { verified: true });
+  const { vehicleId, vehicleTypeId } = await makeAssignedVehicle(driverId);
+  const requestId = await makeRideRequest(customer.id, vehicleTypeId);
+  const rideId = await makeRide({
+    requestId,
+    customerId: customer.id,
+    driverId,
+    vehicleId,
+    vehicleTypeId,
+    status: 'COMPLETED',
+  });
+
+  await db().client.ride.update({
+    where: { id: rideId },
+    data: {
+      completedAt: new Date(),
+      paymentStatus: 'PAID',
+      pickupAddress: 'Lal Chowk',
+      dropAddress: 'Dal Lake',
+    },
+  });
+
+  await db().client.rideFare.create({
+    data: {
+      rideId,
+      baseFare: 50,
+      distanceFare: 200,
+      timeFare: 83.33,
+      subtotal: 333.33,
+      taxAmount: 16.67,
+      totalFare: 350,
+      driverEarning: 325.5,
+      platformCommission: 24.5,
+    },
+  });
+
+  await db().client.invoiceTemplate.create({
+    data: {
+      name: 'Standard Ride Invoice Template',
+      headerLogoText: 'ZAROORAT MOBILITY PVT LTD',
+      address: '102, MG Road, Bengaluru - 560001',
+      gstin: '29AAAAA1111A1Z1',
+      footerTerms: 'Computer generated invoice.',
+      cgstRate: 2.5,
+      sgstRate: 2.5,
+      igstRate: 0,
+      appliesTo: 'ride',
+      isDefault: true,
+    },
+  });
+
+  await db().client.billingInvoice.createMany({
+    data: [
+      {
+        invoiceNumber: 'INV-TEST-001',
+        rideId,
+        recipientType: 'RIDER',
+        recipientUserId: customer.id,
+        recipientName: 'Demo Passenger',
+        bookingCode: 'R-9812',
+        amount: 350,
+        taxAmount: 16.67,
+        status: 'GENERATED',
+        fromRoute: 'Lal Chowk',
+        toRoute: 'Dal Lake',
+      },
+      {
+        invoiceNumber: 'INV-TEST-002',
+        rideId,
+        recipientType: 'DRIVER',
+        recipientUserId: driverUser.id,
+        recipientName: 'Demo Driver',
+        bookingCode: 'R-9812',
+        amount: 24.5,
+        taxAmount: 0,
+        status: 'GENERATED',
+        fromRoute: 'Lal Chowk',
+        toRoute: 'Dal Lake',
+      },
+    ],
+  });
+}

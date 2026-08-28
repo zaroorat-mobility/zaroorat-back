@@ -403,6 +403,19 @@ enum AppPlatform {
   WEB
 }
 
+enum ServiceZoneType {
+  SERVICE
+  AIRPORT
+  RESTRICTED
+}
+
+enum RideServiceType {
+  INSTANT
+  SCHEDULED
+  RENTAL
+  OUTSTATION
+}
+
 // Device trust lifecycle (auth doc 01 §6, doc 03). Signals that move a device
 // between states are owned by the security/risk layer (doc 02).
 enum DeviceTrustState {

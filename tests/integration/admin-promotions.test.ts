@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
@@ -43,7 +44,34 @@ describe('admin promotions (integration)', () => {
       payload: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
     });
     assert.equal(loggedIn.statusCode, 200, loggedIn.payload);
-    return { authorization: `Bearer ${loggedIn.json().accessToken}` };
+    return {
+      authorization: `Bearer ${loggedIn.json().accessToken}`,
+      adminUserId: seed.userId,
+    };
+  }
+
+  async function seedPromoBannerFile(adminUserId: string): Promise<string> {
+    const now = new Date();
+    const file = await db().client.file.create({
+      data: {
+        ownerUserId: adminUserId,
+        purpose: 'PROMO_BANNER',
+        status: 'READY',
+        storageKey: `pb/test/${randomUUID()}.png`,
+        storageProvider: 'mock',
+        fileName: 'banner.png',
+        contentType: 'image/png',
+        detectedContentType: 'image/png',
+        sizeBytes: 512,
+        scanStatus: 'SKIPPED',
+        uploadExpiresAt: now,
+        uploadedAt: now,
+        verifiedAt: now,
+        completedAt: now,
+        scannedAt: now,
+      },
+    });
+    return file.id;
   }
 
   it('creates promotion, campaign, segment, batch and reports', async () => {
@@ -137,6 +165,7 @@ describe('admin promotions (integration)', () => {
     assert.equal(couponsRes.statusCode, 200, couponsRes.payload);
     assert.equal(couponsRes.json().data.length, 5);
 
+    const bannerFileId = await seedPromoBannerFile(authHeader.adminUserId);
     const bannerRes = await app.inject({
       method: 'POST',
       url: '/api/v1/admin/promo-banners',
@@ -144,7 +173,7 @@ describe('admin promotions (integration)', () => {
       payload: {
         campaignId: campaign.id,
         title: 'Rain offer',
-        imageUrl: 'https://cdn.example.com/rain.png',
+        imageFileId: bannerFileId,
         placement: 'HOME',
       },
     });
@@ -235,6 +264,38 @@ describe('admin promotions (integration)', () => {
     assert.ok(listed.json().data.some((row: { id: string }) => row.id === campaign.id));
   });
 
+  it('updates banner with relative action URL and replaced image file', async () => {
+    const authHeader = await loginAdmin();
+    const initialFileId = await seedPromoBannerFile(authHeader.adminUserId);
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/promo-banners',
+      headers: authHeader,
+      payload: {
+        title: 'Welcome hero',
+        imageFileId: initialFileId,
+        placement: 'HOME',
+        actionUrl: '/offers/welcome',
+      },
+    });
+    assert.equal(createRes.statusCode, 201, createRes.payload);
+    const bannerId = createRes.json().data.id;
+
+    const replacementFileId = await seedPromoBannerFile(authHeader.adminUserId);
+    const updateRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/promo-banners/${bannerId}`,
+      headers: authHeader,
+      payload: {
+        imageFileId: replacementFileId,
+        actionUrl: '/offers/welcome',
+      },
+    });
+    assert.equal(updateRes.statusCode, 200, updateRes.payload);
+    assert.equal(updateRes.json().data.imageFileId, replacementFileId);
+    assert.equal(updateRes.json().data.actionUrl, '/offers/welcome');
+  });
+
   it('deactivates coupon batch and banner', async () => {
     const authHeader = await loginAdmin();
     const now = new Date();
@@ -286,13 +347,14 @@ describe('admin promotions (integration)', () => {
     assert.equal(batchOn.statusCode, 200, batchOn.payload);
     assert.equal(batchOn.json().data.isActive, true);
 
+    const bannerFileId = await seedPromoBannerFile(authHeader.adminUserId);
     const bannerRes = await app.inject({
       method: 'POST',
       url: '/api/v1/admin/promo-banners',
       headers: authHeader,
       payload: {
         title: 'Toggle banner',
-        imageUrl: 'https://cdn.example.com/banner.png',
+        imageFileId: bannerFileId,
         placement: 'OFFERS',
         priority: 5,
       },

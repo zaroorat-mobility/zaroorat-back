@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { callerId } from '@core/auth';
 import { AdminPromotionService } from './promotion.service.js';
 import { AdminCampaignService } from './campaign.service.js';
 import { AdminSegmentService } from './segment.service.js';
@@ -182,23 +183,23 @@ export class AdminPromotionsController {
 
   async createBanner(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createBannerBodySchema.parse(req.body);
-    reply.status(201).send({ data: await this.adminBannerService.create(body) });
+    reply.status(201).send({ data: await this.adminBannerService.create(body, callerId(req)) });
   }
 
   async updateBanner(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = idParamSchema.parse(req.params);
     const body = updateBannerBodySchema.parse(req.body ?? {});
-    reply.send({ data: await this.adminBannerService.update(id, body) });
+    reply.send({ data: await this.adminBannerService.update(id, body, callerId(req)) });
   }
 
   async activateBanner(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = idParamSchema.parse(req.params);
-    reply.send({ data: await this.adminBannerService.activate(id) });
+    reply.send({ data: await this.adminBannerService.activate(id, callerId(req)) });
   }
 
   async deactivateBanner(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = idParamSchema.parse(req.params);
-    reply.send({ data: await this.adminBannerService.deactivate(id) });
+    reply.send({ data: await this.adminBannerService.deactivate(id, callerId(req)) });
   }
 
   async removeBanner(req: FastifyRequest, reply: FastifyReply): Promise<void> {

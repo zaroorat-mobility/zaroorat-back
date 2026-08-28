@@ -79,6 +79,7 @@ model File {
   driverDocuments  DriverDocument[]
   // Vehicle documents this file backs, if any (vehicles module's live reference).
   vehicleDocuments VehicleDocument[]
+  promoBannerImage PromoBanner?      @relation("BannerImage")
 
   // FILE-INV-1. Total, not partial: a key must stay unique across erased rows
   // too, or a stale signed URL could resolve to somebody else's object. This one
@@ -109,6 +110,7 @@ enum FilePurpose {
   VEHICLE_IMAGE
   SOS_EVIDENCE
   DISPUTE_EVIDENCE
+  PROMO_BANNER
 }
 
 /// The file lifecycle (files doc 01 §7). `archived`/`erased` are not states —
