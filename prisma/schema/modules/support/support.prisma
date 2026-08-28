@@ -1,5 +1,3 @@
-// ============================ CHAT ============================
-
 model ChatConversation {
   id            String                 @id @default(uuid(7)) @db.Uuid
   type          ChatConversationType   @default(RIDE)
@@ -146,8 +144,6 @@ model ChatReport {
   @@map("chat_reports")
 }
 
-// ============================ REVIEW ============================
-
 model RatingTag {
   id         String           @id @default(uuid(7)) @db.Uuid
   code       String           @unique
@@ -245,8 +241,6 @@ model ReviewResponse {
 
   @@map("review_responses")
 }
-
-// ============================ SUPPORT ============================
 
 model SlaPolicy {
   id                String         @id @default(uuid(7)) @db.Uuid

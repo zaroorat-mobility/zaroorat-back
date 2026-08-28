@@ -9,6 +9,7 @@ import {
   InvalidRideStateTransitionError,
   RideDriverMismatchError,
   RideRequestAlreadyMatchedError,
+  SelfRideNotAllowedError,
 } from '../../../src/modules/rides/errors/ride.errors.js';
 
 function makeWorld() {
@@ -106,6 +107,49 @@ function makeWorld() {
     async updateStatus(driverId: string, status: string) {
       driverStatuses.push({ driverId, status });
       driverStatusById.set(driverId, status);
+    },
+  };
+
+  // Accepting now checks who owns the driver record, so that a driver cannot
+  // accept a request they booked themselves. Every driver in this file maps to
+  // a distinct user id; a test that wants the self-accept case seeds the
+  // matching `customerId` on the request.
+  /// The server's own trip meter, standing in for Redis. Seed it to say how far
+  /// the driver was actually measured to have travelled.
+  const tripMeter = new Map<string, number>();
+  const redisService = {
+    tripDistance: {
+      async add(driverId: string, km: number) {
+        tripMeter.set(driverId, (tripMeter.get(driverId) ?? 0) + km);
+      },
+      async read(driverId: string) {
+        return tripMeter.get(driverId) ?? 0;
+      },
+      async reset(driverId: string) {
+        tripMeter.delete(driverId);
+      },
+    },
+  };
+
+  const completionCounters = new Map<
+    string,
+    { totalRides: number; totalDistanceKm: number; lastRideAt: Date }
+  >();
+  const driverRepository = {
+    async findById(driverId: string) {
+      return { id: driverId, userId: `user_of_${driverId}` };
+    },
+    async recordCompletedRide(driverId: string, distanceKm: number, completedAt: Date) {
+      const current = completionCounters.get(driverId) ?? {
+        totalRides: 0,
+        totalDistanceKm: 0,
+        lastRideAt: completedAt,
+      };
+      completionCounters.set(driverId, {
+        totalRides: current.totalRides + 1,
+        totalDistanceKm: current.totalDistanceKm + distanceKm,
+        lastRideAt: completedAt,
+      });
     },
   };
 
@@ -211,6 +255,7 @@ function makeWorld() {
       },
     } as never,
     driverStatusRepository as never,
+    driverRepository as never,
     userRepository as never,
     notificationService as never,
     vehicleRepository as never,
@@ -227,6 +272,7 @@ function makeWorld() {
       },
     } as never,
     { rideStarted() {}, rideCompleted() {}, rideCancelled() {}, driverArriving() {} } as never,
+    redisService as never,
   );
 
   /// Puts a live PENDING offer in front of a driver, the way a dispatch round
@@ -262,6 +308,8 @@ function makeWorld() {
     driverStatuses,
     activeRideByDriver,
     sentOtpSms,
+    completionCounters,
+    tripMeter,
   };
 }
 
@@ -269,6 +317,9 @@ function seedRide(world: ReturnType<typeof makeWorld>, status: string) {
   world.rides.set('ride_1', {
     id: 'ride_1',
     status,
+    // Points at the request the plausibility bound is read from. Tests that do
+    // not seed `req_1` get a null request, which is the no-estimate path.
+    requestId: 'req_1',
     driverId: 'driver_1',
     customerId: 'cust_1',
     vehicleTypeId: 'v1',
@@ -305,6 +356,37 @@ describe('Ride lifecycle concurrency', () => {
     assert.equal(lost.length, 1);
     assert.ok((lost[0] as PromiseRejectedResult).reason instanceof RideRequestAlreadyMatchedError);
     assert.equal(world.rides.size, 1, 'only one ride row may exist for one request');
+  });
+
+  /// A driver holds the `customer` role like everybody else — `ensureDefaultRole`
+  /// grants it on every phone login — so nothing on the booking route can stop
+  /// one from requesting a ride, and dispatch will happily offer that request
+  /// back to them as the nearest online driver to their own pickup point.
+  /// Accepting is where it has to be refused, because accepting is what mints
+  /// the ride, the fare and the driver earning.
+  it('refuses a driver accepting the request they booked themselves', async () => {
+    const world = makeWorld();
+    world.requests.set('req_1', {
+      id: 'req_1',
+      status: 'SEARCHING',
+      customerId: 'user_of_d1',
+      vehicleTypeId: 'v1',
+      pickupLat: 1,
+      pickupLng: 1,
+    });
+    world.offer('req_1', 'd1');
+
+    await assert.rejects(
+      world.service.acceptRideRequest({ requestId: 'req_1', driverId: 'd1', vehicleId: 'v1' }),
+      SelfRideNotAllowedError,
+    );
+    assert.equal(world.rides.size, 0, 'no ride may be created');
+    assert.equal(world.fares.length, 0);
+    assert.equal(
+      world.requests.get('req_1')?.status,
+      'SEARCHING',
+      'the request must stay open for a real driver',
+    );
   });
 
   it('accepting a request resolves its offers and puts the driver ON_TRIP', async () => {
@@ -431,6 +513,60 @@ describe('Ride lifecycle concurrency', () => {
       'exactly one ledger posting — the books must not double-count the trip either',
     );
     assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
+    assert.equal(
+      world.completionCounters.get('driver_1')?.totalRides,
+      1,
+      'and the driver is credited with one ride, not two',
+    );
+  });
+
+  /// `GET /drivers/me` has always sent `totalRides`, `totalDistanceKm` and
+  /// `lastRideAt` straight off the `drivers` row, and nothing has ever written
+  /// them — so a driver five hundred rides in read `0`, `0` and `null`.
+  describe('driver completion counters (M-11)', () => {
+    it('credits the driver with the ride and the distance actually driven', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+
+      await world.service.completeRide('ride_1', 'driver_1', 12, 25);
+
+      const counters = world.completionCounters.get('driver_1');
+      assert.equal(counters?.totalRides, 1);
+      assert.equal(counters?.totalDistanceKm, 12);
+    });
+
+    it('accumulates across rides rather than overwriting', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+      await world.service.completeRide('ride_1', 'driver_1', 12, 25);
+      world.rides.set('ride_1', { ...world.rides.get('ride_1')!, status: 'IN_PROGRESS' });
+      await world.service.completeRide('ride_1', 'driver_1', 8, 20);
+
+      const counters = world.completionCounters.get('driver_1');
+      assert.equal(counters?.totalRides, 2);
+      assert.equal(counters?.totalDistanceKm, 20);
+    });
+
+    it('stamps the completion time as the driver’s last ride', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+      const before = Date.now();
+
+      await world.service.completeRide('ride_1', 'driver_1', 12, 25);
+
+      const lastRideAt = world.completionCounters.get('driver_1')?.lastRideAt;
+      assert.ok(lastRideAt instanceof Date);
+      assert.ok(lastRideAt.getTime() >= before && lastRideAt.getTime() <= Date.now());
+    });
+
+    it('credits nobody when the completion is refused', async () => {
+      const world = makeWorld();
+      seedRide(world, 'IN_PROGRESS');
+
+      await assert.rejects(() => world.service.completeRide('ride_1', 'someone_else', 5, 10));
+
+      assert.equal(world.completionCounters.size, 0, 'a rejected completion counts for nothing');
+    });
   });
 
   it('allows only one terminal transition when cancel races complete', async () => {
@@ -474,12 +610,202 @@ describe('Ride lifecycle concurrency', () => {
     assert.deepEqual(world.ledgerPostings, [], 'and nothing may reach the books');
   });
 
-  it('bills the completed ride for its actual distance', async () => {
+  /// C-3b. `actualDistanceKm` arrives in the completion request from the
+  /// driver's own app, and billing on it made the client the authority on the
+  /// fare — a modified app could name its own price. The server now adds the
+  /// journey up itself from the location fixes it already receives and bills
+  /// the greater of that and the distance the customer was quoted.
+  describe('the fare is billed on the distance the server measured (C-3b)', () => {
+    function quotedRide(world: ReturnType<typeof makeWorld>, estimatedDistanceKm: number) {
+      seedRide(world, 'IN_PROGRESS');
+      world.requests.set('req_1', {
+        id: 'req_1',
+        status: 'MATCHED',
+        customerId: 'cust_1',
+        vehicleTypeId: 'v1',
+        estimatedDistanceKm,
+        estimatedDurationMin: 60,
+      });
+    }
+
+    it('ignores a distance the app inflated', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 12);
+
+      // The app claims 30km for a trip the server watched cover 12.
+      await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '12');
+    });
+
+    it('bills the measured distance when it exceeds the quote', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 18);
+
+      // A genuine detour must still be paid for.
+      await world.service.completeRide('ride_1', 'driver_1', 18, 60);
+
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '18');
+    });
+
+    it('falls back to the quote when the meter recorded less', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // A gappy trail — tunnel, dead battery, backgrounded app.
+      world.tripMeter.set('driver_1', 3);
+
+      await world.service.completeRide('ride_1', 'driver_1', 10, 60);
+
+      assert.equal(
+        world.rides.get('ride_1')?.actualDistanceKm?.toString(),
+        '10',
+        'the quote is the floor, so a lost trail never bills a real journey as a short one',
+      );
+    });
+
+    it('falls back to the quote when the meter was lost entirely', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // Nothing seeded: a Redis flush mid-ride.
+
+      await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '10');
+    });
+
+    it('clears the meter so the next trip starts from zero', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 12);
+
+      await world.service.completeRide('ride_1', 'driver_1', 12, 60);
+
+      assert.equal(world.tripMeter.get('driver_1'), undefined);
+    });
+  });
+
+  /// M-15. The bound used to be drawn from the quote alone. Once the server
+  /// measured the trip itself, a driver sent the long way round reported a
+  /// distance the quote could not justify and was refused — for a number that
+  /// no longer decides anybody's fare, leaving a driver who had finished
+  /// driving unable to close the ride.
+  describe('the plausibility bound follows the trip the server measured (M-15)', () => {
+    function quotedRide(world: ReturnType<typeof makeWorld>, estimatedDistanceKm: number) {
+      seedRide(world, 'IN_PROGRESS');
+      world.requests.set('req_1', {
+        id: 'req_1',
+        status: 'MATCHED',
+        customerId: 'cust_1',
+        vehicleTypeId: 'v1',
+        estimatedDistanceKm,
+        estimatedDurationMin: 20,
+      });
+    }
+
+    it('accepts a long detour the meter actually recorded', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // 10km quoted, 40km genuinely driven. The old bound was 10*3+5 = 35km,
+      // so this completion was refused outright.
+      world.tripMeter.set('driver_1', 40);
+
+      await world.service.completeRide('ride_1', 'driver_1', 40, 60);
+
+      assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
+      assert.equal(world.rides.get('ride_1')?.actualDistanceKm?.toString(), '40');
+    });
+
+    it('still refuses a claim the server saw no support for', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      world.tripMeter.set('driver_1', 12);
+
+      // 12km measured, 10km quoted -> bound is 12*3+5 = 41km.
+      await assert.rejects(
+        () => world.service.completeRide('ride_1', 'driver_1', 500, 60),
+        (err: unknown) => (err as { code?: string }).code === 'IMPLAUSIBLE_TRIP_DATA',
+      );
+    });
+
+    it('never lowers the bound below the quote', async () => {
+      const world = makeWorld();
+      quotedRide(world, 10);
+      // A lost meter must not shrink the allowance to nothing: the quote is
+      // still the reference, exactly as before.
+      await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+
+      assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
+    });
+  });
+
+  /// The distance bound is the only thing standing over a driver-declared
+  /// `actualDistanceKm` (C-3b is still open), and it is skipped whenever the
+  /// request carries no quoted estimate — a nullable column. It used to be
+  /// skipped on a *truthiness* test too, which a legitimate estimate of 0 would
+  /// have silently satisfied.
+  it('still refuses an implausible distance when the quote is present', async () => {
     const world = makeWorld();
     seedRide(world, 'IN_PROGRESS');
+    world.requests.set('req_1', { id: 'req_1', estimatedDistanceKm: 10, estimatedDurationMin: 30 });
+
+    await assert.rejects(
+      world.service.completeRide('ride_1', 'driver_1', 10_000, 30),
+      /Reported distance/,
+    );
+    assert.equal(world.rides.get('ride_1')?.status, 'IN_PROGRESS', 'the ride is not completed');
+  });
+
+  it('checks a zero-kilometre estimate rather than treating it as no estimate', async () => {
+    const world = makeWorld();
+    seedRide(world, 'IN_PROGRESS');
+    // 0 is a real quoted distance, not a missing one. Read as a boolean it is
+    // false, which used to switch the bound off entirely.
+    world.requests.set('req_1', { id: 'req_1', estimatedDistanceKm: 0, estimatedDurationMin: 0 });
+
+    await assert.rejects(
+      world.service.completeRide('ride_1', 'driver_1', 500, 1),
+      /Reported distance/,
+    );
+  });
+
+  it('still completes a ride whose request carries no estimate at all', async () => {
+    const world = makeWorld();
+    seedRide(world, 'IN_PROGRESS');
+    world.requests.set('req_1', {
+      id: 'req_1',
+      estimatedDistanceKm: null,
+      estimatedDurationMin: null,
+    });
+
+    // The driver has finished driving; a completion must not be refused over
+    // missing reference data. It is logged instead, so a ride billed with no
+    // bound over it is visible rather than silently unguarded.
+    await world.service.completeRide('ride_1', 'driver_1', 30, 60);
+    assert.equal(world.rides.get('ride_1')?.status, 'COMPLETED');
+  });
+
+  /// This assertion used to read `actualDurationMin === 60` — the number the
+  /// driver's client declared. That was the defect, not the contract: the fare
+  /// was computed from a value the client chose. Both ends of a trip are
+  /// stamped by the server, so the duration is now measured and the declared
+  /// figure decides nothing.
+  it('records the duration it measured, not the one the driver declared', async () => {
+    const world = makeWorld();
+    seedRide(world, 'IN_PROGRESS');
+    // A ride that genuinely started 25 minutes ago, reported as 60.
+    const startedAt = new Date(Date.now() - 25 * 60_000);
+    world.rides.set('ride_1', { ...world.rides.get('ride_1'), startedAt });
 
     await world.service.completeRide('ride_1', 'driver_1', 30, 60);
-    assert.equal(world.rides.get('ride_1')?.actualDurationMin, 60);
+
+    const measured = world.rides.get('ride_1')?.actualDurationMin as number;
+    assert.ok(
+      measured >= 24 && measured <= 26,
+      `expected roughly 25 measured minutes, got ${measured}`,
+    );
+    assert.notEqual(measured, 60, 'the declared duration must not be what is stored');
   });
 
   it('rejects a final distance wildly beyond the original quote', async () => {

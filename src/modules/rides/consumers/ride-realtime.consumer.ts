@@ -58,6 +58,7 @@ export class RideRealtimeConsumer {
   register(): Unsubscribe {
     const unsubscribes = [
       this.eventBus.on(RIDE_EVENT_CATALOG.REQUESTED, (e) => this.onRideRequested(e)),
+      this.eventBus.on(RIDE_EVENT_CATALOG.REQUEST_EXPIRED, (e) => this.onRequestExpired(e)),
       ...Object.keys(OFFER_EVENTS).map((type) =>
         this.eventBus.on(type, (e) => this.onOfferEvent(type, e)),
       ),
@@ -79,6 +80,20 @@ export class RideRealtimeConsumer {
         requestId: envelope.data.requestId ?? null,
         vehicleTypeId: envelope.data.vehicleTypeId ?? null,
         quotedFare: envelope.data.quotedFare ?? null,
+      }),
+    );
+  }
+
+  /// The end of that same search, and the counterpart to `onRideRequested`:
+  /// same user room, same reason for it — a request that never matched has no
+  /// ride room, because it has no ride.
+  private onRequestExpired(envelope: EventEnvelope): void {
+    const customerId = envelope.data.customerId;
+    if (typeof customerId !== 'string') return;
+    this.realtimeGateway.emitToRoom(
+      room.user(customerId),
+      this.envelopeFor(envelope, SOCKET_EVENT.REQUEST_EXPIRED, {
+        requestId: envelope.data.requestId ?? null,
       }),
     );
   }

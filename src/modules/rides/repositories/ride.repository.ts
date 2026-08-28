@@ -91,13 +91,23 @@ export class RideRepository {
       },
     });
   }
-  async findActiveByDriverUserId(userId: string, tx?: TransactionClient): Promise<Ride | null> {
+  /// The one live ride a user is party to, on either side.
+  ///
+  /// Replaces `findActiveByDriverUserId`, which only ever had one caller and
+  /// only ever asked half the question: `GET /rides/active` picked which of the
+  /// two lookups to run from the caller's roles, and every verified driver
+  /// keeps the `driver` role while riding as a passenger. Asking the ride
+  /// instead removes the guess, and costs one query rather than two.
+  async findActiveForUser(userId: string, tx?: TransactionClient): Promise<Ride | null> {
     const client = tx ?? this.db.client;
     return client.ride.findFirst({
       where: {
-        driver: { userId },
+        OR: [{ customerId: userId }, { driver: { userId } }],
         status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
       },
+      // A user should never have two, but if they somehow do, the one they most
+      // recently became part of is the one they are asking about.
+      orderBy: { createdAt: 'desc' },
     });
   }
   async updateStatus(

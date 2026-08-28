@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { DispatchService } from '../../../src/modules/rides/services/dispatch/dispatch.service.js';
 import { rideConfig } from '../../../src/config/ride/ride.config.js';
+import { geoConfig } from '../../../src/config/geo/geo.config.js';
 
 interface Offer {
   id: string;
@@ -20,7 +21,15 @@ interface Offer {
 /// token-based lock so contention behaves the way Redis does, and a candidate
 /// pool that can be reordered to check geographic ranking survives.
 function makeWorld(
-  options: { candidates?: string[]; requestStatus?: string; requestExpiresAt?: Date | null } = {},
+  options: {
+    candidates?: string[];
+    requestStatus?: string;
+    requestExpiresAt?: Date | null;
+    /// Puts the whole candidate pool this far out, so a search narrower than
+    /// this finds nobody — how a driver sitting beyond the default circle looks
+    /// to dispatch.
+    visibleFromMeters?: number;
+  } = {},
 ) {
   const offers = new Map<string, Offer>();
   const events: { type: string; data: Record<string, unknown> }[] = [];
@@ -105,10 +114,26 @@ function makeWorld(
     },
   };
 
-  const matchingCalls: { excluded: string[]; limit: number }[] = [];
+  // `radiusMeters: number | undefined` rather than an optional property: the
+  // push below always supplies the key, and under `exactOptionalPropertyTypes` an
+  // optional property does not accept an explicit `undefined`.
+  const matchingCalls: { excluded: string[]; limit: number; radiusMeters: number | undefined }[] =
+    [];
   const matchingService = {
-    async findEligibleCandidates(_origin: unknown, excluded: readonly string[], limit: number) {
-      matchingCalls.push({ excluded: [...excluded], limit });
+    async findEligibleCandidates(
+      _origin: unknown,
+      excluded: readonly string[],
+      limit: number,
+      _vehicleTypeId?: string,
+      radiusMeters?: number,
+    ) {
+      matchingCalls.push({ excluded: [...excluded], limit, radiusMeters });
+      if (
+        options.visibleFromMeters !== undefined &&
+        (radiusMeters ?? 0) < options.visibleFromMeters
+      ) {
+        return [];
+      }
       const excludedSet = new Set(excluded);
       return pool
         .filter((driverId) => !excludedSet.has(driverId))
@@ -329,6 +354,60 @@ describe('Dispatch offers', () => {
       assert.equal(offered[0]!.data.requestId, 'req_1');
       assert.equal(offered[0]!.data.driverId, 'drv_a');
       assert.equal(typeof offered[0]!.data.dispatchId, 'string');
+    });
+  });
+
+  /// Dispatch used to pass no radius at all, so `NearbyDriverService` fell back
+  /// to `GEO_SEARCH_RADIUS_M` on every round of every request, and
+  /// `GEO_MAX_SEARCH_RADIUS_M` sat there as a validation ceiling nothing ever
+  /// searched up to.
+  describe('widening the search (M-7)', () => {
+    const base = geoConfig.searchRadiusMeters;
+    const max = geoConfig.maxSearchRadiusMeters;
+    const radiiTried = (world: ReturnType<typeof makeWorld>) =>
+      world.matchingCalls.map((call) => call.radiusMeters);
+
+    it('starts at the configured default and stops there once somebody turns up', async () => {
+      const world = makeWorld();
+      await world.service.dispatchNextBatch('req_1', 1);
+
+      assert.deepEqual(radiiTried(world), [base], 'a driver nearby means no reason to look wider');
+    });
+
+    /// The case that matters most, and the one a per-round radius alone would
+    /// have missed: nothing was offered, so there is no later round to inherit a
+    /// wider radius from, and `DispatchTimeoutJob` only re-dispatches requests
+    /// whose offers expired — so this round is the only one this request gets.
+    it('widens on the spot when nobody is inside the default circle', async () => {
+      const world = makeWorld({ candidates: [] });
+
+      assert.equal(await world.service.dispatchNextBatch('req_1', 1), 0);
+      const tried = radiiTried(world);
+      assert.deepEqual(tried.slice(0, 3), [base, base * 2, base * 3]);
+      assert.equal(tried.at(-1), max, 'and gives up only at the operator’s maximum');
+      assert.ok(
+        (tried as number[]).every((radius) => radius <= max),
+        // Not tidiness: `CoordinateService.assertRadius` throws above the
+        // maximum, so an uncapped step would take dispatch down, not widen it.
+        `GEO_MAX_SEARCH_RADIUS_M is a hard ceiling: ${tried.join(', ')}`,
+      );
+    });
+
+    it('offers the driver a widened search finds, and stops widening there', async () => {
+      const world = makeWorld({ visibleFromMeters: base * 2 + 1 });
+
+      assert.equal(await world.service.dispatchNextBatch('req_1', 1), 1);
+      assert.deepEqual(radiiTried(world), [base, base * 2, base * 3]);
+      assert.equal(world.offersFor('req_1')[0]?.driverId, 'drv_a');
+    });
+
+    it('a later round starts wider, because the nearest drivers already declined', async () => {
+      const world = makeWorld();
+      await world.service.dispatchNextBatch('req_1', 1);
+      world.offers.get('req_1:drv_a')!.response = 'TIMEOUT';
+      await world.service.dispatchNextBatch('req_1', 1);
+
+      assert.deepEqual(radiiTried(world), [base, base * 2]);
     });
   });
 

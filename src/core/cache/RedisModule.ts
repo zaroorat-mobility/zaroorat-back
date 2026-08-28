@@ -6,6 +6,7 @@ import { SidBlacklistStore } from './stores/SidBlacklistStore';
 import { RateLimitStore } from './stores/RateLimitStore';
 import { IdempotencyStore } from './stores/IdempotencyStore';
 import { LockStore } from './stores/LockStore';
+import { TripDistanceStore } from './stores/TripDistanceStore';
 import { RedisService } from './RedisService';
 export function registerRedisModule(container: AwilixContainer): void {
   container.register({
@@ -16,6 +17,7 @@ export function registerRedisModule(container: AwilixContainer): void {
     rateLimitStore: asClass(RateLimitStore).singleton(),
     idempotencyStore: asClass(IdempotencyStore).singleton(),
     lockStore: asClass(LockStore).singleton(),
+    tripDistanceStore: asClass(TripDistanceStore).singleton(),
     redisService: asClass(RedisService).singleton(),
   });
 }

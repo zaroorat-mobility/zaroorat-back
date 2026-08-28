@@ -1,10 +1,6 @@
-// ============================ RIDE ============================
-
 model RideRequest {
-  id                   String                                @id @default(uuid(7)) @db.Uuid
-  /// "One active request per customer" backstop lives as a raw-SQL partial
-  /// unique index (`ride_requests_active_customer_key`, migration
-  /// 20260821130000) — same reasoning as the two on `Ride`, above.
+  id String @id @default(uuid(7)) @db.Uuid
+
   customerId           String                                @map("customer_id") @db.Uuid
   vehicleTypeId        String                                @map("vehicle_type_id") @db.Uuid
   pickupLat            Decimal                               @map("pickup_lat") @db.Decimal(10, 7)
@@ -58,26 +54,18 @@ model RideDispatch {
   @@unique([requestId, driverId])
   @@index([driverId])
   @@index([response])
-  /// DispatchTimeoutJob's whole query: PENDING offers past their window. On the
-  /// `response`-only index that is a scan of every live offer, and PENDING is
-  /// the hot value — the composite is what keeps the sweep cheap as the table
-  /// grows.
   @@index([response, expiresAt])
   @@map("ride_dispatches")
 }
 
 model Ride {
-  id                String                                @id @default(uuid(7)) @db.Uuid
-  rideCode          String                                @unique @map("ride_code")
-  /// One ride per request. The application selects a winner with a row lock
-  /// plus a conditional claim on the request; this is the database backstop
-  /// that makes a double-accept fail loudly rather than double-book a customer.
-  requestId         String                                @unique @map("request_id") @db.Uuid
-  /// "One active ride per customer" backstop lives as a raw-SQL partial unique
-  /// index (`rides_active_customer_key`, migration 20260821130000) — Prisma
-  /// can't express a WHERE-scoped unique constraint, so it isn't declared here.
-  customerId        String                                @map("customer_id") @db.Uuid
-  /// Same backstop, same migration: `rides_active_driver_key`.
+  id       String @id @default(uuid(7)) @db.Uuid
+  rideCode String @unique @map("ride_code")
+
+  requestId String @unique @map("request_id") @db.Uuid
+
+  customerId String @map("customer_id") @db.Uuid
+
   driverId          String                                @map("driver_id") @db.Uuid
   vehicleId         String                                @map("vehicle_id") @db.Uuid
   vehicleTypeId     String                                @map("vehicle_type_id") @db.Uuid
@@ -170,8 +158,6 @@ model RideStatusEvent {
   @@index([rideId, createdAt])
   @@map("ride_status_events")
 }
-
-// NOTE: ride_track_points is RANGE-partitioned — manage via raw SQL, not Prisma.
 
 model RideFare {
   id                 String   @id @default(uuid(7)) @db.Uuid

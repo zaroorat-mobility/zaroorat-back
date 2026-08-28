@@ -31,9 +31,15 @@ export class MatchingService {
     excludeDriverIds: readonly string[],
     limit: number,
     vehicleTypeId?: string,
+    radiusMeters?: number,
   ): Promise<MatchCandidate[]> {
     if (limit <= 0) return [];
-    const nearby = await this.geoService.findNearbyDrivers({ origin });
+    // Dispatch owns the retry policy and hands the radius down; omitting it
+    // falls back to the geo default, which is what every other caller wants.
+    const nearby = await this.geoService.findNearbyDrivers({
+      origin,
+      ...(radiusMeters !== undefined ? { radiusMeters } : {}),
+    });
     if (nearby.outcome === 'no-live-candidates') return [];
     const excluded = new Set(excludeDriverIds);
     // Geo already ordered these by distance; preserve that ordering all the way

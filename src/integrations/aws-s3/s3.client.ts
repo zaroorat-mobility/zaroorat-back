@@ -10,7 +10,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { StorageConfig } from '../../config/storage.config.js';
+import type { StorageConfig } from '../../modules/files/config/storage.config.js';
 import type {
   ObjectHead,
   SignDownloadInput,
@@ -21,9 +21,9 @@ import type {
   StorageArea,
   StorageOperation,
   StorageProvider,
-} from './storage.provider.js';
-import { StorageError } from './storage.provider.js';
-import { base64ToHex, hexToBase64 } from '../checksum.js';
+} from '../../modules/files/utils/storage/storage.provider.js';
+import { StorageError } from '../../modules/files/utils/storage/storage.provider.js';
+import { base64ToHex, hexToBase64 } from '../../modules/files/utils/checksum.js';
 const ARCHIVE_STORAGE_CLASS = 'GLACIER_IR';
 const DELETE_BATCH_SIZE = 1000;
 function isRetryable(error: unknown): boolean {
@@ -198,7 +198,8 @@ export class S3StorageProvider implements StorageProvider {
     try {
       await this.delete(key, 'quarantine');
     } catch {
-      // ignore cleanup errors
+      // Best effort: the object is already promoted, and a quarantine copy that
+      // will not delete is a stray file rather than a failed promotion.
     }
   }
   async delete(key: string, area: StorageArea = 'trusted'): Promise<void> {

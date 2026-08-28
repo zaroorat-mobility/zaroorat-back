@@ -5,6 +5,33 @@ import {
   RecordNotFoundError,
   UniqueConstraintError,
 } from './DatabaseError';
+/// Postgres SQLSTATE for a unique violation.
+const UNIQUE_VIOLATION = '23505';
+
+/// Under a driver adapter, Prisma reports a failed raw statement as P2010 and
+/// buries the database's own answer in here rather than in `meta.code`.
+interface DriverAdapterCause {
+  kind?: string;
+  originalCode?: string;
+  originalMessage?: string;
+  constraint?: { fields?: string[] };
+}
+
+function driverAdapterCause(meta: unknown): DriverAdapterCause | undefined {
+  return (meta as { driverAdapterError?: { cause?: DriverAdapterCause } } | undefined)
+    ?.driverAdapterError?.cause;
+}
+
+/// The index name if Postgres named one, the columns otherwise — the index name
+/// is what a reader can grep for.
+function uniqueTarget(cause: DriverAdapterCause): string {
+  return (
+    /unique constraint "([^"]+)"/.exec(cause.originalMessage ?? '')?.[1] ??
+    cause.constraint?.fields?.join(', ') ??
+    'unknown'
+  );
+}
+
 export class PrismaErrorMapper {
   public static isPrismaError(error: unknown): boolean {
     return (
@@ -33,6 +60,23 @@ export class PrismaErrorMapper {
           return new DatabaseError(`Constraint failed on database`, error);
         case 'P2014':
           return new DatabaseError(`Change violates required relation`, error);
+        // A unique violation raised by a raw statement arrives as P2010, never
+        // as P2002 — and every insert into a table carrying a PostGIS geography
+        // column goes through `$executeRaw`, because Prisma cannot express one.
+        // Without this case those violations fell through to a bare
+        // `DatabaseError`, so a partial unique index doing exactly its job
+        // (`ride_requests_active_customer_key`) reached the client as an
+        // unexplained 500 that no route handler could translate.
+        case 'P2010': {
+          const cause = driverAdapterCause(error.meta);
+          if (
+            cause?.kind === 'UniqueConstraintViolation' ||
+            cause?.originalCode === UNIQUE_VIOLATION
+          ) {
+            return new UniqueConstraintError(uniqueTarget(cause), error);
+          }
+          break;
+        }
         case 'P2024':
           return new ConnectionError('Connection pool exhausted / Wait Queue timeout', error);
         case 'P2025':

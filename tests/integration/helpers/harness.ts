@@ -52,6 +52,18 @@ function assertTestDatabase(): void {
 
 export async function resetState(): Promise<void> {
   assertTestDatabase();
+  // `surge_zones` is here for the same reason as the two below, plus one of its
+  // own: a leaked surge zone does not merely accumulate rows, it silently
+  // multiplies the fare of every ride any later suite books near that point.
+  // CASCADE takes `surge_windows` with it.
+  //
+  // `wallet_reconciliations` is in the list for the same reason
+  // `payment_ledger_entries` is: its wallet id is a plain uuid column with no
+  // foreign key, so TRUNCATE "users" CASCADE never reaches it. Left out, the
+  // table is the one thing in the test database that survives every reset, and
+  // a run's rows are still there for the next one — which turns any assertion
+  // that counts reconciliation rows into a count of every run since the table
+  // was created.
   await db().client.$executeRawUnsafe(
     'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
       '"account_deletion_requests", ' +

@@ -1,5 +1,3 @@
-// ============================ PRICING ============================
-
 model PricingRule {
   id                String           @id @default(uuid(7)) @db.Uuid
   vehicleTypeId     String           @map("vehicle_type_id") @db.Uuid

@@ -1,6 +1,6 @@
 import { config } from '@config';
 import { MockStorageProvider } from '../utils/storage/mock.provider.js';
-import { S3StorageProvider } from '../utils/storage/s3.provider.js';
+import { S3StorageProvider } from '../../../integrations/aws-s3/s3.client.js';
 import type { StorageProvider } from '../utils/storage/storage.provider.js';
 export type StorageProviderName = 'mock' | 's3';
 const ENCRYPTION_MODES = ['AES256', 'aws:kms', 'aws:kms:dsse'] as const;

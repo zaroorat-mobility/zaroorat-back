@@ -1,5 +1,3 @@
-// ============================ DRIVER ============================
-
 model Driver {
   id                 String                   @id @default(uuid(7)) @db.Uuid
   userId             String                   @unique @map("user_id") @db.Uuid
@@ -196,8 +194,6 @@ model DriverLocation {
 
   driver Driver @relation(fields: [driverId], references: [id])
 
-  // The GiST index on `location` that backs nearby-driver search lives in raw
-  // SQL (migration 20260815000000) — Prisma cannot index an `Unsupported` column.
   @@map("driver_locations")
 }
 
@@ -222,5 +218,3 @@ model DriverShiftLog {
   @@index([driverId, shiftStart])
   @@map("driver_shift_logs")
 }
-
-// NOTE: driver_location_history is RANGE-partitioned — manage via raw SQL, not Prisma.

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { PricingService } from '../../../src/modules/pricing';
+import { pricingConfig } from '../../../src/config/pricing/pricing.config.js';
+import { PricingService, ZeroDistanceTripError } from '../../../src/modules/pricing';
 import type { PricingRuleRepository } from '../../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import type { PricingRule } from '../../../src/generated/prisma/index.js';
 
@@ -273,5 +274,171 @@ describe('Final fare (billed on actual trip values)', () => {
         `${field} carries sub-paise precision: ${value}`,
       );
     }
+  });
+});
+
+/// `Ride.waitTimeMin` is read by `completeRide` and written by nothing, so
+/// `waitingMinutes` is 0 on every fare the platform has ever computed and none
+/// of this is reachable today. It is tested because the formula has to be right
+/// *before* something starts measuring the wait — otherwise the first rider
+/// billed for waiting is overcharged for the grace period they were promised.
+describe('waiting charges honour the free period', () => {
+  const rateCard = {
+    ...pricingConfig.defaultRateCard,
+    freeWaitingMinutes: 3,
+    perWaitingMinute: 3,
+  };
+
+  async function waitingChargeFor(waitingMinutes: number): Promise<number> {
+    const result = await pricingService.calculateFinalFare({
+      actualDistanceKm: 5,
+      actualDurationMin: 10,
+      vehicleTypeId: 'v-type-1',
+      waitingMinutes,
+      rateCard,
+    });
+    return result.waitingCharge;
+  }
+
+  it('charges nothing for a wait inside the free period', async () => {
+    assert.equal(await waitingChargeFor(0), 0);
+    assert.equal(await waitingChargeFor(2), 0);
+    // The boundary: three free minutes means the third is still free.
+    assert.equal(await waitingChargeFor(3), 0);
+  });
+
+  it('charges only the minutes beyond the free period', async () => {
+    // 10 minutes waited, 3 free, 7 billable at 3/min.
+    assert.equal(await waitingChargeFor(10), 21);
+    assert.equal(await waitingChargeFor(4), 3);
+  });
+
+  it('never returns a negative charge for a short wait', async () => {
+    assert.equal(await waitingChargeFor(1), 0);
+  });
+
+  it('adds the waiting charge to the total, once', async () => {
+    const withoutWait = await pricingService.calculateFinalFare({
+      actualDistanceKm: 5,
+      actualDurationMin: 10,
+      vehicleTypeId: 'v-type-1',
+      rateCard,
+    });
+    const withWait = await pricingService.calculateFinalFare({
+      actualDistanceKm: 5,
+      actualDurationMin: 10,
+      vehicleTypeId: 'v-type-1',
+      waitingMinutes: 10,
+      rateCard,
+    });
+    assert.equal(withWait.waitingCharge, 21);
+    assert.ok(withWait.totalFare > withoutWait.totalFare);
+  });
+});
+
+/// A booking whose drop was its pickup priced at the minimum fare and went out
+/// to dispatch: a driver sent to a customer already standing at their
+/// destination, and the customer charged the floor for a journey that could not
+/// happen.
+describe('a trip with nowhere to go (L-6)', () => {
+  const BLR = { latitude: 12.9716, longitude: 77.5946 };
+
+  function estimate(drop: { latitude: number; longitude: number }) {
+    return pricingService.estimateTrip({
+      pickupLat: BLR.latitude,
+      pickupLng: BLR.longitude,
+      dropLat: drop.latitude,
+      dropLng: drop.longitude,
+    });
+  }
+
+  it('refuses a drop that is the pickup', () => {
+    assert.throws(() => estimate(BLR), ZeroDistanceTripError);
+  });
+
+  it('refuses a drop too close to price, not only an exact match', () => {
+    // ~1m north — a second GPS read of the same spot, which rounds to no
+    // distance at all once the road factor and 2dp rounding are applied.
+    assert.throws(
+      () => estimate({ latitude: BLR.latitude + 0.00001, longitude: BLR.longitude }),
+      ZeroDistanceTripError,
+    );
+  });
+
+  it('is refused with a code a client can act on, not a 500', () => {
+    try {
+      estimate(BLR);
+      assert.fail('expected a refusal');
+    } catch (err) {
+      const coded = err as { code?: string; statusCode?: number };
+      assert.equal(coded.code, 'TRIP_HAS_NO_DISTANCE');
+      assert.equal(coded.statusCode, 400, 'a client mistake, not a server fault');
+    }
+  });
+
+  it('still prices a real trip', () => {
+    // ~1km north.
+    const trip = estimate({ latitude: BLR.latitude + 0.009, longitude: BLR.longitude });
+    assert.ok(trip.distanceKm > 0);
+    assert.ok(trip.durationMin >= 1);
+  });
+
+  it('never refuses a completed ride that reports no distance', async () => {
+    // The driver has finished driving; refusing here would leave them unable to
+    // close the ride. Guarding the quote is not the same as guarding the bill.
+    const fare = await pricingService.calculateFinalFare({
+      actualDistanceKm: 0,
+      actualDurationMin: 5,
+      vehicleTypeId: 'v-type-1',
+    });
+    assert.ok(fare.totalFare > 0);
+  });
+});
+
+/// `createQuote` estimates the journey once for the response, then priced every
+/// active category in a loop — and each pass re-ran the same haversine over the
+/// same two points. The journey does not change between a bike and a premium
+/// cab.
+describe('a quote estimates the journey once (L-4)', () => {
+  const BLR = { latitude: 12.9716, longitude: 77.5946 };
+  const NEARBY = { latitude: 12.9806, longitude: 77.5946 };
+
+  function quote(trip?: { distanceKm: number; durationMin: number }) {
+    return pricingService.calculateFareQuote({
+      pickupLat: BLR.latitude,
+      pickupLng: BLR.longitude,
+      dropLat: NEARBY.latitude,
+      dropLng: NEARBY.longitude,
+      vehicleTypeId: 'v-type-1',
+      ...(trip !== undefined ? { trip } : {}),
+    });
+  }
+
+  it('prices the trip it was handed rather than re-deriving one', async () => {
+    // Coordinates a kilometre apart, but the caller says fifty. If the supplied
+    // trip were ignored the fare would come out at the short one.
+    const supplied = await quote({ distanceKm: 50, durationMin: 100 });
+    const derived = await quote();
+
+    assert.ok(
+      supplied.totalFare > derived.totalFare * 5,
+      `supplied ${supplied.totalFare} should dwarf derived ${derived.totalFare}`,
+    );
+  });
+
+  it('agrees with the estimate it would have made when none is handed in', async () => {
+    const trip = pricingService.estimateTrip({
+      pickupLat: BLR.latitude,
+      pickupLng: BLR.longitude,
+      dropLat: NEARBY.latitude,
+      dropLng: NEARBY.longitude,
+    });
+
+    const supplied = await quote(trip);
+    const derived = await quote();
+
+    // The optimisation must be invisible in the price — passing the trip in is
+    // the same journey, not a different one.
+    assert.equal(supplied.totalFare, derived.totalFare);
   });
 });

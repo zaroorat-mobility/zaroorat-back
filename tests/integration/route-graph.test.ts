@@ -14,6 +14,22 @@ const SANCTIONED_PUBLIC: ReadonlyMap<string, string> = new Map([
     'The access token is expired by definition; the refresh token is the credential.',
   ],
   [
+    'POST /api/v1/auth/admin/login',
+    'Pre-authentication: staff email & password is the credential. Rate limited by ' +
+      'rateLimits.adminLogin, and unknown, non-staff and wrong credentials are all one ' +
+      '401 INVALID_CREDENTIALS, so it does not enumerate staff accounts.',
+  ],
+  [
+    'POST /api/v1/auth/admin/otp/send',
+    'Pre-authentication: the caller has no token yet. Sends only to an existing staff ' +
+      'account but answers identically either way, so it does not disclose who is staff.',
+  ],
+  [
+    'POST /api/v1/auth/admin/otp/verify',
+    'Pre-authentication: this is what mints the staff token. Never creates an account — ' +
+      'a rider or customer number is refused with 401 INVALID_CREDENTIALS.',
+  ],
+  [
     'POST /api/v1/payments/webhooks/:gateway',
     'A payment gateway holds no bearer token. Authenticated by HMAC over the raw body.',
   ],

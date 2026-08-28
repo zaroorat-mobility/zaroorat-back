@@ -112,6 +112,45 @@ export class DriverRepository {
       },
     });
   }
+  /// `Driver.rating` is a stored aggregate over `RideRating`, not a value
+  /// anybody sets directly. It defaulted to 5.00 and was written by nothing, so
+  /// every driver's profile reported a perfect score forever, however they were
+  /// actually rated.
+  async setRating(id: string, rating: number, tx?: TransactionClient): Promise<Driver> {
+    const client = tx ?? this.db.client;
+    return client.driver.update({ where: { id }, data: { rating } });
+  }
+
+  /// The completion counters `GET /drivers/me` has always served and nothing
+  /// has ever written, so a driver five hundred rides in still read
+  /// `totalRides: 0`, `totalDistanceKm: 0` and `lastRideAt: null`.
+  ///
+  /// Incremented rather than recomputed: these are running totals over every
+  /// ride a driver has ever done, and re-deriving one on each completion would
+  /// cost a scan of that driver's whole history. Called from inside the
+  /// completion transaction, behind the conditional claim that decides the
+  /// completion, so it commits with the ride or not at all and a replayed
+  /// completion cannot count twice.
+  ///
+  /// `totalEarnings` and the three rate columns are deliberately not touched —
+  /// see the note in `LifecycleService.completeRide`.
+  async recordCompletedRide(
+    id: string,
+    distanceKm: number,
+    completedAt: Date,
+    tx?: TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.db.client;
+    await client.driver.update({
+      where: { id },
+      data: {
+        totalRides: { increment: 1 },
+        totalDistanceKm: { increment: distanceKm },
+        lastRideAt: completedAt,
+      },
+    });
+  }
+
   async setSuspended(id: string, isSuspended: boolean, tx?: TransactionClient): Promise<Driver> {
     const client = tx ?? this.db.client;
     return client.driver.update({

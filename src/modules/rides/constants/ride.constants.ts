@@ -1,25 +1,15 @@
-export const RIDE_STATUS = {
-  REQUESTED: 'REQUESTED',
-  SEARCHING: 'SEARCHING',
-  ACCEPTED: 'ACCEPTED',
-  DRIVER_ARRIVING: 'DRIVER_ARRIVING',
-  DRIVER_ARRIVED: 'DRIVER_ARRIVED',
-  IN_PROGRESS: 'IN_PROGRESS',
-  COMPLETED: 'COMPLETED',
-  CANCELLED_BY_CUSTOMER: 'CANCELLED_BY_CUSTOMER',
-  CANCELLED_BY_DRIVER: 'CANCELLED_BY_DRIVER',
-  CANCELLED_BY_SYSTEM: 'CANCELLED_BY_SYSTEM',
-  NO_DRIVERS_FOUND: 'NO_DRIVERS_FOUND',
-} as const;
-export type RideStatusType = (typeof RIDE_STATUS)[keyof typeof RIDE_STATUS];
-export const RIDE_REQUEST_STATUS = {
-  CREATED: 'CREATED',
-  SEARCHING: 'SEARCHING',
-  MATCHED: 'MATCHED',
-  EXPIRED: 'EXPIRED',
-  ABANDONED: 'ABANDONED',
-} as const;
-export type RideRequestStatusType = (typeof RIDE_REQUEST_STATUS)[keyof typeof RIDE_REQUEST_STATUS];
+/// `RIDE_STATUS`, `RIDE_REQUEST_STATUS` and `DISPATCH_RESPONSE` used to stand
+/// here: three hand-written copies of enums Prisma already generates from the
+/// schema, imported by nothing. A second copy of an enum cannot be kept honest
+/// — it drifts from the schema silently, and the copy of `RideStatus` had
+/// already drifted into offering `REQUESTED`, `SEARCHING` and
+/// `NO_DRIVERS_FOUND` as if a `Ride` could be in those states. It cannot: a
+/// `Ride` row is only ever created at ACCEPTED, and those three describe the
+/// request phase, which `RideRequestStatus` models properly.
+///
+/// Everything in this file now is a real constant with no counterpart in the
+/// schema. Import the generated types for statuses.
+
 export const RIDE_OTP_TTL_MINUTES = 15;
 export const RIDE_OTP_MAX_ATTEMPTS = 5;
 export const RIDE_OTP_LENGTH = 6;
@@ -37,11 +27,3 @@ export const TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER = 3;
 export const TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM = 5;
 export const TRIP_DURATION_PLAUSIBILITY_MULTIPLIER = 4;
 export const TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN = 15;
-export const DISPATCH_RESPONSE = {
-  PENDING: 'PENDING',
-  ACCEPTED: 'ACCEPTED',
-  REJECTED: 'REJECTED',
-  TIMEOUT: 'TIMEOUT',
-  CANCELLED: 'CANCELLED',
-} as const;
-export type DispatchResponseType = (typeof DISPATCH_RESPONSE)[keyof typeof DISPATCH_RESPONSE];

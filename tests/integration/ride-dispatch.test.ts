@@ -4,8 +4,16 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
-import { grantRole, makeAssignedVehicle, makeDriver, makeVehicleType } from './helpers/fixtures.js';
+import {
+  completeProfile,
+  grantRole,
+  makeAssignedVehicle,
+  makeDriver,
+  makeVehicleType,
+} from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
+import { rideConfig } from '../../src/config/ride/ride.config.js';
+import { geoConfig } from '../../src/config/geo/geo.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { OutboxRelay } from '../../src/core/events/OutboxRelay.js';
 import type { DispatchTimeoutJob } from '../../src/modules/rides/jobs/dispatch-timeout.job.js';
@@ -54,7 +62,13 @@ describe('ride dispatch, offers and assignment (integration)', () => {
     await container.resolve<OutboxRelay>('outboxRelay').processBatch(200);
   }
 
-  async function onlineDriver(phone: string, vehicleTypeId: string): Promise<OnlineDriver> {
+  /// `at` places the driver somewhere other than the pickup point, which is how
+  /// a search radius becomes observable at all.
+  async function onlineDriver(
+    phone: string,
+    vehicleTypeId: string,
+    at: { latitude: number; longitude: number } = CENTRE,
+  ): Promise<OnlineDriver> {
     const seed = await loginAs(app, phone);
     await grantRole(seed.userId, 'driver');
     const user = await loginAs(app, phone);
@@ -73,7 +87,7 @@ describe('ride dispatch, offers and assignment (integration)', () => {
       method: 'POST',
       url: '/api/v1/drivers/location',
       headers: user.authHeader,
-      payload: CENTRE,
+      payload: at,
     });
     assert.equal(located.statusCode, 200, located.payload);
 
@@ -154,6 +168,18 @@ describe('ride dispatch, offers and assignment (integration)', () => {
     return container.resolve<DispatchTimeoutJob>('dispatchTimeoutJob').run();
   }
 
+  /// Drags a ride's accept back past `RIDE_CANCELLATION_GRACE_MIN`, so a
+  /// cancellation lands outside the free window without the test sleeping
+  /// through it.
+  async function ageBeyondGrace(rideId: string): Promise<void> {
+    await db().client.ride.update({
+      where: { id: rideId },
+      data: {
+        acceptedAt: new Date(Date.now() - (rideConfig.cancellationGraceMinutes + 1) * 60_000),
+      },
+    });
+  }
+
   /// Drags every live offer for a request back past its window, so the timeout
   /// job has something to sweep without the test sleeping for 30 seconds.
   async function expireOffers(requestId: string): Promise<void> {
@@ -164,6 +190,178 @@ describe('ride dispatch, offers and assignment (integration)', () => {
   }
 
   // ------------------------------------------------------------ the scenarios
+
+  /// A drop that is the pickup priced at the minimum fare and went out to
+  /// dispatch — a driver sent to somebody already standing at their
+  /// destination. The realistic cause is a client that never set the drop and
+  /// sent the pickup twice.
+  describe('a trip with nowhere to go (L-6)', () => {
+    it('refuses the booking with a code, not a server error', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NOWHERE_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730910');
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: {
+          vehicleTypeId,
+          pickupLat: CENTRE.latitude,
+          pickupLng: CENTRE.longitude,
+          dropLat: CENTRE.latitude,
+          dropLng: CENTRE.longitude,
+        },
+      });
+
+      assert.equal(created.statusCode, 400, created.payload);
+      assert.equal(created.json().error.code, 'TRIP_HAS_NO_DISTANCE');
+      // And nothing was written or dispatched on the way to refusing it.
+      assert.equal(
+        await db().client.rideRequest.count({ where: { customerId: customer.userId } }),
+        0,
+      );
+    });
+
+    it('refuses the quote too, so the app finds out before it books', async () => {
+      await makeVehicleType({ code: `NOWHQ_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730911');
+
+      const quoted = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: {
+          pickupLat: CENTRE.latitude,
+          pickupLng: CENTRE.longitude,
+          dropLat: CENTRE.latitude,
+          dropLng: CENTRE.longitude,
+        },
+      });
+
+      assert.equal(quoted.statusCode, 400, quoted.payload);
+      assert.equal(quoted.json().error.code, 'TRIP_HAS_NO_DISTANCE');
+    });
+  });
+
+  /// Nothing in the suite covered the "one active request per customer" guard
+  /// at all, in either shape.
+  describe('booking twice at once (M-10)', () => {
+    function book(customer: LoggedInUser, vehicleTypeId: string) {
+      return app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP },
+      });
+    }
+
+    async function requestRows(customerId: string): Promise<number> {
+      return db().client.rideRequest.count({
+        where: { customerId, status: { in: ['CREATED', 'SEARCHING'] } },
+      });
+    }
+
+    it('refuses a second booking while one is still open', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `DUP1_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730901');
+
+      assert.equal((await book(customer, vehicleTypeId)).statusCode, 200);
+      const second = await book(customer, vehicleTypeId);
+
+      assert.equal(second.statusCode, 409, second.payload);
+      assert.equal(second.json().error.code, 'ACTIVE_RIDE_EXISTS');
+      assert.equal(await requestRows(customer.userId), 1);
+    });
+
+    /// The lost race, staged deterministically. Two overlapping bookings cannot
+    /// be interleaved through `app.inject` — they serialise, and the read guard
+    /// catches the second every time — so the guard is blinded instead, which is
+    /// precisely what losing the race does to it: it looks, and the sibling
+    /// request has not committed yet. The insert that follows meets the real
+    /// `ride_requests_active_customer_key` index in Postgres.
+    it('answers a lost race the same way it answers a retry', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `DUP2_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730902');
+      assert.equal((await book(customer, vehicleTypeId)).statusCode, 200);
+
+      const repo = container.resolve<{ findActiveByCustomer: unknown }>('rideRequestRepository');
+      const original = repo.findActiveByCustomer;
+      repo.findActiveByCustomer = async () => null;
+      let refused;
+      try {
+        refused = await book(customer, vehicleTypeId);
+      } finally {
+        repo.findActiveByCustomer = original;
+      }
+
+      assert.equal(refused.statusCode, 409, refused.payload);
+      assert.equal(refused.json().error.code, 'ACTIVE_RIDE_EXISTS');
+      assert.equal(await requestRows(customer.userId), 1, 'exactly one request may exist');
+    });
+  });
+
+  /// One degree of longitude is about 108.5km at this latitude, which is all the
+  /// arithmetic needed to put a driver a chosen distance due east of the pickup.
+  function eastOfCentre(metres: number): { latitude: number; longitude: number } {
+    return { latitude: CENTRE.latitude, longitude: CENTRE.longitude + metres / 108_500 };
+  }
+
+  /// The unit suite checks which radii dispatch asks for; this checks that the
+  /// radius reaches the geo query at all — the Redis cell cover and the PostGIS
+  /// `ST_DWithin` both have to honour it, and neither is exercised by a fake.
+  describe('a driver beyond the default search radius (M-7)', () => {
+    it('is found by widening, and is not found without it', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `FAR_${randomUUID().slice(0, 6)}` });
+      const far = await onlineDriver(
+        '+919876730801',
+        vehicleTypeId,
+        // Comfortably outside GEO_SEARCH_RADIUS_M, comfortably inside the maximum.
+        eastOfCentre(geoConfig.searchRadiusMeters + 2000),
+      );
+      const customer = await customerWithProfile('+919876730802');
+
+      const { requestId, offers } = await requestRide(customer, vehicleTypeId);
+
+      assert.deepEqual(
+        offers.map((offer) => offer.driverId),
+        [far.driverId],
+        'the only driver in the city was beyond the first circle, not beyond reach',
+      );
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.equal(request.status, 'SEARCHING');
+
+      // The control for the claim above: the same driver is genuinely outside
+      // the default radius, so this is widening finding them and not the
+      // default circle having been wide enough all along.
+      const geo = container.resolve<{
+        findNearbyDrivers(search: unknown): Promise<{ outcome: string; drivers?: unknown[] }>;
+      }>('geoService');
+      const atDefault = await geo.findNearbyDrivers({
+        origin: CENTRE,
+        radiusMeters: geoConfig.searchRadiusMeters,
+      });
+      assert.equal(atDefault.drivers?.length ?? 0, 0, 'not inside the default circle');
+    });
+
+    it('is left alone when a nearer driver can take the ride', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NEAR_${randomUUID().slice(0, 6)}` });
+      const near = await onlineDriver('+919876730803', vehicleTypeId);
+      await onlineDriver(
+        '+919876730804',
+        vehicleTypeId,
+        eastOfCentre(geoConfig.searchRadiusMeters + 2000),
+      );
+      const customer = await customerWithProfile('+919876730805');
+
+      const { offers } = await requestRide(customer, vehicleTypeId);
+
+      assert.deepEqual(
+        offers.map((offer) => offer.driverId),
+        [near.driverId],
+        'widening is a fallback, not a reason to drag a distant driver into round one',
+      );
+    });
+  });
 
   describe('parallel dispatch', () => {
     it('offers one request to several nearby drivers at once', async () => {
@@ -792,6 +990,99 @@ describe('ride dispatch, offers and assignment (integration)', () => {
       });
       assert.equal(status.status, 'ONLINE', 'the driver is freed again');
     });
+
+    /// The fee a post-arrival customer cancellation attracts is *assessed*, and
+    /// the row has to say so. Collecting it is an explicit non-goal of the
+    /// payment feature (spec.md non-goals; decisions.md scopes collection to a
+    /// COMPLETED ride), and `feeCharged: true` asserted money had changed hands
+    /// that nothing had taken.
+    it('records a post-arrival cancellation fee as assessed, not charged', async () => {
+      const { driver, customer, rideId } = await acceptedRide(
+        { driver: '+919876730104', customer: '+919876730105' },
+        `FEE_${randomUUID().slice(0, 6)}`,
+      );
+      const arrived = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/arrive`,
+        headers: driver.authHeader,
+        payload: {},
+      });
+      assert.equal(arrived.statusCode, 200, arrived.payload);
+      // Outside the free window, which is what this case is about — the grace
+      // period has its own test below.
+      await ageBeyondGrace(rideId);
+
+      const cancelled = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/cancel`,
+        headers: customer.authHeader,
+        payload: { reasonCode: 'CHANGED_MIND' },
+      });
+      assert.equal(cancelled.statusCode, 200, cancelled.payload);
+
+      const row = await db().client.rideCancellation.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(row.cancellationFee.toString(), String(rideConfig.defaultCancellationFee));
+      assert.equal(row.feeCharged, false, 'nothing charged this fee');
+
+      // And the record must match reality: no payment attempt, no ledger entry,
+      // and the ride's own obligation untouched.
+      assert.equal(await db().client.ridePayment.count({ where: { rideId } }), 0);
+      assert.equal(
+        await db().client.paymentLedgerEntry.count({ where: { referenceId: rideId } }),
+        0,
+      );
+      const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+      assert.equal(ride.paymentStatus, 'PENDING');
+    });
+
+    /// `RIDE_CANCELLATION_GRACE_MIN` was declared, defaulted to 2 minutes and
+    /// read by nothing, so the free window it describes did not exist: a
+    /// customer who changed their mind seconds after a driver accepted was
+    /// assessed the full fee the moment that driver reached them.
+    it('charges nobody who cancels inside the grace window', async () => {
+      const { driver, customer, rideId } = await acceptedRide(
+        { driver: '+919876730106', customer: '+919876730107' },
+        `GRACE_${randomUUID().slice(0, 6)}`,
+      );
+      const arrived = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/arrive`,
+        headers: driver.authHeader,
+        payload: {},
+      });
+      assert.equal(arrived.statusCode, 200, arrived.payload);
+      // Deliberately no ageBeyondGrace: the accept just happened.
+
+      const cancelled = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/cancel`,
+        headers: customer.authHeader,
+        payload: { reasonCode: 'CHANGED_MIND' },
+      });
+      assert.equal(cancelled.statusCode, 200, cancelled.payload);
+
+      const row = await db().client.rideCancellation.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(row.cancellationFee.toString(), '0', 'the free window must be free');
+      assert.equal(row.feeCharged, false);
+    });
+
+    it('assesses no fee when the customer cancels before the driver arrives', async () => {
+      const { customer, rideId } = await acceptedRide(
+        { driver: '+919876730106', customer: '+919876730107' },
+        `NOFEE_${randomUUID().slice(0, 6)}`,
+      );
+      const cancelled = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/cancel`,
+        headers: customer.authHeader,
+        payload: { reasonCode: 'CHANGED_MIND' },
+      });
+      assert.equal(cancelled.statusCode, 200, cancelled.payload);
+
+      const row = await db().client.rideCancellation.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(row.cancellationFee.toString(), '0');
+      assert.equal(row.feeCharged, false);
+    });
   });
 
   describe('events', () => {
@@ -955,6 +1246,180 @@ describe('ride dispatch, offers and assignment (integration)', () => {
         headers: driver.authHeader,
       });
       assert.equal(offers.json().data.length, 1);
+    });
+  });
+
+  /// A driver holds the `customer` role too — `ensureDefaultRole` grants it on
+  /// every phone login — so nothing on the booking route distinguishes them
+  /// from a rider, and dispatch ranks their own record as the nearest driver to
+  /// their own pickup point. Both halves are legitimate on their own; the
+  /// combination lets one account manufacture a completed ride, a fare, a driver
+  /// earning and a commission entry for a journey nobody took.
+  describe('a driver may not ride with themselves (H-1)', () => {
+    it('offers the request back to the driver who booked it, then refuses the accept', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `SELF_${randomUUID().slice(0, 6)}` });
+      const driver = await onlineDriver('+919876730101', vehicleTypeId);
+      // Booking needs a profile name, same as any rider's would.
+      await completeProfile(driver.userId, 'Dee', 'Driver');
+
+      // The same token books the ride. This is the step no role gate can catch.
+      const { requestId, offers } = await requestRide(driver, vehicleTypeId);
+      const own = offerOf(offers, driver);
+      assert.ok(own, 'dispatch does offer a driver their own request — accept is the gate');
+
+      const accepted = await accept(driver, requestId);
+      assert.equal(accepted.statusCode, 403, accepted.payload);
+      assert.equal(accepted.json().error.code, 'SELF_RIDE_NOT_ALLOWED');
+
+      // Nothing may have been minted, and the request must stay open for a real
+      // driver rather than being burnt by the attempt.
+      assert.equal(await db().client.ride.count({ where: { requestId } }), 0);
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.equal(request.status, 'SEARCHING');
+      assert.equal(await responseOf(own.id), 'PENDING');
+    });
+
+    it('still lets a different driver accept that same request', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `SELF2_${randomUUID().slice(0, 6)}` });
+      const booking = await onlineDriver('+919876730102', vehicleTypeId);
+      const other = await onlineDriver('+919876730103', vehicleTypeId);
+      await completeProfile(booking.userId, 'Dee', 'Driver');
+
+      const { requestId, offers } = await requestRide(booking, vehicleTypeId);
+      assert.equal((await accept(booking, requestId)).statusCode, 403);
+
+      const accepted = await accept(other, requestId);
+      assert.equal(accepted.statusCode, 200, accepted.payload);
+      const ride = await db().client.ride.findFirstOrThrow({ where: { requestId } });
+      assert.equal(ride.driverId, other.driverId);
+      assert.equal(await responseOf(offerOf(offers, other).id), 'ACCEPTED');
+    });
+  });
+
+  /// `Promotion` and `PromotionRedemption` are fully modelled and referenced
+  /// nowhere in `src`. Redeeming them is out of scope by decision, but the API
+  /// accepted a code anyway, stored it on the request and billed the customer
+  /// in full — a rider who typed a code was quietly charged the undiscounted
+  /// fare with nothing in the response to tell them.
+  describe('a promo code the platform cannot honour (M-3)', () => {
+    it('refuses the booking rather than charging full price in silence', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `PROMO_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730120');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP, promoCode: 'SUMMER50' },
+      });
+
+      assert.equal(response.statusCode, 422, response.payload);
+      assert.equal(response.json().error.code, 'PROMOTIONS_UNAVAILABLE');
+      assert.equal(await db().client.rideRequest.count(), 0, 'nothing may be written');
+    });
+
+    it('treats an empty code as no code, so a client sending one is not broken', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `BLANK_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730121');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP, promoCode: '   ' },
+      });
+
+      assert.equal(response.statusCode, 200, response.payload);
+      const request = await db().client.rideRequest.findUniqueOrThrow({
+        where: { id: response.json().data.id as string },
+      });
+      // Whitespace is not a promotion, and must not be recorded as one.
+      assert.equal(request.promoCode, null);
+    });
+
+    it('still books normally with no code at all', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NOPRM_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730122');
+
+      const { requestId } = await requestRide(customer, vehicleTypeId);
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.equal(request.promoCode, null);
+    });
+  });
+
+  /// `dropLat`/`dropLng` were `.optional()` on both schemas while everything
+  /// behind them required a drop, so a body the schema advertised as valid died
+  /// on a bare `Error` inside pricing and came back as 500 INTERNAL — the server
+  /// blaming itself for the client following its own contract.
+  describe('a ride needs somewhere to go (H-4)', () => {
+    it('refuses a quote with no drop, as a validation error and not a 500', async () => {
+      const customer = await customerWithProfile('+919876730110');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: { pickupLat: 12.9716, pickupLng: 77.5946 },
+      });
+
+      assert.equal(response.statusCode, 400, response.payload);
+      assert.equal(response.json().error.code, 'VALIDATION');
+      // The point of a 400 over a 500 is that it says which fields are wrong.
+      const paths = (response.json().error.details as { path: string[] }[]).map((issue) =>
+        issue.path.join('.'),
+      );
+      assert.deepEqual(paths.sort(), ['dropLat', 'dropLng']);
+    });
+
+    it('refuses a booking with no drop, and writes nothing', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `NODROP_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730111');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, pickupLat: 12.9716, pickupLng: 77.5946 },
+      });
+
+      assert.equal(response.statusCode, 400, response.payload);
+      assert.equal(response.json().error.code, 'VALIDATION');
+      assert.equal(await db().client.rideRequest.count(), 0);
+    });
+
+    it('refuses half a drop, so a dropped field cannot be read as no destination', async () => {
+      const customer = await customerWithProfile('+919876730112');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: { pickupLat: 12.9716, pickupLng: 77.5946, dropLat: 12.9352 },
+      });
+
+      assert.equal(response.statusCode, 400, response.payload);
+      const paths = (response.json().error.details as { path: string[] }[]).map((issue) =>
+        issue.path.join('.'),
+      );
+      assert.deepEqual(paths, ['dropLng']);
+    });
+
+    it('still quotes and books a trip that has a drop', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `DROP_${randomUUID().slice(0, 6)}` });
+      const customer = await customerWithProfile('+919876730113');
+
+      const quoted = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/quote',
+        headers: customer.authHeader,
+        payload: { vehicleTypeId, ...TRIP },
+      });
+      assert.equal(quoted.statusCode, 200, quoted.payload);
+      assert.ok(quoted.json().data.estimatedDistanceKm > 0);
+
+      const { requestId } = await requestRide(customer, vehicleTypeId);
+      const request = await db().client.rideRequest.findUniqueOrThrow({ where: { id: requestId } });
+      assert.ok(request.dropLat !== null && request.dropLng !== null);
     });
   });
 });

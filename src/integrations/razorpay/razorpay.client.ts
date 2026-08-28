@@ -1,19 +1,23 @@
 import { randomUUID } from 'node:crypto';
-import { Decimal } from '../../types/index.js';
+import { Decimal } from '../../modules/payments/types/index.js';
 import type {
   PaymentGatewayProvider,
   CreateGatewayIntentInput,
   GatewayIntentResult,
   GatewayRefundResult,
   GatewayPayoutResult,
-} from './gateway.provider.js';
-export class StripeGatewayProvider implements PaymentGatewayProvider {
-  readonly gatewayName = 'stripe';
-  constructor(private readonly secretKey?: string) {}
+} from '../../modules/payments/services/gateway/gateway.provider.js';
+
+export class RazorpayGatewayProvider implements PaymentGatewayProvider {
+  readonly gatewayName = 'razorpay';
+  constructor(
+    private readonly keyId?: string,
+    private readonly keySecret?: string,
+  ) {}
   async createIntent(_input: CreateGatewayIntentInput): Promise<GatewayIntentResult> {
     return {
-      gatewayIntentId: `pi_stripe_${randomUUID()}`,
-      clientSecret: `pi_stripe_secret_${randomUUID()}`,
+      gatewayIntentId: `rzp_order_${randomUUID().substring(0, 14)}`,
+      clientSecret: `rzp_key_${this.keyId ?? 'mock'}`,
       status: 'PENDING',
     };
   }
@@ -29,7 +33,7 @@ export class StripeGatewayProvider implements PaymentGatewayProvider {
     _idempotencyKey: string,
   ): Promise<GatewayRefundResult> {
     return {
-      gatewayRefundId: `re_stripe_${randomUUID()}`,
+      gatewayRefundId: `rzp_rf_${randomUUID().substring(0, 14)}`,
       status: 'SUCCEEDED',
     };
   }
@@ -40,7 +44,7 @@ export class StripeGatewayProvider implements PaymentGatewayProvider {
     _idempotencyKey: string,
   ): Promise<GatewayPayoutResult> {
     return {
-      gatewayPayoutId: `po_stripe_${randomUUID()}`,
+      gatewayPayoutId: `rzp_pout_${randomUUID().substring(0, 14)}`,
       status: 'COMPLETED',
     };
   }

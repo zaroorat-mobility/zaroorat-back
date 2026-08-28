@@ -5,6 +5,7 @@ import { SidBlacklistStore } from './stores/SidBlacklistStore';
 import { RateLimitStore } from './stores/RateLimitStore';
 import { IdempotencyStore } from './stores/IdempotencyStore';
 import { LockStore } from './stores/LockStore';
+import { TripDistanceStore } from './stores/TripDistanceStore';
 export class RedisService {
   public readonly provider: RedisProvider;
   public readonly otp: OtpStore;
@@ -13,6 +14,7 @@ export class RedisService {
   public readonly rateLimit: RateLimitStore;
   public readonly idempotency: IdempotencyStore;
   public readonly lock: LockStore;
+  public readonly tripDistance: TripDistanceStore;
   constructor(
     redisProvider: RedisProvider,
     otpStore: OtpStore,
@@ -21,6 +23,7 @@ export class RedisService {
     rateLimitStore: RateLimitStore,
     idempotencyStore: IdempotencyStore,
     lockStore: LockStore,
+    tripDistanceStore: TripDistanceStore,
   ) {
     this.provider = redisProvider;
     this.otp = otpStore;
@@ -29,5 +32,6 @@ export class RedisService {
     this.rateLimit = rateLimitStore;
     this.idempotency = idempotencyStore;
     this.lock = lockStore;
+    this.tripDistance = tripDistanceStore;
   }
 }

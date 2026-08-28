@@ -3,8 +3,10 @@ export const RIDE_PRODUCER = 'rides';
 export const RIDE_EVENT_CATALOG = {
   REQUESTED: 'ride.requested',
   REQUEST_ABANDONED: 'ride.request.abandoned',
+  /// Nobody accepted before the request aged out. The rider's search is over,
+  /// and this is the only thing that tells them so.
+  REQUEST_EXPIRED: 'ride.request.expired',
   DISPATCH_OFFERED: 'ride.dispatch.offered',
-  DISPATCH_ACCEPTED: 'ride.dispatch.accepted',
   DISPATCH_REJECTED: 'ride.dispatch.rejected',
   DISPATCH_EXPIRED: 'ride.dispatch.expired',
   ACCEPTED: 'ride.accepted',

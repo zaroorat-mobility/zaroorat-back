@@ -18,6 +18,7 @@ import {
   RideCustomerMismatchError,
   RideRequestNotCancellableError,
   IncompleteProfileError,
+  PromotionsUnavailableError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
@@ -77,21 +78,18 @@ export class RideRequestService {
   async createQuote(params: {
     pickupLat: number;
     pickupLng: number;
-    dropLat?: number;
-    dropLng?: number;
+    dropLat: number;
+    dropLng: number;
     vehicleTypeId?: string;
     cityId?: string;
     cityCode?: string;
     promoCode?: string;
     userId?: string;
   }): Promise<RideQuote> {
-    if (params.dropLat == null || params.dropLng == null) {
-      throw new Error(
-        'A fare quote requires drop coordinates. Quoting an open-ended ride at a ' +
-          'fixed default distance produced a price unrelated to the trip.',
-      );
-    }
-
+    // The `dropLat == null` guard that used to stand here was a second copy of
+    // the one in `calculateFareQuote`, and both threw a bare `Error` that
+    // surfaced as 500. `quoteFareSchema` now requires the coordinates, so this
+    // is unreachable input rather than an error path.
     const vehicleTypes = params.vehicleTypeId
       ? [await this.vehicleTypeService.requireActive(params.vehicleTypeId)]
       : await this.vehicleTypeService.listActive(
@@ -142,6 +140,10 @@ export class RideRequestService {
         cityCode: city.code,
         surgeMultiplier,
         rateCard,
+        // Estimated once above. The journey is the same whichever category
+        // prices it, so this loop was running the same haversine per category
+        // and could disagree with the `estimatedDistanceKm` it reports.
+        trip,
       });
 
       const promoResult = await this.promotionService.quotePromo(params.promoCode, {
@@ -203,13 +205,20 @@ export class RideRequestService {
     pickupLat: number;
     pickupLng: number;
     pickupAddress?: string;
-    dropLat?: number;
-    dropLng?: number;
+    dropLat: number;
+    dropLng: number;
     dropAddress?: string;
     paymentMethod?: string;
     promoCode?: string;
     cityCode?: string;
   }): Promise<RideRequest> {
+    // Refused before anything is written, and before the debt and active-ride
+    // checks, because it is a fact about the request itself rather than about
+    // the rider: nothing in this codebase can apply a promotion, so a booking
+    // carrying a code would be billed in full without ever saying so.
+    if (input.promoCode !== undefined && input.promoCode.trim() !== '') {
+      throw new PromotionsUnavailableError();
+    }
     const profile = await this.userProfileRepository.findByUserId(input.customerId);
     if (!profile?.firstName || !profile.lastName) {
       throw new IncompleteProfileError();
@@ -263,6 +272,8 @@ export class RideRequestService {
     const baseFare = await this.pricingService.calculateFareQuote({
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
+      dropLat: input.dropLat,
+      dropLng: input.dropLng,
       vehicleTypeId: input.vehicleTypeId,
       cityCode: city.code,
       surgeMultiplier,

@@ -1,4 +1,5 @@
 import { pricingConfig, type PricingRateCard } from '@config';
+import { GLOBAL_PRICING_CITY_CODE } from '../constants.js';
 import type { PricingRule } from '../../../generated/prisma/index.js';
 import { PricingRuleRepository } from '../repositories/pricing-rule.repository.js';
 import { calculateHaversineDistanceKm } from '../utils/distance.util.js';
@@ -8,6 +9,19 @@ import type {
   ItemizedFareResult,
   RateCardLookupOptions,
 } from '../domain/pricing.types.js';
+
+/// Shaped so `handleRideError` recognises it: that handler duck-types on
+/// `code` + `statusCode` + `message` rather than on any base class, so pricing
+/// can refuse a request without the pricing module having to depend on the ride
+/// module's error hierarchy.
+export class ZeroDistanceTripError extends Error {
+  readonly code = 'TRIP_HAS_NO_DISTANCE';
+  readonly statusCode = 400;
+  constructor() {
+    super('Pickup and drop are the same place — there is no journey to price');
+    this.name = 'ZeroDistanceTripError';
+  }
+}
 
 function money(value: number): number {
   return Math.round(value * 100) / 100;
@@ -29,6 +43,10 @@ export class PricingService {
       baseFare: decimal(rule.baseFare) ?? fallback.baseFare,
       perKm: decimal(rule.perKmRate) ?? fallback.perKm,
       perMinute: decimal(rule.perMinuteRate) ?? fallback.perMinute,
+      // `freeWaitingMin` is on every rule and was read by nothing: the rate card
+      // it maps into had no field for it, so the grace period an operator set was
+      // dropped between the rule and the price.
+      freeWaitingMinutes: decimal(rule.freeWaitingMin) ?? fallback.freeWaitingMinutes,
       perWaitingMinute: decimal(rule.waitingPerMin) ?? fallback.perWaitingMinute,
       freeWaitingMin: rule.freeWaitingMin ?? fallback.freeWaitingMin,
       bookingFee: decimal(rule.bookingFee) ?? fallback.bookingFee,
@@ -54,6 +72,20 @@ export class PricingService {
       ...(options?.pickupLng !== undefined ? { pickupLng: options.pickupLng } : {}),
     });
     return this.rateCardFor(rule);
+  }
+
+  /// Rate cards for many categories at once, for the catalog. A type with no
+  /// rule of its own gets `rateCardFor(null)` — the default card — which is
+  /// exactly what `rateCardForTypeId` would have priced its rides at, so the
+  /// catalog cannot advertise one number and the quote charge another.
+  async rateCardsForTypeIds(
+    vehicleTypeIds: readonly string[],
+    cityCode = GLOBAL_PRICING_CITY_CODE,
+  ): Promise<Map<string, PricingRateCard>> {
+    const rules = await this.pricingRuleRepository.findGlobalRules(vehicleTypeIds, cityCode);
+    return new Map(
+      vehicleTypeIds.map((id) => [id, this.rateCardFor(rules.get(id) ?? null)] as const),
+    );
   }
 
   private price(
@@ -128,8 +160,28 @@ export class PricingService {
       params.dropLat,
       params.dropLng,
     );
-    const distanceKm = money(straightLineKm * 1.3);
-    return { distanceKm, durationMin: Math.max(1, Math.round(distanceKm * 3)) };
+    const distanceKm = money(straightLineKm * pricingConfig.roadDistanceFactor);
+    // A booking whose drop is its pickup used to price at the minimum fare and
+    // go out to dispatch: a driver was sent to a customer already standing at
+    // their destination, and the customer paid the floor for a journey that
+    // could not happen. The realistic cause is a client that never set the drop
+    // and sent the pickup twice, or a second GPS read of the same spot — so the
+    // test is "zero at the precision we price in", not exact equality of the
+    // coordinates.
+    //
+    // Guarded here rather than in the two request schemas because this is the
+    // one place both quoting and booking pass through, and it is the only place
+    // that knows the road factor and the rounding that decide when a distance
+    // has vanished.
+    //
+    // Deliberately not applied to `calculateFinalFare`: a *completed* ride
+    // reporting no distance is a different situation entirely, and refusing it
+    // would leave a driver who has finished driving unable to close the ride.
+    if (distanceKm <= 0) throw new ZeroDistanceTripError();
+    return {
+      distanceKm,
+      durationMin: Math.max(1, Math.round(distanceKm * pricingConfig.minutesPerKm)),
+    };
   }
 
   async calculateFareQuote(params: FareCalculationParams): Promise<ItemizedFareResult> {
@@ -140,12 +192,17 @@ export class PricingService {
           'fixed default distance produced a price unrelated to the trip.',
       );
     }
-    const trip = this.estimateTrip({
-      pickupLat: params.pickupLat,
-      pickupLng: params.pickupLng,
-      dropLat: params.dropLat as number,
-      dropLng: params.dropLng as number,
-    });
+    // The multi-category quote estimates the trip once and passes it in: the
+    // journey does not change between a bike and a premium cab, and recomputing
+    // it inside that loop ran the same haversine once per category.
+    const trip =
+      params.trip ??
+      this.estimateTrip({
+        pickupLat: params.pickupLat,
+        pickupLng: params.pickupLng,
+        dropLat: params.dropLat as number,
+        dropLng: params.dropLng as number,
+      });
     const card =
       params.rateCard ??
       (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode, {

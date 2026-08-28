@@ -1,11 +1,11 @@
-import { rideConfig } from '@config';
+import { geoConfig, rideConfig } from '@config';
 import { TransactionManager } from '@core/database';
 import { RedisService } from '@core/cache/RedisService.js';
 import { EventPublisher } from '@core/events';
 import { logger } from '@shared/logger/index.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { RideRequestRepository } from '../../repositories/ride-request.repository.js';
-import { MatchingService } from '@modules/matching/index.js';
+import { MatchingService, type MatchCandidate } from '@modules/matching/index.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import {
@@ -19,6 +19,32 @@ import type { TransactionClient } from '@core/database/TransactionManager';
 /// A request is only worth dispatching while nobody has taken it and it has not
 /// been abandoned or aged out.
 const DISPATCHABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
+
+/// The radii one dispatch round will try, in order: this round's own circle
+/// first, then progressively wider ones up to the operator's maximum.
+///
+/// Dispatch used to pass no radius at all, so every round of every request fell
+/// back to `GEO_SEARCH_RADIUS_M` and `GEO_MAX_SEARCH_RADIUS_M` was only ever a
+/// validation ceiling — nothing in the codebase ever searched up to it.
+///
+/// Two different situations need widening and they meet here. A later round
+/// starts wider because the drivers nearest the pickup have already declined.
+/// And a round that finds nobody at all widens on the spot rather than
+/// returning empty, because `DispatchTimeoutJob` only re-dispatches requests
+/// whose offers expired: a round that made no offers is never retried, so a
+/// request with nobody inside the default circle would simply age out however
+/// many drivers sat just beyond it.
+///
+/// The maximum is load-bearing rather than tidiness — `CoordinateService`
+/// throws above it, so an uncapped radius would take dispatch down instead of
+/// searching wider.
+function searchRadiiFrom(round: number): number[] {
+  const { searchRadiusMeters: step, maxSearchRadiusMeters: max } = geoConfig;
+  const radii: number[] = [];
+  for (let n = Math.max(1, round); step * n < max; n++) radii.push(step * n);
+  radii.push(max);
+  return radii;
+}
 
 export class DispatchService {
   constructor(
@@ -112,21 +138,32 @@ export class DispatchService {
     if (slots <= 0) return 0;
 
     const alreadyOffered = await this.dispatchRepo.findAllDriverIdsForRequest(requestId);
-    const candidates = await this.matchingService.findEligibleCandidates(
-      { latitude: Number(request.pickupLat), longitude: Number(request.pickupLng) },
-      alreadyOffered,
-      slots,
-      request.vehicleTypeId,
-    );
+    const dispatchRound = (await this.dispatchRepo.highestRound(requestId)) + 1;
+    const origin = { latitude: Number(request.pickupLat), longitude: Number(request.pickupLng) };
+    // ponytail: the widening steps are searched one at a time, and only while
+    // each comes back empty — an empty result is the cheap query. Batch them
+    // into a single wide query if the extra round trips ever show up.
+    let candidates: MatchCandidate[] = [];
+    let searchRadiusMeters = 0;
+    for (const radius of searchRadiiFrom(dispatchRound)) {
+      searchRadiusMeters = radius;
+      candidates = await this.matchingService.findEligibleCandidates(
+        origin,
+        alreadyOffered,
+        slots,
+        request.vehicleTypeId,
+        radius,
+      );
+      if (candidates.length > 0) break;
+    }
     if (candidates.length === 0) {
       logger.info(
-        { requestId, alreadyOffered: alreadyOffered.length },
+        { requestId, alreadyOffered: alreadyOffered.length, dispatchRound, searchRadiusMeters },
         '[rides] no further eligible driver candidates for this request',
       );
       return 0;
     }
 
-    const dispatchRound = (await this.dispatchRepo.highestRound(requestId)) + 1;
     let offered = 0;
     for (const candidate of candidates) {
       try {

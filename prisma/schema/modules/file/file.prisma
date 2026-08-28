@@ -1,108 +1,70 @@
-// ============================ FILE CUSTODY ============================
-// files doc 03 §3. One table for every uploaded object's metadata and
-// lifecycle; the bytes live in object storage and only the key is stored here.
-// Constraints §4.1–§4.6 are raw SQL in the migration — Prisma expresses none of
-// them.
-
 model File {
-  id                  String         @id @default(uuid(7)) @db.Uuid
-  ownerUserId         String         @map("owner_user_id") @db.Uuid
-  purpose             FilePurpose
-  status              FileStatus     @default(PENDING)
-  // Server-generated, unguessable, never reused, never returned (R-FILE-7, FILE-INV-1/2).
-  storageKey          String         @map("storage_key")
-  // Which provider wrote it. A vendor change must not repoint historical keys.
-  storageProvider     String         @map("storage_provider")
-  /// Which bucket holds it. Nullable because rows written before this column
-  /// existed cannot be back-filled reliably — the bucket at the time is not
-  /// recoverable. Without it a bucket rename orphans every historical row.
-  storageBucket       String?        @map("storage_bucket")
-  /// The S3 version the validated bytes live at, when the bucket is versioned.
-  /// Null on unversioned buckets and on providers that do not report one.
-  /// Erasure needs this to prove it destroyed the object it validated.
-  storageVersionId    String?        @map("storage_version_id")
-  // The client's name, kept for display only. Never part of the key, never trusted.
-  fileName            String         @map("file_name")
-  /// What the client SAID the bytes are. Never authoritative.
-  contentType         String         @map("content_type")
-  /// What the bytes ACTUALLY are, decided server-side from the stored object's
-  /// magic bytes. Null until validation has run.
-  detectedContentType String?        @map("detected_content_type")
-  // Declared at creation; overwritten with the verified value at completion (R-FILE-5).
-  sizeBytes           Int            @map("size_bytes")
-  /// SHA-256 of the stored object as recorded by object storage, which was made
-  /// to validate it on PUT by binding the declared digest into the upload
-  /// signature. Null when no digest was declared: the API never reads the object
-  /// back to compute one, because bytes do not transit this process (R-FILE-1).
-  checksumSha256      String?        @map("checksum_sha256")
-  /// Malware verdict. A file is never READY without `CLEAN` (or `SKIPPED`,
-  /// which only exists outside production).
-  scanStatus          FileScanStatus @default(PENDING) @map("scan_status")
-  scannedAt           DateTime?      @map("scanned_at")
-  /// The scanner's threat identifier, for the security event and investigation.
-  /// Never returned to the uploader — it discloses scanner internals.
-  scanThreat          String?        @map("scan_threat")
-  /// Why the file was REJECTED, as a stable code (`THREAT`, `CONTENT_MISMATCH`,
-  /// `EXIF_LOCATION_PRESENT`, …). Drives metrics and support, not the response.
-  rejectedReason      String?        @map("rejected_reason")
-  // When the write permission lapses. The sweeper reads this (R-FILE-22).
-  uploadExpiresAt     DateTime       @map("upload_expires_at")
-  /// When the object was first observed in storage. Distinct from completedAt:
-  /// reconciliation can observe an object long before the row settles, and the
-  /// gap between the two is what tells you a client abandoned the handshake.
-  uploadedAt          DateTime?      @map("uploaded_at")
-  /// When server-side content validation passed. Distinct from completedAt,
-  /// which is when the row reached its terminal state.
-  verifiedAt          DateTime?      @map("verified_at")
-  completedAt         DateTime?      @map("completed_at")
-  createdAt           DateTime       @default(now()) @map("created_at")
-  updatedAt           DateTime       @updatedAt @map("updated_at")
-  // Soft delete. The object outlives this until retention erases it (R-FILE-18).
-  deletedAt           DateTime?      @map("deleted_at")
-  // Retention moved the bytes to cold storage. Distinct from erasure: the object
-  // still exists (R-FILE-21). Mutually exclusive with erasedAt (FILE-INV-9).
-  archivedAt          DateTime?      @map("archived_at")
-  // Retention destroyed every version of the object (R-FILE-23).
-  erasedAt            DateTime?      @map("erased_at")
-  // The file that replaced this one (R-FILE-31). `@unique` is what keeps a
-  // version chain a line rather than a tree (FILE-INV-8) — Postgres treats NULLs
-  // as distinct, so every current file coexists freely.
-  supersededById      String?        @unique @map("superseded_by_id") @db.Uuid
+  id          String      @id @default(uuid(7)) @db.Uuid
+  ownerUserId String      @map("owner_user_id") @db.Uuid
+  purpose     FilePurpose
+  status      FileStatus  @default(PENDING)
 
-  owner            User              @relation(fields: [ownerUserId], references: [id])
-  supersededBy     File?             @relation("FileVersion", fields: [supersededById], references: [id])
-  supersedes       File?             @relation("FileVersion")
-  // The profile this file is the avatar of, if any — the first live reference
-  // any module holds (files doc 03 §7.2).
-  profileOf        UserProfile?      @relation("ProfileImage")
-  // Driver documents this file backs, if any (drivers module's live reference).
-  driverDocuments  DriverDocument[]
-  // Vehicle documents this file backs, if any (vehicles module's live reference).
+  storageKey String @map("storage_key")
+
+  storageProvider String @map("storage_provider")
+
+  storageBucket String? @map("storage_bucket")
+
+  storageVersionId String? @map("storage_version_id")
+
+  fileName String @map("file_name")
+
+  contentType String @map("content_type")
+
+  detectedContentType String? @map("detected_content_type")
+
+  sizeBytes Int @map("size_bytes")
+
+  checksumSha256 String? @map("checksum_sha256")
+
+  scanStatus FileScanStatus @default(PENDING) @map("scan_status")
+  scannedAt  DateTime?      @map("scanned_at")
+
+  scanThreat String? @map("scan_threat")
+
+  rejectedReason String? @map("rejected_reason")
+
+  uploadExpiresAt DateTime @map("upload_expires_at")
+
+  uploadedAt DateTime? @map("uploaded_at")
+
+  verifiedAt  DateTime? @map("verified_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  deletedAt DateTime? @map("deleted_at")
+
+  archivedAt DateTime? @map("archived_at")
+
+  erasedAt DateTime? @map("erased_at")
+
+  supersededById String? @unique @map("superseded_by_id") @db.Uuid
+
+  owner        User  @relation(fields: [ownerUserId], references: [id])
+  supersededBy File? @relation("FileVersion", fields: [supersededById], references: [id])
+  supersedes   File? @relation("FileVersion")
+
+  profileOf UserProfile? @relation("ProfileImage")
+
+  driverDocuments DriverDocument[]
+
   vehicleDocuments VehicleDocument[]
   promoBannerImage PromoBanner?      @relation("BannerImage")
 
-  // FILE-INV-1. Total, not partial: a key must stay unique across erased rows
-  // too, or a stale signed URL could resolve to somebody else's object. This one
-  // IS expressible in Prisma, so it lives here rather than in raw SQL — `map`
-  // keeps the name doc 03 §4.1 publishes.
   @@unique([storageKey], map: "uq_files_storage_key")
-  // Ownership scoping — every read filters on owner first (FILE-INV-4).
   @@index([ownerUserId], map: "ix_files_owner")
-  // The sweeper's query: PENDING rows past their permission window. The partial
-  // form is in raw SQL (03 §4.2) — Prisma cannot express the WHERE clause.
   @@index([status, uploadExpiresAt], map: "ix_files_sweep")
-  // The scan-result and validation workers' queries: files sitting in a
-  // non-terminal state waiting for the next step.
   @@index([status, scanStatus], map: "ix_files_scan")
-  // The retention job's query: closed (deleted or superseded), no terminal
-  // outcome yet. Partial form in raw SQL (03 §4.6).
   @@index([status, deletedAt], map: "ix_files_retention")
   @@map("files")
 }
 
-/// Drives every per-purpose policy: MIME allow-list, size and pixel ceilings,
-/// read TTL, EXIF stripping, and retention (files doc 02 §5). There is no
-/// "general" purpose — R-FILE-3.
 enum FilePurpose {
   PROFILE_IMAGE
   DRIVER_DOCUMENT
@@ -113,53 +75,31 @@ enum FilePurpose {
   PROMO_BANNER
 }
 
-/// The file lifecycle (files doc 01 §7). `archived`/`erased` are not states —
-/// they are terminal outcomes recorded in `archived_at` / `erased_at`.
-///
-/// ```
-/// PENDING ──▶ UPLOADED ──▶ SCANNING ──▶ VALIDATING ──▶ READY
-///    │            │            │             │
-///    └──▶ EXPIRED ┘            └──▶ REJECTED ◀┘
-/// ```
-///
-/// A file is only readable at `READY`, and only reaches it by passing malware
-/// scanning **and** content validation. Nothing promotes an object on the
-/// strength of it merely existing in the bucket.
 enum FileStatus {
-  /// Reserved. A presigned PUT has been issued; no object is known to exist.
   PENDING
-  /// The client says it uploaded, and the object was found in quarantine with
-  /// the declared size and checksum. Not yet scanned, not yet inspected.
+
   UPLOADED
-  /// Awaiting a malware verdict from the scanner.
+
   SCANNING
-  /// Scanned clean; the content inspector is checking what the bytes actually
-  /// are (magic bytes, dimensions, EXIF, structure).
+
   VALIDATING
   READY
-  /// Failed scanning or validation. Terminal: no read URL is ever issued, and
-  /// the quarantined object is destroyed by retention.
+
   REJECTED
   EXPIRED
   DELETED
-  /// Replaced by a newer version. NOT deleted: the bytes were valid evidence
-  /// while current, and retention keeps them for their full window (R-FILE-32).
+
   SUPERSEDED
 }
 
-/// The malware verdict, tracked separately from the lifecycle so "not scanned
-/// yet" and "scanned clean" are never conflated with "is READY".
 enum FileScanStatus {
-  /// No verdict yet.
   PENDING
-  /// The scanner found no threat. Required before READY.
+
   CLEAN
-  /// A threat was found. The file is REJECTED and the object destroyed.
+
   THREAT
-  /// The scanner could not produce a verdict (access error, unsupported, too
-  /// large). Treated as a failure, never as clean.
+
   FAILED
-  /// Scanning is deliberately not configured — development and test only.
-  /// Boot refuses this in production.
+
   SKIPPED
 }

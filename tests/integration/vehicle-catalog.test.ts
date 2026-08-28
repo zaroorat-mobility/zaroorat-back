@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
 import { grantRole, makeDriver, makeVehicleType } from './helpers/fixtures.js';
+import { seedVehicleTypes } from '../../prisma/seed/shared/vehicle-types.js';
 
 const CUSTOMER = '+919876710001';
 const DRIVER = '+919876710002';
@@ -299,6 +300,210 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
       assert.equal(response.statusCode, 409, response.payload);
       assert.equal(response.json().error.code, 'VEHICLE_TYPE_INACTIVE');
       assert.equal(await db().client.vehicle.count(), 0);
+    });
+  });
+
+  /// Every category was priced identically for as long as `pricing_rules` had
+  /// no rows in it — which was always, because nothing in the codebase wrote
+  /// any. `rateCardForTypeId` found nothing, fell back to
+  /// `pricingConfig.defaultRateCard`, and billed a bike as an economy cab.
+  describe('each category is priced on its own rate card (M-1)', () => {
+    const LADDER = ['BIKE', 'AUTO', 'CAB_ECONOMY', 'CAB_PREMIUM'];
+
+    it('seeds one GLOBAL rule per category, and re-seeding does not duplicate them', async () => {
+      const rules = await db().client.pricingRule.findMany({ where: { cityCode: 'GLOBAL' } });
+      assert.equal(rules.length, LADDER.length);
+
+      // `resetState` re-seeds after every test, so this table is written
+      // repeatedly against a database that already has it. `pricing_rules` has
+      // no unique key to lean on, so idempotency is the seed's own job.
+      await seedVehicleTypes(db().client);
+      const after = await db().client.pricingRule.findMany({ where: { cityCode: 'GLOBAL' } });
+      assert.equal(after.length, LADDER.length, 're-seeding must not stack duplicate rules');
+    });
+
+    it('quotes the whole ladder in ascending order, not four identical fares', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+
+      const options = (await post('/api/v1/rides/quote', customer, { ...PICKUP, ...DROP })).json()
+        .data.options as { vehicleTypeCode: string; estimatedFare: number }[];
+
+      const fares = LADDER.map((code) => {
+        const option = options.find((entry) => entry.vehicleTypeCode === code);
+        assert.ok(option, `no quote for ${code}`);
+        return option.estimatedFare;
+      });
+      assert.deepEqual(
+        fares,
+        [...fares].sort((a, b) => a - b),
+        `expected an ascending ladder, got ${LADDER.map((c, i) => `${c}=${fares[i]}`).join(', ')}`,
+      );
+      assert.equal(new Set(fares).size, fares.length, 'four categories, four different prices');
+    });
+
+    it('advertises the same per-km rate in the catalog that it charges in a quote', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+      const types = (await get('/api/v1/vehicle-types', customer)).json().data as {
+        id: string;
+        code: string;
+        perKmRate: number;
+      }[];
+      const premium = types.find((type) => type.code === 'CAB_PREMIUM')!;
+      const bike = types.find((type) => type.code === 'BIKE')!;
+      assert.ok(premium.perKmRate > bike.perKmRate, 'the catalog must show the ladder too');
+
+      // The catalog reads its numbers through the same `rateCardFor` the quote
+      // prices with, so the two cannot drift into advertising one rate and
+      // billing another.
+      const breakdown = (
+        await post('/api/v1/rides/quote', customer, {
+          ...PICKUP,
+          ...DROP,
+          vehicleTypeId: premium.id,
+        })
+      ).json().data.options[0].fareBreakdown as {
+        estimatedDistanceKm: number;
+        distanceFare: number;
+      };
+      assert.equal(
+        breakdown.distanceFare,
+        Math.round(breakdown.estimatedDistanceKm * premium.perKmRate * 100) / 100,
+      );
+    });
+
+    /// `isActive` was the only filter on a rule, so neither end of its
+    /// effective window was honoured. An operator could not retire a rate card
+    /// by dating it out, and — worse — could not schedule one either: a
+    /// future-dated rule was ordered ahead of the current one and applied the
+    /// moment it was written.
+    describe('and only while it is actually in force (M-2)', () => {
+      const LOUD = { baseFare: 500, perKmRate: 99, perMinuteRate: 50, minimumFare: 500 };
+
+      function addRule(
+        vehicleTypeId: string,
+        window: { effectiveFrom?: Date; effectiveTo?: Date | null },
+      ) {
+        return db().client.pricingRule.create({
+          data: {
+            vehicleTypeId,
+            cityCode: 'GLOBAL',
+            ...LOUD,
+            ...(window.effectiveFrom ? { effectiveFrom: window.effectiveFrom } : {}),
+            ...(window.effectiveTo !== undefined ? { effectiveTo: window.effectiveTo } : {}),
+          },
+        });
+      }
+
+      async function quotedFare(customer: LoggedInUser, vehicleTypeId: string): Promise<number> {
+        const response = await post('/api/v1/rides/quote', customer, {
+          ...PICKUP,
+          ...DROP,
+          vehicleTypeId,
+        });
+        assert.equal(response.statusCode, 200, response.payload);
+        return (response.json().data.options[0] as { estimatedFare: number }).estimatedFare;
+      }
+
+      const DAY = 24 * 60 * 60 * 1000;
+
+      /// The control. Without this the two cases below would pass even if rules
+      /// were ignored entirely, which is exactly the bug M-1 fixed.
+      it('honours a rule whose window is open right now', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `NOW_${randomUUID().slice(0, 6)}` });
+        const withoutRule = await quotedFare(customer, typeId);
+
+        await addRule(typeId, { effectiveFrom: new Date(Date.now() - DAY), effectiveTo: null });
+
+        assert.ok(
+          (await quotedFare(customer, typeId)) > withoutRule,
+          'an in-force rule must actually change the price',
+        );
+      });
+
+      it('ignores a rule whose window has closed', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `PAST_${randomUUID().slice(0, 6)}` });
+        const withoutRule = await quotedFare(customer, typeId);
+
+        await addRule(typeId, {
+          effectiveFrom: new Date(Date.now() - 30 * DAY),
+          effectiveTo: new Date(Date.now() - DAY),
+        });
+
+        assert.equal(
+          await quotedFare(customer, typeId),
+          withoutRule,
+          'a retired rate card must stop pricing rides',
+        );
+      });
+
+      it('ignores a rule dated into the future instead of applying it early', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `SOON_${randomUUID().slice(0, 6)}` });
+        const withoutRule = await quotedFare(customer, typeId);
+
+        await addRule(typeId, {
+          effectiveFrom: new Date(Date.now() + 30 * DAY),
+          effectiveTo: null,
+        });
+
+        // Ordered by `effectiveFrom` descending, this row sorted ahead of every
+        // current one — so scheduling a rate change used to enact it at once.
+        assert.equal(
+          await quotedFare(customer, typeId),
+          withoutRule,
+          'a scheduled rate card must wait for its start date',
+        );
+      });
+
+      it('keeps the catalog and the quote on the same rule when one expires', async () => {
+        const customer = await loginAs(app, CUSTOMER);
+        const typeId = await makeVehicleType({ code: `BOTH_${randomUUID().slice(0, 6)}` });
+        await addRule(typeId, {
+          effectiveFrom: new Date(Date.now() - 30 * DAY),
+          effectiveTo: new Date(Date.now() - DAY),
+        });
+
+        // The catalog reads through `findGlobalRules`, the quote through
+        // `findActiveRule`. Both had the same gap, so both had to be closed —
+        // otherwise the picker advertises a retired rate the quote no longer
+        // charges.
+        const types = (await get('/api/v1/vehicle-types', customer)).json().data as {
+          id: string;
+          perKmRate: number;
+        }[];
+        const listed = types.find((type) => type.id === typeId);
+        assert.ok(listed, 'the throwaway type must be in the catalog');
+        assert.notEqual(listed.perKmRate, LOUD.perKmRate, 'the catalog must drop the expired rule');
+
+        const breakdown = (
+          await post('/api/v1/rides/quote', customer, { ...PICKUP, ...DROP, vehicleTypeId: typeId })
+        ).json().data.options[0].fareBreakdown as {
+          estimatedDistanceKm: number;
+          distanceFare: number;
+        };
+        assert.equal(
+          breakdown.distanceFare,
+          Math.round(breakdown.estimatedDistanceKm * listed.perKmRate * 100) / 100,
+        );
+      });
+    });
+
+    it('still prices a category with no rule of its own at the default card', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+      const orphanId = await makeVehicleType({ code: `ORPHAN_${randomUUID().slice(0, 6)}` });
+
+      const option = (
+        await post('/api/v1/rides/quote', customer, {
+          ...PICKUP,
+          ...DROP,
+          vehicleTypeId: orphanId,
+        })
+      ).json().data.options[0] as { estimatedFare: number };
+      // Not an error and not zero: the documented fallback still applies, which
+      // is what every throwaway type in every other suite relies on.
+      assert.ok(option.estimatedFare > 0);
     });
   });
 });

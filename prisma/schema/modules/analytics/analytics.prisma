@@ -1,6 +1,3 @@
-// ============================ ANALYTICS ============================
-// Note: analytics_events is RANGE-partitioned — managed via raw SQL, not Prisma.
-
 model EventType {
   id          String   @id @default(uuid(7)) @db.Uuid
   code        String   @unique

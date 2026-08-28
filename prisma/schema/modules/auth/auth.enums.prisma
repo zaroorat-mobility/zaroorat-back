@@ -1,11 +1,6 @@
 enum OtpPurpose {
   LOGIN
   REGISTER
-  // Phone-number change (user doc 02 §2.4). A distinct purpose is what keeps the
-  // flows separate: the OTP secret is stored under a purpose-scoped Redis key, so
-  // a code sent to prove control of a new number cannot be replayed against
-  // /auth/otp/verify to log in as it. AUTH doc 03 (OD-7) reserved this as
-  // CHANGE_PHONE; the shipped name follows user doc 02 §2.4.1.
+
   PHONE_CHANGE
-  // RESET_PASSWORD, DELETE_ACCOUNT — reserved for P1+, not v1 (auth doc 03, OD-7).
 }

@@ -1,7 +1,6 @@
 import { config } from '@config';
-import { logger } from '@shared/logger/index.js';
 import { MockProvider } from './providers/mock.provider';
-import { Msg91Provider } from './providers/msg91.provider';
+import { Msg91Provider } from '../../integrations/msg91/msg91.client.js';
 import { MockPushProvider } from './providers/mock-push.provider';
 import type { SmsProvider } from './providers/sms.provider';
 import type { PushProvider } from './providers/push.provider';
@@ -9,6 +8,17 @@ export type SmsProviderName = 'mock' | 'msg91';
 export type PushProviderName = 'mock';
 const NON_DELIVERING_PROVIDERS: readonly SmsProviderName[] = Object.freeze(['mock']);
 const DELIVERY_REQUIRED_ENVIRONMENTS: readonly string[] = Object.freeze(['production', 'staging']);
+export class PushProviderNotDeliverableError extends Error {
+  constructor(environment: string, provider: PushProviderName) {
+    super(
+      `Push provider "${provider}" delivers nothing and cannot be used in ${environment}. ` +
+        'It accepts every message and drops it, so a dispatch offer sent to a driver whose ' +
+        'app is backgrounded reaches nobody and expires unanswered. Implement a real provider ' +
+        'behind createPushProvider and select it with PUSH_PROVIDER before deploying here.',
+    );
+    this.name = 'PushProviderNotDeliverableError';
+  }
+}
 export class SmsProviderNotDeliverableError extends Error {
   constructor(environment: string, provider: SmsProviderName) {
     super(
@@ -46,12 +56,26 @@ export function resolveSmsProviderName(
   }
   return smsProvider;
 }
-/// Unlike SMS, no real push provider exists yet at all (see the platform
-/// audit's P1 finding) — there is nothing to select besides 'mock', so this
-/// warns rather than throws even in production. The knob still exists so
-/// dropping a real provider in later is a config change, not a code change,
-/// exactly like SMS's msg91/mock split.
-function resolvePushProviderName(
+/// Refuses, at boot, to run a delivery-required environment on a push provider
+/// that delivers nothing — the same rule `resolveSmsProviderName` applies right
+/// above, and the asymmetry between them was the bug.
+///
+/// This used to warn instead, on the reasoning that no real provider exists yet
+/// so there is nothing to select. That reasoning inverted the point: the absence
+/// of a provider is exactly what an operator needs to be stopped by, and a
+/// single startup log line is not a stop. Every push the platform then emitted
+/// was accepted and dropped, silently and forever.
+///
+/// It matters most for drivers, not riders. A rider whose app is closed misses a
+/// status update; a driver whose app is backgrounded never sees the dispatch
+/// offer at all, and it expires unanswered while the customer waits. Dispatch
+/// only works for drivers holding their phone.
+///
+/// No override, for the same reason C-1's gateway guard has none: an escape
+/// hatch here would be used once, in a hurry, and never removed. Exported and
+/// pure so it can be tested against every environment — the running process
+/// reads `config.app.environment` once at import.
+export function resolvePushProviderName(
   environment: string,
   explicit: string | undefined,
 ): PushProviderName {
@@ -62,10 +86,7 @@ function resolvePushProviderName(
     );
   }
   if (DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment)) {
-    logger.warn(
-      { environment },
-      '[notifications] no real push provider is configured — push notifications will not reach a device',
-    );
+    throw new PushProviderNotDeliverableError(environment, 'mock');
   }
   return 'mock';
 }

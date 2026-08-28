@@ -1,6 +1,10 @@
 import { logger } from '@shared/logger/index.js';
-import { maskPhone } from '@shared/validation';
-import type { SmsMessage, SmsProvider, SmsSendResult } from './sms.provider';
+import { maskPhone } from '@shared/validation/index.js';
+import type {
+  SmsMessage,
+  SmsProvider,
+  SmsSendResult,
+} from '../../modules/notifications/providers/sms.provider.js';
 export interface Msg91Config {
   authKey: string;
   senderId?: string;

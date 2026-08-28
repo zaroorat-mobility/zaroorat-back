@@ -12,7 +12,7 @@ import {
   resetState,
   type LoggedInUser,
 } from './helpers/harness.js';
-import { grantRole } from './helpers/fixtures.js';
+import { grantRole, makeDispatchOffer } from './helpers/fixtures.js';
 import {
   accountBalance,
   completeRide as flowCompleteRide,
@@ -28,6 +28,7 @@ import type { SettlementService } from '../../src/modules/payments/services/sett
 import type { RideCollectionService } from '../../src/modules/payments/services/collection/collection.service.js';
 import type { PaymentGatewayProvider } from '../../src/modules/payments/services/gateway/gateway.provider.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
+import { pricingConfig } from '../../src/config/pricing/pricing.config.js';
 
 const CUSTOMER = '+919876603001';
 const DRIVER = '+919876603002';
@@ -507,6 +508,211 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
         'and the driver is credited exactly once across both periods',
       );
       assert.ok(new Decimal(first.netPayable).gt(0));
+    });
+  });
+
+  /// C-2. `RideRequest.surgeMultiplier` is written at booking precisely so the
+  /// price the customer agreed to survives the trip. `completeRide` never read
+  /// it back, so `PricingService.price` fell through to its `?? 1` default and
+  /// a ride quoted at 1.8x was invoiced at 1.0x — the premium vanished from the
+  /// bill, the driver's earning and the platform's commission at once, and
+  /// `RideFare` recorded a surge of 1 with an amount of 0, so nothing in the
+  /// books showed it had ever applied.
+  describe('the surge the customer agreed to (C-2)', () => {
+    async function surgePickup(multiplier: string, vehicleTypeId?: string): Promise<void> {
+      const zoneId = randomUUID();
+      await db().client.$executeRawUnsafe(
+        `INSERT INTO surge_zones (id, city_code, name, boundary, is_active, created_at)
+         VALUES ($1::uuid, 'GLOBAL', 'test-surge',
+                 ST_GeogFromText('SRID=4326;POLYGON((77.50 12.90, 77.70 12.90, 77.70 13.05, 77.50 13.05, 77.50 12.90))'),
+                 true, now())`,
+        zoneId,
+      );
+      await db().client.surgeWindow.create({
+        data: {
+          zoneId,
+          multiplier: new Decimal(multiplier),
+          startsAt: new Date(Date.now() - 60_000),
+          endsAt: new Date(Date.now() + 3_600_000),
+          isActive: true,
+          ...(vehicleTypeId !== undefined ? { vehicleTypeId } : {}),
+        },
+      });
+    }
+
+    it('invoices a surged ride at the multiplier quoted at booking', async () => {
+      const world = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      await surgePickup('1.80');
+
+      const { rideId } = await flowCompleteRide(app, world, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+
+      const request = await db().client.rideRequest.findFirstOrThrow({
+        where: { rides: { some: { id: rideId } } },
+      });
+      assert.equal(request.surgeMultiplier.toString(), '1.8', 'the quote carried the surge');
+
+      const fare = await db().client.rideFare.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(
+        fare.surgeMultiplier.toString(),
+        '1.8',
+        'and the invoice charges the same multiplier, not the 1.0 default',
+      );
+      assert.ok(
+        fare.surgeAmount.gt(0),
+        `a surged ride must carry a surge amount, got ${fare.surgeAmount.toString()}`,
+      );
+    });
+
+    /// The premium is not cosmetic: it has to reach the two parties who split
+    /// the fare, or the platform has quietly absorbed it.
+    it('carries the premium into the driver earning and the commission', async () => {
+      const plain = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      const flat = await flowCompleteRide(app, plain, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+      const flatFare = await db().client.rideFare.findUniqueOrThrow({
+        where: { rideId: flat.rideId },
+      });
+
+      await resetState();
+      const surged = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      await surgePickup('1.80');
+      const peak = await flowCompleteRide(app, surged, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+      const peakFare = await db().client.rideFare.findUniqueOrThrow({
+        where: { rideId: peak.rideId },
+      });
+
+      assert.ok(
+        peakFare.totalFare.gt(flatFare.totalFare),
+        `surged ${peakFare.totalFare} must exceed flat ${flatFare.totalFare}`,
+      );
+      assert.ok(
+        peakFare.driverEarning.gt(flatFare.driverEarning),
+        'the driver shares in the premium',
+      );
+      assert.ok(
+        peakFare.platformCommission.gt(flatFare.platformCommission),
+        'and so does the platform',
+      );
+    });
+
+    it('leaves a ride booked outside any surge window at 1.0', async () => {
+      const world = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      const { rideId } = await flowCompleteRide(app, world, {
+        distanceKm: 8,
+        durationMin: 18,
+        paymentMethod: 'CASH',
+      });
+      const fare = await db().client.rideFare.findUniqueOrThrow({ where: { rideId } });
+      assert.equal(fare.surgeMultiplier.toString(), '1', 'no surge zone means no surge');
+      assert.equal(fare.surgeAmount.toString(), '0');
+    });
+  });
+
+  /// C-3a. `actualDurationMin` came off the request body and went straight into
+  /// the fare, so a driver's client could bill any duration it liked, bounded
+  /// only by `assertPlausibleTripData` at 4x the estimate + 15 minutes. Both
+  /// ends of a trip are stamped by the server's own clock, so this was never a
+  /// number the platform had to ask a phone for.
+  describe('trip duration is measured, not declared (C-3a)', () => {
+    it('bills the elapsed server time, not the minutes the driver reported', async () => {
+      const world = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+
+      // A short real trip, reported as a very long one. 90 minutes sits inside
+      // the plausibility bound for an 18-minute quote (4x + 15), so the old
+      // code accepted and billed it.
+      const { rideId } = await flowCompleteRide(app, world, {
+        distanceKm: 8,
+        durationMin: 90,
+        paymentMethod: 'CASH',
+      });
+
+      const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+      assert.ok(
+        (ride.actualDurationMin ?? 0) < 5,
+        `a trip that ran for seconds must not record ${ride.actualDurationMin} minutes`,
+      );
+
+      const fare = await db().client.rideFare.findUniqueOrThrow({ where: { rideId } });
+      const perMinute = pricingConfig.defaultRateCard.perMinute;
+      assert.ok(
+        fare.timeFare.lt(new Decimal(90 * perMinute)),
+        `time fare ${fare.timeFare} must not reflect the declared 90 minutes`,
+      );
+      assert.equal(
+        fare.timeFare.toString(),
+        new Decimal((ride.actualDurationMin ?? 0) * perMinute).toString(),
+        'the time fare follows the measured duration exactly',
+      );
+    });
+
+    /// The declared value keeps its one remaining job: it is still refused when
+    /// it is wildly beyond the quote. Removing the trust must not remove the
+    /// signal that the client is misbehaving.
+    it('still refuses an implausible declared duration outright', async () => {
+      const world = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+      const requested = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/requests',
+        headers: world.customer.authHeader,
+        payload: {
+          vehicleTypeId: world.vehicleTypeId,
+          pickupLat: 12.9716,
+          pickupLng: 77.5946,
+          dropLat: 12.9716 + 8 * 0.009,
+          dropLng: 77.5946,
+          paymentMethod: 'CASH',
+        },
+      });
+      assert.equal(requested.statusCode, 200, requested.payload);
+      const requestId = requested.json().data.id;
+      await makeDispatchOffer(requestId, world.driverId);
+
+      const accepted = await app.inject({
+        method: 'POST',
+        url: '/api/v1/rides/accept',
+        headers: world.driver.authHeader,
+        payload: { requestId, vehicleId: world.vehicleId },
+      });
+      assert.equal(accepted.statusCode, 200, accepted.payload);
+      const rideId = accepted.json().data.ride.id;
+      const otpCode = accepted.json().data.plaintextOtp;
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/arrive`,
+        headers: world.driver.authHeader,
+        payload: {},
+      });
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/start`,
+        headers: world.driver.authHeader,
+        payload: { otpCode },
+      });
+
+      const completed = await app.inject({
+        method: 'POST',
+        url: `/api/v1/rides/${rideId}/complete`,
+        headers: world.driver.authHeader,
+        payload: { actualDistanceKm: 8, actualDurationMin: 100_000 },
+      });
+      assert.ok(
+        completed.statusCode >= 400,
+        `an absurd declared duration must still be refused, got ${completed.statusCode}`,
+      );
+      const stillOpen = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+      assert.equal(stillOpen.status, 'IN_PROGRESS', 'and the ride is not completed');
     });
   });
 });

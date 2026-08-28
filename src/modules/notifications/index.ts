@@ -8,7 +8,7 @@ import { NotificationService } from './notification.service';
 export type { SmsProvider, SmsMessage, SmsSendResult } from './providers/sms.provider';
 export type { PushProvider, PushMessage, PushSendResult } from './providers/push.provider';
 export { MockProvider } from './providers/mock.provider';
-export { Msg91Provider, type Msg91Config } from './providers/msg91.provider';
+export { Msg91Provider, type Msg91Config } from '../../integrations/msg91/msg91.client.js';
 export { MockPushProvider } from './providers/mock-push.provider';
 export {
   getNotificationConfig,

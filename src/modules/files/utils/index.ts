@@ -27,4 +27,4 @@ export {
   type MockUrlRejection,
   type MockUrlVerdict,
 } from './storage/mock.provider.js';
-export { S3StorageProvider } from './storage/s3.provider.js';
+export { S3StorageProvider } from '../../../integrations/aws-s3/s3.client.js';
