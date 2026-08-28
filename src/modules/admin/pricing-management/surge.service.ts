@@ -1,6 +1,14 @@
 import { Prisma } from '../../../generated/prisma/index.js';
 import type { ProviderClient } from '@core/database/index.js';
 import type { SurgeZone, SurgeWindow } from '../../../generated/prisma/index.js';
+import { assertValidPolygon, polygonGeoJson } from '../../geographic/utils/postgis.js';
+
+export interface SurgeZoneDetail extends Pick<
+  SurgeZone,
+  'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'
+> {
+  boundary: number[][][];
+}
 
 export class AdminSurgeService {
   constructor(private readonly db: { client: ProviderClient }) {}
@@ -40,23 +48,53 @@ export class AdminSurgeService {
     `;
   }
 
-  async getSurgeZone(
-    id: string,
-  ): Promise<Pick<SurgeZone, 'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'> | null> {
+  async getSurgeZone(id: string): Promise<SurgeZoneDetail | null> {
     const zones = await this.db.client.$queryRaw<
-      Pick<SurgeZone, 'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'>[]
+      Array<
+        Pick<SurgeZone, 'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'> & {
+          boundary: string;
+        }
+      >
     >`
-      SELECT id, city_code AS "cityCode", name, is_active AS "isActive", created_at AS "createdAt"
+      SELECT
+        id,
+        city_code AS "cityCode",
+        name,
+        is_active AS "isActive",
+        created_at AS "createdAt",
+        ST_AsGeoJSON(boundary::geometry) AS boundary
       FROM surge_zones
       WHERE id = ${id}::uuid
     `;
-    return zones[0] ?? null;
+    const row = zones[0];
+    if (!row) return null;
+    const parsed = JSON.parse(row.boundary) as { coordinates: number[][][] };
+    return {
+      id: row.id,
+      cityCode: row.cityCode,
+      name: row.name,
+      isActive: row.isActive,
+      createdAt: row.createdAt,
+      boundary: parsed.coordinates,
+    };
   }
 
   async updateSurgeZone(
     id: string,
-    data: { name?: string | undefined; isActive?: boolean | undefined },
+    data: {
+      name?: string | undefined;
+      isActive?: boolean | undefined;
+      coordinates?: number[][][] | undefined;
+    },
   ): Promise<void> {
+    if (data.coordinates) {
+      await assertValidPolygon(this.db, data.coordinates);
+      const geoJson = polygonGeoJson(data.coordinates);
+      await this.db.client.$executeRaw`
+        UPDATE surge_zones SET boundary = ST_GeomFromGeoJSON(${geoJson}) WHERE id = ${id}::uuid
+      `;
+    }
+
     if (data.name !== undefined && data.isActive !== undefined) {
       await this.db.client.$executeRaw`
         UPDATE surge_zones SET name = ${data.name}, is_active = ${data.isActive} WHERE id = ${id}::uuid
@@ -83,6 +121,11 @@ export class AdminSurgeService {
     startsAt: Date;
     endsAt?: Date | undefined;
     reason?: string | undefined;
+    demandThresholdPct?: number | undefined;
+    supplyThresholdPct?: number | undefined;
+    peakHourStart?: string | undefined;
+    peakHourEnd?: string | undefined;
+    isPeakHourOnly?: boolean | undefined;
   }): Promise<SurgeWindow> {
     return this.db.client.surgeWindow.create({
       data: {
@@ -92,6 +135,15 @@ export class AdminSurgeService {
         startsAt: data.startsAt,
         endsAt: data.endsAt ?? null,
         reason: data.reason ?? null,
+        ...(data.demandThresholdPct !== undefined
+          ? { demandThresholdPct: new Prisma.Decimal(data.demandThresholdPct) }
+          : {}),
+        ...(data.supplyThresholdPct !== undefined
+          ? { supplyThresholdPct: new Prisma.Decimal(data.supplyThresholdPct) }
+          : {}),
+        ...(data.peakHourStart !== undefined ? { peakHourStart: data.peakHourStart } : {}),
+        ...(data.peakHourEnd !== undefined ? { peakHourEnd: data.peakHourEnd } : {}),
+        ...(data.isPeakHourOnly !== undefined ? { isPeakHourOnly: data.isPeakHourOnly } : {}),
       },
     });
   }
@@ -119,6 +171,11 @@ export class AdminSurgeService {
       multiplier: row.multiplier,
       source: row.source,
       reason: row.reason,
+      demandThresholdPct: row.demandThresholdPct,
+      supplyThresholdPct: row.supplyThresholdPct,
+      peakHourStart: row.peakHourStart,
+      peakHourEnd: row.peakHourEnd,
+      isPeakHourOnly: row.isPeakHourOnly,
       startsAt: row.startsAt,
       endsAt: row.endsAt,
       isActive: row.isActive,
@@ -150,6 +207,11 @@ export class AdminSurgeService {
       multiplier: row.multiplier,
       source: row.source,
       reason: row.reason,
+      demandThresholdPct: row.demandThresholdPct,
+      supplyThresholdPct: row.supplyThresholdPct,
+      peakHourStart: row.peakHourStart,
+      peakHourEnd: row.peakHourEnd,
+      isPeakHourOnly: row.isPeakHourOnly,
       startsAt: row.startsAt,
       endsAt: row.endsAt,
       isActive: row.isActive,
@@ -167,6 +229,11 @@ export class AdminSurgeService {
       endsAt?: Date | undefined;
       isActive?: boolean | undefined;
       reason?: string | undefined;
+      demandThresholdPct?: number | null | undefined;
+      supplyThresholdPct?: number | null | undefined;
+      peakHourStart?: string | null | undefined;
+      peakHourEnd?: string | null | undefined;
+      isPeakHourOnly?: boolean | undefined;
     },
   ): Promise<SurgeWindow> {
     const updateData: Record<string, unknown> = {};
@@ -175,6 +242,17 @@ export class AdminSurgeService {
     if (data.endsAt !== undefined) updateData.endsAt = data.endsAt;
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.reason !== undefined) updateData.reason = data.reason;
+    if (data.demandThresholdPct !== undefined) {
+      updateData.demandThresholdPct =
+        data.demandThresholdPct === null ? null : new Prisma.Decimal(data.demandThresholdPct);
+    }
+    if (data.supplyThresholdPct !== undefined) {
+      updateData.supplyThresholdPct =
+        data.supplyThresholdPct === null ? null : new Prisma.Decimal(data.supplyThresholdPct);
+    }
+    if (data.peakHourStart !== undefined) updateData.peakHourStart = data.peakHourStart;
+    if (data.peakHourEnd !== undefined) updateData.peakHourEnd = data.peakHourEnd;
+    if (data.isPeakHourOnly !== undefined) updateData.isPeakHourOnly = data.isPeakHourOnly;
 
     return this.db.client.surgeWindow.update({
       where: { id },

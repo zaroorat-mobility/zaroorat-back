@@ -14,12 +14,13 @@ model VehicleType {
   isActive          Boolean  @default(true) @map("is_active")
   createdAt         DateTime @default(now()) @map("created_at")
 
-  vehicles     Vehicle[]
-  rideRequests RideRequest[]
-  rides        Ride[]
-  pricingRules PricingRule[]
-  surgeWindows SurgeWindow[]
-  promotions   Promotion[]
+  vehicles         Vehicle[]
+  rideRequests     RideRequest[]
+  rides            Ride[]
+  pricingRules     PricingRule[]
+  surgeWindows     SurgeWindow[]
+  promotions       Promotion[]
+  serviceZoneLinks ServiceZoneVehicleType[]
 
   @@index([isActive, displayOrder])
   @@map("vehicle_types")

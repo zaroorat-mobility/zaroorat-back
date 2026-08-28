@@ -114,6 +114,7 @@ model Ride {
   otps                RideOtp[]
   receipt             RideReceipt?
   payments            RidePayment[]
+  billingInvoices     BillingInvoice[]
   ratings             RideRating[]
   promosApplied       RidePromoApplied[]
   routePlan           RideRoutePlan?

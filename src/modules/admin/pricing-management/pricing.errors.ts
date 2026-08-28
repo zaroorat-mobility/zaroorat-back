@@ -37,3 +37,21 @@ export class CancellationPolicyConflictError extends PricingAdminError {
     this.name = 'CancellationPolicyConflictError';
   }
 }
+
+export class InvoiceNotFoundError extends PricingAdminError {
+  constructor(id?: string) {
+    super(id ? `Invoice ${id} was not found` : 'Invoice was not found', 'INVOICE_NOT_FOUND', 404);
+    this.name = 'InvoiceNotFoundError';
+  }
+}
+
+export class InvoiceTemplateNotFoundError extends PricingAdminError {
+  constructor(id?: string) {
+    super(
+      id ? `Invoice template ${id} was not found` : 'Invoice template was not found',
+      'INVOICE_TEMPLATE_NOT_FOUND',
+      404,
+    );
+    this.name = 'InvoiceTemplateNotFoundError';
+  }
+}

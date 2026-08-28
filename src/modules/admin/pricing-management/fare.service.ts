@@ -1,7 +1,12 @@
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
+import { Prisma, type RideServiceType } from '../../../generated/prisma/index.js';
 import { FareRuleConflictError, FareRuleNotFoundError } from './pricing.errors.js';
 import type { CreateFareRuleBody, ListFareRulesQuery, UpdateFareRuleBody } from './fare.schemas.js';
+import {
+  AdminServiceZoneService,
+  parseServiceType,
+  serviceTypeUi,
+} from './service-zone.service.js';
 
 const UI_TO_CODE: Record<string, string> = {
   cab: 'CAB_ECONOMY',
@@ -26,12 +31,19 @@ export interface FareRuleDto {
   vehicleType: 'cab' | 'auto' | 'bike';
   vehicleTypeCode: string;
   cityCode: string;
+  serviceType: string | null;
+  serviceZoneId: string | null;
+  serviceZoneName: string | null;
   baseFare: number;
   minimumFare: number;
   perKmRate: number;
   perMinuteRate: number;
   freeWaitingMinutes: number;
   waitingChargePerMinute: number;
+  bookingFee: number;
+  platformFeePct: number;
+  taxRatePct: number | null;
+  commissionRatePct: number | null;
   nightEnabled: boolean;
   nightChargePercentage: number;
   status: 'active' | 'inactive';
@@ -41,7 +53,8 @@ export interface FareRuleDto {
   updatedAt: string;
 }
 
-function toNum(value: { toString(): string } | number): number {
+function toNum(value: { toString(): string } | number | null | undefined): number {
+  if (value === null || value === undefined) return 0;
   return typeof value === 'number' ? value : Number(value.toString());
 }
 
@@ -58,8 +71,28 @@ function nightMultiplierFromInput(body: {
   return 1 + pct / 100;
 }
 
+type RuleKey = {
+  vehicleTypeId: string;
+  cityCode: string;
+  serviceType: RideServiceType | null;
+  serviceZoneId: string | null;
+};
+
+function exclusivityWhere(key: RuleKey): Prisma.PricingRuleWhereInput {
+  return {
+    vehicleTypeId: key.vehicleTypeId,
+    cityCode: key.cityCode,
+    serviceType: key.serviceType,
+    serviceZoneId: key.serviceZoneId,
+    isActive: true,
+  };
+}
+
 export class AdminFareService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly adminServiceZoneService: AdminServiceZoneService,
+  ) {}
 
   async list(query: ListFareRulesQuery): Promise<{
     data: FareRuleDto[];
@@ -68,10 +101,11 @@ export class AdminFareService {
     const where: Prisma.PricingRuleWhereInput = {};
     if (query.status === 'active') where.isActive = true;
     if (query.status === 'inactive') where.isActive = false;
+    if (query.cityCode) where.cityCode = query.cityCode;
 
     const rows = await this.databaseService.client.pricingRule.findMany({
       where,
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
       orderBy: [{ createdAt: 'desc' }],
     });
 
@@ -82,7 +116,8 @@ export class AdminFareService {
         (row) =>
           row.ruleName.toLowerCase().includes(q) ||
           row.vehicleTypeCode.toLowerCase().includes(q) ||
-          row.cityCode.toLowerCase().includes(q),
+          row.cityCode.toLowerCase().includes(q) ||
+          (row.serviceZoneName?.toLowerCase().includes(q) ?? false),
       );
     }
 
@@ -104,7 +139,7 @@ export class AdminFareService {
   async getById(id: string): Promise<FareRuleDto> {
     const row = await this.databaseService.client.pricingRule.findUnique({
       where: { id },
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
     });
     if (!row) throw new FareRuleNotFoundError();
     return this.toDto(row);
@@ -114,10 +149,23 @@ export class AdminFareService {
     const vehicleType = await this.resolveVehicleType(body.vehicleType);
     const isActive = body.status !== 'inactive';
     const cityCode = body.cityCode || 'GLOBAL';
+    const serviceType = parseServiceType(body.serviceType ?? null);
+    const serviceZoneId = body.serviceZoneId ?? null;
+
+    if (serviceZoneId) {
+      await this.adminServiceZoneService.assertZoneBelongsToCity(serviceZoneId, cityCode);
+    }
+
+    const key: RuleKey = {
+      vehicleTypeId: vehicleType.id,
+      cityCode,
+      serviceType,
+      serviceZoneId,
+    };
 
     if (isActive) {
       await this.databaseService.client.pricingRule.updateMany({
-        where: { vehicleTypeId: vehicleType.id, cityCode, isActive: true },
+        where: exclusivityWhere(key),
         data: { isActive: false },
       });
     }
@@ -126,12 +174,20 @@ export class AdminFareService {
       data: {
         vehicleTypeId: vehicleType.id,
         cityCode,
+        serviceType,
+        serviceZoneId,
         baseFare: body.baseFare,
         minimumFare: body.minimumFare,
         perKmRate: body.perKmRate,
         perMinuteRate: body.perMinuteRate,
         freeWaitingMin: body.freeWaitingMinutes,
         waitingPerMin: body.waitingChargePerMinute,
+        bookingFee: body.bookingFee,
+        platformFeePct: body.platformFeePct,
+        ...(body.taxRatePct !== undefined ? { taxRatePct: body.taxRatePct } : {}),
+        ...(body.commissionRatePct !== undefined
+          ? { commissionRatePct: body.commissionRatePct }
+          : {}),
         nightMultiplier: nightMultiplierFromInput({
           ...(body.nightEnabled !== undefined ? { nightEnabled: body.nightEnabled } : {}),
           ...(body.nightChargePercentage !== undefined
@@ -144,7 +200,7 @@ export class AdminFareService {
         ...(body.effectiveTo ? { effectiveTo: new Date(body.effectiveTo) } : {}),
         ...(actorId ? { createdBy: actorId } : {}),
       },
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
     });
 
     return this.toDto(created);
@@ -153,7 +209,7 @@ export class AdminFareService {
   async update(id: string, body: UpdateFareRuleBody, actorId?: string): Promise<FareRuleDto> {
     const existing = await this.databaseService.client.pricingRule.findUnique({
       where: { id },
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
     });
     if (!existing) throw new FareRuleNotFoundError();
 
@@ -162,21 +218,31 @@ export class AdminFareService {
       : existing.vehicleType.code;
     const vehicleType = await this.resolveVehicleType(vehicleTypeCode);
     const cityCode = body.cityCode ?? existing.cityCode;
+    const serviceType =
+      body.serviceType !== undefined ? parseServiceType(body.serviceType) : existing.serviceType;
+    const serviceZoneId =
+      body.serviceZoneId !== undefined ? body.serviceZoneId : existing.serviceZoneId;
     const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
+
+    if (serviceZoneId) {
+      await this.adminServiceZoneService.assertZoneBelongsToCity(serviceZoneId, cityCode);
+    }
 
     await this.databaseService.client.pricingRule.update({
       where: { id },
       data: { isActive: false },
     });
 
+    const key: RuleKey = {
+      vehicleTypeId: vehicleType.id,
+      cityCode,
+      serviceType,
+      serviceZoneId,
+    };
+
     if (isActive) {
       await this.databaseService.client.pricingRule.updateMany({
-        where: {
-          vehicleTypeId: vehicleType.id,
-          cityCode,
-          isActive: true,
-          NOT: { id },
-        },
+        where: { ...exclusivityWhere(key), NOT: { id } },
         data: { isActive: false },
       });
     }
@@ -185,12 +251,18 @@ export class AdminFareService {
       data: {
         vehicleTypeId: vehicleType.id,
         cityCode,
+        serviceType,
+        serviceZoneId,
         baseFare: body.baseFare ?? toNum(existing.baseFare),
         minimumFare: body.minimumFare ?? toNum(existing.minimumFare),
         perKmRate: body.perKmRate ?? toNum(existing.perKmRate),
         perMinuteRate: body.perMinuteRate ?? toNum(existing.perMinuteRate),
         freeWaitingMin: body.freeWaitingMinutes ?? existing.freeWaitingMin,
         waitingPerMin: body.waitingChargePerMinute ?? toNum(existing.waitingPerMin),
+        bookingFee: body.bookingFee ?? toNum(existing.bookingFee),
+        platformFeePct: body.platformFeePct ?? toNum(existing.platformFeePct),
+        taxRatePct: body.taxRatePct ?? existing.taxRatePct,
+        commissionRatePct: body.commissionRatePct ?? existing.commissionRatePct,
         nightMultiplier:
           body.nightEnabled !== undefined || body.nightChargePercentage !== undefined
             ? nightMultiplierFromInput({
@@ -210,7 +282,7 @@ export class AdminFareService {
             : {}),
         ...(actorId ? { createdBy: actorId } : {}),
       },
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
     });
 
     return this.toDto(created);
@@ -219,37 +291,38 @@ export class AdminFareService {
   async activate(id: string): Promise<FareRuleDto> {
     const existing = await this.databaseService.client.pricingRule.findUnique({
       where: { id },
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
     });
     if (!existing) throw new FareRuleNotFoundError();
 
+    const key: RuleKey = {
+      vehicleTypeId: existing.vehicleTypeId,
+      cityCode: existing.cityCode,
+      serviceType: existing.serviceType,
+      serviceZoneId: existing.serviceZoneId,
+    };
+
     await this.databaseService.client.pricingRule.updateMany({
-      where: {
-        vehicleTypeId: existing.vehicleTypeId,
-        cityCode: existing.cityCode,
-        isActive: true,
-      },
+      where: exclusivityWhere(key),
       data: { isActive: false },
     });
 
     const updated = await this.databaseService.client.pricingRule.update({
       where: { id },
       data: { isActive: true },
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
     });
     return this.toDto(updated);
   }
 
   async deactivate(id: string): Promise<FareRuleDto> {
-    const existing = await this.databaseService.client.pricingRule.findUnique({
-      where: { id },
-    });
+    const existing = await this.databaseService.client.pricingRule.findUnique({ where: { id } });
     if (!existing) throw new FareRuleNotFoundError();
 
     const updated = await this.databaseService.client.pricingRule.update({
       where: { id },
       data: { isActive: false },
-      include: { vehicleType: true },
+      include: { vehicleType: true, serviceZone: true },
     });
     return this.toDto(updated);
   }
@@ -272,12 +345,18 @@ export class AdminFareService {
   private toDto(row: {
     id: string;
     cityCode: string;
+    serviceType: RideServiceType | null;
+    serviceZoneId: string | null;
     baseFare: { toString(): string };
     minimumFare: { toString(): string };
     perKmRate: { toString(): string };
     perMinuteRate: { toString(): string };
     freeWaitingMin: number;
     waitingPerMin: { toString(): string };
+    bookingFee: { toString(): string };
+    platformFeePct: { toString(): string };
+    taxRatePct: { toString(): string } | null;
+    commissionRatePct: { toString(): string } | null;
     nightMultiplier: { toString(): string };
     version: number;
     isActive: boolean;
@@ -285,23 +364,37 @@ export class AdminFareService {
     effectiveTo: Date | null;
     createdAt: Date;
     vehicleType: { code: string };
+    serviceZone?: { name: string } | null;
   }): FareRuleDto {
     const nightMultiplier = toNum(row.nightMultiplier);
     const nightPct = nightPctFromMultiplier(nightMultiplier);
     const uiType = CODE_TO_UI[row.vehicleType.code] ?? 'cab';
+    const zoneLabel = row.serviceZone?.name ?? null;
+    const svcLabel = serviceTypeUi(row.serviceType);
+    const nameParts = [row.vehicleType.code, row.cityCode];
+    if (svcLabel) nameParts.push(svcLabel);
+    if (zoneLabel) nameParts.push(zoneLabel);
+
     return {
       id: row.id,
-      ruleName: `${row.vehicleType.code} · ${row.cityCode}`,
+      ruleName: nameParts.join(' · '),
       version: row.version,
       vehicleType: uiType,
       vehicleTypeCode: row.vehicleType.code,
       cityCode: row.cityCode,
+      serviceType: svcLabel,
+      serviceZoneId: row.serviceZoneId,
+      serviceZoneName: zoneLabel,
       baseFare: toNum(row.baseFare),
       minimumFare: toNum(row.minimumFare),
       perKmRate: toNum(row.perKmRate),
       perMinuteRate: toNum(row.perMinuteRate),
       freeWaitingMinutes: row.freeWaitingMin,
       waitingChargePerMinute: toNum(row.waitingPerMin),
+      bookingFee: toNum(row.bookingFee),
+      platformFeePct: toNum(row.platformFeePct),
+      taxRatePct: row.taxRatePct != null ? toNum(row.taxRatePct) : null,
+      commissionRatePct: row.commissionRatePct != null ? toNum(row.commissionRatePct) : null,
       nightEnabled: nightMultiplier > 1,
       nightChargePercentage: nightPct,
       status: row.isActive ? 'active' : 'inactive',

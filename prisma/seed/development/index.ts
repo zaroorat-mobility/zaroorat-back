@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ProviderClient } from '../../../src/core/database';
 import { hashPassword } from '../../../src/modules/auth/utils/password';
 import { driverConfig } from '../../../src/config/driver/driver.config';
@@ -373,8 +374,13 @@ export async function seedDevelopment(prisma: Prisma) {
   );
 
   await seedCities(prisma);
+  await seedGeographicReference(prisma);
+  await seedServiceZones(prisma);
   await seedPricingFixtures(prisma);
   console.log('  -> Seeded GLOBAL fare rules, Srinagar surge zone/windows, cancellation policies');
+
+  await seedBillingFixtures(prisma);
+  console.log('  -> Seeded billing invoices, templates, and completed demo rides');
 
   await seedPromotionsFixtures(prisma);
   await seedReferralFixtures(prisma);
@@ -403,12 +409,186 @@ async function seedCities(prisma: Prisma) {
   console.log('  -> Seeded cities SGR, BLR, GLOBAL');
 }
 
+const SGR_BOUNDARY: number[][][] = [
+  [
+    [74.7, 34.0],
+    [75.0, 34.0],
+    [75.0, 34.2],
+    [74.7, 34.2],
+    [74.7, 34.0],
+  ],
+];
+
+const BLR_BOUNDARY: number[][][] = [
+  [
+    [77.4, 12.8],
+    [77.8, 12.8],
+    [77.8, 13.2],
+    [77.4, 13.2],
+    [77.4, 12.8],
+  ],
+];
+
+async function seedGeographicReference(prisma: Prisma) {
+  const india = await prisma.country.upsert({
+    where: { code: 'IN' },
+    update: { name: 'India', isActive: true },
+    create: { code: 'IN', name: 'India', isActive: true },
+  });
+
+  const stateSeeds = [
+    { code: 'JK', name: 'Jammu & Kashmir' },
+    { code: 'KA', name: 'Karnataka' },
+  ];
+  const stateByName = new Map<string, string>();
+  for (const s of stateSeeds) {
+    const row = await prisma.state.upsert({
+      where: { countryId_code: { countryId: india.id, code: s.code } },
+      update: { name: s.name, isActive: true },
+      create: { countryId: india.id, code: s.code, name: s.name, isActive: true },
+    });
+    stateByName.set(s.name, row.id);
+  }
+
+  const cityBoundaries: Record<string, { boundary: number[][][]; center: [number, number] }> = {
+    SGR: { boundary: SGR_BOUNDARY, center: [74.85, 34.1] },
+    BLR: { boundary: BLR_BOUNDARY, center: [77.5946, 12.9716] },
+  };
+
+  for (const [code, geo] of Object.entries(cityBoundaries)) {
+    const city = await prisma.city.findUnique({ where: { code } });
+    if (!city) continue;
+    const stateId =
+      code === 'SGR' ? stateByName.get('Jammu & Kashmir') : stateByName.get('Karnataka');
+    await prisma.city.update({
+      where: { id: city.id },
+      data: {
+        ...(stateId ? { stateId } : {}),
+        country: 'India',
+      },
+    });
+    const boundaryJson = JSON.stringify({ type: 'Polygon', coordinates: geo.boundary });
+    const centerJson = JSON.stringify({ type: 'Point', coordinates: geo.center });
+    await prisma.$executeRaw`
+      UPDATE cities
+      SET boundary = ST_GeomFromGeoJSON(${boundaryJson}),
+          center = ST_GeomFromGeoJSON(${centerJson})
+      WHERE id = ${city.id}::uuid
+    `;
+  }
+  console.log('  -> Seeded country IN, states, city boundaries for SGR/BLR');
+}
+
+async function seedServiceZones(prisma: Prisma) {
+  const sgr = await prisma.city.findUnique({ where: { code: 'SGR' } });
+  if (!sgr) return;
+
+  const types = await prisma.vehicleType.findMany({ where: { isActive: true } });
+
+  const zones: Array<{
+    code: string;
+    name: string;
+    zoneType: 'SERVICE' | 'AIRPORT' | 'RESTRICTED';
+    coordinates: number[][][];
+    allowsPickup?: boolean;
+  }> = [
+    {
+      code: 'SGR_CITYWIDE',
+      name: 'Srinagar Citywide',
+      zoneType: 'SERVICE',
+      coordinates: SGR_BOUNDARY,
+    },
+    {
+      code: 'SGR_AIRPORT',
+      name: 'SGR Airport',
+      zoneType: 'AIRPORT',
+      coordinates: [
+        [
+          [74.76, 34.0],
+          [74.79, 34.0],
+          [74.79, 34.03],
+          [74.76, 34.03],
+          [74.76, 34.0],
+        ],
+      ],
+    },
+    {
+      code: 'SGR_RESTRICTED_DEMO',
+      name: 'Restricted Demo Area',
+      zoneType: 'RESTRICTED',
+      coordinates: [
+        [
+          [74.72, 34.05],
+          [74.74, 34.05],
+          [74.74, 34.07],
+          [74.72, 34.07],
+          [74.72, 34.05],
+        ],
+      ],
+      allowsPickup: false,
+    },
+  ];
+
+  for (const zone of zones) {
+    const existing = await prisma.serviceZone.findFirst({
+      where: { cityId: sgr.id, code: zone.code },
+    });
+    if (existing) {
+      await prisma.serviceZone.update({
+        where: { id: existing.id },
+        data: {
+          zoneType: zone.zoneType,
+          allowsPickup: zone.allowsPickup ?? true,
+        },
+      });
+      continue;
+    }
+
+    const geoJson = JSON.stringify({ type: 'Polygon', coordinates: zone.coordinates });
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO service_zones (
+        id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at
+      )
+      VALUES (
+        gen_random_uuid(),
+        ${sgr.id}::uuid,
+        ${zone.code},
+        ${zone.name},
+        ${zone.zoneType}::"ServiceZoneType",
+        ST_GeomFromGeoJSON(${geoJson}),
+        ${zone.allowsPickup ?? true},
+        true,
+        true,
+        NOW(),
+        NOW()
+      )
+      RETURNING id
+    `;
+    const zoneId = rows[0]?.id;
+    if (zoneId && types.length > 0 && zone.zoneType !== 'RESTRICTED') {
+      for (const vt of types) {
+        await prisma.serviceZoneVehicleType.upsert({
+          where: {
+            serviceZoneId_vehicleTypeId: { serviceZoneId: zoneId, vehicleTypeId: vt.id },
+          },
+          create: { serviceZoneId: zoneId, vehicleTypeId: vt.id },
+          update: {},
+        });
+      }
+    }
+  }
+  console.log('  -> Seeded service zones SGR_CITYWIDE, SGR_AIRPORT, SGR_RESTRICTED_DEMO');
+}
+
 async function seedPricingFixtures(prisma: Prisma) {
   const types = await prisma.vehicleType.findMany();
   const byCode = Object.fromEntries(types.map((t) => [t.code, t]));
 
   const fareSeeds: Array<{
     code: string;
+    cityCode: string;
+    serviceType?: 'INSTANT' | 'SCHEDULED' | 'RENTAL' | 'OUTSTATION';
+    serviceZoneCode?: string;
     baseFare: number;
     minimumFare: number;
     perKmRate: number;
@@ -416,9 +596,14 @@ async function seedPricingFixtures(prisma: Prisma) {
     freeWaitingMin: number;
     waitingPerMin: number;
     nightMultiplier: number;
+    bookingFee: number;
+    platformFeePct: number;
+    taxRatePct: number;
+    commissionRatePct: number;
   }> = [
     {
       code: 'CAB_ECONOMY',
+      cityCode: 'GLOBAL',
       baseFare: 60,
       minimumFare: 80,
       perKmRate: 15,
@@ -426,9 +611,14 @@ async function seedPricingFixtures(prisma: Prisma) {
       freeWaitingMin: 5,
       waitingPerMin: 3,
       nightMultiplier: 1.25,
+      bookingFee: 5,
+      platformFeePct: 2,
+      taxRatePct: 5,
+      commissionRatePct: 15,
     },
     {
       code: 'AUTO',
+      cityCode: 'GLOBAL',
       baseFare: 30,
       minimumFare: 40,
       perKmRate: 10,
@@ -436,9 +626,14 @@ async function seedPricingFixtures(prisma: Prisma) {
       freeWaitingMin: 3,
       waitingPerMin: 2,
       nightMultiplier: 1.2,
+      bookingFee: 3,
+      platformFeePct: 2,
+      taxRatePct: 5,
+      commissionRatePct: 12,
     },
     {
       code: 'BIKE',
+      cityCode: 'GLOBAL',
       baseFare: 20,
       minimumFare: 25,
       perKmRate: 7,
@@ -446,20 +641,105 @@ async function seedPricingFixtures(prisma: Prisma) {
       freeWaitingMin: 2,
       waitingPerMin: 1.5,
       nightMultiplier: 1.15,
+      bookingFee: 2,
+      platformFeePct: 1.5,
+      taxRatePct: 5,
+      commissionRatePct: 10,
+    },
+    {
+      code: 'CAB_ECONOMY',
+      cityCode: 'SGR',
+      baseFare: 65,
+      minimumFare: 85,
+      perKmRate: 16,
+      perMinuteRate: 1.6,
+      freeWaitingMin: 5,
+      waitingPerMin: 3,
+      nightMultiplier: 1.25,
+      bookingFee: 5,
+      platformFeePct: 2,
+      taxRatePct: 5,
+      commissionRatePct: 15,
+    },
+    {
+      code: 'AUTO',
+      cityCode: 'SGR',
+      baseFare: 35,
+      minimumFare: 45,
+      perKmRate: 11,
+      perMinuteRate: 1.1,
+      freeWaitingMin: 3,
+      waitingPerMin: 2,
+      nightMultiplier: 1.2,
+      bookingFee: 3,
+      platformFeePct: 2,
+      taxRatePct: 5,
+      commissionRatePct: 12,
+    },
+    {
+      code: 'CAB_ECONOMY',
+      cityCode: 'SGR',
+      serviceType: 'SCHEDULED',
+      baseFare: 70,
+      minimumFare: 90,
+      perKmRate: 16,
+      perMinuteRate: 1.6,
+      freeWaitingMin: 5,
+      waitingPerMin: 3,
+      nightMultiplier: 1.2,
+      bookingFee: 10,
+      platformFeePct: 2.5,
+      taxRatePct: 5,
+      commissionRatePct: 15,
+    },
+    {
+      code: 'CAB_ECONOMY',
+      cityCode: 'SGR',
+      serviceZoneCode: 'SGR_AIRPORT',
+      baseFare: 90,
+      minimumFare: 120,
+      perKmRate: 18,
+      perMinuteRate: 1.8,
+      freeWaitingMin: 5,
+      waitingPerMin: 4,
+      nightMultiplier: 1.3,
+      bookingFee: 15,
+      platformFeePct: 3,
+      taxRatePct: 5,
+      commissionRatePct: 18,
     },
   ];
+
+  const sgr = await prisma.city.findUnique({ where: { code: 'SGR' } });
+  const zoneByCode: Record<string, string> = {};
+  if (sgr) {
+    const zones = await prisma.serviceZone.findMany({ where: { cityId: sgr.id } });
+    for (const z of zones) zoneByCode[z.code] = z.id;
+  }
 
   for (const seed of fareSeeds) {
     const vt = byCode[seed.code];
     if (!vt) continue;
+    const serviceZoneId = seed.serviceZoneCode ? (zoneByCode[seed.serviceZoneCode] ?? null) : null;
+    if (seed.serviceZoneCode && !serviceZoneId) continue;
+
     const existing = await prisma.pricingRule.findFirst({
-      where: { vehicleTypeId: vt.id, cityCode: 'GLOBAL', isActive: true },
+      where: {
+        vehicleTypeId: vt.id,
+        cityCode: seed.cityCode,
+        serviceType: seed.serviceType ?? null,
+        serviceZoneId,
+        isActive: true,
+      },
     });
     if (existing) continue;
+
     await prisma.pricingRule.create({
       data: {
         vehicleTypeId: vt.id,
-        cityCode: 'GLOBAL',
+        cityCode: seed.cityCode,
+        ...(seed.serviceType ? { serviceType: seed.serviceType } : {}),
+        ...(serviceZoneId ? { serviceZoneId } : {}),
         baseFare: seed.baseFare,
         minimumFare: seed.minimumFare,
         perKmRate: seed.perKmRate,
@@ -467,6 +747,10 @@ async function seedPricingFixtures(prisma: Prisma) {
         freeWaitingMin: seed.freeWaitingMin,
         waitingPerMin: seed.waitingPerMin,
         nightMultiplier: seed.nightMultiplier,
+        bookingFee: seed.bookingFee,
+        platformFeePct: seed.platformFeePct,
+        taxRatePct: seed.taxRatePct,
+        commissionRatePct: seed.commissionRatePct,
         isActive: true,
         version: 1,
       },
@@ -533,6 +817,11 @@ async function seedPricingFixtures(prisma: Prisma) {
             reason: 'Morning Peak Cab Surge',
             source: 'MANUAL',
             isActive: true,
+            demandThresholdPct: 75,
+            supplyThresholdPct: 25,
+            peakHourStart: '08:00',
+            peakHourEnd: '11:00',
+            isPeakHourOnly: true,
           },
         });
       }
@@ -547,6 +836,11 @@ async function seedPricingFixtures(prisma: Prisma) {
             reason: 'Evening Peak Auto Surge',
             source: 'MANUAL',
             isActive: true,
+            demandThresholdPct: 65,
+            supplyThresholdPct: 30,
+            peakHourStart: '17:00',
+            peakHourEnd: '20:00',
+            isPeakHourOnly: true,
           },
         });
       }
@@ -592,6 +886,21 @@ async function seedPromotionsFixtures(prisma: Prisma) {
   const now = new Date();
   const in90Days = new Date(now.getTime() + 90 * 86400000);
   const in30Days = new Date(now.getTime() + 30 * 86400000);
+
+  const admin = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000000', deletedAt: null },
+  });
+  const demoPassenger = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000002', deletedAt: null },
+  });
+  const inviteFriend = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000004', deletedAt: null },
+  });
+
+  if (!admin) {
+    console.log('  -> Skipped promotions seed (admin user missing)');
+    return;
+  }
 
   const cab = await prisma.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
 
@@ -649,6 +958,8 @@ async function seedPromotionsFixtures(prisma: Prisma) {
     },
   });
 
+  const demoRiderIds = [demoPassenger?.id, inviteFriend?.id].filter(Boolean) as string[];
+
   const sgrRiders = await prisma.audienceSegment.upsert({
     where: { code: 'SGR_RIDERS' },
     update: {
@@ -685,8 +996,22 @@ async function seedPromotionsFixtures(prisma: Prisma) {
     },
   });
 
-  const admin = await prisma.user.findFirst({
-    where: { phoneNumber: '+10000000000', deletedAt: null },
+  const demoUsersSeg = await prisma.audienceSegment.upsert({
+    where: { code: 'DEMO_RIDERS' },
+    update: {
+      name: 'Demo rider accounts',
+      rules: demoRiderIds.length > 0 ? { userIds: demoRiderIds } : { firstRideOnly: true },
+      estimatedSize: demoRiderIds.length || 2,
+      isDynamic: false,
+    },
+    create: {
+      code: 'DEMO_RIDERS',
+      name: 'Demo rider accounts',
+      description: 'Seeded demo passenger accounts for local testing',
+      rules: demoRiderIds.length > 0 ? { userIds: demoRiderIds } : { firstRideOnly: true },
+      estimatedSize: demoRiderIds.length || 2,
+      isDynamic: false,
+    },
   });
 
   const campaign = await prisma.promoCampaign.upsert({
@@ -697,6 +1022,7 @@ async function seedPromotionsFixtures(prisma: Prisma) {
       budget: 100000,
       startsAt: now,
       endsAt: in90Days,
+      createdBy: admin.id,
     },
     create: {
       code: 'LAUNCH2026',
@@ -707,27 +1033,25 @@ async function seedPromotionsFixtures(prisma: Prisma) {
       spent: 2500,
       startsAt: now,
       endsAt: in90Days,
-      createdBy: admin?.id ?? null,
+      createdBy: admin.id,
     },
   });
 
-  const existingTargets = await prisma.campaignTarget.count({
-    where: { campaignId: campaign.id },
-  });
-  if (existingTargets === 0) {
-    await prisma.campaignTarget.createMany({
-      data: [
-        {
-          campaignId: campaign.id,
-          segmentId: firstRideSeg.id,
-          promotionId: welcomePromo.id,
-        },
-        {
-          campaignId: campaign.id,
-          segmentId: sgrRiders.id,
-          promotionId: sgrFlat.id,
-        },
-      ],
+  for (const target of [
+    { segmentId: firstRideSeg.id, promotionId: welcomePromo.id },
+    { segmentId: sgrRiders.id, promotionId: sgrFlat.id },
+    { segmentId: demoUsersSeg.id, promotionId: welcomePromo.id },
+  ]) {
+    await prisma.campaignTarget.upsert({
+      where: {
+        campaignId_segmentId: { campaignId: campaign.id, segmentId: target.segmentId },
+      },
+      update: { promotionId: target.promotionId },
+      create: {
+        campaignId: campaign.id,
+        segmentId: target.segmentId,
+        promotionId: target.promotionId,
+      },
     });
   }
 
@@ -765,28 +1089,163 @@ async function seedPromotionsFixtures(prisma: Prisma) {
     });
   }
 
-  const bannerExists = await prisma.promoBanner.findFirst({
-    where: { campaignId: campaign.id, title: 'Welcome offer' },
-  });
-  if (!bannerExists) {
-    await prisma.promoBanner.create({
-      data: {
-        campaignId: campaign.id,
-        title: 'Welcome offer',
-        imageUrl: 'https://example.invalid/banners/welcome-offer.png',
-        placement: 'HOME',
-        actionUrl: 'https://example.invalid/offers/welcome',
-        priority: 10,
-        startsAt: now,
-        endsAt: in90Days,
-        isActive: true,
-      },
+  if (demoPassenger) {
+    const assignedCoupon = await prisma.coupon.findFirst({
+      where: { batchId: batch.id, code: 'WLCSEED001' },
+    });
+    if (assignedCoupon) {
+      await prisma.coupon.update({
+        where: { id: assignedCoupon.id },
+        data: {
+          userId: demoPassenger.id,
+          status: 'ASSIGNED',
+          assignedAt: now,
+        },
+      });
+    }
+  }
+
+  const bannerSeeds: Array<{
+    slug: string;
+    title: string;
+    placement: 'HOME' | 'RIDE' | 'WALLET' | 'SPLASH' | 'OFFERS';
+    actionUrl: string;
+    priority: number;
+  }> = [
+    {
+      slug: 'banner-home-welcome',
+      title: 'Welcome offer (HOME)',
+      placement: 'HOME',
+      actionUrl: '/offers/welcome',
+      priority: 50,
+    },
+    {
+      slug: 'banner-ride-sgr',
+      title: 'Srinagar ride promo (RIDE)',
+      placement: 'RIDE',
+      actionUrl: '/offers/sgr-flat30',
+      priority: 40,
+    },
+    {
+      slug: 'banner-wallet-cashback',
+      title: 'Wallet cashback (WALLET)',
+      placement: 'WALLET',
+      actionUrl: '/wallet/rewards',
+      priority: 30,
+    },
+    {
+      slug: 'banner-splash-launch',
+      title: 'Launch splash (SPLASH)',
+      placement: 'SPLASH',
+      actionUrl: '/offers/welcome',
+      priority: 20,
+    },
+    {
+      slug: 'banner-offers-flat30',
+      title: 'Srinagar flat ₹30 (OFFERS)',
+      placement: 'OFFERS',
+      actionUrl: '/offers/sgr-flat30',
+      priority: 10,
+    },
+  ];
+
+  for (const seed of bannerSeeds) {
+    const imageFileId = await ensureSeedPromoBannerFile(prisma, admin.id, seed.slug);
+    await ensurePromoBanner(prisma, {
+      campaignId: campaign.id,
+      title: seed.title,
+      imageFileId,
+      placement: seed.placement,
+      actionUrl: seed.actionUrl,
+      priority: seed.priority,
+      startsAt: now,
+      endsAt: in90Days,
+      isActive: true,
     });
   }
 
+  console.log('');
+  console.log('  Promotions & campaigns dev workflow');
+  console.log('  ───────────────────────────────────');
+  console.log('  Admin creator : +10000000000 (LAUNCH2026 campaign owner)');
+  console.log('  Promotions    : WELCOME20 (first ride), SGRFLAT30 (Srinagar)');
+  console.log('  Segments      : FIRST_RIDE, SGR_RIDERS, DEMO_RIDERS (demo passengers)');
+  console.log('  Coupon batch  : WLCSEED001–005 — WLCSEED001 assigned to +10000000002');
   console.log(
-    '  -> Seeded promotions WELCOME20/SGRFLAT30, segments, campaign LAUNCH2026, coupon batch, banner',
+    '  Banners       : HOME, RIDE, WALLET, SPLASH, OFFERS (one active demo per placement)',
   );
+  console.log('  Admin APIs    : /api/v1/admin/promotions, /campaigns, /promo-banners');
+  console.log('');
+}
+
+async function ensureSeedPromoBannerFile(
+  prisma: Prisma,
+  ownerUserId: string,
+  slug: string,
+): Promise<string> {
+  const storageKey = `pb/seed/${slug}.png`;
+  const existing = await prisma.file.findFirst({ where: { storageKey } });
+  if (existing) return existing.id;
+
+  const now = new Date();
+  return (
+    await prisma.file.create({
+      data: {
+        ownerUserId,
+        purpose: 'PROMO_BANNER',
+        status: 'READY',
+        storageKey,
+        storageProvider: 'local',
+        storageBucket: 'dev-seed',
+        fileName: `${slug}.png`,
+        contentType: 'image/png',
+        detectedContentType: 'image/png',
+        sizeBytes: 2048,
+        scanStatus: 'SKIPPED',
+        uploadExpiresAt: now,
+        uploadedAt: now,
+        verifiedAt: now,
+        completedAt: now,
+        scannedAt: now,
+      },
+    })
+  ).id;
+}
+
+async function ensurePromoBanner(
+  prisma: Prisma,
+  input: {
+    campaignId: string;
+    title: string;
+    imageFileId: string;
+    placement: 'HOME' | 'RIDE' | 'WALLET' | 'SPLASH' | 'OFFERS';
+    actionUrl: string;
+    priority: number;
+    startsAt: Date;
+    endsAt: Date;
+    isActive: boolean;
+  },
+) {
+  const existing = await prisma.promoBanner.findFirst({
+    where: { campaignId: input.campaignId, placement: input.placement },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (existing) {
+    await prisma.promoBanner.update({
+      where: { id: existing.id },
+      data: {
+        imageFileId: input.imageFileId,
+        placement: input.placement,
+        actionUrl: input.actionUrl,
+        priority: input.priority,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+        isActive: input.isActive,
+      },
+    });
+    return;
+  }
+  await prisma.promoBanner.create({ data: input });
 }
 
 async function seedReferralFixtures(prisma: Prisma) {
@@ -1044,6 +1503,320 @@ async function seedReferralFixtures(prisma: Prisma) {
   console.log('  APIs     : GET/POST /api/v1/referrals/driver/me | /apply');
   console.log('  Trigger  : POST /api/v1/admin/drivers/:id/verify { status: "VERIFIED" }');
   console.log('');
+}
+
+async function seedBillingFixtures(prisma: Prisma) {
+  const passengerUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000002', deletedAt: null },
+    include: { profile: true },
+  });
+  const inviteUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000004', deletedAt: null },
+    include: { profile: true },
+  });
+  const driverUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000001', deletedAt: null },
+    include: { profile: true },
+  });
+
+  if (!passengerUser || !driverUser) return;
+
+  const driver = await prisma.driver.findUnique({
+    where: { userId: driverUser.id },
+    include: { profile: true },
+  });
+  if (!driver?.currentVehicleId) return;
+
+  const vehicle = await prisma.vehicle.findUnique({ where: { id: driver.currentVehicleId } });
+  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY' } });
+  if (!vehicle || !cabType) return;
+
+  const driverName =
+    driver.profile?.fullLegalName ??
+    `${driverUser.profile?.firstName ?? 'Demo'} ${driverUser.profile?.lastName ?? 'Driver'}`;
+
+  const templateSeeds = [
+    {
+      name: 'Standard Ride Invoice Template',
+      templateType: 'RIDER_INVOICE',
+      headerLogoText: 'ZAROORAT MOBILITY PVT LTD',
+      address: '102, 1st Floor, Start-up Hangar, MG Road, Bengaluru - 560001',
+      gstin: '29AAAAA1111A1Z1',
+      footerTerms:
+        'This is a computer generated invoice. No signature is required. Tax is calculated under reverse charge guidelines if applicable.',
+      cgstRate: 2.5,
+      sgstRate: 2.5,
+      igstRate: 0,
+      appliesTo: 'ride',
+      isDefault: true,
+    },
+    {
+      name: 'Driver Settlement Template',
+      templateType: 'DRIVER_SETTLEMENT',
+      headerLogoText: 'ZAROORAT MOBILITY PVT LTD',
+      address: '102, 1st Floor, Start-up Hangar, MG Road, Bengaluru - 560001',
+      gstin: '29AAAAA1111A1Z1',
+      footerTerms: 'Driver commission settlement statement for completed rides.',
+      cgstRate: 2.5,
+      sgstRate: 2.5,
+      igstRate: 0,
+      appliesTo: 'services',
+      isDefault: true,
+    },
+    {
+      name: 'School Mode Reusable Receipt',
+      templateType: 'SUBSCRIPTION_INVOICE',
+      headerLogoText: 'ZAROORAT SCHOOL MOBILITY SERVICES',
+      address: '44, Outer Ring Road, HSR Layout, Bengaluru - 560102',
+      gstin: '29BBBBB2222B2Z2',
+      footerTerms:
+        'Applicable for school transportation billing cycles. Standard CGST and SGST rates apply as per service notifications.',
+      cgstRate: 2.5,
+      sgstRate: 2.5,
+      igstRate: 0,
+      appliesTo: 'school',
+      isDefault: false,
+    },
+  ];
+
+  for (const tpl of templateSeeds) {
+    const existing = await prisma.invoiceTemplate.findFirst({ where: { name: tpl.name } });
+    if (existing) {
+      await prisma.invoiceTemplate.update({ where: { id: existing.id }, data: tpl });
+    } else {
+      await prisma.invoiceTemplate.create({ data: tpl });
+    }
+  }
+
+  const taxSeeds = [
+    { taxName: 'CGST', ratePct: 2.5, appliesTo: 'SUBTOTAL' },
+    { taxName: 'SGST', ratePct: 2.5, appliesTo: 'SUBTOTAL' },
+    { taxName: 'IGST', ratePct: 5.0, appliesTo: 'SUBTOTAL' },
+  ];
+  for (const tax of taxSeeds) {
+    const existing = await prisma.taxConfig.findFirst({
+      where: { cityCode: null, taxName: tax.taxName, isActive: true },
+    });
+    if (!existing) {
+      await prisma.taxConfig.create({
+        data: { cityCode: null, ...tax, isActive: true },
+      });
+    }
+  }
+
+  type RideSeed = {
+    rideCode: string;
+    customerId: string;
+    customerName: string;
+    fromRoute: string;
+    toRoute: string;
+    totalFare: number;
+    taxAmount: number;
+    commission: number;
+    daysAgo: number;
+    riderInvoiceNumber: string;
+    driverInvoiceNumber: string;
+    riderStatus: 'GENERATED' | 'PENDING';
+  };
+
+  const rideSeeds: RideSeed[] = [
+    {
+      rideCode: 'R-9812',
+      customerId: passengerUser.id,
+      customerName: `${passengerUser.profile?.firstName ?? 'Demo'} ${passengerUser.profile?.lastName ?? 'Passenger'}`,
+      fromRoute: 'Lal Chowk',
+      toRoute: 'Dal Lake',
+      totalFare: 350,
+      taxAmount: 16.67,
+      commission: 24.5,
+      daysAgo: 4,
+      riderInvoiceNumber: 'INV-2026-001',
+      driverInvoiceNumber: 'INV-2026-002',
+      riderStatus: 'GENERATED',
+    },
+    {
+      rideCode: 'R-9811',
+      customerId: (inviteUser ?? passengerUser).id,
+      customerName: inviteUser
+        ? `${inviteUser.profile?.firstName ?? 'Invite'} ${inviteUser.profile?.lastName ?? 'Friend'}`
+        : `${passengerUser.profile?.firstName ?? 'Demo'} ${passengerUser.profile?.lastName ?? 'Passenger'}`,
+      fromRoute: 'Rajbagh',
+      toRoute: 'Boulevard Road',
+      totalFare: 120,
+      taxAmount: 5.71,
+      commission: 8.4,
+      daysAgo: 4,
+      riderInvoiceNumber: 'INV-2026-003',
+      driverInvoiceNumber: 'INV-2026-003-D',
+      riderStatus: 'GENERATED',
+    },
+    {
+      rideCode: 'R-9810',
+      customerId: passengerUser.id,
+      customerName: `${passengerUser.profile?.firstName ?? 'Demo'} ${passengerUser.profile?.lastName ?? 'Passenger'}`,
+      fromRoute: 'Airport Road',
+      toRoute: 'Hazratbal',
+      totalFare: 210,
+      taxAmount: 10,
+      commission: 14.7,
+      daysAgo: 5,
+      riderInvoiceNumber: 'INV-2026-004',
+      driverInvoiceNumber: 'INV-2026-004-D',
+      riderStatus: 'PENDING',
+    },
+    {
+      rideCode: 'R-9808',
+      customerId: passengerUser.id,
+      customerName: `${passengerUser.profile?.firstName ?? 'Demo'} ${passengerUser.profile?.lastName ?? 'Passenger'}`,
+      fromRoute: 'Bemina',
+      toRoute: 'Lal Chowk',
+      totalFare: 410,
+      taxAmount: 19.52,
+      commission: 28.7,
+      daysAgo: 6,
+      riderInvoiceNumber: 'INV-2026-005',
+      driverInvoiceNumber: 'INV-2026-006',
+      riderStatus: 'GENERATED',
+    },
+  ];
+
+  for (const seed of rideSeeds) {
+    let ride = await prisma.ride.findUnique({ where: { rideCode: seed.rideCode } });
+    if (!ride) {
+      const requestId = randomUUID();
+      const rideId = randomUUID();
+      const completedAt = new Date(Date.now() - seed.daysAgo * 24 * 60 * 60 * 1000);
+
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO ride_requests
+           (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+            drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+            status, surge_multiplier, payment_method, created_at)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, 34.0837, 74.7973,
+                 ST_SetSRID(ST_MakePoint(74.7973, 34.0837), 4326)::geography,
+                 34.1215, 74.8640,
+                 ST_SetSRID(ST_MakePoint(74.8640, 34.1215), 4326)::geography,
+                 $4, $5,
+                 'MATCHED', 1.0, 'CASH', $6)`,
+        requestId,
+        seed.customerId,
+        cabType.id,
+        seed.fromRoute,
+        seed.toRoute,
+        completedAt,
+      );
+
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO rides
+           (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+            status, payment_method, payment_status, pickup_location, pickup_address,
+            drop_location, drop_address, accepted_at, started_at, completed_at,
+            wait_time_min, is_scheduled, created_at, updated_at)
+         VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+                 'COMPLETED', 'CASH', 'PAID',
+                 ST_SetSRID(ST_MakePoint(74.7973, 34.0837), 4326)::geography, $8,
+                 ST_SetSRID(ST_MakePoint(74.8640, 34.1215), 4326)::geography, $9,
+                 $10, $10, $10,
+                 0, false, $10, $10)`,
+        rideId,
+        seed.rideCode,
+        requestId,
+        seed.customerId,
+        driver.id,
+        vehicle.id,
+        cabType.id,
+        seed.fromRoute,
+        seed.toRoute,
+        completedAt,
+      );
+
+      await prisma.rideRequest.update({
+        where: { id: requestId },
+        data: { rideId },
+      });
+
+      const subtotal = seed.totalFare - seed.taxAmount;
+      const driverEarning = seed.totalFare - seed.commission;
+
+      await prisma.rideFare.create({
+        data: {
+          rideId,
+          baseFare: 50,
+          distanceFare: subtotal * 0.6,
+          timeFare: subtotal * 0.25,
+          subtotal,
+          taxAmount: seed.taxAmount,
+          totalFare: seed.totalFare,
+          driverEarning,
+          platformCommission: seed.commission,
+        },
+      });
+
+      ride = await prisma.ride.findUniqueOrThrow({ where: { id: rideId } });
+    }
+
+    const issuedAt = ride.completedAt ?? new Date();
+
+    await prisma.billingInvoice.upsert({
+      where: { invoiceNumber: seed.riderInvoiceNumber },
+      update: {
+        rideId: ride.id,
+        recipientUserId: seed.customerId,
+        recipientName: seed.customerName,
+        bookingCode: seed.rideCode,
+        amount: seed.totalFare,
+        taxAmount: seed.taxAmount,
+        status: seed.riderStatus,
+        fromRoute: seed.fromRoute,
+        toRoute: seed.toRoute,
+        issuedAt,
+      },
+      create: {
+        invoiceNumber: seed.riderInvoiceNumber,
+        rideId: ride.id,
+        recipientType: 'RIDER',
+        recipientUserId: seed.customerId,
+        recipientName: seed.customerName,
+        bookingCode: seed.rideCode,
+        amount: seed.totalFare,
+        taxAmount: seed.taxAmount,
+        status: seed.riderStatus,
+        fromRoute: seed.fromRoute,
+        toRoute: seed.toRoute,
+        issuedAt,
+      },
+    });
+
+    await prisma.billingInvoice.upsert({
+      where: { invoiceNumber: seed.driverInvoiceNumber },
+      update: {
+        rideId: ride.id,
+        recipientUserId: driverUser.id,
+        recipientName: driverName,
+        bookingCode: seed.rideCode,
+        amount: seed.commission,
+        taxAmount: 0,
+        status: 'GENERATED',
+        fromRoute: seed.fromRoute,
+        toRoute: seed.toRoute,
+        issuedAt,
+      },
+      create: {
+        invoiceNumber: seed.driverInvoiceNumber,
+        rideId: ride.id,
+        recipientType: 'DRIVER',
+        recipientUserId: driverUser.id,
+        recipientName: driverName,
+        bookingCode: seed.rideCode,
+        amount: seed.commission,
+        taxAmount: 0,
+        status: 'GENERATED',
+        fromRoute: seed.fromRoute,
+        toRoute: seed.toRoute,
+        issuedAt,
+      },
+    });
+  }
 }
 
 async function ensureReferralCode(

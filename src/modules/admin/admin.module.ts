@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { asClass, AwilixContainer } from 'awilix';
+import { registerFileReference } from '@modules/files';
 
 import {
   pricingManagementRoutes,
@@ -9,6 +10,10 @@ import {
   AdminFareService,
   AdminCancellationController,
   AdminCancellationService,
+  AdminServiceZoneController,
+  AdminServiceZoneService,
+  AdminInvoiceController,
+  AdminInvoiceService,
 } from './pricing-management/index.js';
 import {
   promotionsManagementRoutes,
@@ -58,6 +63,11 @@ import {
   AdminRiderController,
   AdminRiderService,
 } from './rider-management/index.js';
+import {
+  geographicManagementRoutes,
+  AdminGeographicController,
+  AdminGeographicService,
+} from './geographic-management/index.js';
 
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
@@ -65,8 +75,12 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminSurgeController: asClass(AdminSurgeController).singleton(),
     adminFareService: asClass(AdminFareService).singleton(),
     adminFareController: asClass(AdminFareController).singleton(),
+    adminServiceZoneService: asClass(AdminServiceZoneService).singleton(),
+    adminServiceZoneController: asClass(AdminServiceZoneController).singleton(),
     adminCancellationService: asClass(AdminCancellationService).singleton(),
     adminCancellationController: asClass(AdminCancellationController).singleton(),
+    adminInvoiceService: asClass(AdminInvoiceService).singleton(),
+    adminInvoiceController: asClass(AdminInvoiceController).singleton(),
     adminPromotionService: asClass(AdminPromotionService).singleton(),
     adminCampaignService: asClass(AdminCampaignService).singleton(),
     adminSegmentService: asClass(AdminSegmentService).singleton(),
@@ -91,6 +105,14 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminRbacController: asClass(AdminRbacController).singleton(),
     adminRiderService: asClass(AdminRiderService).singleton(),
     adminRiderController: asClass(AdminRiderController).singleton(),
+    adminGeographicService: asClass(AdminGeographicService).singleton(),
+    adminGeographicController: asClass(AdminGeographicController).singleton(),
+  });
+
+  registerFileReference('PROMO_BANNER', {
+    module: 'promotions',
+    isReferenced: (fileId, tx) =>
+      container.resolve<AdminBannerService>('adminBannerService').isBannerImage(fileId, tx),
   });
 }
 
@@ -104,4 +126,5 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   await app.register(staffManagementRoutes);
   await app.register(rbacManagementRoutes);
   await app.register(riderManagementRoutes);
+  await app.register(geographicManagementRoutes, { prefix: '/geographic' });
 }

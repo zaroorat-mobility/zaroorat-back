@@ -76,6 +76,14 @@ export const filePurposePolicy = Object.freeze({
     rejectExifLocation: false,
     retention: { afterDays: 1825, trigger: 'DISPUTE_CLOSED', action: 'ARCHIVE' },
   },
+  PROMO_BANNER: {
+    mimeTypes: Object.freeze(['image/jpeg', 'image/png', 'image/webp']),
+    maxBytes: bounded(process.env.FILE_MAX_PROMO_BANNER_BYTES, 5 * MB, 5 * MB),
+    maxPixels: { width: 4096, height: 4096 },
+    readTtlSeconds: 600,
+    rejectExifLocation: true,
+    retention: { afterDays: 365, trigger: 'REPLACED', action: 'ERASE' },
+  },
 } as const satisfies Record<string, FilePurposePolicy>);
 export type FilePurposeName = keyof typeof filePurposePolicy;
 export const CONTENT_TYPE_EXTENSION: Readonly<Record<string, string>> = Object.freeze({
@@ -92,6 +100,7 @@ export const PURPOSE_KEY_PREFIX: Readonly<Record<FilePurposeName, string>> = Obj
   VEHICLE_IMAGE: 'vi',
   SOS_EVIDENCE: 'se',
   DISPUTE_EVIDENCE: 'de',
+  PROMO_BANNER: 'pb',
 });
 export const fileConfig = Object.freeze({
   purposes: filePurposePolicy,

@@ -6,6 +6,7 @@ import type {
   FareCalculationParams,
   FinalFareParams,
   ItemizedFareResult,
+  RateCardLookupOptions,
 } from '../domain/pricing.types.js';
 
 function money(value: number): number {
@@ -21,9 +22,6 @@ function decimal(value: unknown): number | null {
 export class PricingService {
   constructor(private readonly pricingRuleRepository: PricingRuleRepository) {}
 
-  /// Maps a PricingRule row onto a rate card. Pure and synchronous on purpose:
-  /// every field falls back to `pricingConfig.defaultRateCard` individually.
-  /// `commissionRate`, `taxRate` and `platformFee` stay platform-wide config.
   rateCardFor(rule: PricingRule | null): PricingRateCard {
     const fallback = pricingConfig.defaultRateCard;
     if (!rule) return fallback;
@@ -32,23 +30,29 @@ export class PricingService {
       perKm: decimal(rule.perKmRate) ?? fallback.perKm,
       perMinute: decimal(rule.perMinuteRate) ?? fallback.perMinute,
       perWaitingMinute: decimal(rule.waitingPerMin) ?? fallback.perWaitingMinute,
+      freeWaitingMin: rule.freeWaitingMin ?? fallback.freeWaitingMin,
+      bookingFee: decimal(rule.bookingFee) ?? fallback.bookingFee,
+      platformFeePct: decimal(rule.platformFeePct) ?? fallback.platformFeePct,
+      platformFeeFlat: fallback.platformFeeFlat,
+      taxRatePct: decimal(rule.taxRatePct) ?? fallback.taxRatePct,
+      commissionRatePct: decimal(rule.commissionRatePct) ?? fallback.commissionRatePct,
       minimumFare: decimal(rule.minimumFare) ?? fallback.minimumFare,
-      platformFee: fallback.platformFee,
-      commissionRate: fallback.commissionRate,
-      taxRate: fallback.taxRate,
+      nightMultiplier: decimal(rule.nightMultiplier) ?? fallback.nightMultiplier,
     });
   }
 
-  /// The one I/O path to a rate card. It looks for a specific city's rule,
-  /// falls back to 'GLOBAL', and if neither exist, returns the default config.
-  async rateCardForTypeId(vehicleTypeId: string, cityCode?: string): Promise<PricingRateCard> {
-    let rule = null;
-    if (cityCode) {
-      rule = await this.pricingRuleRepository.findActiveRule(vehicleTypeId, cityCode);
-    }
-    if (!rule) {
-      rule = await this.pricingRuleRepository.findActiveRule(vehicleTypeId, 'GLOBAL');
-    }
+  async rateCardForTypeId(
+    vehicleTypeId: string,
+    cityCode?: string,
+    options?: RateCardLookupOptions,
+  ): Promise<PricingRateCard> {
+    const rule = await this.pricingRuleRepository.findBestActiveRule({
+      vehicleTypeId,
+      ...(cityCode !== undefined ? { cityCode } : {}),
+      ...(options?.serviceType !== undefined ? { serviceType: options.serviceType } : {}),
+      ...(options?.pickupLat !== undefined ? { pickupLat: options.pickupLat } : {}),
+      ...(options?.pickupLng !== undefined ? { pickupLng: options.pickupLng } : {}),
+    });
     return this.rateCardFor(rule);
   }
 
@@ -60,23 +64,37 @@ export class PricingService {
       surgeMultiplier?: number;
       waitingMinutes?: number;
       discountAmount?: number;
+      isNightTrip?: boolean;
     },
   ): ItemizedFareResult {
     const billableDistanceKm = Math.max(0, distanceKm);
     const billableDurationMin = Math.max(0, durationMin);
     const distanceFare = money(billableDistanceKm * card.perKm);
     const timeFare = money(billableDurationMin * card.perMinute);
-    const waitingCharge = money(Math.max(0, params.waitingMinutes ?? 0) * card.perWaitingMinute);
-    const rawSubtotal = card.baseFare + distanceFare + timeFare + waitingCharge;
+    const billableWaitingMin = Math.max(0, (params.waitingMinutes ?? 0) - card.freeWaitingMin);
+    const waitingCharge = money(billableWaitingMin * card.perWaitingMinute);
+    const bookingFee = money(card.bookingFee);
+    const rawSubtotal = card.baseFare + distanceFare + timeFare + waitingCharge + bookingFee;
+
+    const nightMultiplier =
+      params.isNightTrip && card.nightMultiplier > 1 ? card.nightMultiplier : 1;
+    const nightAdjustment = money(rawSubtotal * (nightMultiplier - 1));
+    const subtotalBeforeSurge = money(rawSubtotal + nightAdjustment);
+
     const surgeMultiplier = params.surgeMultiplier ?? 1;
-    const surgeAmount = money(rawSubtotal * (surgeMultiplier - 1));
-    const subtotal = money(rawSubtotal + surgeAmount);
+    const surgeAmount = money(subtotalBeforeSurge * (surgeMultiplier - 1));
+    const subtotal = money(subtotalBeforeSurge + surgeAmount);
     const discountAmount = Math.max(0, params.discountAmount ?? 0);
     const taxable = Math.max(0, subtotal - discountAmount);
-    const taxAmount = money(taxable * card.taxRate);
-    const totalFare = money(Math.max(card.minimumFare, taxable + taxAmount + card.platformFee));
-    const platformCommission = money(totalFare * card.commissionRate);
+    const taxAmount = money(taxable * (card.taxRatePct / 100));
+    const platformFee =
+      card.platformFeePct > 0
+        ? money(taxable * (card.platformFeePct / 100))
+        : money(card.platformFeeFlat);
+    const totalFare = money(Math.max(card.minimumFare, taxable + taxAmount + platformFee));
+    const platformCommission = money(totalFare * (card.commissionRatePct / 100));
     const driverEarning = money(totalFare - platformCommission);
+
     return {
       estimatedDistanceKm: billableDistanceKm,
       estimatedDurationMin: billableDurationMin,
@@ -84,21 +102,20 @@ export class PricingService {
       distanceFare,
       timeFare,
       waitingCharge,
+      bookingFee,
+      nightAdjustment,
       surgeMultiplier,
       surgeAmount,
       subtotal,
       discountAmount,
       taxAmount,
-      platformFee: card.platformFee,
+      platformFee,
       totalFare,
       driverEarning,
       platformCommission,
     };
   }
 
-  /// Straight-line distance scaled by a road factor. Unchanged from before this
-  /// module landed — replacing it needs a routing provider, which does not
-  /// exist yet.
   estimateTrip(params: {
     pickupLat: number;
     pickupLng: number;
@@ -130,7 +147,12 @@ export class PricingService {
       dropLng: params.dropLng as number,
     });
     const card =
-      params.rateCard ?? (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode));
+      params.rateCard ??
+      (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode, {
+        ...(params.serviceType !== undefined ? { serviceType: params.serviceType } : {}),
+        pickupLat: params.pickupLat,
+        pickupLng: params.pickupLng,
+      }));
     return this.price(trip.distanceKm, trip.durationMin, card, params);
   }
 
@@ -146,7 +168,12 @@ export class PricingService {
       );
     }
     const card =
-      params.rateCard ?? (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode));
+      params.rateCard ??
+      (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode, {
+        ...(params.serviceType !== undefined ? { serviceType: params.serviceType } : {}),
+        ...(params.pickupLat !== undefined ? { pickupLat: params.pickupLat } : {}),
+        ...(params.pickupLng !== undefined ? { pickupLng: params.pickupLng } : {}),
+      }));
     return this.price(params.actualDistanceKm, params.actualDurationMin, card, params);
   }
 }

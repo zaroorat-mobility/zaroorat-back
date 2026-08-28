@@ -1,30 +1,35 @@
 // ============================ PRICING ============================
 
 model PricingRule {
-  id              String    @id @default(uuid(7)) @db.Uuid
-  vehicleTypeId   String    @map("vehicle_type_id") @db.Uuid
-  cityCode        String    @map("city_code")
-  currency        String    @default("INR") @db.Char(3)
-  baseFare        Decimal   @map("base_fare") @db.Decimal(10, 2)
-  minimumFare     Decimal   @map("minimum_fare") @db.Decimal(10, 2)
-  perKmRate       Decimal   @map("per_km_rate") @db.Decimal(10, 2)
-  perMinuteRate   Decimal   @map("per_minute_rate") @db.Decimal(10, 2)
-  freeWaitingMin  Int       @default(3) @map("free_waiting_min") @db.SmallInt
-  waitingPerMin   Decimal   @default(0) @map("waiting_per_min") @db.Decimal(10, 2)
-  includedKm      Decimal   @default(0) @map("included_km") @db.Decimal(6, 2)
-  bookingFee      Decimal   @default(0) @map("booking_fee") @db.Decimal(10, 2)
-  platformFeePct  Decimal   @default(0) @map("platform_fee_pct") @db.Decimal(5, 2)
-  nightMultiplier Decimal   @default(1.0) @map("night_multiplier") @db.Decimal(4, 2)
-  version         Int       @default(1)
-  isActive        Boolean   @default(true) @map("is_active")
-  effectiveFrom   DateTime  @default(now()) @map("effective_from")
-  effectiveTo     DateTime? @map("effective_to")
-  createdBy       String?   @map("created_by") @db.Uuid
-  createdAt       DateTime  @default(now()) @map("created_at")
+  id                String           @id @default(uuid(7)) @db.Uuid
+  vehicleTypeId     String           @map("vehicle_type_id") @db.Uuid
+  cityCode          String           @map("city_code")
+  serviceType       RideServiceType? @map("service_type")
+  serviceZoneId     String?          @map("service_zone_id") @db.Uuid
+  currency          String           @default("INR") @db.Char(3)
+  baseFare          Decimal          @map("base_fare") @db.Decimal(10, 2)
+  minimumFare       Decimal          @map("minimum_fare") @db.Decimal(10, 2)
+  perKmRate         Decimal          @map("per_km_rate") @db.Decimal(10, 2)
+  perMinuteRate     Decimal          @map("per_minute_rate") @db.Decimal(10, 2)
+  freeWaitingMin    Int              @default(3) @map("free_waiting_min") @db.SmallInt
+  waitingPerMin     Decimal          @default(0) @map("waiting_per_min") @db.Decimal(10, 2)
+  includedKm        Decimal          @default(0) @map("included_km") @db.Decimal(6, 2)
+  bookingFee        Decimal          @default(0) @map("booking_fee") @db.Decimal(10, 2)
+  platformFeePct    Decimal          @default(0) @map("platform_fee_pct") @db.Decimal(5, 2)
+  taxRatePct        Decimal?         @map("tax_rate_pct") @db.Decimal(5, 2)
+  commissionRatePct Decimal?         @map("commission_rate_pct") @db.Decimal(5, 2)
+  nightMultiplier   Decimal          @default(1.0) @map("night_multiplier") @db.Decimal(4, 2)
+  version           Int              @default(1)
+  isActive          Boolean          @default(true) @map("is_active")
+  effectiveFrom     DateTime         @default(now()) @map("effective_from")
+  effectiveTo       DateTime?        @map("effective_to")
+  createdBy         String?          @map("created_by") @db.Uuid
+  createdAt         DateTime         @default(now()) @map("created_at")
 
-  vehicleType VehicleType @relation(fields: [vehicleTypeId], references: [id])
+  vehicleType VehicleType  @relation(fields: [vehicleTypeId], references: [id])
+  serviceZone ServiceZone? @relation(fields: [serviceZoneId], references: [id])
 
-  @@index([cityCode, vehicleTypeId])
+  @@index([cityCode, vehicleTypeId, serviceType, serviceZoneId])
   @@map("pricing_rules")
 }
 
@@ -43,16 +48,21 @@ model SurgeZone {
 }
 
 model SurgeWindow {
-  id            String    @id @default(uuid(7)) @db.Uuid
-  zoneId        String    @map("zone_id") @db.Uuid
-  vehicleTypeId String?   @map("vehicle_type_id") @db.Uuid
-  multiplier    Decimal   @db.Decimal(4, 2)
-  source        String    @default("DYNAMIC")
-  reason        String?
-  startsAt      DateTime  @map("starts_at")
-  endsAt        DateTime? @map("ends_at")
-  isActive      Boolean   @default(true) @map("is_active")
-  createdAt     DateTime  @default(now()) @map("created_at")
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  zoneId             String    @map("zone_id") @db.Uuid
+  vehicleTypeId      String?   @map("vehicle_type_id") @db.Uuid
+  multiplier         Decimal   @db.Decimal(4, 2)
+  source             String    @default("DYNAMIC")
+  reason             String?
+  demandThresholdPct Decimal?  @map("demand_threshold_pct") @db.Decimal(5, 2)
+  supplyThresholdPct Decimal?  @map("supply_threshold_pct") @db.Decimal(5, 2)
+  peakHourStart      String?   @map("peak_hour_start")
+  peakHourEnd        String?   @map("peak_hour_end")
+  isPeakHourOnly     Boolean   @default(false) @map("is_peak_hour_only")
+  startsAt           DateTime  @map("starts_at")
+  endsAt             DateTime? @map("ends_at")
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at")
 
   zone        SurgeZone    @relation(fields: [zoneId], references: [id])
   vehicleType VehicleType? @relation(fields: [vehicleTypeId], references: [id])
@@ -101,4 +111,48 @@ model TaxConfig {
 
   @@index([cityCode, isActive])
   @@map("tax_configs")
+}
+
+model BillingInvoice {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  invoiceNumber   String   @unique @map("invoice_number")
+  rideId          String?  @map("ride_id") @db.Uuid
+  recipientType   String   @map("recipient_type")
+  recipientUserId String?  @map("recipient_user_id") @db.Uuid
+  recipientName   String   @map("recipient_name")
+  bookingCode     String?  @map("booking_code")
+  amount          Decimal  @db.Decimal(10, 2)
+  taxAmount       Decimal  @default(0) @map("tax_amount") @db.Decimal(10, 2)
+  status          String   @default("GENERATED")
+  hsnCode         String   @default("9964") @map("hsn_code")
+  fromRoute       String?  @map("from_route")
+  toRoute         String?  @map("to_route")
+  issuedAt        DateTime @default(now()) @map("issued_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  ride Ride? @relation(fields: [rideId], references: [id])
+
+  @@index([recipientType])
+  @@index([issuedAt])
+  @@map("billing_invoices")
+}
+
+model InvoiceTemplate {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  name           String
+  templateType   String   @default("RIDER_INVOICE") @map("template_type")
+  headerLogoText String   @map("header_logo_text")
+  address        String
+  gstin          String
+  footerTerms    String   @map("footer_terms")
+  cgstRate       Decimal  @default(2.5) @map("cgst_rate") @db.Decimal(5, 2)
+  sgstRate       Decimal  @default(2.5) @map("sgst_rate") @db.Decimal(5, 2)
+  igstRate       Decimal  @default(0) @map("igst_rate") @db.Decimal(5, 2)
+  appliesTo      String   @default("ride") @map("applies_to")
+  isDefault      Boolean  @default(false) @map("is_default")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("invoice_templates")
 }

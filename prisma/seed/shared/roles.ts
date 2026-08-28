@@ -122,6 +122,18 @@ export const PERMISSION_SEED = [
     description: 'Create or change fare, surge, and pricing configuration',
   },
   {
+    code: 'geography:read',
+    resource: 'geography',
+    action: 'read',
+    description: 'View countries, cities, service zones, and coverage configuration',
+  },
+  {
+    code: 'geography:write',
+    resource: 'geography',
+    action: 'write',
+    description: 'Create or change cities, service zones, and geographic coverage',
+  },
+  {
     code: 'operations:read',
     resource: 'operations',
     action: 'read',

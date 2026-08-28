@@ -23,6 +23,7 @@ import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { DebtService } from '@modules/payments/services/debt/debt.service.js';
 import { RiderDebtLimitExceededError } from '@modules/payments/errors/payment.errors.js';
+import { GeographicCoverageService } from '@modules/geographic';
 import type { RideRequest } from '../../types';
 import type { ItemizedFareResult } from '@modules/pricing';
 
@@ -65,6 +66,7 @@ export class RideRequestService {
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
     private readonly debtService: DebtService,
+    private readonly geographicCoverageService: GeographicCoverageService,
   ) {}
   /// One request, every category. `vehicleTypeId` narrows the result to a
   /// single option; omitting it prices every active type so the customer app
@@ -104,8 +106,27 @@ export class RideRequestService {
     });
 
     const options: QuoteOption[] = [];
+    let resolvedCityCode: string | undefined;
     for (const vehicleType of vehicleTypes) {
-      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id, params.cityId);
+      const city = await this.geographicCoverageService.assertPickupServiceable({
+        lat: params.pickupLat,
+        lng: params.pickupLng,
+        vehicleTypeId: vehicleType.id,
+      });
+      resolvedCityCode = city.code;
+
+      if (params.dropLat != null && params.dropLng != null) {
+        await this.geographicCoverageService.assertDropServiceable({
+          lat: params.dropLat,
+          lng: params.dropLng,
+          cityCode: city.code,
+        });
+      }
+
+      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id, city.code, {
+        pickupLat: params.pickupLat,
+        pickupLng: params.pickupLng,
+      });
       const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
         params.pickupLat,
         params.pickupLng,
@@ -118,13 +139,14 @@ export class RideRequestService {
         dropLat: params.dropLat,
         dropLng: params.dropLng,
         vehicleTypeId: vehicleType.id,
+        cityCode: city.code,
         surgeMultiplier,
         rateCard,
       });
 
       const promoResult = await this.promotionService.quotePromo(params.promoCode, {
         ...(params.userId !== undefined ? { userId: params.userId } : {}),
-        cityCode: params.cityCode ?? null,
+        cityCode: city.code,
         vehicleTypeId: vehicleType.id,
         subtotal: baseFare.subtotal,
         softUserChecks: params.userId == null,
@@ -138,6 +160,7 @@ export class RideRequestService {
               dropLat: params.dropLat,
               dropLng: params.dropLng,
               vehicleTypeId: vehicleType.id,
+              cityCode: city.code,
               surgeMultiplier,
               rateCard,
               discountAmount: promoResult.discountAmount,
@@ -170,6 +193,7 @@ export class RideRequestService {
       estimatedDistanceKm: trip.distanceKm,
       estimatedDurationMin: trip.durationMin,
       currency: 'INR',
+      ...(resolvedCityCode !== undefined ? { cityCode: resolvedCityCode } : {}),
       options,
     };
   }
@@ -217,6 +241,19 @@ export class RideRequestService {
     // PricingRuleRepository, so the returned type is not needed here.
     await this.vehicleTypeService.requireActive(input.vehicleTypeId);
 
+    const city = await this.geographicCoverageService.assertPickupServiceable({
+      lat: input.pickupLat,
+      lng: input.pickupLng,
+      vehicleTypeId: input.vehicleTypeId,
+    });
+    if (input.dropLat != null && input.dropLng != null) {
+      await this.geographicCoverageService.assertDropServiceable({
+        lat: input.dropLat,
+        lng: input.dropLng,
+        cityCode: city.code,
+      });
+    }
+
     const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
       input.pickupLat,
       input.pickupLng,
@@ -227,6 +264,7 @@ export class RideRequestService {
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
       vehicleTypeId: input.vehicleTypeId,
+      cityCode: city.code,
       surgeMultiplier,
       ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
       ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
@@ -236,7 +274,7 @@ export class RideRequestService {
     if (input.promoCode?.trim()) {
       const resolved = await this.promotionService.validateAndResolve(input.promoCode.trim(), {
         userId: input.customerId,
-        cityCode: input.cityCode ?? null,
+        cityCode: city.code,
         vehicleTypeId: input.vehicleTypeId,
         subtotal: baseFare.subtotal,
       });
@@ -249,6 +287,7 @@ export class RideRequestService {
             pickupLat: input.pickupLat,
             pickupLng: input.pickupLng,
             vehicleTypeId: input.vehicleTypeId,
+            cityCode: city.code,
             surgeMultiplier,
             discountAmount,
             ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),

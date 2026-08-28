@@ -1,4 +1,6 @@
 import { DatabaseService } from '@core/database';
+import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager.js';
+import { FileLifecycleService } from '@modules/files/services/file-lifecycle.service.js';
 import { Prisma } from '../../../generated/prisma/index.js';
 import { BannerNotFoundError, CampaignNotFoundError } from './promotions.errors.js';
 import type { CreateBannerBody, ListBannersQuery, UpdateBannerBody } from './schemas.js';
@@ -7,7 +9,7 @@ export interface BannerDto {
   id: string;
   campaignId: string | null;
   title: string | null;
-  imageUrl: string;
+  imageFileId: string;
   placement: string;
   actionUrl: string | null;
   priority: number;
@@ -19,13 +21,23 @@ export interface BannerDto {
 }
 
 export class AdminBannerService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly transactionManager: TransactionManager,
+    private readonly fileLifecycleService: FileLifecycleService,
+  ) {}
+
+  async isBannerImage(fileId: string, tx?: TransactionClient): Promise<boolean> {
+    const client = tx ?? this.databaseService.client;
+    const count = await client.promoBanner.count({ where: { imageFileId: fileId } });
+    return count > 0;
+  }
 
   private toDto(row: {
     id: string;
     campaignId: string | null;
     title: string | null;
-    imageUrl: string;
+    imageFileId: string;
     placement: string;
     actionUrl: string | null;
     priority: number;
@@ -38,7 +50,7 @@ export class AdminBannerService {
       id: row.id,
       campaignId: row.campaignId,
       title: row.title,
-      imageUrl: row.imageUrl,
+      imageFileId: row.imageFileId,
       placement: row.placement,
       actionUrl: row.actionUrl,
       priority: row.priority,
@@ -86,7 +98,7 @@ export class AdminBannerService {
     return this.toDto(row);
   }
 
-  async create(body: CreateBannerBody): Promise<BannerDto> {
+  async create(body: CreateBannerBody, ownerUserId: string): Promise<BannerDto> {
     if (body.campaignId) {
       const campaign = await this.databaseService.client.promoCampaign.findUnique({
         where: { id: body.campaignId },
@@ -94,23 +106,32 @@ export class AdminBannerService {
       if (!campaign) throw new CampaignNotFoundError();
     }
 
-    const row = await this.databaseService.client.promoBanner.create({
-      data: {
-        campaignId: body.campaignId ?? null,
-        title: body.title ?? null,
-        imageUrl: body.imageUrl,
-        placement: body.placement ?? 'HOME',
-        actionUrl: body.actionUrl ?? null,
-        priority: body.priority ?? 0,
-        startsAt: body.startsAt ?? null,
-        endsAt: body.endsAt ?? null,
-        isActive: body.isActive ?? true,
-      },
+    return this.transactionManager.execute(async (tx) => {
+      await this.fileLifecycleService.assertReferenceable(
+        body.imageFileId,
+        ownerUserId,
+        'PROMO_BANNER',
+        tx,
+      );
+
+      const row = await tx.promoBanner.create({
+        data: {
+          campaignId: body.campaignId ?? null,
+          title: body.title ?? null,
+          imageFileId: body.imageFileId,
+          placement: body.placement ?? 'HOME',
+          actionUrl: body.actionUrl ?? null,
+          priority: body.priority ?? 0,
+          startsAt: body.startsAt ?? null,
+          endsAt: body.endsAt ?? null,
+          isActive: body.isActive ?? true,
+        },
+      });
+      return this.toDto(row);
     });
-    return this.toDto(row);
   }
 
-  async update(id: string, body: UpdateBannerBody): Promise<BannerDto> {
+  async update(id: string, body: UpdateBannerBody, ownerUserId: string): Promise<BannerDto> {
     const existing = await this.databaseService.client.promoBanner.findUnique({ where: { id } });
     if (!existing) throw new BannerNotFoundError();
 
@@ -121,29 +142,41 @@ export class AdminBannerService {
       if (!campaign) throw new CampaignNotFoundError();
     }
 
-    const row = await this.databaseService.client.promoBanner.update({
-      where: { id },
-      data: {
-        ...(body.campaignId !== undefined ? { campaignId: body.campaignId } : {}),
-        ...(body.title !== undefined ? { title: body.title } : {}),
-        ...(body.imageUrl !== undefined ? { imageUrl: body.imageUrl } : {}),
-        ...(body.placement !== undefined ? { placement: body.placement } : {}),
-        ...(body.actionUrl !== undefined ? { actionUrl: body.actionUrl } : {}),
-        ...(body.priority !== undefined ? { priority: body.priority } : {}),
-        ...(body.startsAt !== undefined ? { startsAt: body.startsAt } : {}),
-        ...(body.endsAt !== undefined ? { endsAt: body.endsAt } : {}),
-        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
-      },
+    return this.transactionManager.execute(async (tx) => {
+      if (body.imageFileId !== undefined && body.imageFileId !== existing.imageFileId) {
+        await this.fileLifecycleService.assertReferenceable(
+          body.imageFileId,
+          ownerUserId,
+          'PROMO_BANNER',
+          tx,
+        );
+        await this.fileLifecycleService.supersede(existing.imageFileId, body.imageFileId, tx);
+      }
+
+      const row = await tx.promoBanner.update({
+        where: { id },
+        data: {
+          ...(body.campaignId !== undefined ? { campaignId: body.campaignId } : {}),
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.imageFileId !== undefined ? { imageFileId: body.imageFileId } : {}),
+          ...(body.placement !== undefined ? { placement: body.placement } : {}),
+          ...(body.actionUrl !== undefined ? { actionUrl: body.actionUrl } : {}),
+          ...(body.priority !== undefined ? { priority: body.priority } : {}),
+          ...(body.startsAt !== undefined ? { startsAt: body.startsAt } : {}),
+          ...(body.endsAt !== undefined ? { endsAt: body.endsAt } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        },
+      });
+      return this.toDto(row);
     });
-    return this.toDto(row);
   }
 
-  async activate(id: string): Promise<BannerDto> {
-    return this.update(id, { isActive: true });
+  async activate(id: string, ownerUserId: string): Promise<BannerDto> {
+    return this.update(id, { isActive: true }, ownerUserId);
   }
 
-  async deactivate(id: string): Promise<BannerDto> {
-    return this.update(id, { isActive: false });
+  async deactivate(id: string, ownerUserId: string): Promise<BannerDto> {
+    return this.update(id, { isActive: false }, ownerUserId);
   }
 
   async remove(id: string): Promise<void> {
