@@ -32,6 +32,7 @@ const OPS_SCOPE_FOR_PURPOSE: Readonly<Record<FilePurposeName, string>> = Object.
   VEHICLE_IMAGE: 'drivers:verify',
   SOS_EVIDENCE: 'safety:read',
   DISPUTE_EVIDENCE: 'support:read',
+  PROMO_BANNER: 'campaigns:read',
 });
 const SCOPES_FOR_ROLE: Readonly<Record<string, readonly string[]>> = Object.freeze({
   admin: Object.freeze(['users:read', 'drivers:verify', 'safety:read', 'support:read']),

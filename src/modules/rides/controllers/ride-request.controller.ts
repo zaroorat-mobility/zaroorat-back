@@ -11,6 +11,7 @@ export class RideRequestController {
   ) {}
   async quote(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = quoteFareSchema.parse(req.body);
+    const userId = req.auth?.userId;
     const quote = await this.rideService.request.createQuote({
       pickupLat: body.pickupLat,
       pickupLng: body.pickupLng,
@@ -18,6 +19,11 @@ export class RideRequestController {
       dropLng: body.dropLng,
       ...(body.vehicleTypeId !== undefined ? { vehicleTypeId: body.vehicleTypeId } : {}),
       ...(body.cityId !== undefined ? { cityId: body.cityId } : {}),
+      ...(body.dropLat !== undefined ? { dropLat: body.dropLat } : {}),
+      ...(body.dropLng !== undefined ? { dropLng: body.dropLng } : {}),
+      ...(body.promoCode !== undefined ? { promoCode: body.promoCode } : {}),
+      ...(body.cityCode !== undefined ? { cityCode: body.cityCode } : {}),
+      ...(userId !== undefined ? { userId } : {}),
     });
     reply.send({ data: quote });
   }

@@ -180,10 +180,44 @@ model IpAllowlistEntry {
   @@map("ip_allowlist")
 }
 
+// ============================ SYSTEM ============================
+// Note: geography columns are Unsupported(...); managed for indexing via raw SQL.
+
+model Country {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  states State[]
+
+  @@map("countries")
+}
+
+model State {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  countryId String   @map("country_id") @db.Uuid
+  code      String
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  country Country @relation(fields: [countryId], references: [id])
+  cities  City[]
+
+  @@unique([countryId, code])
+  @@index([countryId])
+  @@map("states")
+}
+
 model City {
   id         String                                  @id @default(uuid(7)) @db.Uuid
   code       String                                  @unique
   name       String
+  stateId    String?                                 @map("state_id") @db.Uuid
   state      String?
   country    String                                  @default("India")
   timezone   String                                  @default("Asia/Kolkata")
@@ -193,26 +227,46 @@ model City {
   isActive   Boolean                                 @default(true) @map("is_active")
   launchedAt DateTime?                               @map("launched_at") @db.Date
   createdAt  DateTime                                @default(now()) @map("created_at")
+  updatedAt  DateTime                                @updatedAt @map("updated_at")
 
-  zones ServiceZone[]
+  stateRef State?        @relation(fields: [stateId], references: [id])
+  zones    ServiceZone[]
 
+  @@index([stateId])
   @@map("cities")
 }
 
 model ServiceZone {
-  id        String                                 @id @default(uuid(7)) @db.Uuid
-  cityId    String                                 @map("city_id") @db.Uuid
-  code      String
-  name      String
-  zoneType  String                                 @default("SERVICE") @map("zone_type")
-  boundary  Unsupported("geography(Polygon,4326)")
-  isActive  Boolean                                @default(true) @map("is_active")
-  createdAt DateTime                               @default(now()) @map("created_at")
+  id            String                                 @id @default(uuid(7)) @db.Uuid
+  cityId        String                                 @map("city_id") @db.Uuid
+  code          String
+  name          String
+  zoneType      ServiceZoneType                        @default(SERVICE) @map("zone_type")
+  boundary      Unsupported("geography(Polygon,4326)")
+  allowsPickup  Boolean                                @default(true) @map("allows_pickup")
+  allowsDropoff Boolean                                @default(true) @map("allows_dropoff")
+  isActive      Boolean                                @default(true) @map("is_active")
+  createdAt     DateTime                               @default(now()) @map("created_at")
+  updatedAt     DateTime                               @updatedAt @map("updated_at")
 
-  city City @relation(fields: [cityId], references: [id])
+  city         City                     @relation(fields: [cityId], references: [id])
+  pricingRules PricingRule[]
+  vehicleTypes ServiceZoneVehicleType[]
 
-  @@index([cityId])
+  @@unique([cityId, code])
+  @@index([cityId, zoneType])
   @@map("service_zones")
+}
+
+model ServiceZoneVehicleType {
+  serviceZoneId String @map("service_zone_id") @db.Uuid
+  vehicleTypeId String @map("vehicle_type_id") @db.Uuid
+
+  serviceZone ServiceZone @relation(fields: [serviceZoneId], references: [id], onDelete: Cascade)
+  vehicleType VehicleType @relation(fields: [vehicleTypeId], references: [id], onDelete: Cascade)
+
+  @@id([serviceZoneId, vehicleTypeId])
+  @@map("service_zone_vehicle_types")
 }
 
 model AppVersion {

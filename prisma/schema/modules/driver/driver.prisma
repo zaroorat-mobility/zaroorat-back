@@ -13,6 +13,7 @@ model Driver {
   approvedAt         DateTime?                @map("approved_at")
   approvedBy         String?                  @map("approved_by") @db.Uuid
   rejectionReason    String?                  @map("rejection_reason")
+  referralCodeId     String?                  @map("referral_code_id") @db.Uuid
   lastRideAt         DateTime?                @map("last_ride_at")
   acceptanceRate     Decimal?                 @map("acceptance_rate") @db.Decimal(5, 2)
   completionRate     Decimal?                 @map("completion_rate") @db.Decimal(5, 2)
@@ -22,6 +23,7 @@ model Driver {
   deletedAt          DateTime?                @map("deleted_at")
 
   user               User                   @relation(fields: [userId], references: [id])
+  referralCode       ReferralCode?          @relation("DriverReferralCode", fields: [referralCodeId], references: [id])
   profile            DriverProfile?
   documents          DriverDocument[]
   bankAccounts       DriverBankAccount[]

@@ -11,53 +11,54 @@ model User {
   updatedAt       DateTime   @updatedAt @map("updated_at")
   deletedAt       DateTime?  @map("deleted_at")
 
-  profile                 UserProfile?
-  devices                 UserDevice[]
-  sessions                UserSession[]
-  refreshTokens           RefreshToken[]
-  otpVerifications        OtpVerification[]
-  emergencyContacts       EmergencyContact[]
-  savedPlaces             SavedPlace[]
-  files                   File[]
-  driver                  Driver?
-  customerRides           Ride[]                   @relation("CustomerRides")
-  promoRedemptions        PromotionRedemption[]
-  paymentMethods          PaymentInstrument[]
-  customerWallet          CustomerWallet?
-  paymentIntents          PaymentIntent[]
-  paymentTransactions     PaymentTransaction[]
-  refunds                 Refund[]
-  walletTopups            WalletTopup[]
-  cashbackGrants          CashbackGrant[]
-  notifications           Notification[]
-  notificationPreferences NotificationPreference[]
-  inAppMessages           InAppMessage[]
-  campaignRecipients      CampaignRecipient[]
-  chatParticipants        ChatParticipant[]
-  chatMessages            ChatMessage[]
-  chatReadReceipts        ChatReadReceipt[]
-  chatBlocksMade          ChatBlock[]              @relation("Blocker")
-  chatBlocksReceived      ChatBlock[]              @relation("Blocked")
-  chatReportsMade         ChatReport[]             @relation("Reporter")
-  chatReportsReceived     ChatReport[]             @relation("Reported")
-  customerRatingAggregate CustomerRatingAggregate?
-  reviewFlagsRaised       ReviewFlag[]             @relation("FlaggedBy")
-  reviewFlagsModerated    ReviewFlag[]             @relation("Moderator")
-  reviewResponses         ReviewResponse[]
-  supportTickets          SupportTicket[]
-  supportAgent            SupportAgent?
-  ticketMessages          SupportTicketMessage[]
-  referralCodes           ReferralCode[]
-  referralsMade           Referral[]               @relation("Referrer")
-  referralsReceived       Referral[]               @relation("Referee")
-  referralRewards         ReferralReward[]
-  referralFraudReviews    ReferralFraudFlag[]
-  assignedCoupons         Coupon[]
-  roleAssignments         UserRoleAssignment[]
-  adminActivityLogs       AdminActivityLog[]
-  featureFlagOverrides    FeatureFlagOverride[]
-  adminSessions           AdminSession[]
-  deletionRequests        AccountDeletionRequest[]
+  profile                       UserProfile?
+  devices                       UserDevice[]
+  sessions                      UserSession[]
+  refreshTokens                 RefreshToken[]
+  otpVerifications              OtpVerification[]
+  emergencyContacts             EmergencyContact[]
+  savedPlaces                   SavedPlace[]
+  files                         File[]
+  driver                        Driver?
+  customerRides                 Ride[]                         @relation("CustomerRides")
+  promoRedemptions              PromotionRedemption[]
+  paymentMethods                PaymentInstrument[]
+  customerWallet                CustomerWallet?
+  paymentIntents                PaymentIntent[]
+  paymentTransactions           PaymentTransaction[]
+  refunds                       Refund[]
+  walletTopups                  WalletTopup[]
+  cashbackGrants                CashbackGrant[]
+  notifications                 Notification[]
+  notificationPreferences       NotificationPreference[]
+  inAppMessages                 InAppMessage[]
+  campaignRecipients            CampaignRecipient[]
+  chatParticipants              ChatParticipant[]
+  chatMessages                  ChatMessage[]
+  chatReadReceipts              ChatReadReceipt[]
+  chatBlocksMade                ChatBlock[]                    @relation("Blocker")
+  chatBlocksReceived            ChatBlock[]                    @relation("Blocked")
+  chatReportsMade               ChatReport[]                   @relation("Reporter")
+  chatReportsReceived           ChatReport[]                   @relation("Reported")
+  customerRatingAggregate       CustomerRatingAggregate?
+  reviewFlagsRaised             ReviewFlag[]                   @relation("FlaggedBy")
+  reviewFlagsModerated          ReviewFlag[]                   @relation("Moderator")
+  reviewResponses               ReviewResponse[]
+  supportTickets                SupportTicket[]
+  supportAgent                  SupportAgent?
+  ticketMessages                SupportTicketMessage[]
+  referralCodes                 ReferralCode[]
+  referralsMade                 Referral[]                     @relation("Referrer")
+  referralsReceived             Referral[]                     @relation("Referee")
+  referralRewards               ReferralReward[]
+  referralMilestoneAchievements ReferralMilestoneAchievement[]
+  referralFraudReviews          ReferralFraudFlag[]
+  assignedCoupons               Coupon[]
+  roleAssignments               UserRoleAssignment[]
+  adminActivityLogs             AdminActivityLog[]
+  featureFlagOverrides          FeatureFlagOverride[]
+  adminSessions                 AdminSession[]
+  deletionRequests              AccountDeletionRequest[]
 
   @@index([status])
   @@map("users")

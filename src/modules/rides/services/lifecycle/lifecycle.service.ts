@@ -8,6 +8,7 @@ import { RideStatusEventRepository } from '../../repositories/ride-status-event.
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { RideOtpService } from '../otp/ride-otp.service.js';
 import { PricingService } from '@modules/pricing';
+import { PromotionService } from '@modules/promotions';
 import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
@@ -85,6 +86,7 @@ export class LifecycleService {
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly rideOtpService: RideOtpService,
     private readonly pricingService: PricingService,
+    private readonly promotionService: PromotionService,
     private readonly fareRepo: RideFareRepository,
     private readonly cancellationService: CancellationService,
     private readonly ledgerService: LedgerService,
@@ -601,16 +603,34 @@ export class LifecycleService {
         );
       }
       const waitingMinutes = ride.waitTimeMin ?? 0;
-      // The surge the customer accepted when they booked, not whatever is in
-      // force now. `RideRequest.surgeMultiplier` exists precisely to be this
-      // snapshot; leaving it out let `price()` fall back to its `?? 1` default,
-      // so a ride quoted at 1.8x was invoiced at 1.0x and `RideFare` recorded a
-      // surge of 1 with an amount of 0 — the premium silently vanished from the
-      // customer's bill, the driver's earning and the platform's commission.
-      //
-      // Re-resolving surge here instead would be worse than either: the price
-      // would then depend on when the trip happened to end, which is outside
-      // the customer's control and not what they agreed to.
+
+      let discountAmount = 0;
+      let resolvedPromo: Awaited<ReturnType<PromotionService['validateAndResolve']>> | null = null;
+      if (request?.promoCode) {
+        const preview = await this.pricingService.calculateFinalFare({
+          actualDistanceKm,
+          actualDurationMin,
+          vehicleTypeId: ride.vehicleTypeId,
+          waitingMinutes,
+        });
+        try {
+          resolvedPromo = await this.promotionService.validateAndResolve(
+            request.promoCode,
+            {
+              userId: ride.customerId,
+              vehicleTypeId: ride.vehicleTypeId,
+              subtotal: preview.subtotal,
+            },
+            tx,
+          );
+          discountAmount = resolvedPromo.discountAmount;
+        } catch {
+          // Promo may have expired between request and completion — complete without discount.
+          discountAmount = 0;
+          resolvedPromo = null;
+        }
+      }
+
       const surgeMultiplier = Number(request?.surgeMultiplier ?? 1);
       const itemizedFare = await this.pricingService.calculateFinalFare({
         actualDistanceKm: billedDistanceKm,
@@ -618,6 +638,7 @@ export class LifecycleService {
         vehicleTypeId: ride.vehicleTypeId,
         surgeMultiplier,
         waitingMinutes,
+        ...(discountAmount > 0 ? { discountAmount } : {}),
       });
       // BD-5. With the flag off this is byte-identical to before: a cash ride
       // is PAID the moment it ends. With it on, cash waits for someone to say
@@ -660,6 +681,15 @@ export class LifecycleService {
         },
         tx,
       );
+
+      if (resolvedPromo && resolvedPromo.discountAmount > 0) {
+        await this.promotionService.redeem({
+          promo: resolvedPromo,
+          userId: ride.customerId,
+          rideId,
+          client: tx,
+        });
+      }
       // Cash only (transition 4c). A cash ride is paid the moment it ends —
       // the driver is holding the money — so its commission group is
       // recognised here, in the completion transaction, exactly as before.

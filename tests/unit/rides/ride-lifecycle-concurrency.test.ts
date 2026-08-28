@@ -235,6 +235,7 @@ function makeWorld() {
         return null;
       },
     } as never),
+    {} as never, // PromotionService
     {
       async create(f: { rideId: string }) {
         fares.push(f.rideId);

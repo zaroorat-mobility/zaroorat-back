@@ -69,8 +69,12 @@ export async function resetState(): Promise<void> {
       '"account_deletion_requests", ' +
       '"files", "otp_verifications", "outbox_events", "vehicle_types", ' +
       '"vehicles", "vehicle_assignments", "vehicle_documents", ' +
-      '"payment_ledger_entries", "wallet_reconciliations", "gateway_events", ' +
-      '"surge_zones" RESTART IDENTITY CASCADE',
+      '"payment_ledger_entries", "gateway_events", ' +
+      '"promotions", "promotion_redemptions", "promo_campaigns", "audience_segments", ' +
+      '"campaign_targets", "coupon_batches", "coupons", "promo_banners", ' +
+      '"referral_programs", "referral_codes", "referrals", "referral_rewards", ' +
+      '"referral_milestones", "referral_milestone_achievements", "referral_fraud_flags", ' +
+      '"billing_invoices", "invoice_templates" RESTART IDENTITY CASCADE',
   );
   // Vehicle types are reference data, like the RBAC roles — except `roles` is
   // not in the TRUNCATE list and `vehicle_types` has to be, because tests create

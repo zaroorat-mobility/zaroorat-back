@@ -1,6 +1,5 @@
 import { Decimal } from '../../types/index.js';
-import { rideConfig } from '@config';
-import { TransactionManager, UniqueConstraintError } from '@core/database';
+import { TransactionManager } from '@core/database';
 import { EventPublisher } from '@core/events';
 import {
   RideRequestRepository,
@@ -9,6 +8,7 @@ import {
 import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { PricingService, SurgeService } from '@modules/pricing';
+import { PromotionService } from '@modules/promotions';
 import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
 import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
 import { toVehicleTypeView } from '@modules/vehicles/controllers/vehicle-type.controller.js';
@@ -24,6 +24,7 @@ import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { DebtService } from '@modules/payments/services/debt/debt.service.js';
 import { RiderDebtLimitExceededError } from '@modules/payments/errors/payment.errors.js';
+import { GeographicCoverageService } from '@modules/geographic';
 import type { RideRequest } from '../../types';
 import type { ItemizedFareResult } from '@modules/pricing';
 
@@ -37,6 +38,10 @@ export interface QuoteOption {
   estimatedFare: number;
   minimumFare: number;
   fareBreakdown: ItemizedFareResult;
+  promoApplied: boolean;
+  promoDiscountAmount: number;
+  promoErrorCode?: string;
+  promoErrorMessage?: string;
 }
 
 export interface RideQuote {
@@ -55,12 +60,14 @@ export class RideRequestService {
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly pricingService: PricingService,
     private readonly surgeService: SurgeService,
+    private readonly promotionService: PromotionService,
     private readonly vehicleTypeService: VehicleTypeService,
     private readonly userProfileRepository: UserProfileRepository,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
     private readonly debtService: DebtService,
+    private readonly geographicCoverageService: GeographicCoverageService,
   ) {}
   /// One request, every category. `vehicleTypeId` narrows the result to a
   /// single option; omitting it prices every active type so the customer app
@@ -75,6 +82,9 @@ export class RideRequestService {
     dropLng: number;
     vehicleTypeId?: string;
     cityId?: string;
+    cityCode?: string;
+    promoCode?: string;
+    userId?: string;
   }): Promise<RideQuote> {
     // The `dropLat == null` guard that used to stand here was a second copy of
     // the one in `calculateFareQuote`, and both threw a bare `Error` that
@@ -94,28 +104,40 @@ export class RideRequestService {
     });
 
     const options: QuoteOption[] = [];
+    let resolvedCityCode: string | undefined;
     for (const vehicleType of vehicleTypes) {
-      // Deliberately not passed a city: `rateCardForTypeId`'s second argument is
-      // a `PricingRule.cityCode` — a short string like 'BLR' — and `params.cityId`
-      // is a `City` UUID. Feeding one to the other could never match, so the
-      // city-specific lookup was a guaranteed miss that fell through to GLOBAL
-      // and cost a query to do it. `City.code` makes the translation available
-      // whenever per-city rate cards are actually wanted; until something writes
-      // one, resolving it here would be a second query for a table that has only
-      // GLOBAL rows in it.
-      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id);
+      const city = await this.geographicCoverageService.assertPickupServiceable({
+        lat: params.pickupLat,
+        lng: params.pickupLng,
+        vehicleTypeId: vehicleType.id,
+      });
+      resolvedCityCode = city.code;
+
+      if (params.dropLat != null && params.dropLng != null) {
+        await this.geographicCoverageService.assertDropServiceable({
+          lat: params.dropLat,
+          lng: params.dropLng,
+          cityCode: city.code,
+        });
+      }
+
+      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id, city.code, {
+        pickupLat: params.pickupLat,
+        pickupLng: params.pickupLng,
+      });
       const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
         params.pickupLat,
         params.pickupLng,
         vehicleType.id,
       );
 
-      const fare = await this.pricingService.calculateFareQuote({
+      const baseFare = await this.pricingService.calculateFareQuote({
         pickupLat: params.pickupLat,
         pickupLng: params.pickupLng,
         dropLat: params.dropLat,
         dropLng: params.dropLng,
         vehicleTypeId: vehicleType.id,
+        cityCode: city.code,
         surgeMultiplier,
         rateCard,
         // Estimated once above. The journey is the same whichever category
@@ -123,7 +145,31 @@ export class RideRequestService {
         // and could disagree with the `estimatedDistanceKm` it reports.
         trip,
       });
-      const view = toVehicleTypeView(vehicleType, rateCard);
+
+      const promoResult = await this.promotionService.quotePromo(params.promoCode, {
+        ...(params.userId !== undefined ? { userId: params.userId } : {}),
+        cityCode: city.code,
+        vehicleTypeId: vehicleType.id,
+        subtotal: baseFare.subtotal,
+        softUserChecks: params.userId == null,
+      });
+
+      const fare =
+        promoResult.applied && promoResult.discountAmount > 0
+          ? await this.pricingService.calculateFareQuote({
+              pickupLat: params.pickupLat,
+              pickupLng: params.pickupLng,
+              dropLat: params.dropLat,
+              dropLng: params.dropLng,
+              vehicleTypeId: vehicleType.id,
+              cityCode: city.code,
+              surgeMultiplier,
+              rateCard,
+              discountAmount: promoResult.discountAmount,
+            })
+          : baseFare;
+
+      const view = toVehicleTypeView(vehicleType);
       options.push({
         vehicleTypeId: vehicleType.id,
         vehicleTypeCode: view.code,
@@ -134,6 +180,12 @@ export class RideRequestService {
         estimatedFare: fare.totalFare,
         minimumFare: rateCard.minimumFare,
         fareBreakdown: fare,
+        promoApplied: promoResult.applied,
+        promoDiscountAmount: promoResult.discountAmount,
+        ...(promoResult.errorCode !== undefined ? { promoErrorCode: promoResult.errorCode } : {}),
+        ...(promoResult.errorMessage !== undefined
+          ? { promoErrorMessage: promoResult.errorMessage }
+          : {}),
       });
     }
 
@@ -143,6 +195,7 @@ export class RideRequestService {
       estimatedDistanceKm: trip.distanceKm,
       estimatedDurationMin: trip.durationMin,
       currency: 'INR',
+      ...(resolvedCityCode !== undefined ? { cityCode: resolvedCityCode } : {}),
       options,
     };
   }
@@ -157,6 +210,7 @@ export class RideRequestService {
     dropAddress?: string;
     paymentMethod?: string;
     promoCode?: string;
+    cityCode?: string;
   }): Promise<RideRequest> {
     // Refused before anything is written, and before the debt and active-ride
     // checks, because it is a fact about the request itself rather than about
@@ -196,73 +250,94 @@ export class RideRequestService {
     // PricingRuleRepository, so the returned type is not needed here.
     await this.vehicleTypeService.requireActive(input.vehicleTypeId);
 
+    const city = await this.geographicCoverageService.assertPickupServiceable({
+      lat: input.pickupLat,
+      lng: input.pickupLng,
+      vehicleTypeId: input.vehicleTypeId,
+    });
+    if (input.dropLat != null && input.dropLng != null) {
+      await this.geographicCoverageService.assertDropServiceable({
+        lat: input.dropLat,
+        lng: input.dropLng,
+        cityCode: city.code,
+      });
+    }
+
     const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
       input.pickupLat,
       input.pickupLng,
       input.vehicleTypeId,
     );
 
-    const fareQuote = await this.pricingService.calculateFareQuote({
+    const baseFare = await this.pricingService.calculateFareQuote({
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
       dropLat: input.dropLat,
       dropLng: input.dropLng,
       vehicleTypeId: input.vehicleTypeId,
+      cityCode: city.code,
       surgeMultiplier,
+      ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
+      ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
     });
-    // The `findActiveByCustomer` check above is a read outside this write's
-    // transaction, so it cannot see a sibling booking that has not committed
-    // yet — the `ride_requests_active_customer_key` partial index is what
-    // actually stops the second row, exactly as its migration says.
-    try {
-      return await this.txManager.execute(async (tx) => {
-        const createInput: CreateRideRequestInput = {
+
+    let discountAmount = 0;
+    if (input.promoCode?.trim()) {
+      const resolved = await this.promotionService.validateAndResolve(input.promoCode.trim(), {
+        userId: input.customerId,
+        cityCode: city.code,
+        vehicleTypeId: input.vehicleTypeId,
+        subtotal: baseFare.subtotal,
+      });
+      discountAmount = resolved.discountAmount;
+    }
+
+    const fareQuote =
+      discountAmount > 0
+        ? await this.pricingService.calculateFareQuote({
+            pickupLat: input.pickupLat,
+            pickupLng: input.pickupLng,
+            vehicleTypeId: input.vehicleTypeId,
+            cityCode: city.code,
+            surgeMultiplier,
+            discountAmount,
+            ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
+            ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
+          })
+        : baseFare;
+
+    return this.txManager.execute(async (tx) => {
+      const createInput: CreateRideRequestInput = {
+        customerId: input.customerId,
+        vehicleTypeId: input.vehicleTypeId,
+        pickupLat: new Decimal(input.pickupLat),
+        pickupLng: new Decimal(input.pickupLng),
+        estimatedDistanceKm: new Decimal(fareQuote.estimatedDistanceKm),
+        estimatedDurationMin: fareQuote.estimatedDurationMin,
+        quotedFare: new Decimal(fareQuote.totalFare),
+        surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      };
+      if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
+      if (input.dropLat !== undefined) createInput.dropLat = new Decimal(input.dropLat);
+      if (input.dropLng !== undefined) createInput.dropLng = new Decimal(input.dropLng);
+      if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
+      if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
+      if (input.promoCode !== undefined)
+        createInput.promoCode = input.promoCode.trim().toUpperCase();
+      const request = await this.requestRepo.create(createInput, tx);
+      this.rideMetrics.requestCreated({ requestId: request.id });
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
+          requestId: request.id,
           customerId: input.customerId,
           vehicleTypeId: input.vehicleTypeId,
-          pickupLat: new Decimal(input.pickupLat),
-          pickupLng: new Decimal(input.pickupLng),
-          estimatedDistanceKm: new Decimal(fareQuote.estimatedDistanceKm),
-          estimatedDurationMin: fareQuote.estimatedDurationMin,
-          quotedFare: new Decimal(fareQuote.totalFare),
-          surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
-          // Was a hardcoded five minutes while `RIDE_REQUEST_EXPIRY_MIN` — which
-          // exists for exactly this, defaults to the same five, and is what
-          // `.env.example` tells an operator bounds the search — went unread.
-          expiresAt: new Date(Date.now() + rideConfig.requestExpiryMinutes * 60_000),
-        };
-        createInput.dropLat = new Decimal(input.dropLat);
-        createInput.dropLng = new Decimal(input.dropLng);
-        if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
-        if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
-        if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
-        const request = await this.requestRepo.create(createInput, tx);
-        this.rideMetrics.requestCreated({ requestId: request.id });
-        await this.eventPublisher.publish(
-          rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
-            requestId: request.id,
-            customerId: input.customerId,
-            vehicleTypeId: input.vehicleTypeId,
-            quotedFare: fareQuote.totalFare,
-          }),
-          tx,
-        );
-        return request;
-      });
-    } catch (err) {
-      // That index is the only unique constraint this insert can violate — the
-      // id is a uuid7 and the outbox event id is freshly generated — so
-      // reaching here means the rider booked twice at once and lost the race.
-      //
-      // They used to be told what the database was told: nothing.
-      // `UniqueConstraintError` carries no `code` and no `statusCode`, so
-      // `handleRideError` could only call it 500 — a server fault reported to a
-      // rider who tapped Book twice, where the identical sequential retry gets
-      // a clean 409. Same intent, same end state, two different answers.
-      if (err instanceof UniqueConstraintError) {
-        throw new ActiveRideExistsError('Customer already has an active ride request');
-      }
-      throw err;
-    }
+          quotedFare: fareQuote.totalFare,
+        }),
+        tx,
+      );
+      return request;
+    });
   }
   /// A request nobody has accepted yet has no `Ride` row, so `LifecycleService`'s
   /// cancel path (which acts on a `Ride`) can't reach it — this is the only

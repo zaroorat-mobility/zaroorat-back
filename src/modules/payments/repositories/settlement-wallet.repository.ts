@@ -34,6 +34,7 @@ export class SettlementWalletRepository {
       referenceType: string;
       referenceId: string;
       description: string;
+      txnType?: 'RIDE_EARNING' | 'BONUS' | 'INCENTIVE' | 'REFUND' | 'ADJUSTMENT';
     },
     tx: TransactionClient,
   ): Promise<DriverWallet> {
@@ -49,7 +50,7 @@ export class SettlementWalletRepository {
       data: {
         walletId: wallet.id,
         driverId: data.driverId,
-        txnType: 'RIDE_EARNING',
+        txnType: data.txnType ?? 'RIDE_EARNING',
         amount: data.amount,
         balanceAfter: newBalance,
         referenceType: data.referenceType,

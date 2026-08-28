@@ -25,6 +25,14 @@ export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void
   const controller = container.resolve<AdminVehicleManagementController>(
     'adminVehicleManagementController',
   );
+  const canRead = { preHandler: fastify.authorize({ permissions: ['vehicles:read'] }) };
+  const canWrite = { preHandler: fastify.authorize({ permissions: ['vehicles:write'] }) };
+
+  fastify.get('/vehicles', canRead, (req, reply) => controller.list(req, reply));
+  fastify.get('/vehicles/:id', canRead, (req, reply) => controller.getById(req, reply));
+  fastify.post('/vehicles/:id/flag-renewal', canWrite, (req, reply) =>
+    controller.flagForRenewal(req, reply),
+  );
 
   fastify.get(
     '/vehicles/:id/review',
@@ -44,7 +52,7 @@ export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void
   fastify.post(
     '/vehicles/:id/documents/:documentId/review',
     {
-      preHandler: fastify.authorize({ permissions: ['vehicles:read'] }),
+      preHandler: fastify.authorize({ permissions: ['vehicles:write'] }),
       schema: {
         tags: ['Admin', 'Vehicles'],
         summary: 'Approve or reject a vehicle document',
@@ -60,7 +68,7 @@ export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void
   fastify.post(
     '/vehicles/:id/verify',
     {
-      preHandler: fastify.authorize({ permissions: ['vehicles:read'] }),
+      preHandler: fastify.authorize({ permissions: ['vehicles:write'] }),
       schema: {
         tags: ['Admin', 'Vehicles'],
         summary: 'Approve or reject a vehicle',

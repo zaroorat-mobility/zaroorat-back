@@ -1,21 +1,24 @@
 model VehicleType {
-  id                String @id @default(uuid(7)) @db.Uuid
-  code              String @unique
+  id                String   @id @default(uuid(7)) @db.Uuid
+  code              String   @unique
   name              String
-  passengerCapacity Int?   @map("passenger_capacity") @db.SmallInt
-  luggageCapacity   Int?   @map("luggage_capacity") @db.SmallInt
+  passengerCapacity Int?     @map("passenger_capacity") @db.SmallInt
+  luggageCapacity   Int?     @map("luggage_capacity") @db.SmallInt
+  /// Client-side glyph key for the category picker (e.g. "bike", "auto").
+  /// Deliberately not a URL: the app ships its own artwork and only needs to
+  /// know which one to draw.
+  icon              String?
+  displayOrder      Int      @default(0) @map("display_order") @db.SmallInt
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
 
-  icon         String?
-  displayOrder Int      @default(0) @map("display_order") @db.SmallInt
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at")
-
-  vehicles     Vehicle[]
-  rideRequests RideRequest[]
-  rides        Ride[]
-  pricingRules PricingRule[]
-  surgeWindows SurgeWindow[]
-  promotions   Promotion[]
+  vehicles         Vehicle[]
+  rideRequests     RideRequest[]
+  rides            Ride[]
+  pricingRules     PricingRule[]
+  surgeWindows     SurgeWindow[]
+  promotions       Promotion[]
+  serviceZoneLinks ServiceZoneVehicleType[]
 
   @@index([isActive, displayOrder])
   @@map("vehicle_types")

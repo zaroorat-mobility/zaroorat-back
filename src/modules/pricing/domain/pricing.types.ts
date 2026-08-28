@@ -1,4 +1,11 @@
 import type { PricingRateCard } from '@config';
+import type { RideServiceType } from '../../../generated/prisma/index.js';
+
+export interface RateCardLookupOptions {
+  serviceType?: RideServiceType | undefined;
+  pickupLat?: number | undefined;
+  pickupLng?: number | undefined;
+}
 
 export interface FareCalculationParams {
   pickupLat: number;
@@ -7,12 +14,11 @@ export interface FareCalculationParams {
   dropLng?: number;
   vehicleTypeId: string;
   cityCode?: string;
+  serviceType?: RideServiceType;
   surgeMultiplier?: number;
   waitingMinutes?: number;
   discountAmount?: number;
-  /// Pre-resolved rate card. The multi-category quote loads every active type
-  /// in one query and passes each card in, so pricing N categories stays one
-  /// round trip rather than N.
+  isNightTrip?: boolean;
   rateCard?: PricingRateCard;
   /// Pre-estimated trip, for the same reason as `rateCard`: the multi-category
   /// quote works out the journey once and prices every category against it,
@@ -30,9 +36,13 @@ export interface FinalFareParams {
   actualDurationMin: number;
   vehicleTypeId: string;
   cityCode?: string;
+  serviceType?: RideServiceType;
+  pickupLat?: number;
+  pickupLng?: number;
   surgeMultiplier?: number;
   waitingMinutes?: number;
   discountAmount?: number;
+  isNightTrip?: boolean;
   rateCard?: PricingRateCard;
 }
 
@@ -43,6 +53,8 @@ export interface ItemizedFareResult {
   distanceFare: number;
   timeFare: number;
   waitingCharge: number;
+  bookingFee: number;
+  nightAdjustment: number;
   surgeMultiplier: number;
   surgeAmount: number;
   subtotal: number;

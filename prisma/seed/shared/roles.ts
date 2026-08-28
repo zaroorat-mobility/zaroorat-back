@@ -74,6 +74,12 @@ export const PERMISSION_SEED = [
     description: 'View rider directory and rider detail in the admin panel',
   },
   {
+    code: 'riders:write',
+    resource: 'riders',
+    action: 'write',
+    description: 'Suspend, block, or reactivate rider accounts',
+  },
+  {
     code: 'drivers:read',
     resource: 'drivers',
     action: 'read',
@@ -86,16 +92,22 @@ export const PERMISSION_SEED = [
     description: 'Approve or reject driver verification, and read driver documents',
   },
   {
-    code: 'drivers:suspend',
+    code: 'drivers:write',
     resource: 'drivers',
-    action: 'suspend',
-    description: 'Suspend or reinstate a driver',
+    action: 'write',
+    description: 'Suspend, block, or reinstate driver accounts',
   },
   {
     code: 'vehicles:read',
     resource: 'vehicles',
     action: 'read',
-    description: 'Review vehicles and vehicle documents',
+    description: 'View vehicle directory and vehicle documents',
+  },
+  {
+    code: 'vehicles:write',
+    resource: 'vehicles',
+    action: 'write',
+    description: 'Approve, reject, or flag vehicles and vehicle documents for renewal',
   },
   {
     code: 'pricing:read',
@@ -108,6 +120,18 @@ export const PERMISSION_SEED = [
     resource: 'pricing',
     action: 'write',
     description: 'Create or change fare, surge, and pricing configuration',
+  },
+  {
+    code: 'geography:read',
+    resource: 'geography',
+    action: 'read',
+    description: 'View countries, cities, service zones, and coverage configuration',
+  },
+  {
+    code: 'geography:write',
+    resource: 'geography',
+    action: 'write',
+    description: 'Create or change cities, service zones, and geographic coverage',
   },
   {
     code: 'operations:read',
@@ -170,6 +194,24 @@ export const PERMISSION_SEED = [
     description: 'View campaigns and coupons',
   },
   {
+    code: 'campaigns:write',
+    resource: 'campaigns',
+    action: 'write',
+    description: 'Create and manage campaigns and coupons',
+  },
+  {
+    code: 'referrals:read',
+    resource: 'referrals',
+    action: 'read',
+    description: 'View referral programs, codes, and history',
+  },
+  {
+    code: 'referrals:write',
+    resource: 'referrals',
+    action: 'write',
+    description: 'Create and manage referral programs and codes',
+  },
+  {
     code: 'documents:read',
     resource: 'documents',
     action: 'read',
@@ -218,7 +260,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<RoleSlug, readonly PermissionCode
       'support:read',
       'rides:read_any',
     ] as const),
-    // Deliberately NOT drivers:verify or drivers:suspend — finance moves money,
+    // Deliberately NOT drivers:verify or drivers:write — finance moves money,
     // it does not decide operability.
     finance: Object.freeze([
       'finance:read',
@@ -268,6 +310,7 @@ export async function seedRoles(prisma: ProviderClient): Promise<void> {
   const roles = await prisma.role.findMany({ select: { id: true, slug: true } });
   const permissions = await prisma.permission.findMany({ select: { id: true, code: true } });
   const permissionIdByCode = new Map(permissions.map((p) => [p.code, p.id]));
+  const knownCodes = new Set<string>(PERMISSION_SEED.map((permission) => permission.code));
 
   for (const role of roles) {
     const intended = ROLE_PERMISSIONS[role.slug as RoleSlug];
@@ -292,6 +335,14 @@ export async function seedRoles(prisma: ProviderClient): Promise<void> {
     await prisma.rolePermission.deleteMany({
       where: { roleId: role.id, permissionId: { notIn: [...intendedIds] } },
     });
+  }
+
+  // Drop obsolete permission rows so Role Access only shows the current vocabulary.
+  const obsolete = permissions.filter((permission) => !knownCodes.has(permission.code));
+  if (obsolete.length > 0) {
+    const obsoleteIds = obsolete.map((permission) => permission.id);
+    await prisma.rolePermission.deleteMany({ where: { permissionId: { in: obsoleteIds } } });
+    await prisma.permission.deleteMany({ where: { id: { in: obsoleteIds } } });
   }
 }
 

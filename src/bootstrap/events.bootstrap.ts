@@ -8,11 +8,12 @@ import type {
   RideRealtimeConsumer,
 } from '@modules/rides';
 import type { RideCollectionConsumer } from '@modules/payments';
+import type {
+  ReferralRideCompletedConsumer,
+  ReferralDriverVerifiedConsumer,
+} from '@modules/referrals/consumers/index.js';
 import { logger } from '@shared/logger/index.js';
 
-/// Every consumer the platform runs, by container key. One list, so a new
-/// consumer is wired in exactly one place and `registerEventConsumers` is the
-/// only thing that has to know the set.
 const CONSUMER_KEYS = [
   'epochInvalidationConsumer',
   'authDriverVerifiedConsumer',
@@ -20,6 +21,8 @@ const CONSUMER_KEYS = [
   'rideNotificationConsumer',
   'rideRealtimeConsumer',
   'rideCollectionConsumer',
+  'referralRideCompletedConsumer',
+  'referralDriverVerifiedConsumer',
 ] as const;
 
 type Consumer =
@@ -28,7 +31,9 @@ type Consumer =
   | RideRequestedConsumer
   | RideNotificationConsumer
   | RideRealtimeConsumer
-  | RideCollectionConsumer;
+  | RideCollectionConsumer
+  | ReferralRideCompletedConsumer
+  | ReferralDriverVerifiedConsumer;
 
 /// Subscribing consumers to the in-process bus, and nothing else.
 ///
