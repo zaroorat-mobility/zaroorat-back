@@ -1,12 +1,3 @@
-// ============================ AUTHENTICATION ============================
-//
-// Source of truth: docs/auth/03 auth database spec.md.
-//   - Session epoch is Redis-only (auth:epoch:{user_id}) — never a column here.
-//   - Refresh tokens store a HASH only; the raw token never touches Postgres.
-//   - OTP secrets live in Redis; this module keeps only a purgeable attempt trail.
-// Partial-unique / housekeeping indexes that Prisma cannot express are shipped
-// as raw SQL in the migration (see doc 03 §4).
-
 model UserSession {
   id            String    @id @default(uuid(7)) @db.Uuid // = sid (doc 02 §3.3)
   userId        String    @map("user_id") @db.Uuid
@@ -23,7 +14,6 @@ model UserSession {
   user          User           @relation(fields: [userId], references: [id])
   device        UserDevice?    @relation(fields: [deviceId], references: [id])
   refreshTokens RefreshToken[]
-  // Live-session count for the concurrency cap is a PARTIAL index — see doc 03 §4.
 
   @@index([userId])
   @@index([expiresAt])
@@ -53,37 +43,30 @@ model RefreshToken {
 }
 
 model OtpVerification {
-  id                String     @id @default(uuid(7)) @db.Uuid
-  userId            String?    @map("user_id") @db.Uuid // null until the account exists
-  phoneNumber       String     @map("phone_number")
-  purpose           OtpPurpose
-  // queued = accepted by the API and handed to the delivery worker; the worker
-  // settles it to sent or failed once the SMS gateway has answered.
-  outcome           String? // queued | sent | verified | failed | expired | locked
-  attempts          Int        @default(0)
-  ipAddress         String?    @map("ip_address") @db.Inet
-  deviceId          String?    @map("device_id") @db.Uuid
-  // Fraud / delivery metadata (non-secret) for investigation & observability.
-  deviceFingerprint String?    @map("device_fingerprint")
-  userAgent         String?    @map("user_agent")
+  id          String     @id @default(uuid(7)) @db.Uuid
+  userId      String?    @map("user_id") @db.Uuid // null until the account exists
+  phoneNumber String     @map("phone_number")
+  purpose     OtpPurpose
+
+  outcome   String? // queued | sent | verified | failed | expired | locked
+  attempts  Int     @default(0)
+  ipAddress String? @map("ip_address") @db.Inet
+  deviceId  String? @map("device_id") @db.Uuid
+
+  deviceFingerprint String?   @map("device_fingerprint")
+  userAgent         String?   @map("user_agent")
   provider          String? // SMS provider that handled delivery
-  providerRef       String?    @map("provider_ref") // gateway message id
-  latencyMs         Int?       @map("latency_ms") // delivery latency
-  failureReason     String?    @map("failure_reason") // delivery/verify failure detail
-  verifiedAt        DateTime?  @map("verified_at")
-  expiresAt         DateTime   @map("expires_at")
-  createdAt         DateTime   @default(now()) @map("created_at")
-  // No otp_hash: the secret is Redis-only. This is a purgeable fraud/audit
-  // trail (R-AUTH-22/26/30), never a verification store (doc 02 §4.5).
-  // NOTE: geo enrichment (country/city) is deferred — needs a geo-IP lookup.
+  providerRef       String?   @map("provider_ref") // gateway message id
+  latencyMs         Int?      @map("latency_ms") // delivery latency
+  failureReason     String?   @map("failure_reason") // delivery/verify failure detail
+  verifiedAt        DateTime? @map("verified_at")
+  expiresAt         DateTime  @map("expires_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   user User? @relation(fields: [userId], references: [id]) // null until the account exists
 
   @@index([phoneNumber])
   @@index([createdAt])
-  // The nightly retention purge's only query: `expires_at < cutoff ORDER BY
-  // expires_at LIMIT n` (AuthRetentionJob). Without it that batch is a full scan
-  // plus a top-N sort of the largest table in the schema, every night.
   @@index([expiresAt])
   @@map("otp_verifications")
 }

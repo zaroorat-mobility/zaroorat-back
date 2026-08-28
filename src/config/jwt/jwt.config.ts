@@ -9,7 +9,7 @@ function parseSecretsJson(): Record<string, string> {
       return parsed as Record<string, string>;
     }
   } catch {
-    // ignore parsing errors
+    // Malformed JSON falls through to the empty map below.
   }
   return {};
 }

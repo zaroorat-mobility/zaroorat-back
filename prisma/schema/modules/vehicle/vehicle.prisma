@@ -1,18 +1,14 @@
-// ============================ VEHICLE ============================
-
 model VehicleType {
-  id                 String   @id @default(uuid(7)) @db.Uuid
-  code               String   @unique
-  name               String
-  passengerCapacity  Int?     @map("passenger_capacity") @db.SmallInt
-  luggageCapacity    Int?     @map("luggage_capacity") @db.SmallInt
-  /// Client-side glyph key for the category picker (e.g. "bike", "auto").
-  /// Deliberately not a URL: the app ships its own artwork and only needs to
-  /// know which one to draw.
-  icon               String?
-  displayOrder       Int      @default(0) @map("display_order") @db.SmallInt
-  isActive           Boolean  @default(true) @map("is_active")
-  createdAt          DateTime @default(now()) @map("created_at")
+  id                String @id @default(uuid(7)) @db.Uuid
+  code              String @unique
+  name              String
+  passengerCapacity Int?   @map("passenger_capacity") @db.SmallInt
+  luggageCapacity   Int?   @map("luggage_capacity") @db.SmallInt
+
+  icon         String?
+  displayOrder Int      @default(0) @map("display_order") @db.SmallInt
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   vehicles     Vehicle[]
   rideRequests RideRequest[]
@@ -26,24 +22,22 @@ model VehicleType {
 }
 
 model Vehicle {
-  id                 String             @id @default(uuid(7)) @db.Uuid
-  registrationNumber String             @unique @map("registration_number")
-  registrationState  String?            @map("registration_state")
-  vin                String?            @unique
+  id                 String  @id @default(uuid(7)) @db.Uuid
+  registrationNumber String  @unique @map("registration_number")
+  registrationState  String? @map("registration_state")
+  vin                String? @unique
   make               String?
   model              String?
-  manufacturingYear  Int?               @map("manufacturing_year") @db.SmallInt
+  manufacturingYear  Int?    @map("manufacturing_year") @db.SmallInt
   color              String?
-  fuelType           String?            @map("fuel_type")
-  seatingCapacity    Int?               @map("seating_capacity") @db.SmallInt
-  vehicleTypeId      String             @map("vehicle_type_id") @db.Uuid
-  ownerName          String?            @map("owner_name")
-  ownerPhone         String?            @map("owner_phone")
-  currentOdometer    Int?               @map("current_odometer")
-  currentDriverId    String?            @map("current_driver_id") @db.Uuid
-  /// Operator approval to carry passengers — distinct from `isActive`, which
-  /// only says the row is usable. Mirrors `Driver.verificationStatus`: before
-  /// this existed a VERIFIED driver could operate a vehicle nobody reviewed.
+  fuelType           String? @map("fuel_type")
+  seatingCapacity    Int?    @map("seating_capacity") @db.SmallInt
+  vehicleTypeId      String  @map("vehicle_type_id") @db.Uuid
+  ownerName          String? @map("owner_name")
+  ownerPhone         String? @map("owner_phone")
+  currentOdometer    Int?    @map("current_odometer")
+  currentDriverId    String? @map("current_driver_id") @db.Uuid
+
   verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
   verifiedBy         String?            @map("verified_by") @db.Uuid
   verifiedAt         DateTime?          @map("verified_at")
@@ -70,11 +64,8 @@ model Vehicle {
 }
 
 model VehicleAssignment {
-  id         String    @id @default(uuid(7)) @db.Uuid
-  /// One ACTIVE row per driver, and one per vehicle: a raw-SQL partial unique
-  /// index (migration 20260821140000, `vehicle_assignments_active_driver_key`
-  /// / `_active_vehicle_key`) — Prisma can't express a WHERE-scoped unique
-  /// constraint, so neither is declared as `@@unique` here.
+  id String @id @default(uuid(7)) @db.Uuid
+
   driverId   String    @map("driver_id") @db.Uuid
   vehicleId  String    @map("vehicle_id") @db.Uuid
   assignedAt DateTime  @default(now()) @map("assigned_at")
@@ -93,12 +84,11 @@ model VehicleAssignment {
 }
 
 model VehicleDocument {
-  id                 String             @id @default(uuid(7)) @db.Uuid
-  vehicleId          String             @map("vehicle_id") @db.Uuid
-  documentType       String             @map("document_type")
-  documentNumber     String?            @map("document_number")
-  /// Legacy client-supplied URL, kept nullable for the expand half of the
-  /// file-reference cutover. New writes populate `fileId` only.
+  id             String  @id @default(uuid(7)) @db.Uuid
+  vehicleId      String  @map("vehicle_id") @db.Uuid
+  documentType   String  @map("document_type")
+  documentNumber String? @map("document_number")
+
   fileUrl            String?            @map("file_url")
   fileId             String?            @map("file_id") @db.Uuid
   issuedAt           DateTime?          @map("issued_at") @db.Date
@@ -197,7 +187,6 @@ model InsuranceClaim {
   @@map("insurance_claims")
 }
 
-// NOTE: accident_reports references rides(id) via raw SQL FK; modeled loosely.
 model AccidentReport {
   id           String                                @id @default(uuid(7)) @db.Uuid
   vehicleId    String                                @map("vehicle_id") @db.Uuid

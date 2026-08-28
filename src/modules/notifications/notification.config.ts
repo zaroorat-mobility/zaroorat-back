@@ -1,6 +1,6 @@
 import { config } from '@config';
 import { MockProvider } from './providers/mock.provider';
-import { Msg91Provider } from './providers/msg91.provider.js';
+import { Msg91Provider } from '../../integrations/msg91/msg91.client.js';
 import { MockPushProvider } from './providers/mock-push.provider';
 import type { SmsProvider } from './providers/sms.provider';
 import type { PushProvider } from './providers/push.provider';

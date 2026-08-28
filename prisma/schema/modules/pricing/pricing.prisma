@@ -1,5 +1,3 @@
-// ============================ PRICING ============================
-
 model PricingRule {
   id              String    @id @default(uuid(7)) @db.Uuid
   vehicleTypeId   String    @map("vehicle_type_id") @db.Uuid
@@ -148,8 +146,6 @@ model TaxConfig {
   @@index([cityCode, isActive])
   @@map("tax_configs")
 }
-
-// ============================ PROMOTIONS ============================
 
 model PromoCampaign {
   id        String            @id @default(uuid(7)) @db.Uuid

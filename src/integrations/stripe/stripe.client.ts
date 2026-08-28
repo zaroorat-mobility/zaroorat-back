@@ -1,17 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { Decimal } from '../../types/index.js';
+import { Decimal } from '../../modules/payments/types/index.js';
 import type {
   PaymentGatewayProvider,
   CreateGatewayIntentInput,
   GatewayIntentResult,
   GatewayRefundResult,
   GatewayPayoutResult,
-} from './gateway.provider.js';
-/// A placeholder, not an integration: it makes no network call and reports
-/// every charge as successful. `UNIMPLEMENTED_GATEWAYS` in
-/// `src/config/payment/payment.config.ts` is what stops it being selected in a
-/// money-taking environment — remove it from that list only when the methods
-/// below actually reach the provider.
+} from '../../modules/payments/services/gateway/gateway.provider.js';
+
 export class StripeGatewayProvider implements PaymentGatewayProvider {
   readonly gatewayName = 'stripe';
   constructor(private readonly secretKey?: string) {}

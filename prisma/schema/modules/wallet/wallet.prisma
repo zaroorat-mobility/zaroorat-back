@@ -1,7 +1,3 @@
-// ============================ WALLET (operations) ============================
-// Polymorphic (walletType, walletId) fields are plain scalars: they can point at
-// customer_wallets OR driver_wallets, so no single Prisma relation is modeled.
-
 model WalletTopup {
   id                   String    @id @default(uuid(7)) @db.Uuid
   userId               String    @map("user_id") @db.Uuid

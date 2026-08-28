@@ -10,7 +10,7 @@ import {
   type S3Client,
 } from '@aws-sdk/client-s3';
 
-import { S3StorageProvider } from '../../../src/modules/files/utils/storage/s3.provider.js';
+import { S3StorageProvider } from '../../../src/integrations/aws-s3/s3.client.js';
 import { StorageError } from '../../../src/modules/files/utils/storage/storage.provider.js';
 import { MockStorageProvider } from '../../../src/modules/files/utils/storage/mock.provider.js';
 import { createStorageProvider } from '../../../src/modules/files/config/storage.config.js';
@@ -560,7 +560,7 @@ describe('S3 storage provider (unit)', () => {
   });
 
   it('logs nothing at all — FILE-INV-2 applies inside the provider', () => {
-    const source = readFileSync('src/modules/files/utils/storage/s3.provider.ts', 'utf8');
+    const source = readFileSync('src/integrations/aws-s3/s3.client.ts', 'utf8');
 
     assert.equal(source.includes('logger'), false);
     assert.equal(source.includes('console.'), false);
