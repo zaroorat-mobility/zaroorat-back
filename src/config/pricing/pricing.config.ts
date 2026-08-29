@@ -4,9 +4,12 @@ export interface PricingRateCard {
   baseFare: number;
   perKm: number;
   perMinute: number;
-  /// Minutes of waiting absorbed before `perWaitingMinute` starts billing.
-  freeWaitingMinutes: number;
   perWaitingMinute: number;
+  /// FR-012. Minutes of waiting absorbed before `perWaitingMinute` starts
+  /// billing. There used to be a second field, `freeWaitingMinutes`, fed from
+  /// the same `PricingRule.freeWaitingMin` column but from a different
+  /// environment variable — and nothing read it. Two names for one number is how
+  /// an operator sets the grace period in the wrong one.
   freeWaitingMin: number;
   bookingFee: number;
   platformFeePct: number;
@@ -14,7 +17,6 @@ export interface PricingRateCard {
   taxRatePct: number;
   commissionRatePct: number;
   minimumFare: number;
-  nightMultiplier: number;
 }
 
 export interface PricingConfig {
@@ -32,9 +34,9 @@ const defaultRateCard: PricingRateCard = Object.freeze({
   baseFare: numericEnv('RIDE_BASE_FARE', 50, { min: 0 }),
   perKm: numericEnv('RIDE_RATE_PER_KM', 12, { min: 0 }),
   perMinute: numericEnv('RIDE_RATE_PER_MIN', 2, { min: 0 }),
-  // Mirrors `PricingRule.freeWaitingMin`, whose column default is also 3.
-  freeWaitingMinutes: numericEnv('RIDE_FREE_WAIT_MIN', 3, { min: 0 }),
   perWaitingMinute: numericEnv('RIDE_RATE_PER_WAIT_MIN', 3, { min: 0 }),
+  // Mirrors `PricingRule.freeWaitingMin`, whose column default is also 3.
+  // `RIDE_FREE_WAIT_MIN` fed the removed duplicate and now has no reader.
   freeWaitingMin: numericEnv('RIDE_FREE_WAITING_MIN', 3, { min: 0 }),
   bookingFee: numericEnv('RIDE_BOOKING_FEE', 0, { min: 0 }),
   platformFeePct: numericEnv('RIDE_PLATFORM_FEE_PCT', 0, { min: 0, max: 100 }),
@@ -42,7 +44,6 @@ const defaultRateCard: PricingRateCard = Object.freeze({
   taxRatePct: numericEnv('RIDE_TAX_RATE', 0.05, { min: 0, max: 1 }) * 100,
   commissionRatePct: numericEnv('RIDE_COMMISSION_RATE', 0.2, { min: 0, max: 1 }) * 100,
   minimumFare: numericEnv('RIDE_MINIMUM_FARE', 50, { min: 0 }),
-  nightMultiplier: 1,
 });
 
 export const pricingConfig: PricingConfig = Object.freeze({

@@ -7,10 +7,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { pricingConfig } from '../../../src/config/pricing/pricing.config.js';
-import { PricingService } from '../../../src/modules/pricing';
+import { PricingMetrics, PricingService } from '../../../src/modules/pricing';
 import { calculateHaversineDistanceKm } from '../../../src/modules/pricing/utils/distance.util.js';
 
-const pricingService = new PricingService({} as never);
+const pricingService = new PricingService({} as never, new PricingMetrics());
 
 const PICKUP = { latitude: 12.9716, longitude: 77.5946 };
 /// Roughly 1km north — far enough to survive the zero-distance guard, small

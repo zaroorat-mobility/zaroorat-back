@@ -59,6 +59,15 @@ export async function makeVehicleType(
   return type.id;
 }
 
+/// The id of a canonical catalog type. `resetState` truncates `vehicle_types`
+/// and re-seeds the platform catalog, so a test that needs `CAB_ECONOMY`
+/// specifically must look it up — creating one is a unique violation.
+export async function vehicleTypeIdByCode(code: string): Promise<string> {
+  const type = await db().client.vehicleType.findUnique({ where: { code } });
+  if (!type) throw new Error(`vehicle type ${code} is not in the seeded catalog`);
+  return type.id;
+}
+
 export async function makeVehicle(
   vehicleTypeId: string,
   options: { verified?: boolean; isActive?: boolean } = {},
@@ -316,6 +325,34 @@ export async function ensureCity(
   return city.id;
 }
 
+/// A city with an actual boundary, which `ensureCity` cannot produce: Prisma
+/// models `cities.boundary` as `Unsupported("geography(Polygon,4326)")`, so no
+/// `city.create` can ever set it. Every city in the test database was therefore
+/// boundary-less, `resolveCityAtPoint` matched nothing, and the pickup gate
+/// refused every quote and every booking — 12 of the 24 catalog tests died on it
+/// before FR-048.
+///
+/// Tests that need coverage to be *configured* (so the gate enforces rather than
+/// standing down) must use this rather than `ensureCity`.
+export async function ensureCityWithBoundary(
+  code: string,
+  name: string,
+  coordinates: number[][][],
+): Promise<string> {
+  const cityId = await ensureCity(code, name);
+  const geoJson = JSON.stringify({ type: 'Polygon', coordinates });
+  await db().client.$executeRaw`
+    UPDATE cities SET boundary = ST_GeomFromGeoJSON(${geoJson}) WHERE id = ${cityId}::uuid
+  `;
+  return cityId;
+}
+
+/// FR-005. Sets the explicit precedence override on a zone, for the cases where
+/// the default (smallest containing polygon wins) is not what an operator wants.
+export async function setZonePriority(zoneId: string, priority: number): Promise<void> {
+  await db().client.serviceZone.update({ where: { id: zoneId }, data: { priority } });
+}
+
 export async function ensureServiceZone(
   cityCode: string,
   zoneCode: string,
@@ -363,6 +400,27 @@ export async function createPricingRuleDirect(data: {
   commissionRatePct?: number;
   isActive?: boolean;
 }): Promise<string> {
+  /// FR-034. The database now refuses two live rules whose effective windows
+  /// overlap on the same key, and `resetState` re-seeds one GLOBAL rule per
+  /// catalog vehicle type. A fixture that simply inserted therefore produced the
+  /// exact state the constraint exists to prevent — which is what several of
+  /// these tests were silently depending on before it existed.
+  ///
+  /// Superseding the incumbent is what `AdminFareService.create` does, so this
+  /// mirrors the only path that creates rules in production.
+  if (data.isActive ?? true) {
+    await db().client.pricingRule.updateMany({
+      where: {
+        vehicleTypeId: data.vehicleTypeId,
+        cityCode: data.cityCode,
+        serviceType: data.serviceType ?? null,
+        serviceZoneId: data.serviceZoneId ?? null,
+        isActive: true,
+      },
+      data: { isActive: false },
+    });
+  }
+
   const row = await db().client.pricingRule.create({
     data: {
       vehicleTypeId: data.vehicleTypeId,

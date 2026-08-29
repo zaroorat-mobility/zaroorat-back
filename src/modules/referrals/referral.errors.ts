@@ -44,3 +44,34 @@ export class ReferralProgramNotActiveError extends ReferralError {
     this.name = 'ReferralProgramNotActiveError';
   }
 }
+
+/// FR-023. The program pays into a wallet the beneficiary does not have.
+///
+/// A 500 rather than a 4xx on purpose: nothing the caller did is wrong, and the
+/// condition is a misconfigured program that an operator has to fix. It aborts
+/// the reward transaction so the referral stays QUALIFIED and retryable, instead
+/// of being marked REWARDED over an uncredited row.
+export class ReferralRewardWalletMissingError extends ReferralError {
+  constructor(message = 'The beneficiary has no wallet of the type this program pays into') {
+    super(message, 'REFERRAL_REWARD_WALLET_MISSING', 500);
+    this.name = 'ReferralRewardWalletMissingError';
+  }
+}
+
+/// FR-025 / BD-6. The referee is not eligible to be referred: they have already
+/// completed a ride, or their account is older than the qualification window.
+export class RefereeNotEligibleError extends ReferralError {
+  constructor(message = 'Referral codes can only be applied by new users') {
+    super(message, 'REFERRAL_REFEREE_NOT_ELIGIBLE', 409);
+    this.name = 'RefereeNotEligibleError';
+  }
+}
+
+/// FR-028. The referral matched a fraud signal. Recorded and held for review
+/// rather than refused outright — a shared device is evidence, not proof.
+export class ReferralUnderReviewError extends ReferralError {
+  constructor(message = 'This referral has been flagged for review') {
+    super(message, 'REFERRAL_UNDER_REVIEW', 202);
+    this.name = 'ReferralUnderReviewError';
+  }
+}

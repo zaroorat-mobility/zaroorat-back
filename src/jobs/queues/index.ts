@@ -25,6 +25,7 @@ export const JOB_NAMES = Object.freeze({
   PAYMENT_COLLECTION_SWEEP: 'payment-collection-sweep',
   PAYMENT_RECEIVABLE_WRITEOFF: 'payment-receivable-writeoff',
   DRIVER_SETTLEMENT: 'driver-settlement',
+  REFERRAL_PENDING_REWARD_SWEEP: 'referral-pending-reward-sweep',
   OTP_SEND: 'otp-send',
 } as const);
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];

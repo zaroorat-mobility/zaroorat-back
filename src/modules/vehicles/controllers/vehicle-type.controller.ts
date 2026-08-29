@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { PricingRateCard } from '@config';
 import { PricingService } from '@modules/pricing';
+import { GeographicCoverageService } from '@modules/geographic';
 import { VehicleTypeService } from '../services/vehicle-type.service.js';
 import type { VehicleType } from '../types/index.js';
 
@@ -50,6 +51,7 @@ export class VehicleTypeController {
   constructor(
     private readonly vehicleTypeService: VehicleTypeService,
     private readonly pricingService: PricingService,
+    private readonly geographicCoverageService: GeographicCoverageService,
   ) {}
 
   /// The catalog the customer app renders its category picker from, and the
@@ -60,9 +62,29 @@ export class VehicleTypeController {
   /// `PricingRule` and the view was not moved with it, so `/docs` advertised a
   /// `perKmRate` that every response omitted.
   async list(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { cityId } = (req.query ?? {}) as { cityId?: string };
+    const { cityId, lat, lng } = (req.query ?? {}) as {
+      cityId?: string;
+      lat?: number;
+      lng?: number;
+    };
     const types = await this.vehicleTypeService.listActive(cityId !== undefined ? { cityId } : {});
-    const rateCards = await this.pricingService.rateCardsForTypeIds(types.map((type) => type.id));
+
+    // FR-041 / BD-9. With a pickup point the catalog resolves exactly what the
+    // quote will: the city that owns the point, then that city's zone rules.
+    // Without one it can only reach the GLOBAL card, which is what advertised a
+    // price the quote did not charge — so it publishes no rate figure instead.
+    if (lat === undefined || lng === undefined) {
+      reply.send({ data: types.map((type) => toVehicleTypeView(type)) });
+      return;
+    }
+
+    const city = await this.geographicCoverageService.resolveCityAtPoint(lat, lng);
+    const rateCards = await this.pricingService.rateCardsForPoint({
+      vehicleTypeIds: types.map((type) => type.id),
+      ...(city?.code !== undefined ? { cityCode: city.code } : {}),
+      pickupLat: lat,
+      pickupLng: lng,
+    });
     reply.send({ data: types.map((type) => toVehicleTypeView(type, rateCards.get(type.id))) });
   }
 }

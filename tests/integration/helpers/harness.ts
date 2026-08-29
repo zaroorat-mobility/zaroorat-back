@@ -70,11 +70,31 @@ export async function resetState(): Promise<void> {
       '"files", "otp_verifications", "outbox_events", "vehicle_types", ' +
       '"vehicles", "vehicle_assignments", "vehicle_documents", ' +
       '"payment_ledger_entries", "gateway_events", ' +
+      // The comment above already claimed `wallet_reconciliations` was here.
+      // It was not, so every run's rows were still present for the next one and
+      // `payment-reconciliation`'s "the driver wallet is scanned" counted every
+      // run since the table was created — green on a virgin database and red
+      // ever after, which is the same defect this list was extended for twice
+      // before.
+      '"wallet_reconciliations", ' +
       '"promotions", "promotion_redemptions", "promo_campaigns", "audience_segments", ' +
       '"campaign_targets", "coupon_batches", "coupons", "promo_banners", ' +
       '"referral_programs", "referral_codes", "referrals", "referral_rewards", ' +
       '"referral_milestones", "referral_milestone_achievements", "referral_fraud_flags", ' +
-      '"billing_invoices", "invoice_templates" RESTART IDENTITY CASCADE',
+      '"billing_invoices", "invoice_templates", ' +
+      // The comment above claimed `surge_zones` was already here. It was not,
+      // and neither were `cities` or `service_zones` — so every city, zone and
+      // surge polygon a test drew survived into every later test in the run.
+      // That is not merely accumulation: a leaked city boundary decides whether
+      // the pickup gate enforces or stands down (FR-048/BD-10), and a leaked
+      // zone decides which rate card prices the ride. Three tests in
+      // `zone-fare-parity` failed on exactly that before this line existed.
+      // `states` and `countries` belong here for the same reason: nothing reset
+      // them, so `admin-geographic`'s "creates a new state" passed on a virgin
+      // database and failed with a unique violation on every run after — a test
+      // that can only be green once is not a test.
+      '"surge_zones", "service_zones", "cities", "states", "countries" ' +
+      'RESTART IDENTITY CASCADE',
   );
   // Vehicle types are reference data, like the RBAC roles — except `roles` is
   // not in the TRUNCATE list and `vehicle_types` has to be, because tests create

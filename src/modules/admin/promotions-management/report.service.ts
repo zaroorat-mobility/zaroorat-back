@@ -31,7 +31,7 @@ export interface PromotionPerformanceDto {
   title: string | null;
   usedCount: number;
   usageLimitTotal: number | null;
-  usageLimitPerUser: number;
+  usageLimitPerUser: number | null;
   totalDiscountAmount: number;
   revenueImpact: number;
   uniqueUsers: number;

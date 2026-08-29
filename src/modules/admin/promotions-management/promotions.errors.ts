@@ -59,6 +59,15 @@ export class CouponBatchNotFoundError extends PromotionsAdminError {
   }
 }
 
+/// FR-019. The batch's `totalCount` is the cap an operator set. Asking for more
+/// is a conflict with that decision, not a not-found or a validation error.
+export class CouponBatchExhaustedError extends PromotionsAdminError {
+  constructor(message = 'Coupon batch has already generated all of its coupons') {
+    super(message, 'COUPON_BATCH_EXHAUSTED', 409);
+    this.name = 'CouponBatchExhaustedError';
+  }
+}
+
 export class BannerNotFoundError extends PromotionsAdminError {
   constructor(message = 'Promo banner was not found') {
     super(message, 'BANNER_NOT_FOUND', 404);

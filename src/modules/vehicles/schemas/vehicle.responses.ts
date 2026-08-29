@@ -25,10 +25,17 @@ export const listVehicleTypesQuerySchema = {
     cityId: {
       type: 'string',
       format: 'uuid',
-      description:
-        'Reserved for service-zone scoping. Accepted and ignored until zones are populated.',
+      description: 'Restricts the catalog to categories available in this city.',
     },
+    // FR-041 / BD-9. The catalog used to publish a GLOBAL rate figure while the
+    // quote charged a city- or zone-scoped one, so the picker advertised a price
+    // the next screen did not honour. A zone cannot be resolved from a city id —
+    // it needs a point — so the endpoint takes the pickup the client already has.
+    // Both or neither; supplying one alone is rejected.
+    lat: { type: 'number', minimum: -90, maximum: 90, description: 'Pickup latitude.' },
+    lng: { type: 'number', minimum: -180, maximum: 180, description: 'Pickup longitude.' },
   },
+  dependencies: { lat: ['lng'], lng: ['lat'] },
 } as const;
 
 const vehicleTypeView = {

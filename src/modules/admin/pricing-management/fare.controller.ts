@@ -40,19 +40,19 @@ export class AdminFareController {
 
   async activate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = fareRuleIdParamSchema.parse(req.params);
-    const data = await this.adminFareService.activate(id);
+    const data = await this.adminFareService.activate(id, callerId(req));
     reply.send({ data });
   }
 
   async deactivate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = fareRuleIdParamSchema.parse(req.params);
-    const data = await this.adminFareService.deactivate(id);
+    const data = await this.adminFareService.deactivate(id, callerId(req));
     reply.send({ data });
   }
 
   async remove(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = fareRuleIdParamSchema.parse(req.params);
-    await this.adminFareService.remove(id);
+    await this.adminFareService.remove(id, callerId(req));
     reply.send({ success: true });
   }
 }

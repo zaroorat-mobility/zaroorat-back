@@ -3,6 +3,7 @@ import { DatabaseService } from '@core/database';
 import { Prisma } from '../../../generated/prisma/index.js';
 import {
   CampaignNotFoundError,
+  CouponBatchExhaustedError,
   CouponBatchNotFoundError,
   PromotionNotFoundError,
 } from './promotions.errors.js';
@@ -194,8 +195,19 @@ export class AdminCouponService {
     });
     if (!batch) throw new CouponBatchNotFoundError();
 
+    // FR-019. `remaining || body.count` collapsed to `body.count` the moment the
+    // batch was exhausted, because 0 is falsy — so the guard read
+    // `Math.min(count, count)` and generation became unlimited. Line 221 then
+    // raised `totalCount` to match, erasing the evidence that a cap had ever
+    // been exceeded. Repeated POSTs to /generate minted unbounded coupons
+    // against a promotion.
     const remaining = Math.max(0, batch.totalCount - batch.generatedCount);
-    const toCreate = Math.min(body.count, remaining || body.count);
+    if (remaining === 0) {
+      throw new CouponBatchExhaustedError(
+        `Batch has already generated all ${batch.totalCount} of its coupons`,
+      );
+    }
+    const toCreate = Math.min(body.count, remaining);
     const prefix = (batch.prefix ?? 'CPN').toUpperCase();
     const codes: string[] = [];
 
@@ -218,7 +230,9 @@ export class AdminCouponService {
         where: { id: batchId },
         data: {
           generatedCount: generated,
-          totalCount: Math.max(batch.totalCount, generated),
+          // `totalCount` is the cap an operator set, not a running tally. Raising
+          // it to match whatever was generated made the cap unenforceable and
+          // hid that it had been breached.
         },
       });
     });

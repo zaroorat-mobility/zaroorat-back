@@ -16,6 +16,8 @@ export interface CreateRideRequestInput {
   estimatedDurationMin?: number | null;
   quotedFare?: Decimal | null;
   surgeMultiplier?: Decimal;
+  /// FR-002. The pricing rule the quote resolved, so completion can bill on it.
+  pricingRuleId?: string | null;
   paymentMethod?: string | null;
   promoCode?: string | null;
   scheduledFor?: Date | null;
@@ -33,7 +35,7 @@ export class RideRequestRepository {
         "pickup_lat", "pickup_lng", "pickup_location", "pickup_address",
         "drop_lat", "drop_lng", "drop_location", "drop_address",
         "estimated_distance_km", "estimated_duration_min", "quoted_fare",
-        "surge_multiplier", "payment_method", "promo_code",
+        "surge_multiplier", "pricing_rule_id", "payment_method", "promo_code",
         "scheduled_for", "status", "created_at", "expires_at"
       ) VALUES (
         ${id}::uuid, ${input.customerId}::uuid, ${input.vehicleTypeId}::uuid,
@@ -50,6 +52,7 @@ export class RideRequestRepository {
         ${input.estimatedDistanceKm ?? null}, ${input.estimatedDurationMin ?? null},
         ${input.quotedFare ?? null},
         ${input.surgeMultiplier ?? new Decimal(1)},
+        ${input.pricingRuleId ?? null}::uuid,
         ${input.paymentMethod ?? null}, ${input.promoCode ?? null},
         ${input.scheduledFor ?? null}, 'CREATED'::"RideRequestStatus",
         now(), ${input.expiresAt ?? null}

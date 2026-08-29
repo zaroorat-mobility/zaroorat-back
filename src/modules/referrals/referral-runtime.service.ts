@@ -8,6 +8,19 @@ import type {
   ReferralProgramAudience,
 } from '../../generated/prisma/index.js';
 import { logger } from '@shared/logger/index.js';
+import { Prisma } from '../../generated/prisma/index.js';
+import { ReferralMetrics } from './referral.metrics.js';
+import { ReferralRewardWalletMissingError } from './referral.errors.js';
+
+/// A unique violation reaches this module as P2002 from the query engine, or as
+/// P2010 carrying a driver-adapter cause when it comes from a raw statement.
+function isUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code === 'P2002') return true;
+  if (err.code !== 'P2010') return false;
+  const meta = err.meta as { driverAdapterError?: { cause?: { kind?: string } } } | undefined;
+  return meta?.driverAdapterError?.cause?.kind === 'UniqueConstraintViolation';
+}
 
 type DbClient = DatabaseService['client'] | TransactionClient;
 
@@ -24,6 +37,7 @@ export class ReferralRuntimeService {
     private readonly transactionManager: TransactionManager,
     private readonly walletService: WalletService,
     private readonly settlementWalletRepository: SettlementWalletRepository,
+    private readonly referralMetrics: ReferralMetrics,
   ) {}
 
   async onReferralApplied(referralId: string, tx?: DbClient): Promise<void> {
@@ -49,9 +63,9 @@ export class ReferralRuntimeService {
     });
     if (!ride || ride.status !== 'COMPLETED') return;
 
-    await this.processRideForReferee(ride.customerId, 'RIDER');
+    await this.processRideForReferee(ride.customerId, 'RIDER', rideId);
     if (ride.driver?.userId) {
-      await this.processRideForReferee(ride.driver.userId, 'DRIVER');
+      await this.processRideForReferee(ride.driver.userId, 'DRIVER', rideId);
     }
   }
 
@@ -81,6 +95,7 @@ export class ReferralRuntimeService {
   private async processRideForReferee(
     refereeUserId: string,
     audience: ReferralProgramAudience,
+    rideId: string,
   ): Promise<void> {
     const events = audience === 'RIDER' ? RIDE_EVENTS : DRIVER_RIDE_EVENTS;
     const referrals = await this.databaseService.client.referral.findMany({
@@ -105,7 +120,28 @@ export class ReferralRuntimeService {
             return;
           }
 
-          const nextCount = fresh.qualifyingRides + 1;
+          // FR-022. Claim this ride for this referral first. The unique
+          // constraint on (referral_id, ride_id) is what makes the consumer safe
+          // to run twice — `ride.completed` is delivered at least once, and the
+          // old bare increment counted a redelivered ride again every time.
+          try {
+            await tx.referralQualifyingRide.create({
+              data: { referralId: fresh.id, rideId },
+            });
+          } catch (err) {
+            if (isUniqueViolation(err)) {
+              // Already counted. Not an error — this is the redelivery the
+              // constraint exists to absorb.
+              return;
+            }
+            throw err;
+          }
+
+          // Derived from the rows, not incremented, so the counter cannot drift
+          // from the set of rides that actually qualified.
+          const nextCount = await tx.referralQualifyingRide.count({
+            where: { referralId: fresh.id },
+          });
           await tx.referral.update({
             where: { id: fresh.id },
             data: { qualifyingRides: nextCount },
@@ -211,8 +247,18 @@ export class ReferralRuntimeService {
     if (input.program.rewardWallet === 'DRIVER') {
       const driver = await input.tx.driver.findUnique({ where: { userId: input.userId } });
       if (!driver) {
-        logger.warn({ userId: input.userId }, '[referral] driver wallet missing for reward');
-        return;
+        // FR-023. This used to `return`, so `qualifyAndReward` carried on and set
+        // the referral to REWARDED while the ReferralReward row it had just
+        // created stayed PENDING. The status guard at the top of that method then
+        // short-circuited forever and no job swept pending rewards: money owed,
+        // booked as paid, and unrecoverable without someone noticing by hand.
+        //
+        // Throwing rolls the whole transaction back — reward row included — so
+        // the referral stays QUALIFIED and is retried rather than silently lost.
+        this.referralMetrics.rewardWalletMissing({ beneficiary: input.beneficiary });
+        throw new ReferralRewardWalletMissingError(
+          `No driver wallet for user ${input.userId}; referral reward cannot be credited`,
+        );
       }
       const wallet = await this.settlementWalletRepository.credit(
         {
@@ -244,6 +290,13 @@ export class ReferralRuntimeService {
       walletTxnId = txn?.id ?? null;
     }
 
+    if (walletTxnId === null) {
+      // The credit call returned without a transaction row to point at. That
+      // should not happen, and leaving the reward PENDING while the referral is
+      // marked REWARDED is exactly the silent loss FR-023 exists to stop.
+      this.referralMetrics.rewardCreditUnverified({ beneficiary: input.beneficiary });
+    }
+
     await input.tx.referralReward.update({
       where: { id: reward.id },
       data: {
@@ -252,6 +305,7 @@ export class ReferralRuntimeService {
         walletTransactionId: walletTxnId,
       },
     });
+    this.referralMetrics.rewardCredited({ beneficiary: input.beneficiary });
 
     if (input.beneficiary === 'MILESTONE' && input.milestoneId) {
       await input.tx.referralMilestoneAchievement.create({

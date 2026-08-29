@@ -1,3 +1,8 @@
+/// FR-047. `included_km` and `night_multiplier` are gone from the model and
+/// remain as columns until the deferred drop — see
+/// `specs/003-zone-pricing-integrity/deferred/`. `included_km` was never read by
+/// anything at all; `night_multiplier` was written by the admin form and read by
+/// a branch gated on a flag no caller ever set.
 model PricingRule {
   id                String           @id @default(uuid(7)) @db.Uuid
   vehicleTypeId     String           @map("vehicle_type_id") @db.Uuid
@@ -11,12 +16,13 @@ model PricingRule {
   perMinuteRate     Decimal          @map("per_minute_rate") @db.Decimal(10, 2)
   freeWaitingMin    Int              @default(3) @map("free_waiting_min") @db.SmallInt
   waitingPerMin     Decimal          @default(0) @map("waiting_per_min") @db.Decimal(10, 2)
-  includedKm        Decimal          @default(0) @map("included_km") @db.Decimal(6, 2)
   bookingFee        Decimal          @default(0) @map("booking_fee") @db.Decimal(10, 2)
   platformFeePct    Decimal          @default(0) @map("platform_fee_pct") @db.Decimal(5, 2)
+  /// FR-009. Null means "this rule says nothing about a flat fee" — the
+  /// environment default applies. A value, including 0, is the rule speaking.
+  platformFeeFlat   Decimal?         @map("platform_fee_flat") @db.Decimal(10, 2)
   taxRatePct        Decimal?         @map("tax_rate_pct") @db.Decimal(5, 2)
   commissionRatePct Decimal?         @map("commission_rate_pct") @db.Decimal(5, 2)
-  nightMultiplier   Decimal          @default(1.0) @map("night_multiplier") @db.Decimal(4, 2)
   version           Int              @default(1)
   isActive          Boolean          @default(true) @map("is_active")
   effectiveFrom     DateTime         @default(now()) @map("effective_from")
@@ -24,8 +30,9 @@ model PricingRule {
   createdBy         String?          @map("created_by") @db.Uuid
   createdAt         DateTime         @default(now()) @map("created_at")
 
-  vehicleType VehicleType  @relation(fields: [vehicleTypeId], references: [id])
-  serviceZone ServiceZone? @relation(fields: [serviceZoneId], references: [id])
+  vehicleType  VehicleType   @relation(fields: [vehicleTypeId], references: [id])
+  serviceZone  ServiceZone?  @relation(fields: [serviceZoneId], references: [id])
+  rideRequests RideRequest[]
 
   @@index([cityCode, vehicleTypeId, serviceType, serviceZoneId])
   @@map("pricing_rules")
@@ -47,7 +54,13 @@ model SurgeZone {
 
 model SurgeWindow {
   id                 String    @id @default(uuid(7)) @db.Uuid
-  zoneId             String    @map("zone_id") @db.Uuid
+  /// BD-4. The geographic module's zone — the single polygon of record. Nullable
+  /// only while legacy windows still resolve through `zoneId`; the follow-up
+  /// release drops `SurgeZone` and makes this required.
+  serviceZoneId      String?   @map("service_zone_id") @db.Uuid
+  /// @deprecated BD-4. The legacy `SurgeZone` link, nullable so a window can
+  /// exist against a service zone alone. Removed with the table.
+  zoneId             String?   @map("zone_id") @db.Uuid
   vehicleTypeId      String?   @map("vehicle_type_id") @db.Uuid
   multiplier         Decimal   @db.Decimal(4, 2)
   source             String    @default("DYNAMIC")
@@ -62,24 +75,19 @@ model SurgeWindow {
   isActive           Boolean   @default(true) @map("is_active")
   createdAt          DateTime  @default(now()) @map("created_at")
 
-  zone        SurgeZone    @relation(fields: [zoneId], references: [id])
+  zone        SurgeZone?   @relation(fields: [zoneId], references: [id])
+  serviceZone ServiceZone? @relation(fields: [serviceZoneId], references: [id])
   vehicleType VehicleType? @relation(fields: [vehicleTypeId], references: [id])
 
   @@index([zoneId, startsAt])
+  @@index([serviceZoneId, startsAt])
   @@map("surge_windows")
 }
 
-model TollZone {
-  id        String                                  @id @default(uuid(7)) @db.Uuid
-  cityCode  String?                                 @map("city_code")
-  name      String
-  boundary  Unsupported("geography(Polygon,4326)")?
-  charge    Decimal                                 @db.Decimal(10, 2)
-  isActive  Boolean                                 @default(true) @map("is_active")
-  createdAt DateTime                                @default(now()) @map("created_at")
-
-  @@map("toll_zones")
-}
+/// FR-047. `TollZone` and `TaxConfig` were removed from the schema: nothing read
+/// either one. Toll charging does not exist in any pricing path, and tax comes
+/// from `PricingRule.taxRatePct`, not from `tax_configs`. The tables survive
+/// until the deferred drop — see `specs/003-zone-pricing-integrity/deferred/`.
 
 model CancellationPolicy {
   id                  String   @id @default(uuid(7)) @db.Uuid
@@ -94,21 +102,6 @@ model CancellationPolicy {
   createdAt           DateTime @default(now()) @map("created_at")
 
   @@map("cancellation_policies")
-}
-
-model TaxConfig {
-  id            String    @id @default(uuid(7)) @db.Uuid
-  cityCode      String?   @map("city_code")
-  taxName       String    @map("tax_name")
-  ratePct       Decimal   @map("rate_pct") @db.Decimal(5, 2)
-  appliesTo     String    @default("SUBTOTAL") @map("applies_to")
-  isActive      Boolean   @default(true) @map("is_active")
-  effectiveFrom DateTime  @default(now()) @map("effective_from")
-  effectiveTo   DateTime? @map("effective_to")
-  createdAt     DateTime  @default(now()) @map("created_at")
-
-  @@index([cityCode, isActive])
-  @@map("tax_configs")
 }
 
 model BillingInvoice {
