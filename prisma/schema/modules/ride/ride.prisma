@@ -15,6 +15,7 @@ model RideRequest {
   estimatedDurationMin Int?                                  @map("estimated_duration_min")
   quotedFare           Decimal?                              @map("quoted_fare") @db.Decimal(10, 2)
   surgeMultiplier      Decimal                               @default(1.0) @map("surge_multiplier") @db.Decimal(4, 2)
+  pricingRuleId        String?                               @map("pricing_rule_id") @db.Uuid
   paymentMethod        String?                               @map("payment_method")
   promoCode            String?                               @map("promo_code")
   scheduledFor         DateTime?                             @map("scheduled_for")
@@ -24,12 +25,14 @@ model RideRequest {
   expiresAt            DateTime?                             @map("expires_at")
 
   vehicleType    VehicleType     @relation(fields: [vehicleTypeId], references: [id])
+  pricingRule    PricingRule?    @relation(fields: [pricingRuleId], references: [id])
   dispatches     RideDispatch[]
   rides          Ride[]
   scheduledRides ScheduledRide[]
 
   @@index([customerId])
   @@index([status])
+  @@index([pricingRuleId])
   @@map("ride_requests")
 }
 
@@ -94,30 +97,31 @@ model Ride {
   vehicle     Vehicle     @relation(fields: [vehicleId], references: [id])
   vehicleType VehicleType @relation(fields: [vehicleTypeId], references: [id])
 
-  stops               RideStop[]
-  statusEvents        RideStatusEvent[]
-  fare                RideFare?
-  fareLines           RideFareLine[]
-  cancellation        RideCancellation?
-  otps                RideOtp[]
-  receipt             RideReceipt?
-  payments            RidePayment[]
-  billingInvoices     BillingInvoice[]
-  ratings             RideRating[]
-  promosApplied       RidePromoApplied[]
-  routePlan           RideRoutePlan?
-  waitEvents          RideWaitEvent[]
-  disputes            RideDispute[]
-  promoRedemptions    PromotionRedemption[]
-  paymentIntents      PaymentIntent[]
-  paymentTransactions PaymentTransaction[]
-  refunds             Refund[]
-  chargebacks         Chargeback[]
-  payoutItems         PayoutItem[]
-  cashbackGrants      CashbackGrant[]
-  chatConversations   ChatConversation[]
-  supportTickets      SupportTicket[]
-  redeemedCoupons     Coupon[]
+  stops                  RideStop[]
+  statusEvents           RideStatusEvent[]
+  fare                   RideFare?
+  fareLines              RideFareLine[]
+  cancellation           RideCancellation?
+  otps                   RideOtp[]
+  receipt                RideReceipt?
+  payments               RidePayment[]
+  billingInvoices        BillingInvoice[]
+  ratings                RideRating[]
+  promosApplied          RidePromoApplied[]
+  referralQualifications ReferralQualifyingRide[]
+  routePlan              RideRoutePlan?
+  waitEvents             RideWaitEvent[]
+  disputes               RideDispute[]
+  promoRedemptions       PromotionRedemption[]
+  paymentIntents         PaymentIntent[]
+  paymentTransactions    PaymentTransaction[]
+  refunds                Refund[]
+  chargebacks            Chargeback[]
+  payoutItems            PayoutItem[]
+  cashbackGrants         CashbackGrant[]
+  chatConversations      ChatConversation[]
+  supportTickets         SupportTicket[]
+  redeemedCoupons        Coupon[]
 
   @@index([customerId])
   @@index([driverId])

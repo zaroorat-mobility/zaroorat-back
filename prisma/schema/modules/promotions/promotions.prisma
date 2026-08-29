@@ -13,7 +13,7 @@ model Promotion {
   applicableVehicleType String?  @map("applicable_vehicle_type") @db.Uuid
   firstRideOnly         Boolean  @default(false) @map("first_ride_only")
   usageLimitTotal       Int?     @map("usage_limit_total")
-  usageLimitPerUser     Int      @default(1) @map("usage_limit_per_user")
+  usageLimitPerUser     Int?     @map("usage_limit_per_user")
   usedCount             Int      @default(0) @map("used_count")
   validFrom             DateTime @map("valid_from")
   validTo               DateTime @map("valid_to")
@@ -35,14 +35,19 @@ model PromotionRedemption {
   userId         String   @map("user_id") @db.Uuid
   rideId         String?  @map("ride_id") @db.Uuid
   discountAmount Decimal  @map("discount_amount") @db.Decimal(10, 2)
+  /// This redemption's ordinal for the (promotion, user) pair. The unique index
+  /// over the triple is what actually enforces the per-user cap (FR-017).
+  userUseIndex   Int      @default(1) @map("user_use_index")
   redeemedAt     DateTime @default(now()) @map("redeemed_at")
 
   promotion Promotion @relation(fields: [promotionId], references: [id])
   user      User      @relation(fields: [userId], references: [id])
   ride      Ride?     @relation(fields: [rideId], references: [id])
 
+  @@unique([promotionId, userId, userUseIndex])
   @@index([promotionId])
   @@index([userId])
+  @@index([promotionId, userId])
   @@map("promotion_redemptions")
 }
 

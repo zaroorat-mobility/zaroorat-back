@@ -18,14 +18,21 @@ export const updateSurgeZoneSchema = z.object({
 
 export const createSurgeWindowSchema = z
   .object({
-    zoneId: z.string().uuid(),
+    // BD-4. New windows target the geographic module's service zone — the single
+    // polygon of record. `zoneId` remains accepted while legacy surge polygons
+    // exist and is removed with `SurgeZone` in the follow-up release.
+    serviceZoneId: z.string().uuid().optional(),
+    zoneId: z.string().uuid().optional(),
     vehicleTypeId: z.string().uuid().optional(),
     multiplier: z.number().min(1.0).max(2.0),
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime().optional(),
     reason: z.string().optional(),
-    demandThresholdPct: z.number().min(0).max(100).optional(),
-    supplyThresholdPct: z.number().min(0).max(100).optional(),
+    // FR-014. `demandThresholdPct` and `supplyThresholdPct` were accepted here,
+    // stored, and evaluated by nothing — there is no demand or supply signal in
+    // the system for them to be compared against. Removed rather than left
+    // writable and inert: a knob that does nothing is how an operator concludes
+    // a feature exists.
     peakHourStart: z
       .string()
       .regex(/^\d{2}:\d{2}$/)
@@ -39,6 +46,10 @@ export const createSurgeWindowSchema = z
   .refine((data) => !data.endsAt || new Date(data.startsAt) < new Date(data.endsAt), {
     message: 'endsAt must be after startsAt',
     path: ['endsAt'],
+  })
+  .refine((data) => Boolean(data.serviceZoneId ?? data.zoneId), {
+    message: 'serviceZoneId is required',
+    path: ['serviceZoneId'],
   })
   .refine(
     (data) => {
@@ -60,8 +71,6 @@ export const updateSurgeWindowSchema = z
     endsAt: z.string().datetime().optional(),
     isActive: z.boolean().optional(),
     reason: z.string().optional(),
-    demandThresholdPct: z.number().min(0).max(100).nullable().optional(),
-    supplyThresholdPct: z.number().min(0).max(100).nullable().optional(),
     peakHourStart: z
       .string()
       .regex(/^\d{2}:\d{2}$/)

@@ -41,14 +41,32 @@ export class SettlementService {
       data.periodStart,
       data.periodEnd,
     );
-    const commission = earned.commission.sub(alreadyRecovered);
+    const stillOwedOnCash = Decimal.max(0, earned.owedOnCash.sub(alreadyRecovered));
+
+    /// What this settlement is actually netting: the platform's commission on
+    /// the rides it collected, plus anything still owed on cash rides that has
+    /// not already come out of the driver's wallet at confirmation time. A cash
+    /// debt already recovered contributes nothing — netting it here too would
+    /// recover the same rupees twice.
+
+    /// FR-006. `netPayable` used to be `collectedFare - commission`, which was
+    /// only ever right because commission was levied on the whole total and so
+    /// absorbed the tax and the platform fee. Now that the driver is paid out of
+    /// ride revenue alone, `collectedFare - commission` overpays them by exactly
+    /// the tax and the fee on every non-cash ride.
+    ///
+    /// The two sides are stated directly instead: what the platform owes for
+    /// rides it collected, less what the driver owes for rides they took cash
+    /// on, less anything already recovered from their wallet at confirmation
+    /// time so the same rupees are not clawed back twice.
     // A period that ended owing carries into the next one and is deducted
     // before anything is payable (FR-020/FR-021). `adjustments` was a
     // parameter nothing ever supplied; an explicit value still wins, so a
     // finance correction can override the carry.
     const carried = Decimal.min(0, await this.settlementRepo.cumulativeNetPayable(data.driverId));
     const adjustments = data.adjustments ?? carried;
-    const netPayable = grossEarnings.sub(commission).add(adjustments);
+    const commission = earned.commissionOnCollected.add(stillOwedOnCash);
+    const netPayable = earned.earnedOnCollected.sub(stillOwedOnCash).add(adjustments);
     return this.txManager.execute(async (tx) => {
       const settlement = await this.settlementRepo.create(
         {

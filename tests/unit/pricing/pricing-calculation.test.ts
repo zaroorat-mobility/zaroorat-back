@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { pricingConfig } from '../../../src/config/pricing/pricing.config.js';
-import { PricingService, ZeroDistanceTripError } from '../../../src/modules/pricing';
+import {
+  PricingMetrics,
+  PricingService,
+  ZeroDistanceTripError,
+} from '../../../src/modules/pricing';
 import type { PricingRuleRepository } from '../../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import type { PricingRule } from '../../../src/generated/prisma/index.js';
 
@@ -60,7 +64,9 @@ const pricingRuleRepository = {
   },
 } as unknown as PricingRuleRepository;
 
-const pricingService = new PricingService(pricingRuleRepository);
+// The real metrics class: it increments an in-process counter and logs, with no
+// I/O, so stubbing it would only risk the stub drifting from the constructor.
+const pricingService = new PricingService(pricingRuleRepository, new PricingMetrics());
 
 describe('Itemized fare calculation', () => {
   it('computes an itemized quote whose parts reconcile to the total', async () => {
@@ -78,8 +84,15 @@ describe('Itemized fare calculation', () => {
     assert.ok(result.driverEarning > 0);
     assert.ok(result.platformCommission > 0);
 
+    // FR-006. The old assertion here was `driver + commission === totalFare`,
+    // which held only because commission was levied on the whole total including
+    // tax and the platform fee. Those belong to the state and to the platform
+    // respectively, so the reconciliation has four terms, not two.
     assert.equal(
-      Math.round((result.driverEarning + result.platformCommission) * 100) / 100,
+      Math.round(
+        (result.driverEarning + result.platformCommission + result.platformFee + result.taxAmount) *
+          100,
+      ) / 100,
       result.totalFare,
     );
   });
@@ -148,7 +161,19 @@ describe('Itemized fare calculation', () => {
 
     assert.equal(result.taxAmount, 5);
     assert.equal(result.platformFee, 10);
-    assert.equal(result.platformCommission, Math.round(result.totalFare * 0.2 * 100) / 100);
+
+    // FR-007 / BD-1 A. Commission is 20% of the ride revenue (100), not of the
+    // total (115). The old expectation, `totalFare * 0.2` = 23.00, charged the
+    // driver commission on the 5.00 of tax and the 10.00 platform fee as well.
+    assert.equal(result.platformCommission, 20);
+    assert.equal(result.driverEarning, 80);
+    assert.equal(
+      Math.round(
+        (result.driverEarning + result.platformCommission + result.platformFee + result.taxAmount) *
+          100,
+      ) / 100,
+      result.totalFare,
+    );
   });
 });
 
@@ -283,9 +308,12 @@ describe('Final fare (billed on actual trip values)', () => {
 /// *before* something starts measuring the wait — otherwise the first rider
 /// billed for waiting is overcharged for the grace period they were promised.
 describe('waiting charges honour the free period', () => {
+  // FR-012. This used to also set `freeWaitingMinutes`, a second field carrying
+  // the same number that nothing ever read. `freeWaitingMin` is the one the
+  // fare is computed from.
   const rateCard = {
     ...pricingConfig.defaultRateCard,
-    freeWaitingMinutes: 3,
+    freeWaitingMin: 3,
     perWaitingMinute: 3,
   };
 

@@ -108,7 +108,12 @@ describe('admin surge windows (integration)', () => {
     assert.equal(row!.reason, 'Morning Peak Cab Surge');
   });
 
-  it('creates a surge window with demand/supply thresholds and peak-hour rules', async () => {
+  /// FR-013 / FR-014. Peak-hour rules are stored AND evaluated now; the demand
+  /// and supply thresholds are gone. The previous version of this test asserted
+  /// the thresholds round-tripped, which was true and meant nothing — no signal
+  /// existed anywhere for them to be compared against, so they were writable and
+  /// inert.
+  it('stores peak-hour rules and no longer accepts inert thresholds', async () => {
     const authHeader = await loginAdmin();
     const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
     assert.ok(cab);
@@ -145,25 +150,21 @@ describe('admin surge windows (integration)', () => {
         multiplier: 1.8,
         startsAt,
         reason: 'Peak Demand Surge',
-        demandThresholdPct: 75,
-        supplyThresholdPct: 25,
         peakHourStart: '08:00',
         peakHourEnd: '10:00',
         isPeakHourOnly: true,
       },
     });
     assert.equal(created.statusCode, 201, created.payload);
-    const body = created.json() as {
-      demandThresholdPct: string | number;
-      supplyThresholdPct: string | number;
-      peakHourStart: string;
-      peakHourEnd: string;
-      isPeakHourOnly: boolean;
-    };
-    assert.equal(Number(body.demandThresholdPct), 75);
-    assert.equal(Number(body.supplyThresholdPct), 25);
+    const body = created.json() as Record<string, unknown>;
     assert.equal(body.peakHourStart, '08:00');
     assert.equal(body.peakHourEnd, '10:00');
     assert.equal(body.isPeakHourOnly, true);
+    assert.equal(
+      body.demandThresholdPct,
+      undefined,
+      'a field nothing evaluates must not be returned',
+    );
+    assert.equal(body.supplyThresholdPct, undefined);
   });
 });

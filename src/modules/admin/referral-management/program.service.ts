@@ -1,5 +1,5 @@
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
+import { Prisma, type ReferralProgramAudience } from '../../../generated/prisma/index.js';
 import { generateUniqueCode } from './code.util.js';
 import {
   ReferralProgramConflictError,
@@ -79,6 +79,7 @@ export interface ProgramDto {
   qualifyingEvent: QualifyingEvent;
   qualifyingThreshold: number;
   maxReferralsPerUser: number | null;
+  qualificationWindowDays: number | null;
   rewardExpiryDays: number | null;
   validFrom: string;
   validTo: string;
@@ -127,6 +128,7 @@ export class AdminReferralProgramService {
     qualifyingEvent: QualifyingEvent;
     qualifyingThreshold: number;
     maxReferralsPerUser: number | null;
+    qualificationWindowDays: number | null;
     rewardExpiryDays: number | null;
     validFrom: Date;
     validTo: Date;
@@ -156,6 +158,7 @@ export class AdminReferralProgramService {
       qualifyingEvent: row.qualifyingEvent,
       qualifyingThreshold: row.qualifyingThreshold,
       maxReferralsPerUser: row.maxReferralsPerUser,
+      qualificationWindowDays: row.qualificationWindowDays ?? row.rewardExpiryDays,
       rewardExpiryDays: row.rewardExpiryDays,
       validFrom: row.validFrom.toISOString(),
       validTo: row.validTo.toISOString(),
@@ -235,6 +238,17 @@ export class AdminReferralProgramService {
       code = generateUniqueCode(body.name, audience === 'DRIVER' ? 'DREF' : 'REF');
     }
 
+    // FR-026 / BD-7. One active program per audience.
+    //
+    // `resolveActiveProgram` is a `findFirst` ordered by `createdAt desc` over an
+    // unbounded set, and `Referral` is unique per (programId, refereeId) — so
+    // every additional active program for an audience was another payout to the
+    // same referee. Mirrors the rule-exclusivity `AdminFareService` already
+    // applies to pricing rules.
+    if (body.isActive ?? true) {
+      await this.deactivateOtherProgramsFor(audience);
+    }
+
     const row = await this.databaseService.client.referralProgram.create({
       data: {
         code,
@@ -247,7 +261,8 @@ export class AdminReferralProgramService {
         qualifyingEvent,
         qualifyingThreshold: body.qualifyingThreshold ?? 1,
         maxReferralsPerUser: body.maxReferralsPerUser ?? null,
-        rewardExpiryDays: body.rewardExpiryDays ?? null,
+        qualificationWindowDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
+        rewardExpiryDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
         validFrom: body.validFrom,
         validTo: body.validTo,
         isActive: body.isActive ?? true,
@@ -276,6 +291,11 @@ export class AdminReferralProgramService {
       if (clash) throw new ReferralProgramConflictError(`Program code "${code}" already exists`);
     }
 
+    const willBeActive = body.isActive ?? existing.isActive;
+    if (willBeActive) {
+      await this.deactivateOtherProgramsFor(audience, id);
+    }
+
     const row = await this.databaseService.client.referralProgram.update({
       where: { id },
       data: {
@@ -293,7 +313,17 @@ export class AdminReferralProgramService {
         ...(body.maxReferralsPerUser !== undefined
           ? { maxReferralsPerUser: body.maxReferralsPerUser }
           : {}),
-        ...(body.rewardExpiryDays !== undefined ? { rewardExpiryDays: body.rewardExpiryDays } : {}),
+        ...(body.qualificationWindowDays !== undefined
+          ? {
+              qualificationWindowDays: body.qualificationWindowDays,
+              rewardExpiryDays: body.qualificationWindowDays,
+            }
+          : body.rewardExpiryDays !== undefined
+            ? {
+                qualificationWindowDays: body.rewardExpiryDays,
+                rewardExpiryDays: body.rewardExpiryDays,
+              }
+            : {}),
         ...(body.validFrom !== undefined ? { validFrom: body.validFrom } : {}),
         ...(body.validTo !== undefined ? { validTo: body.validTo } : {}),
         ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
@@ -301,6 +331,26 @@ export class AdminReferralProgramService {
       include: this.include,
     });
     return this.toDto(row);
+  }
+
+  /// Retires whatever else is currently live for this audience. Deliberately not
+  /// a database constraint: Postgres cannot express "at most one row where
+  /// is_active AND audience = X" as a plain unique, and a partial unique index on
+  /// (audience) WHERE is_active would make the handover a two-statement dance
+  /// that can fail between them. The write path is the single place programs are
+  /// activated, so enforcing it here keeps the transition atomic.
+  private async deactivateOtherProgramsFor(
+    audience: ReferralProgramAudience,
+    exceptId?: string,
+  ): Promise<void> {
+    await this.databaseService.client.referralProgram.updateMany({
+      where: {
+        audience,
+        isActive: true,
+        ...(exceptId !== undefined ? { NOT: { id: exceptId } } : {}),
+      },
+      data: { isActive: false },
+    });
   }
 
   async activate(id: string): Promise<ProgramDto> {

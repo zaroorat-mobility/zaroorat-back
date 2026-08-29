@@ -30,3 +30,14 @@ export class PromoNotEligibleError extends PromotionError {
     this.name = 'PromoNotEligibleError';
   }
 }
+
+/// The promotion's total or per-user cap was reached, decided by the database at
+/// the moment of redemption rather than by a read taken minutes earlier at
+/// booking. Distinct from `PromoCodeInvalidError` so a caller can tell "this code
+/// is finished" from "this code was never valid".
+export class PromoLimitReachedError extends PromotionError {
+  constructor(message = 'This promotion has reached its usage limit') {
+    super(message, 'PROMO_LIMIT_REACHED', 409);
+    this.name = 'PromoLimitReachedError';
+  }
+}

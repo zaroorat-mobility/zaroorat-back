@@ -595,7 +595,6 @@ async function seedPricingFixtures(prisma: Prisma) {
     perMinuteRate: number;
     freeWaitingMin: number;
     waitingPerMin: number;
-    nightMultiplier: number;
     bookingFee: number;
     platformFeePct: number;
     taxRatePct: number;
@@ -610,7 +609,6 @@ async function seedPricingFixtures(prisma: Prisma) {
       perMinuteRate: 1.5,
       freeWaitingMin: 5,
       waitingPerMin: 3,
-      nightMultiplier: 1.25,
       bookingFee: 5,
       platformFeePct: 2,
       taxRatePct: 5,
@@ -625,7 +623,6 @@ async function seedPricingFixtures(prisma: Prisma) {
       perMinuteRate: 1,
       freeWaitingMin: 3,
       waitingPerMin: 2,
-      nightMultiplier: 1.2,
       bookingFee: 3,
       platformFeePct: 2,
       taxRatePct: 5,
@@ -640,7 +637,6 @@ async function seedPricingFixtures(prisma: Prisma) {
       perMinuteRate: 0.8,
       freeWaitingMin: 2,
       waitingPerMin: 1.5,
-      nightMultiplier: 1.15,
       bookingFee: 2,
       platformFeePct: 1.5,
       taxRatePct: 5,
@@ -655,7 +651,6 @@ async function seedPricingFixtures(prisma: Prisma) {
       perMinuteRate: 1.6,
       freeWaitingMin: 5,
       waitingPerMin: 3,
-      nightMultiplier: 1.25,
       bookingFee: 5,
       platformFeePct: 2,
       taxRatePct: 5,
@@ -670,7 +665,6 @@ async function seedPricingFixtures(prisma: Prisma) {
       perMinuteRate: 1.1,
       freeWaitingMin: 3,
       waitingPerMin: 2,
-      nightMultiplier: 1.2,
       bookingFee: 3,
       platformFeePct: 2,
       taxRatePct: 5,
@@ -686,7 +680,6 @@ async function seedPricingFixtures(prisma: Prisma) {
       perMinuteRate: 1.6,
       freeWaitingMin: 5,
       waitingPerMin: 3,
-      nightMultiplier: 1.2,
       bookingFee: 10,
       platformFeePct: 2.5,
       taxRatePct: 5,
@@ -702,7 +695,6 @@ async function seedPricingFixtures(prisma: Prisma) {
       perMinuteRate: 1.8,
       freeWaitingMin: 5,
       waitingPerMin: 4,
-      nightMultiplier: 1.3,
       bookingFee: 15,
       platformFeePct: 3,
       taxRatePct: 5,
@@ -746,7 +738,6 @@ async function seedPricingFixtures(prisma: Prisma) {
         perMinuteRate: seed.perMinuteRate,
         freeWaitingMin: seed.freeWaitingMin,
         waitingPerMin: seed.waitingPerMin,
-        nightMultiplier: seed.nightMultiplier,
         bookingFee: seed.bookingFee,
         platformFeePct: seed.platformFeePct,
         taxRatePct: seed.taxRatePct,
@@ -1588,21 +1579,9 @@ async function seedBillingFixtures(prisma: Prisma) {
     }
   }
 
-  const taxSeeds = [
-    { taxName: 'CGST', ratePct: 2.5, appliesTo: 'SUBTOTAL' },
-    { taxName: 'SGST', ratePct: 2.5, appliesTo: 'SUBTOTAL' },
-    { taxName: 'IGST', ratePct: 5.0, appliesTo: 'SUBTOTAL' },
-  ];
-  for (const tax of taxSeeds) {
-    const existing = await prisma.taxConfig.findFirst({
-      where: { cityCode: null, taxName: tax.taxName, isActive: true },
-    });
-    if (!existing) {
-      await prisma.taxConfig.create({
-        data: { cityCode: null, ...tax, isActive: true },
-      });
-    }
-  }
+  // FR-047. `tax_configs` was seeded with CGST/SGST/IGST rows that no pricing
+  // path ever read — tax comes from `PricingRule.taxRatePct`. Seeding a table
+  // nothing consumes is how a dead table looks alive.
 
   type RideSeed = {
     rideCode: string;

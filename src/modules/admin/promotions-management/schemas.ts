@@ -28,32 +28,70 @@ const promotionBodyObjectSchema = z.object({
   description: z.string().trim().max(2000).optional().nullable(),
   discountType: discountTypeSchema,
   discountValue: z.coerce.number().positive(),
-  maxDiscount: z.coerce.number().min(0).optional().nullable(),
+  maxDiscount: z.coerce.number().positive().optional().nullable(),
   minFare: z.coerce.number().min(0).optional().default(0),
   applicableCity: z.string().trim().max(40).optional().nullable(),
   applicableVehicleTypeId: z.string().uuid().optional().nullable(),
   firstRideOnly: z.boolean().optional().default(false),
   usageLimitTotal: z.coerce.number().int().positive().optional().nullable(),
-  usageLimitPerUser: z.coerce.number().int().min(1).optional().default(1),
+  // FR-043. Null is unlimited, matching `usageLimitTotal`. Zero is rejected
+  // outright rather than silently meaning "nobody may ever use this".
+  usageLimitPerUser: z.coerce.number().int().min(1).optional().nullable().default(1),
   validFrom: z.coerce.date(),
   validTo: z.coerce.date(),
   isActive: z.boolean().optional().default(true),
 });
 
-export const createPromotionBodySchema = promotionBodyObjectSchema.refine(
-  (b) => b.validTo > b.validFrom,
-  {
+/// FR-020. A percentage promotion needs both a sane rate and a ceiling.
+/// `discountValue` had no upper bound at all, so a typo of 500 for 50 made every
+/// ride free — clamped to the subtotal, so bounded at "free" rather than
+/// negative, but bounded by nothing anyone chose. And an uncapped percentage is
+/// open-ended on an outstation trip whose subtotal is an order of magnitude
+/// larger than a city ride.
+function isPercent(discountType: string): boolean {
+  const upper = discountType.trim().toUpperCase();
+  return upper === 'PERCENT' || upper === 'PERCENTAGE' || upper === '%';
+}
+
+function assertPercentBounds(
+  b: {
+    discountType?: string | undefined;
+    discountValue?: number | undefined;
+    maxDiscount?: number | null | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (b.discountType === undefined || !isPercent(b.discountType)) return;
+  if (b.discountValue !== undefined && b.discountValue > 100) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A percentage discount cannot exceed 100',
+      path: ['discountValue'],
+    });
+  }
+  if (b.maxDiscount === undefined || b.maxDiscount === null) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A percentage promotion requires a maximum discount',
+      path: ['maxDiscount'],
+    });
+  }
+}
+
+export const createPromotionBodySchema = promotionBodyObjectSchema
+  .refine((b) => b.validTo > b.validFrom, {
     message: 'validTo must be after validFrom',
     path: ['validTo'],
-  },
-);
+  })
+  .superRefine(assertPercentBounds);
 
 export const updatePromotionBodySchema = promotionBodyObjectSchema
   .partial()
   .refine((b) => b.validFrom == null || b.validTo == null || b.validTo > b.validFrom, {
     message: 'validTo must be after validFrom',
     path: ['validTo'],
-  });
+  })
+  .superRefine(assertPercentBounds);
 
 export type ListPromotionsQuery = z.infer<typeof listPromotionsQuerySchema>;
 export type CreatePromotionBody = z.infer<typeof createPromotionBodySchema>;

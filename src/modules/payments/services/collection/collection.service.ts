@@ -6,6 +6,7 @@ import { RedisService } from '@core/cache/RedisService.js';
 import { logger } from '@shared/logger/index.js';
 import { RideRepository } from '@modules/rides/repositories/ride.repository.js';
 import { RideFareRepository } from '@modules/rides/repositories/ride-fare.repository.js';
+import { fareDestinationLegs, signedLeg, type RideFareSplit } from '../ledger/ledger.service.js';
 import { ReceiptService } from '@modules/rides/services/receipt/receipt.service.js';
 import { Decimal } from '../../types/index.js';
 import { RidePaymentRepository } from '../../repositories/ride-payment.repository.js';
@@ -144,39 +145,40 @@ export class RideCollectionService {
           },
           tx,
         );
-        if (fare.platformCommission.gt(0)) {
-          // The driver is holding the whole fare, so the platform's share is
-          // owed back. This is allowed to push the balance negative — that
-          // negative is the debt, and the next settlement clears it.
+        /// FR-006. The driver collected the whole fare in cash, so what they owe
+        /// back is everything that is not theirs: the commission, the tax and
+        /// the platform fee. Charging only the commission left the driver
+        /// holding the tax and the fee with no record that they did.
+        const owedByDriver = fare.totalFare.minus(fare.driverEarning);
+        if (!owedByDriver.isZero()) {
+          // This is allowed to push the balance negative — that negative is the
+          // debt, and the next settlement clears it.
           await this.settlementWalletRepository.debit(
             {
               driverId: ride.driverId,
-              amount: fare.platformCommission,
+              amount: owedByDriver,
               referenceType: 'RIDE',
               referenceId: rideId,
-              description: `Commission on cash ride ${rideId}, confirmed ${how}`,
+              description: `Platform share on cash ride ${rideId}, confirmed ${how}`,
             },
             tx,
           );
           await this.ledgerService.postTransactionGroup(
             [
-              {
-                account: 'DRIVER_PAYABLE',
-                accountRefId: ride.driverId,
-                direction: 'DEBIT',
-                amount: fare.platformCommission,
-                referenceType: 'RIDE',
-                referenceId: rideId,
-                description: `Commission owed on cash ride ${rideId}, confirmed ${how}`,
-              },
-              {
-                account: 'PLATFORM_COMMISSION',
-                direction: 'CREDIT',
-                amount: fare.platformCommission,
-                referenceType: 'RIDE',
-                referenceId: rideId,
-                description: `Platform commission for cash ride ${rideId}, confirmed ${how}`,
-              },
+              ...signedLeg(
+                {
+                  account: 'DRIVER_PAYABLE',
+                  accountRefId: ride.driverId,
+                  referenceType: 'RIDE',
+                  referenceId: rideId,
+                  description: `Platform share owed on cash ride ${rideId}, confirmed ${how}`,
+                },
+                owedByDriver,
+                'DEBIT',
+              ),
+              ...fareDestinationLegs(fare, ride.driverId, rideId, `, confirmed ${how}`).filter(
+                (leg) => leg.account !== 'DRIVER_PAYABLE',
+              ),
             ],
             tx,
           );
@@ -191,7 +193,7 @@ export class RideCollectionService {
             driverId: ride.driverId,
             amount: fare.totalFare.toNumber(),
             method: 'CASH',
-            commissionOwed: fare.platformCommission.toNumber(),
+            commissionOwed: owedByDriver.toNumber(),
             automatic: options.automatic === true,
           }),
           tx,
@@ -342,7 +344,7 @@ export class RideCollectionService {
   private async recordSuccess(
     rideId: string,
     ride: { customerId: string; driverId: string; paymentMethod: string },
-    fare: { totalFare: Decimal; driverEarning: Decimal; platformCommission: Decimal },
+    fare: RideFareSplit,
     reference: string | null,
   ): Promise<CollectionResult> {
     return this.txManager.execute(async (tx) => {
@@ -373,7 +375,10 @@ export class RideCollectionService {
         {
           totalFare: fare.totalFare,
           driverPayable: fare.driverEarning,
+          driverEarning: fare.driverEarning,
           platformCommission: fare.platformCommission,
+          taxAmount: fare.taxAmount,
+          platformFee: fare.platformFee,
           customerUserId: ride.customerId,
           driverId: ride.driverId,
           rideId,
@@ -411,7 +416,7 @@ export class RideCollectionService {
   private async recordFailure(
     rideId: string,
     ride: { customerId: string; driverId: string },
-    fare: { totalFare: Decimal; driverEarning: Decimal; platformCommission: Decimal },
+    fare: RideFareSplit,
     failedSoFar: number,
     reason: string,
   ): Promise<CollectionResult> {
@@ -455,9 +460,13 @@ export class RideCollectionService {
   private async postReceivable(
     rideId: string,
     ride: { customerId: string; driverId: string },
-    fare: { totalFare: Decimal; driverEarning: Decimal; platformCommission: Decimal },
+    fare: RideFareSplit,
     tx: TransactionClient,
   ): Promise<void> {
+    /// FR-006. The receivable debit is the whole fare, so the credit side has to
+    /// be the whole fare too — driver, tax, platform fee and commission. It used
+    /// to be only the driver and the commission, which balanced solely because
+    /// commission was levied on the total and so absorbed the other two.
     await this.ledgerService.postTransactionGroup(
       [
         {
@@ -469,31 +478,7 @@ export class RideCollectionService {
           referenceId: rideId,
           description: `Uncollected fare for ride ${rideId}`,
         },
-        ...(fare.driverEarning.gt(0)
-          ? ([
-              {
-                account: 'DRIVER_PAYABLE',
-                accountRefId: ride.driverId,
-                direction: 'CREDIT' as const,
-                amount: fare.driverEarning,
-                referenceType: 'RIDE',
-                referenceId: rideId,
-                description: `Driver earnings for ride ${rideId}`,
-              },
-            ] as const)
-          : []),
-        ...(fare.platformCommission.gt(0)
-          ? ([
-              {
-                account: 'PLATFORM_COMMISSION',
-                direction: 'CREDIT' as const,
-                amount: fare.platformCommission,
-                referenceType: 'RIDE',
-                referenceId: rideId,
-                description: `Platform commission for ride ${rideId}`,
-              },
-            ] as const)
-          : []),
+        ...fareDestinationLegs(fare, ride.driverId, rideId),
       ],
       tx,
     );

@@ -296,6 +296,109 @@ describe('admin promotions (integration)', () => {
     assert.equal(updateRes.json().data.actionUrl, '/offers/welcome');
   });
 
+  /// FR-020. `discountValue` had no upper bound and `maxDiscount` was optional
+  /// regardless of type, so a percentage promotion could be created at 500% with
+  /// no ceiling. `computeDiscountAmount` clamps to the subtotal, so the blast
+  /// radius was "every ride free" rather than a negative fare — bounded, but by
+  /// nothing anyone chose.
+  it('refuses a percentage promotion with no ceiling or an impossible rate (FR-020)', async () => {
+    const authHeader = await loginAdmin();
+    const now = new Date();
+    const later = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const base = {
+      discountType: 'PERCENT',
+      validFrom: now.toISOString(),
+      validTo: later.toISOString(),
+    };
+
+    const uncapped = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/promotions',
+      headers: authHeader,
+      payload: { ...base, code: 'NOCAP', discountValue: 20 },
+    });
+    assert.equal(uncapped.statusCode, 400, uncapped.payload);
+    assert.match(uncapped.payload, /maximum discount/i);
+
+    const overHundred = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/promotions',
+      headers: authHeader,
+      payload: { ...base, code: 'TOOMUCH', discountValue: 500, maxDiscount: 50 },
+    });
+    assert.equal(overHundred.statusCode, 400, overHundred.payload);
+
+    // A fixed-amount promotion is unaffected: it is already bounded by its own
+    // value, so requiring a second ceiling would be noise.
+    const fixed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/promotions',
+      headers: authHeader,
+      payload: {
+        code: 'FLAT50',
+        discountType: 'FIXED',
+        discountValue: 50,
+        validFrom: now.toISOString(),
+        validTo: later.toISOString(),
+      },
+    });
+    assert.equal(fixed.statusCode, 201, fixed.payload);
+  });
+
+  /// FR-019. `Math.min(count, remaining || count)` collapsed to `count` once the
+  /// batch was exhausted, because 0 is falsy, and `totalCount` was then raised to
+  /// match whatever had been generated — so the cap was both unenforceable and
+  /// self-erasing.
+  it('refuses to generate beyond a coupon batch cap (FR-019)', async () => {
+    const authHeader = await loginAdmin();
+    const now = new Date();
+    const later = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const promoRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/promotions',
+      headers: authHeader,
+      payload: {
+        code: 'CAPPED',
+        discountType: 'FIXED',
+        discountValue: 25,
+        validFrom: now.toISOString(),
+        validTo: later.toISOString(),
+      },
+    });
+    assert.equal(promoRes.statusCode, 201, promoRes.payload);
+
+    const batchRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/coupon-batches',
+      headers: authHeader,
+      payload: {
+        promotionId: promoRes.json().data.id,
+        name: 'Capped batch',
+        prefix: 'CP',
+        totalCount: 3,
+        perUserLimit: 1,
+        generateNow: true,
+      },
+    });
+    assert.equal(batchRes.statusCode, 201, batchRes.payload);
+    const batchId = batchRes.json().data.id;
+    assert.equal(batchRes.json().data.generatedCount, 3);
+
+    const again = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/coupon-batches/${batchId}/generate`,
+      headers: authHeader,
+      payload: { count: 100 },
+    });
+    assert.equal(again.statusCode, 409, again.payload);
+    assert.match(again.payload, /COUPON_BATCH_EXHAUSTED/);
+
+    const batch = await db().client.couponBatch.findUniqueOrThrow({ where: { id: batchId } });
+    assert.equal(batch.totalCount, 3, 'the cap must not be rewritten to hide a breach');
+    assert.equal(await db().client.coupon.count({ where: { batchId } }), 3);
+  });
+
   it('deactivates coupon batch and banner', async () => {
     const authHeader = await loginAdmin();
     const now = new Date();
@@ -309,6 +412,10 @@ describe('admin promotions (integration)', () => {
         title: 'Batch promo',
         discountType: 'PERCENT',
         discountValue: 10,
+        // FR-020. A percentage promotion now requires a ceiling: an uncapped one
+        // is open-ended on a long trip, and a typo in `discountValue` had nothing
+        // between it and a free ride.
+        maxDiscount: 40,
         validFrom: now.toISOString(),
         validTo: later.toISOString(),
       },

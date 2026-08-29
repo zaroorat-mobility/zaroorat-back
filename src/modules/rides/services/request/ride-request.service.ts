@@ -103,34 +103,55 @@ export class RideRequestService {
       dropLng: params.dropLng,
     });
 
+    // FR-039. Everything that depends on the pickup point rather than on the
+    // category is resolved once, before the loop.
+    //
+    // The loop used to call `assertPickupServiceable` (a city ST_Contains, a zone
+    // ST_Contains, a zone count), `rateCardForTypeId` (another zone ST_Contains
+    // plus rule lookups) and `resolveSurgeMultiplier` (a surge ST_Intersects plus
+    // a window query) once per category. Six categories was roughly fifty round
+    // trips, about twenty-four of them unindexed spatial scans, to answer the
+    // same questions about the same point six times over. The loop's own comment
+    // recorded that the haversine had been hoisted out; the database work had
+    // not been.
+    const pickupContext = await this.geographicCoverageService.resolvePickupContext(
+      params.pickupLat,
+      params.pickupLng,
+    );
+    const city = pickupContext.city;
+    const resolvedCityCode = city.code;
+
+    if (params.dropLat != null && params.dropLng != null) {
+      await this.geographicCoverageService.assertDropServiceable({
+        lat: params.dropLat,
+        lng: params.dropLng,
+        cityCode: city.code,
+      });
+    }
+
+    const rateCards = await this.pricingService.rateCardsForPoint({
+      vehicleTypeIds: vehicleTypes.map((type) => type.id),
+      cityCode: city.code,
+      pickupLat: params.pickupLat,
+      pickupLng: params.pickupLng,
+    });
+    const surgeByType = await this.surgeService.resolveSurgeMultipliersForTypes(
+      params.pickupLat,
+      params.pickupLng,
+      vehicleTypes.map((type) => type.id),
+      { timeZone: pickupContext.cityTimeZone, cityCode: city.code },
+    );
+
     const options: QuoteOption[] = [];
-    let resolvedCityCode: string | undefined;
     for (const vehicleType of vehicleTypes) {
-      const city = await this.geographicCoverageService.assertPickupServiceable({
-        lat: params.pickupLat,
-        lng: params.pickupLng,
-        vehicleTypeId: vehicleType.id,
-      });
-      resolvedCityCode = city.code;
-
-      if (params.dropLat != null && params.dropLng != null) {
-        await this.geographicCoverageService.assertDropServiceable({
-          lat: params.dropLat,
-          lng: params.dropLng,
-          cityCode: city.code,
-        });
-      }
-
-      const rateCard = await this.pricingService.rateCardForTypeId(vehicleType.id, city.code, {
-        pickupLat: params.pickupLat,
-        pickupLng: params.pickupLng,
-      });
-      const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
-        params.pickupLat,
-        params.pickupLng,
+      // The one genuinely per-category check: does this zone admit this type.
+      await this.geographicCoverageService.assertVehicleTypeServiceable(
+        pickupContext,
         vehicleType.id,
       );
 
+      const rateCard = rateCards.get(vehicleType.id) ?? this.pricingService.rateCardFor(null);
+      const surgeMultiplier = surgeByType.get(vehicleType.id) ?? 1;
       const baseFare = await this.pricingService.calculateFareQuote({
         pickupLat: params.pickupLat,
         pickupLng: params.pickupLng,
@@ -267,6 +288,19 @@ export class RideRequestService {
       input.pickupLat,
       input.pickupLng,
       input.vehicleTypeId,
+      // FR-013. Peak hours are read in the pickup city, not on the server.
+      // FR-015. The city scopes which service zones can carry a surge window.
+      { timeZone: city.timezone, cityCode: city.code },
+    );
+
+    // FR-002. Resolved once, here, and both remembered and reused: the id goes
+    // onto the request so completion bills on this exact rule, and the card
+    // itself is handed to every fare pass below so a second lookup cannot land
+    // on a different rule mid-booking.
+    const { card: rateCard, ruleId: pricingRuleId } = await this.pricingService.resolveRateCard(
+      input.vehicleTypeId,
+      city.code,
+      { pickupLat: input.pickupLat, pickupLng: input.pickupLng },
     );
 
     const baseFare = await this.pricingService.calculateFareQuote({
@@ -277,6 +311,7 @@ export class RideRequestService {
       vehicleTypeId: input.vehicleTypeId,
       cityCode: city.code,
       surgeMultiplier,
+      rateCard,
       ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
       ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
     });
@@ -301,6 +336,7 @@ export class RideRequestService {
             cityCode: city.code,
             surgeMultiplier,
             discountAmount,
+            rateCard,
             ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
             ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
           })
@@ -316,6 +352,7 @@ export class RideRequestService {
         estimatedDurationMin: fareQuote.estimatedDurationMin,
         quotedFare: new Decimal(fareQuote.totalFare),
         surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
+        pricingRuleId,
         expiresAt: new Date(Date.now() + 5 * 60 * 1000),
       };
       if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;

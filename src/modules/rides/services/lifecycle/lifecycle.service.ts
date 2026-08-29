@@ -604,13 +604,24 @@ export class LifecycleService {
       }
       const waitingMinutes = ride.waitTimeMin ?? 0;
 
+      // FR-001/FR-002. The rule the customer was quoted and booked on. Null only
+      // for requests written before the column existed, where `calculateFinalFare`
+      // falls back to live resolution.
+      const pricingRuleId = request?.pricingRuleId ?? null;
+
       let discountAmount = 0;
       let resolvedPromo: Awaited<ReturnType<PromotionService['validateAndResolve']>> | null = null;
       if (request?.promoCode) {
+        // The preview needs the booked rule as much as the final fare does: it
+        // is the subtotal a promotion's `minFare` eligibility and percentage
+        // discount are computed against, so pricing it on the GLOBAL default
+        // card while billing on the zone card applied the discount to a number
+        // the customer was never charged.
         const preview = await this.pricingService.calculateFinalFare({
           actualDistanceKm,
           actualDurationMin,
           vehicleTypeId: ride.vehicleTypeId,
+          pricingRuleId,
           waitingMinutes,
         });
         try {
@@ -636,6 +647,7 @@ export class LifecycleService {
         actualDistanceKm: billedDistanceKm,
         actualDurationMin: billedDurationMin,
         vehicleTypeId: ride.vehicleTypeId,
+        pricingRuleId,
         surgeMultiplier,
         waitingMinutes,
         ...(discountAmount > 0 ? { discountAmount } : {}),
@@ -704,7 +716,12 @@ export class LifecycleService {
           {
             totalFare: new Decimal(itemizedFare.totalFare),
             driverPayable: new Decimal(itemizedFare.driverEarning),
+            driverEarning: new Decimal(itemizedFare.driverEarning),
             platformCommission: new Decimal(itemizedFare.platformCommission),
+            // FR-006. Tax and the platform fee are now distinct destinations
+            // rather than amounts swallowed by the commission line.
+            taxAmount: new Decimal(itemizedFare.taxAmount),
+            platformFee: new Decimal(itemizedFare.platformFee),
             customerUserId: ride.customerId,
             driverId: ride.driverId,
             rideId,

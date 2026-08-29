@@ -55,3 +55,20 @@ export class InvoiceTemplateNotFoundError extends PricingAdminError {
     this.name = 'InvoiceTemplateNotFoundError';
   }
 }
+
+/// FR-033. `updateSurgeZone` wrote through raw `UPDATE`s that matched no rows
+/// when the id did not exist, then returned `{ success: true }`. An operator
+/// editing a deleted zone was told the edit had been applied.
+export class SurgeZoneNotFoundError extends PricingAdminError {
+  constructor(message = 'Surge zone was not found') {
+    super(message, 'SURGE_ZONE_NOT_FOUND', 404);
+    this.name = 'SurgeZoneNotFoundError';
+  }
+}
+
+export class SurgeWindowNotFoundError extends PricingAdminError {
+  constructor(message = 'Surge window was not found') {
+    super(message, 'SURGE_WINDOW_NOT_FOUND', 404);
+    this.name = 'SurgeWindowNotFoundError';
+  }
+}

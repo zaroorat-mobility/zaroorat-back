@@ -28,6 +28,10 @@ export interface FareRow {
   totalFare: Decimal;
   driverEarning: Decimal;
   platformCommission: Decimal;
+  /// FR-006. Tax and the platform fee are destinations of their own now, so a
+  /// test reconciling a ledger group has to be able to name them.
+  taxAmount: Decimal;
+  platformFee: Decimal;
 }
 
 /// A rider, a verified online driver with an assigned vehicle, and a vehicle

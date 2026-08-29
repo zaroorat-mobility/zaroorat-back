@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { callerId } from '@core/auth';
 import { AdminGeographicService } from './admin-geographic.service.js';
 import {
   cityIdParamSchema,
@@ -34,14 +35,14 @@ export class AdminGeographicController {
 
   async createState(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createStateBodySchema.parse(req.body);
-    const data = await this.adminGeographicService.createState(body);
+    const data = await this.adminGeographicService.createState(body, callerId(req));
     reply.status(201).send({ data });
   }
 
   async updateState(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = stateIdParamSchema.parse(req.params);
     const body = updateStateBodySchema.parse(req.body ?? {});
-    const data = await this.adminGeographicService.updateState(id, body);
+    const data = await this.adminGeographicService.updateState(id, body, callerId(req));
     reply.send({ data });
   }
 
@@ -63,14 +64,14 @@ export class AdminGeographicController {
 
   async createCity(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createCityBodySchema.parse(req.body);
-    const data = await this.adminGeographicService.createCity(body);
+    const data = await this.adminGeographicService.createCity(body, callerId(req));
     reply.status(201).send({ data });
   }
 
   async updateCity(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = cityIdParamSchema.parse(req.params);
     const body = updateCityBodySchema.parse(req.body ?? {});
-    const data = await this.adminGeographicService.updateCity(id, body);
+    const data = await this.adminGeographicService.updateCity(id, body, callerId(req));
     reply.send({ data });
   }
 
@@ -92,26 +93,26 @@ export class AdminGeographicController {
 
   async createServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createServiceZoneBodySchema.parse(req.body);
-    const data = await this.adminGeographicService.createServiceZone(body);
+    const data = await this.adminGeographicService.createServiceZone(body, callerId(req));
     reply.status(201).send({ data });
   }
 
   async updateServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = serviceZoneIdParamSchema.parse(req.params);
     const body = updateServiceZoneBodySchema.parse(req.body ?? {});
-    const data = await this.adminGeographicService.updateServiceZone(id, body);
+    const data = await this.adminGeographicService.updateServiceZone(id, body, callerId(req));
     reply.send({ data });
   }
 
   async activateServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = serviceZoneIdParamSchema.parse(req.params);
-    const data = await this.adminGeographicService.activateServiceZone(id);
+    const data = await this.adminGeographicService.activateServiceZone(id, callerId(req));
     reply.send({ data });
   }
 
   async deactivateServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = serviceZoneIdParamSchema.parse(req.params);
-    const data = await this.adminGeographicService.deactivateServiceZone(id);
+    const data = await this.adminGeographicService.deactivateServiceZone(id, callerId(req));
     reply.send({ data });
   }
 }

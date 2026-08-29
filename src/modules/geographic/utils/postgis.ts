@@ -23,23 +23,36 @@ export async function assertValidPolygon(
   }
 }
 
+/// FR-042. A containment assertion that cannot be evaluated fails.
+///
+/// The `AND c.boundary IS NOT NULL` filter used to make an unanswerable question
+/// look like a satisfied one: a city with no boundary returned zero rows, the
+/// `rows.length > 0` guard skipped the check, and the zone was created anywhere
+/// on Earth. Every zone drawn against an unbounded city then resolved for pickups
+/// it was never meant to cover, and the operator was told the boundary had been
+/// verified.
 export async function assertZoneWithinCity(
   db: { client: ProviderClient },
   cityId: string,
   coordinates: PolygonCoordinates,
 ): Promise<void> {
   const geoJson = polygonGeoJson(coordinates);
-  const rows = await db.client.$queryRaw<Array<{ contained: boolean }>>`
+  const rows = await db.client.$queryRaw<Array<{ contained: boolean | null }>>`
     SELECT ST_Contains(
       c.boundary::geometry,
       ST_GeomFromGeoJSON(${geoJson})
     ) AS contained
     FROM cities c
     WHERE c.id = ${cityId}::uuid
-      AND c.boundary IS NOT NULL
     LIMIT 1
   `;
-  if (rows.length > 0 && !rows[0]?.contained) {
+  const row = rows[0];
+  if (!row) {
+    throw new Error('Cannot verify containment: city not found');
+  }
+  // `ST_Contains` is null when the city has no boundary, not false. Both mean the
+  // same thing here: nothing was proved, so nothing is allowed.
+  if (row.contained !== true) {
     throw new Error('Zone boundary must be within the city boundary');
   }
 }

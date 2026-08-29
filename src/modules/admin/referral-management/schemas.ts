@@ -61,6 +61,10 @@ const programBodyObjectSchema = z.object({
   qualifyingEvent: referralQualifyingEventSchema.optional(),
   qualifyingThreshold: z.coerce.number().int().min(1).max(100).optional().default(1),
   maxReferralsPerUser: z.coerce.number().int().min(1).optional().nullable(),
+  // BD-8 / FR-046. `rewardExpiryDays` named a behaviour it did not have: it
+  // bounds how long the referee has to qualify, and never expired a granted
+  // reward. Both accepted during the expand phase; the new name wins.
+  qualificationWindowDays: z.coerce.number().int().min(1).optional().nullable(),
   rewardExpiryDays: z.coerce.number().int().min(1).optional().nullable(),
   validFrom: z.coerce.date(),
   validTo: z.coerce.date(),

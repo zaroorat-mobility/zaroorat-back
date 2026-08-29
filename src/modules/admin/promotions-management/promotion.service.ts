@@ -28,7 +28,7 @@ export interface PromotionDto {
   applicableVehicleTypeId: string | null;
   firstRideOnly: boolean;
   usageLimitTotal: number | null;
-  usageLimitPerUser: number;
+  usageLimitPerUser: number | null;
   usedCount: number;
   validFrom: string;
   validTo: string;
@@ -53,7 +53,7 @@ export class AdminPromotionService {
     applicableVehicleType: string | null;
     firstRideOnly: boolean;
     usageLimitTotal: number | null;
-    usageLimitPerUser: number;
+    usageLimitPerUser: number | null;
     usedCount: number;
     validFrom: Date;
     validTo: Date;

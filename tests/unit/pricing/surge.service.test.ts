@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach } from 'node:test';
+import { PricingMetrics } from '../../../src/modules/pricing/metrics/pricing.metrics.js';
 import {
   SurgeService,
   DEFAULT_SURGE_MULTIPLIER,
@@ -19,8 +20,20 @@ describe('SurgeService', () => {
 
   const mockSurgeRepo = {
     findActiveZonesForLocation: async (_lat: number, _lng: number) => mockActiveZones,
-    findActiveWindowsForZones: async (zoneIds: string[], vehicleTypeId?: string) => {
-      findWindowsArgs = [zoneIds, vehicleTypeId];
+    // BD-4. `findZonesForLocation` resolves both geographies — the geographic
+    // module's service zones and, for one release, the legacy surge polygons.
+    // The stub tracks the repository's real surface rather than the subset the
+    // service happened to call before.
+    findZonesForLocation: async (_lat: number, _lng: number, _cityCode?: string) => ({
+      serviceZoneIds: [],
+      legacySurgeZoneIds: mockActiveZones.map((zone) => zone.id),
+    }),
+    findActiveWindowsForZones: async (
+      zoneIds: string[],
+      vehicleTypeId?: string,
+      serviceZoneIds: string[] = [],
+    ) => {
+      findWindowsArgs = [zoneIds, vehicleTypeId, serviceZoneIds];
       return mockActiveWindows;
     },
   } as unknown as SurgeRepository;
@@ -29,7 +42,7 @@ describe('SurgeService', () => {
     mockActiveZones = [];
     mockActiveWindows = [];
     findWindowsArgs = [];
-    surgeService = new SurgeService(mockSurgeRepo);
+    surgeService = new SurgeService(mockSurgeRepo, new PricingMetrics());
   });
 
   const baseLat = 12.9716;
@@ -48,7 +61,9 @@ describe('SurgeService', () => {
 
     const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId);
 
-    assert.deepEqual(findWindowsArgs, [['z1'], vehicleTypeId]);
+    // BD-4. The repository is now asked for both geographies; a point with no
+    // service zones passes an empty list alongside the legacy ids.
+    assert.deepEqual(findWindowsArgs, [['z1'], vehicleTypeId, []]);
     assert.equal(surge, DEFAULT_SURGE_MULTIPLIER);
   });
 
