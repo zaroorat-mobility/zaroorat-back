@@ -149,20 +149,29 @@ export class LedgerService {
     // that was never in the wallet, so the balance and the books disagreed by
     // the fare of every card ride (FR-037).
     const fundedFromWallet = data.paymentMethod === 'WALLET';
+    /// `signedLeg` rather than a bare item because `totalFare` can now be zero.
+    /// FR-008 moved the minimum-fare floor ahead of the discount, so a promotion
+    /// that covers the whole fare leaves the customer paying nothing — while the
+    /// driver is still owed their earning, funded entirely by the platform
+    /// (BD-2 A). A zero-amount leg is rejected by `postTransactionGroup`, so
+    /// writing one unconditionally made a fully discounted ride fail to settle.
     const items: LedgerItemInput[] = [
-      {
-        account: fundedFromWallet ? 'CUSTOMER_WALLET' : 'GATEWAY_CLEARING',
-        // Only the wallet account is per-rider; `GATEWAY_CLEARING` is a single
-        // platform account, so tagging it with a user would fragment it.
-        ...(fundedFromWallet ? { accountRefId: data.customerUserId } : {}),
-        direction: 'DEBIT',
-        amount: data.totalFare,
-        referenceType: 'RIDE',
-        referenceId: data.rideId,
-        description: `Fare payment for ride ${data.rideId}`,
-      },
+      ...signedLeg(
+        {
+          account: fundedFromWallet ? 'CUSTOMER_WALLET' : 'GATEWAY_CLEARING',
+          // Only the wallet account is per-rider; `GATEWAY_CLEARING` is a single
+          // platform account, so tagging it with a user would fragment it.
+          ...(fundedFromWallet ? { accountRefId: data.customerUserId } : {}),
+          referenceType: 'RIDE',
+          referenceId: data.rideId,
+          description: `Fare payment for ride ${data.rideId}`,
+        },
+        data.totalFare,
+        'DEBIT',
+      ),
       ...fareDestinationLegs(data, data.driverId, data.rideId),
     ];
+    if (items.length === 0) return [];
     return this.postTransactionGroup(items, tx);
   }
 }

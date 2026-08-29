@@ -467,20 +467,23 @@ export class RideCollectionService {
     /// be the whole fare too — driver, tax, platform fee and commission. It used
     /// to be only the driver and the commission, which balanced solely because
     /// commission was levied on the total and so absorbed the other two.
-    await this.ledgerService.postTransactionGroup(
-      [
+    /// `signedLeg` for the same reason as the funding leg in `recordTripPayment`:
+    /// a fully discounted ride owes nothing, and a zero-amount entry is refused.
+    const legs = [
+      ...signedLeg(
         {
           account: 'CUSTOMER_RECEIVABLE',
           accountRefId: ride.customerId,
-          direction: 'DEBIT',
-          amount: fare.totalFare,
           referenceType: 'RIDE',
           referenceId: rideId,
           description: `Uncollected fare for ride ${rideId}`,
         },
-        ...fareDestinationLegs(fare, ride.driverId, rideId),
-      ],
-      tx,
-    );
+        fare.totalFare,
+        'DEBIT',
+      ),
+      ...fareDestinationLegs(fare, ride.driverId, rideId),
+    ];
+    if (legs.length === 0) return;
+    await this.ledgerService.postTransactionGroup(legs, tx);
   }
 }
