@@ -1,18 +1,18 @@
 import { randomBytes } from 'node:crypto';
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
 import {
   CampaignNotFoundError,
   CouponBatchExhaustedError,
   CouponBatchNotFoundError,
   PromotionNotFoundError,
-} from './promotions.errors.js';
+} from '../promotions.errors.js';
 import type {
   CreateCouponBatchBody,
   GenerateCouponsBody,
   ListCouponBatchesQuery,
   ListCouponsQuery,
-} from './schemas.js';
+} from '../schemas.js';
 
 function randomSuffix(len = 8): string {
   return randomBytes(Math.ceil(len / 2))

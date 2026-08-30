@@ -6,12 +6,12 @@ import type { VerificationStatus } from '@modules/drivers/types/index.js';
 import { generateDriverCode } from '@modules/drivers/utils/driver-code.util.js';
 import { VEHICLE_DOCUMENT_TYPE } from '@config/vehicle/vehicle.config.js';
 import { ReferralApplyService, ReferralError } from '@modules/referrals/index.js';
-import { AdminDriverNotFoundError, AdminDriverConflictError } from './driver.errors.js';
+import { AdminDriverNotFoundError, AdminDriverConflictError } from '../driver.errors.js';
 import {
   AdminDriverService,
   type DriverDetailsDto,
   type DriverListItemDto,
-} from './driver.service.js';
+} from '../drivers/driver.service.js';
 import type { CreateManualApplicationBody, ListApplicationsQuery } from './application.schemas.js';
 
 export type ApplicationStatusDto =

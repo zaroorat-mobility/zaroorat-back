@@ -1,13 +1,13 @@
 import { DatabaseService } from '@core/database';
-import { Prisma, type RideServiceType } from '../../../generated/prisma/index.js';
-import { recordAdminAction } from '../audit/index.js';
-import { FareRuleConflictError, FareRuleNotFoundError } from './pricing.errors.js';
+import { Prisma, type RideServiceType } from '../../../../generated/prisma/index.js';
+import { recordAdminAction } from '../../audit/index.js';
+import { FareRuleConflictError, FareRuleNotFoundError } from '../pricing.errors.js';
 import type { CreateFareRuleBody, ListFareRulesQuery, UpdateFareRuleBody } from './fare.schemas.js';
 import {
   AdminServiceZoneService,
   parseServiceType,
   serviceTypeUi,
-} from './service-zone.service.js';
+} from '../service-zone/service-zone.service.js';
 
 const UI_TO_CODE: Record<string, string> = {
   cab: 'CAB_ECONOMY',

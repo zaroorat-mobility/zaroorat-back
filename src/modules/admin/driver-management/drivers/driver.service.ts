@@ -3,7 +3,7 @@ import type { UserStatus } from '@core/database/types';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { SessionService } from '@modules/auth/services/session/session.service.js';
 import { DriverService } from '@modules/drivers/services/driver.service.js';
-import { AdminDriverConflictError, AdminDriverNotFoundError } from './driver.errors.js';
+import { AdminDriverConflictError, AdminDriverNotFoundError } from '../driver.errors.js';
 import type { ListDriversQuery } from './driver.schemas.js';
 
 export type DriverStatusDto =

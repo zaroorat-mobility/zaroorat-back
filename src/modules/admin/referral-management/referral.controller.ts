@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { AdminReferralProgramService } from './program.service.js';
-import { AdminReferralCodeService } from './code.service.js';
-import { AdminReferralHistoryService } from './history.service.js';
+import { AdminReferralProgramService } from './program/program.service.js';
+import { AdminReferralCodeService } from './code/code.service.js';
+import { AdminReferralHistoryService } from './history/history.service.js';
 import {
   createMilestoneBodySchema,
   createProgramBodySchema,

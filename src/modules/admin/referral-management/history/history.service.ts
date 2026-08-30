@@ -1,7 +1,7 @@
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
-import { ReferralNotFoundError } from './referral.errors.js';
-import type { ListReferralsQuery } from './schemas.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
+import { ReferralNotFoundError } from '../referral.errors.js';
+import type { ListReferralsQuery } from '../schemas.js';
 
 function toNum(value: { toString(): string } | number | null | undefined): number | null {
   if (value == null) return null;

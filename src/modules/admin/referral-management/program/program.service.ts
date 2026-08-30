@@ -1,18 +1,18 @@
 import { DatabaseService } from '@core/database';
-import { Prisma, type ReferralProgramAudience } from '../../../generated/prisma/index.js';
-import { generateUniqueCode } from './code.util.js';
+import { Prisma, type ReferralProgramAudience } from '../../../../generated/prisma/index.js';
+import { generateUniqueCode } from '../code/code.util.js';
 import {
   ReferralProgramConflictError,
   ReferralProgramNotFoundError,
   ReferralMilestoneNotFoundError,
-} from './referral.errors.js';
+} from '../referral.errors.js';
 import type {
   CreateMilestoneBody,
   CreateProgramBody,
   ListProgramsQuery,
   UpdateMilestoneBody,
   UpdateProgramBody,
-} from './schemas.js';
+} from '../schemas.js';
 
 function toNum(value: { toString(): string } | number | null | undefined): number | null {
   if (value == null) return null;

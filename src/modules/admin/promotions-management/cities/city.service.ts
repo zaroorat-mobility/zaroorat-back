@@ -1,5 +1,5 @@
 import { DatabaseService } from '@core/database';
-import type { AdminGeographicService } from '../geographic-management/admin-geographic.service.js';
+import type { AdminGeographicService } from '../../geographic-management/admin-geographic.service.js';
 
 export interface CityDto {
   id: string;

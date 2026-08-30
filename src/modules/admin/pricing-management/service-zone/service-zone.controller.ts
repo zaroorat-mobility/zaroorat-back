@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AdminServiceZoneService } from './service-zone.service.js';
-import { listServiceZonesQuerySchema } from './fare.schemas.js';
+import { listServiceZonesQuerySchema } from '../fare/fare.schemas.js';
 
 export class AdminServiceZoneController {
   constructor(private readonly adminServiceZoneService: AdminServiceZoneService) {}
