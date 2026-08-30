@@ -1,9 +1,9 @@
 import { DatabaseService } from '@core/database';
 import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager.js';
 import { FileLifecycleService } from '@modules/files/services/file-lifecycle.service.js';
-import { Prisma } from '../../../generated/prisma/index.js';
-import { BannerNotFoundError, CampaignNotFoundError } from './promotions.errors.js';
-import type { CreateBannerBody, ListBannersQuery, UpdateBannerBody } from './schemas.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
+import { BannerNotFoundError, CampaignNotFoundError } from '../promotions.errors.js';
+import type { CreateBannerBody, ListBannersQuery, UpdateBannerBody } from '../schemas.js';
 
 export interface BannerDto {
   id: string;

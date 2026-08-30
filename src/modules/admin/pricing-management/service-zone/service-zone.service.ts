@@ -1,6 +1,6 @@
-import type { RideServiceType } from '../../../generated/prisma/index.js';
-import { FareRuleConflictError } from './pricing.errors.js';
-import type { AdminGeographicService } from '../geographic-management/admin-geographic.service.js';
+import type { RideServiceType } from '../../../../generated/prisma/index.js';
+import { FareRuleConflictError } from '../pricing.errors.js';
+import type { AdminGeographicService } from '../../geographic-management/admin-geographic.service.js';
 
 export interface ServiceZoneDto {
   id: string;

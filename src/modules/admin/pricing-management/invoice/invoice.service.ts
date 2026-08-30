@@ -1,5 +1,5 @@
 import { DatabaseService } from '@core/database';
-import { InvoiceNotFoundError, InvoiceTemplateNotFoundError } from './pricing.errors.js';
+import { InvoiceNotFoundError, InvoiceTemplateNotFoundError } from '../pricing.errors.js';
 import type {
   CreateInvoiceTemplateBody,
   ListInvoicesQuery,

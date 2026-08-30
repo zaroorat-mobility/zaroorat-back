@@ -1,8 +1,8 @@
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
-import { generateUniqueCode } from './code.util.js';
-import { SegmentConflictError, SegmentNotFoundError } from './promotions.errors.js';
-import type { CreateSegmentBody, ListSegmentsQuery, UpdateSegmentBody } from './schemas.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
+import { generateUniqueCode } from '../shared/code.util.js';
+import { SegmentConflictError, SegmentNotFoundError } from '../promotions.errors.js';
+import type { CreateSegmentBody, ListSegmentsQuery, UpdateSegmentBody } from '../schemas.js';
 
 export interface SegmentDto {
   id: string;

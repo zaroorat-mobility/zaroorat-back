@@ -1,18 +1,18 @@
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
-import { generateUniqueCode } from './code.util.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
+import { generateUniqueCode } from '../shared/code.util.js';
 import {
   CampaignConflictError,
   CampaignNotFoundError,
   PromotionNotFoundError,
   SegmentNotFoundError,
-} from './promotions.errors.js';
+} from '../promotions.errors.js';
 import type {
   CreateCampaignBody,
   ListCampaignsQuery,
   SetCampaignTargetsBody,
   UpdateCampaignBody,
-} from './schemas.js';
+} from '../schemas.js';
 
 function toNum(value: { toString(): string } | number | null | undefined): number | null {
   if (value == null) return null;

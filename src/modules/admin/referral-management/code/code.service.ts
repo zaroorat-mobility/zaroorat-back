@@ -1,7 +1,7 @@
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
-import { ReferralCodeNotFoundError } from './referral.errors.js';
-import type { ListCodesQuery } from './schemas.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
+import { ReferralCodeNotFoundError } from '../referral.errors.js';
+import type { ListCodesQuery } from '../schemas.js';
 
 export interface ReferralCodeDto {
   id: string;

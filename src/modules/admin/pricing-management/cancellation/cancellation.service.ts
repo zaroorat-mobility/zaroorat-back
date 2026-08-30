@@ -2,7 +2,7 @@ import { DatabaseService } from '@core/database';
 import {
   CancellationPolicyConflictError,
   CancellationPolicyNotFoundError,
-} from './pricing.errors.js';
+} from '../pricing.errors.js';
 import type {
   CreateCancellationPolicyBody,
   ListCancellationPoliciesQuery,

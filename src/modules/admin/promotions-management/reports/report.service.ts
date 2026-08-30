@@ -1,7 +1,7 @@
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
-import { PromotionNotFoundError } from './promotions.errors.js';
-import type { ReportOverviewQuery } from './schemas.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
+import { PromotionNotFoundError } from '../promotions.errors.js';
+import type { ReportOverviewQuery } from '../schemas.js';
 
 function toNum(value: { toString(): string } | number | null | undefined): number {
   if (value == null) return 0;
