@@ -1,5 +1,5 @@
 import { Decimal } from '../../types/index.js';
-import { TransactionManager } from '@core/database';
+import { TransactionManager, UniqueConstraintError } from '@core/database';
 import { EventPublisher } from '@core/events';
 import {
   RideRequestRepository,
@@ -24,7 +24,12 @@ import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { DebtService } from '@modules/payments/services/debt/debt.service.js';
 import { RiderDebtLimitExceededError } from '@modules/payments/errors/payment.errors.js';
-import { GeographicCoverageService } from '@modules/location';
+import {
+  GeographicCoverageService,
+  MapProviderService,
+  NearbyDriverService,
+} from '@modules/location';
+import { logger } from '@shared/logger/index.js';
 import type { RideRequest } from '../../types';
 import type { ItemizedFareResult } from '@modules/pricing';
 
@@ -49,7 +54,17 @@ export interface RideQuote {
   drop: { latitude: number; longitude: number };
   estimatedDistanceKm: number;
   estimatedDurationMin: number;
+  /// Name of the map provider that supplied the directions (e.g. 'ola', 'google', 'mappls').
+  distanceSource: string;
   currency: string;
+  /// ETA in minutes for the nearest available driver to reach the pickup point.
+  /// Null when no drivers are nearby or the Matrix API call failed.
+  nearbyDriverEtaMin: number | null;
+  /// Status of the driver ETA calculation:
+  /// 'ok' = road ETA calculated from matrix API
+  /// 'no_drivers' = Redis GEO candidate search returned 0 nearby drivers
+  /// 'matrix_unavailable' = candidate drivers exist but map matrix API failed
+  nearbyDriverEtaStatus: 'ok' | 'no_drivers' | 'matrix_unavailable';
   options: QuoteOption[];
 }
 const CANCELLABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
@@ -68,6 +83,9 @@ export class RideRequestService {
     private readonly rideMetrics: RideMetrics,
     private readonly debtService: DebtService,
     private readonly geographicCoverageService: GeographicCoverageService,
+    private readonly nearbyDriverService: NearbyDriverService,
+    /// Injected map provider service for driver candidate matrix ETAs
+    private readonly mapProviderService?: MapProviderService,
   ) {}
   /// One request, every category. `vehicleTypeId` narrows the result to a
   /// single option; omitting it prices every active type so the customer app
@@ -96,7 +114,7 @@ export class RideRequestService {
           params.cityId !== undefined ? { cityId: params.cityId } : {},
         );
 
-    const trip = this.pricingService.estimateTrip({
+    const trip = await this.pricingService.estimateTrip({
       pickupLat: params.pickupLat,
       pickupLng: params.pickupLng,
       dropLat: params.dropLat,
@@ -210,12 +228,61 @@ export class RideRequestService {
       });
     }
 
+    // ── Driver ETA via Distance Matrix (MapProviderService) ──────────────────────
+    // Step 1: Redis GEO lookup for nearby candidate drivers
+    // Step 2: Distance Matrix routing call to get real road ETAs for candidates
+    // Clearly distinguishes 'no_drivers' (0 candidates) vs 'matrix_unavailable' (API failure).
+    let nearbyDriverEtaMin: number | null = null;
+    let nearbyDriverEtaStatus: 'ok' | 'no_drivers' | 'matrix_unavailable' = 'no_drivers';
+
+    try {
+      const nearby = await this.nearbyDriverService.find({
+        origin: { latitude: params.pickupLat, longitude: params.pickupLng },
+        limit: 5,
+      });
+      const drivers = 'drivers' in nearby && nearby.drivers.length > 0 ? nearby.drivers : null;
+
+      if (!drivers || drivers.length === 0) {
+        nearbyDriverEtaStatus = 'no_drivers';
+      } else if (this.mapProviderService) {
+        const origins = drivers.map((d) => ({
+          latitude: d.latitude,
+          longitude: d.longitude,
+        }));
+        const destination = [{ latitude: params.pickupLat, longitude: params.pickupLng }];
+
+        const matrixResult = await this.mapProviderService.getDistanceMatrix(origins, destination);
+
+        if (matrixResult.status === 'ok' && matrixResult.cells.length > 0) {
+          const etaSeconds = matrixResult.cells
+            .map((row) => row[0])
+            .filter((cell): cell is NonNullable<typeof cell> => !!cell && cell.status === 'OK')
+            .map((cell) => cell.durationSeconds);
+
+          if (etaSeconds.length > 0) {
+            nearbyDriverEtaMin = Math.ceil(Math.min(...etaSeconds) / 60);
+            nearbyDriverEtaStatus = 'ok';
+          } else {
+            nearbyDriverEtaStatus = 'matrix_unavailable';
+          }
+        } else {
+          nearbyDriverEtaStatus = 'matrix_unavailable';
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, '[RideRequestService] Driver candidate ETA matrix calculation failed');
+      nearbyDriverEtaStatus = 'matrix_unavailable';
+    }
+
     return {
       pickup: { latitude: params.pickupLat, longitude: params.pickupLng },
       drop: { latitude: params.dropLat, longitude: params.dropLng },
       estimatedDistanceKm: trip.distanceKm,
       estimatedDurationMin: trip.durationMin,
+      distanceSource: trip.source,
       currency: 'INR',
+      nearbyDriverEtaMin,
+      nearbyDriverEtaStatus,
       ...(resolvedCityCode !== undefined ? { cityCode: resolvedCityCode } : {}),
       options,
     };
@@ -342,39 +409,45 @@ export class RideRequestService {
           })
         : baseFare;
 
-    return this.txManager.execute(async (tx) => {
-      const createInput: CreateRideRequestInput = {
-        customerId: input.customerId,
-        vehicleTypeId: input.vehicleTypeId,
-        pickupLat: new Decimal(input.pickupLat),
-        pickupLng: new Decimal(input.pickupLng),
-        estimatedDistanceKm: new Decimal(fareQuote.estimatedDistanceKm),
-        estimatedDurationMin: fareQuote.estimatedDurationMin,
-        quotedFare: new Decimal(fareQuote.totalFare),
-        surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
-        pricingRuleId,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      };
-      if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
-      if (input.dropLat !== undefined) createInput.dropLat = new Decimal(input.dropLat);
-      if (input.dropLng !== undefined) createInput.dropLng = new Decimal(input.dropLng);
-      if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
-      if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
-      if (input.promoCode !== undefined)
-        createInput.promoCode = input.promoCode.trim().toUpperCase();
-      const request = await this.requestRepo.create(createInput, tx);
-      this.rideMetrics.requestCreated({ requestId: request.id });
-      await this.eventPublisher.publish(
-        rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
-          requestId: request.id,
+    try {
+      return await this.txManager.execute(async (tx) => {
+        const createInput: CreateRideRequestInput = {
           customerId: input.customerId,
           vehicleTypeId: input.vehicleTypeId,
-          quotedFare: fareQuote.totalFare,
-        }),
-        tx,
-      );
-      return request;
-    });
+          pickupLat: new Decimal(input.pickupLat),
+          pickupLng: new Decimal(input.pickupLng),
+          estimatedDistanceKm: new Decimal(fareQuote.estimatedDistanceKm),
+          estimatedDurationMin: fareQuote.estimatedDurationMin,
+          quotedFare: new Decimal(fareQuote.totalFare),
+          surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
+          pricingRuleId,
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        };
+        if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
+        if (input.dropLat !== undefined) createInput.dropLat = new Decimal(input.dropLat);
+        if (input.dropLng !== undefined) createInput.dropLng = new Decimal(input.dropLng);
+        if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
+        if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
+        if (input.promoCode?.trim()) createInput.promoCode = input.promoCode.trim().toUpperCase();
+        const request = await this.requestRepo.create(createInput, tx);
+        this.rideMetrics.requestCreated({ requestId: request.id });
+        await this.eventPublisher.publish(
+          rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
+            requestId: request.id,
+            customerId: input.customerId,
+            vehicleTypeId: input.vehicleTypeId,
+            quotedFare: fareQuote.totalFare,
+          }),
+          tx,
+        );
+        return request;
+      });
+    } catch (err) {
+      if (err instanceof UniqueConstraintError) {
+        throw new ActiveRideExistsError('Customer already has an active ride request');
+      }
+      throw err;
+    }
   }
   /// A request nobody has accepted yet has no `Ride` row, so `LifecycleService`'s
   /// cancel path (which acts on a `Ride`) can't reach it — this is the only

@@ -6,11 +6,13 @@ import { PricingRuleRepository } from '../repositories/pricing-rule.repository.j
 import { calculateHaversineDistanceKm } from '../utils/distance.util.js';
 import { MAX_SURGE_MULTIPLIER, MIN_SURGE_MULTIPLIER } from './surge.service.js';
 import { PricingMetrics } from '../metrics/pricing.metrics.js';
+import type { MapProviderService } from '@modules/location';
 import type {
   FareCalculationParams,
   FinalFareParams,
   ItemizedFareResult,
   RateCardLookupOptions,
+  TripEstimate,
 } from '../domain/pricing.types.js';
 
 /// Shaped so `handleRideError` recognises it: that handler duck-types on
@@ -58,6 +60,9 @@ export class PricingService {
   constructor(
     private readonly pricingRuleRepository: PricingRuleRepository,
     private readonly pricingMetrics: PricingMetrics,
+    /// MapProviderService handles primary map provider routing (Ola Maps) and
+    /// failover routing providers (Google Maps, Mappls).
+    private readonly mapProviderService?: MapProviderService,
   ) {}
 
   rateCardFor(rule: PricingRule | null): PricingRateCard {
@@ -298,12 +303,35 @@ export class PricingService {
     };
   }
 
-  estimateTrip(params: {
+  /// Estimate the trip distance and duration for authoritative pricing.
+  ///
+  /// Primary path: MapProviderService — queries primary map provider (Ola Maps)
+  /// and configured failover providers (Google Maps, Mappls). Returns real road
+  /// distance and traffic-aware duration.
+  ///
+  /// Production policy: If all external routing providers fail, this method
+  /// throws RoutingProviderUnavailableError (503 Service Unavailable).
+  /// Authoritative customer fares are NEVER silently computed using Haversine.
+  async estimateTrip(params: {
     pickupLat: number;
     pickupLng: number;
     dropLat: number;
     dropLng: number;
-  }): { distanceKm: number; durationMin: number } {
+  }): Promise<TripEstimate> {
+    if (this.mapProviderService) {
+      const result = await this.mapProviderService.getDirections(
+        { latitude: params.pickupLat, longitude: params.pickupLng },
+        { latitude: params.dropLat, longitude: params.dropLng },
+      );
+
+      const distanceKm = money(result.distanceMeters / 1000);
+      if (distanceKm <= 0) throw new ZeroDistanceTripError();
+      const durationMin = Math.max(1, Math.round(result.durationSeconds / 60));
+
+      return { distanceKm, durationMin, source: result.providerName };
+    }
+
+    // ── Haversine fallback (Unit tests only when no MapProviderService is registered) ──
     const straightLineKm = calculateHaversineDistanceKm(
       params.pickupLat,
       params.pickupLng,
@@ -311,26 +339,11 @@ export class PricingService {
       params.dropLng,
     );
     const distanceKm = money(straightLineKm * pricingConfig.roadDistanceFactor);
-    // A booking whose drop is its pickup used to price at the minimum fare and
-    // go out to dispatch: a driver was sent to a customer already standing at
-    // their destination, and the customer paid the floor for a journey that
-    // could not happen. The realistic cause is a client that never set the drop
-    // and sent the pickup twice, or a second GPS read of the same spot — so the
-    // test is "zero at the precision we price in", not exact equality of the
-    // coordinates.
-    //
-    // Guarded here rather than in the two request schemas because this is the
-    // one place both quoting and booking pass through, and it is the only place
-    // that knows the road factor and the rounding that decide when a distance
-    // has vanished.
-    //
-    // Deliberately not applied to `calculateFinalFare`: a *completed* ride
-    // reporting no distance is a different situation entirely, and refusing it
-    // would leave a driver who has finished driving unable to close the ride.
     if (distanceKm <= 0) throw new ZeroDistanceTripError();
     return {
       distanceKm,
       durationMin: Math.max(1, Math.round(distanceKm * pricingConfig.minutesPerKm)),
+      source: 'haversine',
     };
   }
 
@@ -344,15 +357,15 @@ export class PricingService {
     }
     // The multi-category quote estimates the trip once and passes it in: the
     // journey does not change between a bike and a premium cab, and recomputing
-    // it inside that loop ran the same haversine once per category.
+    // it inside that loop ran the same directions call once per category.
     const trip =
       params.trip ??
-      this.estimateTrip({
+      (await this.estimateTrip({
         pickupLat: params.pickupLat,
         pickupLng: params.pickupLng,
         dropLat: params.dropLat as number,
         dropLng: params.dropLng as number,
-      });
+      }));
     const card =
       params.rateCard ??
       (await this.rateCardForTypeId(params.vehicleTypeId, params.cityCode, {

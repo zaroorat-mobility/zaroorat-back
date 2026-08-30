@@ -89,3 +89,10 @@ export class DropOutsideServiceAreaError extends GeographicError {
     this.name = 'DropOutsideServiceAreaError';
   }
 }
+
+export class RoutingProviderUnavailableError extends GeographicError {
+  constructor(message = 'Unable to calculate trip route distance and ETA. Please try again.') {
+    super(message, 'ROUTING_PROVIDER_UNAVAILABLE', 503);
+    this.name = 'RoutingProviderUnavailableError';
+  }
+}
