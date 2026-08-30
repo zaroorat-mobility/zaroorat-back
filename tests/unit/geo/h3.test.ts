@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { H3Provider } from '../../../src/modules/geo/providers/h3.provider.js';
-import { InvalidH3CellError } from '../../../src/modules/geo/errors/geo.errors.js';
-import { haversineMeters } from '../../../src/modules/geo/utils/coordinate.util.js';
+import { H3Provider } from '../../../src/modules/location/providers/h3.provider.js';
+import { InvalidH3CellError } from '../../../src/modules/location/errors/location.errors.js';
+import { haversineMeters } from '../../../src/modules/location/utils/coordinate.util.js';
 import { geoConfig } from '../../../src/config/geo/geo.config.js';
 
 const BENGALURU = { latitude: 12.9716, longitude: 77.5946 };

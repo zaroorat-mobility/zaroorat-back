@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { assessPlausibility } from '../../../src/modules/drivers/services/location/location-plausibility.js';
-import { haversineKm } from '../../../src/modules/geo/utils/coordinate.util.js';
+import { haversineKm } from '../../../src/modules/location/utils/coordinate.util.js';
 import { driverConfig } from '../../../src/config/driver/driver.config.js';
 
 const DELHI = { latitude: 28.6139, longitude: 77.209 };

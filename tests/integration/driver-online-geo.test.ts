@@ -8,9 +8,9 @@ import { grantRole, makeAssignedVehicle, makeDriver } from './helpers/fixtures.j
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
-import type { GeoService } from '../../src/modules/geo/services/geo.service.js';
+import type { GeoService } from '../../src/modules/location/core-services/geo.service.js';
 import type { DocExpirationJob } from '../../src/modules/drivers/jobs/doc-expiration.job.js';
-import type { NearbyDriversResult } from '../../src/modules/geo/types/geo.types.js';
+import type { NearbyDriversResult } from '../../src/modules/location/types/geo.types.js';
 
 function png(): Buffer {
   return image({ width: 400, height: 300 });

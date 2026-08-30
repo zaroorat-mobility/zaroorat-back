@@ -11,8 +11,8 @@ import { png as image } from '../helpers/image-fixtures.js';
 import type { MockStorageProvider } from '../../src/modules/files/utils/storage/mock.provider.js';
 import type { OutboxRelay } from '../../src/core/events/OutboxRelay.js';
 import type { AuthDriverVerifiedConsumer } from '../../src/modules/auth/consumers/driver-verified.consumer.js';
-import type { GeoService } from '../../src/modules/geo/services/geo.service.js';
-import type { NearbyDriversResult } from '../../src/modules/geo/types/geo.types.js';
+import type { GeoService } from '../../src/modules/location/core-services/geo.service.js';
+import type { NearbyDriversResult } from '../../src/modules/location/types/geo.types.js';
 
 function png(): Buffer {
   return image({ width: 400, height: 300 });
