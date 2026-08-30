@@ -1,5 +1,5 @@
 import { asClass, asFunction, AwilixContainer } from 'awilix';
-import { GeoMetrics } from './metrics/geo.metrics.js';
+import { GeoMetrics, GeographicMetrics } from './metrics/location.metrics.js';
 import {
   H3Provider,
   PostgisProvider,
@@ -11,18 +11,30 @@ import {
   DistanceService,
   NearbyDriverService,
   GeoService,
-} from './services/index.js';
+} from './core-services/index.js';
+import { GeographicCoverageService } from './business-services/index.js';
+
+// Public API — all consumers import from '@modules/location'
 export * from './providers/index.js';
-export * from './services/index.js';
+export * from './core-services/index.js';
+export * from './business-services/index.js';
 export * from './schemas/index.js';
 export * from './metrics/index.js';
 export * from './errors/index.js';
 export * from './constants/index.js';
 export * from './types/index.js';
 export * from './utils/index.js';
-export function registerGeoModule(container: AwilixContainer): void {
+
+/// Single registration function that replaces registerGeoModule +
+/// registerGeographicModule — DI names are identical to before so no
+/// consumer code needs to change beyond the import path in di.ts.
+export function registerLocationModule(container: AwilixContainer): void {
   container.register({
+    // Metrics
     geoMetrics: asClass(GeoMetrics).singleton(),
+    geographicMetrics: asClass(GeographicMetrics).singleton(),
+
+    // Providers
     h3Provider: asClass(H3Provider).singleton(),
     postgisProvider: asClass(PostgisProvider).singleton(),
     redisGeoProvider: asClass(RedisGeoProvider).singleton(),
@@ -34,6 +46,8 @@ export function registerGeoModule(container: AwilixContainer): void {
       }
       return new MapplsProvider({ clientId, clientSecret });
     }).singleton(),
+
+    // Core services
     coordinateService: asClass(CoordinateService).singleton(),
     distanceService: asClass(DistanceService).singleton(),
     nearbyDriverService: asClass(NearbyDriverService).singleton(),
@@ -44,5 +58,8 @@ export function registerGeoModule(container: AwilixContainer): void {
         distance: c.resolve('distanceService'),
         nearby: c.resolve('nearbyDriverService'),
       })),
+
+    // Business services
+    geographicCoverageService: asClass(GeographicCoverageService).singleton(),
   });
 }

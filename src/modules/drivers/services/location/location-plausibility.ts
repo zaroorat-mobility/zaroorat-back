@@ -1,5 +1,5 @@
 import { driverConfig } from '@config';
-import { haversineKm, isValidCoordinate } from '@modules/geo';
+import { haversineKm, isValidCoordinate } from '@modules/location';
 export interface PreviousFix {
   latitude: number;
   longitude: number;

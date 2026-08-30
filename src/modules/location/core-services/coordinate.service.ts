@@ -1,5 +1,5 @@
 import { geoConfig } from '@config/geo';
-import { InvalidCoordinateError, InvalidSearchRadiusError } from '../errors/geo.errors.js';
+import { InvalidCoordinateError, InvalidSearchRadiusError } from '../errors/location.errors.js';
 import {
   isValidLatitude,
   isValidLongitude,

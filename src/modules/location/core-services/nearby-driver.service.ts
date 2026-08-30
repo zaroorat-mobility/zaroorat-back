@@ -4,7 +4,7 @@ import { H3Provider } from '../providers/h3.provider.js';
 import { PostgisProvider } from '../providers/postgis.provider.js';
 import { RedisGeoProvider } from '../providers/redis-geo.provider.js';
 import { CoordinateService } from './coordinate.service.js';
-import { GeoMetrics } from '../metrics/geo.metrics.js';
+import { GeoMetrics } from '../metrics/location.metrics.js';
 import type {
   Coordinate,
   DriverPosition,

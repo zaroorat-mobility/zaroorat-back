@@ -1,13 +1,13 @@
 import { DatabaseService } from '@core/database';
 import type { RideServiceType, ServiceZoneType } from '../../../generated/prisma/index.js';
-import { GeographicMetrics } from '../metrics/geographic.metrics.js';
+import { GeographicMetrics } from '../metrics/location.metrics.js';
 import {
   DropOutsideServiceAreaError,
   OutsideServiceAreaError,
   OutsideServiceZoneError,
   RestrictedZoneError,
   VehicleNotSupportedInZoneError,
-} from '../errors/geographic.errors.js';
+} from '../errors/location.errors.js';
 
 export interface ResolvedCity {
   id: string;

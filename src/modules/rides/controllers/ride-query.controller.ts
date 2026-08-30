@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { assertRideParty, callerId } from '@core/auth';
-import { GeoService } from '@modules/geo';
+import { GeoService } from '@modules/location';
 import { RideRepository } from '../repositories/ride.repository.js';
 import { ReceiptService } from '../services/receipt/receipt.service.js';
 import { RideNotFoundError } from '../errors/ride.errors.js';

@@ -1,6 +1,6 @@
 import { cellToLatLng, getHexagonEdgeLengthAvg, gridDisk, isValidCell, latLngToCell } from 'h3-js';
 import { geoConfig } from '@config/geo';
-import { InvalidH3CellError } from '../errors/geo.errors.js';
+import { InvalidH3CellError } from '../errors/location.errors.js';
 import type { Coordinate, H3Cell } from '../types/geo.types.js';
 export class H3Provider {
   get resolution(): number {

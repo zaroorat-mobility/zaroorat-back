@@ -1,4 +1,4 @@
-import { haversineKm } from '@modules/geo';
+import { haversineKm } from '@modules/location';
 export function calculateHaversineDistanceKm(
   lat1: number,
   lng1: number,

@@ -24,7 +24,7 @@ import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { DebtService } from '@modules/payments/services/debt/debt.service.js';
 import { RiderDebtLimitExceededError } from '@modules/payments/errors/payment.errors.js';
-import { GeographicCoverageService } from '@modules/geographic';
+import { GeographicCoverageService } from '@modules/location';
 import type { RideRequest } from '../../types';
 import type { ItemizedFareResult } from '@modules/pricing';
 
