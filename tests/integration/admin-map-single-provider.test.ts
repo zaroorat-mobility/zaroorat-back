@@ -9,6 +9,7 @@ import { hashPassword } from '../../src/modules/auth/utils/password.js';
 import { container } from '../../src/core/di.js';
 import type { MapProviderService } from '../../src/modules/location/business-services/map-provider.service.js';
 import { RoutingProviderUnavailableError } from '../../src/modules/location/errors/location.errors.js';
+import type { MapProviderName } from '../../src/modules/admin/system-settings/map/types/map-settings.types.js';
 
 const ADMIN_PHONE = '+919876545066';
 const ADMIN_EMAIL = 'single-provider-admin@zaroorat.test';

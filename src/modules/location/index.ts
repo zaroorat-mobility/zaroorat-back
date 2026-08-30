@@ -15,6 +15,9 @@ import {
   GeoService,
 } from './core-services/index.js';
 import { GeographicCoverageService, MapProviderService } from './business-services/index.js';
+import type { MapProvider } from './types/map-provider.types.js';
+import type { SystemSettingService } from '../admin/system-settings/index.js';
+import type { RedisService } from '../../core/cache/index.js';
 
 // Public API — all consumers import from '@modules/location'
 export * from './providers/index.js';
@@ -85,17 +88,19 @@ export function registerLocationModule(container: AwilixContainer): void {
           mappls: mapplsProvider,
         };
 
-        const primaryProvider = providerMap[primaryName] ?? providerMap['ola'];
+        const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
         const fallbackProviders = fallbackNames
           .map((name) => providerMap[name])
-          .filter((p) => Boolean(p && p.providerName !== primaryProvider.providerName));
+          .filter((p): p is MapProvider =>
+            Boolean(p && p.providerName !== primaryProvider.providerName),
+          );
 
         return new MapProviderService({
           primaryProvider,
           fallbackProviders,
           providersRegistry: providerMap,
-          systemSettingService,
-          redisService,
+          ...(systemSettingService ? { systemSettingService } : {}),
+          ...(redisService ? { redisService } : {}),
         });
       },
     ).singleton(),
