@@ -4,3 +4,4 @@ export * from './admin.module.js';
 export * from './pricing-management/index.js';
 export * from './promotions-management/index.js';
 export * from './referral-management/index.js';
+export * from './operations-management/index.js';

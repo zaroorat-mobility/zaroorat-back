@@ -68,6 +68,19 @@ import {
   AdminGeographicController,
   AdminGeographicService,
 } from './geographic-management/index.js';
+import {
+  operationsManagementRoutes,
+  AdminRideController,
+  AdminRideService,
+  AdminLiveController,
+  AdminLiveService,
+  AdminDispatchController,
+  AdminDispatchService,
+  AdminTicketController,
+  AdminTicketService,
+  AdminSafetyController,
+  AdminSafetyService,
+} from './operations-management/index.js';
 
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
@@ -107,6 +120,16 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminRiderController: asClass(AdminRiderController).singleton(),
     adminGeographicService: asClass(AdminGeographicService).singleton(),
     adminGeographicController: asClass(AdminGeographicController).singleton(),
+    adminRideService: asClass(AdminRideService).singleton(),
+    adminRideController: asClass(AdminRideController).singleton(),
+    adminLiveService: asClass(AdminLiveService).singleton(),
+    adminLiveController: asClass(AdminLiveController).singleton(),
+    adminDispatchService: asClass(AdminDispatchService).singleton(),
+    adminDispatchController: asClass(AdminDispatchController).singleton(),
+    adminTicketService: asClass(AdminTicketService).singleton(),
+    adminTicketController: asClass(AdminTicketController).singleton(),
+    adminSafetyService: asClass(AdminSafetyService).singleton(),
+    adminSafetyController: asClass(AdminSafetyController).singleton(),
   });
 
   registerFileReference('PROMO_BANNER', {
@@ -127,4 +150,5 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   await app.register(rbacManagementRoutes);
   await app.register(riderManagementRoutes);
   await app.register(geographicManagementRoutes, { prefix: '/geographic' });
+  await app.register(operationsManagementRoutes, { prefix: '/operations' });
 }

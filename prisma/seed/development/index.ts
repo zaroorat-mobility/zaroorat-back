@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ProviderClient } from '../../../src/core/database';
+import type { SupportAgent, TicketPriority } from '../../../src/generated/prisma/index.js';
 import { hashPassword } from '../../../src/modules/auth/utils/password';
 import { driverConfig } from '../../../src/config/driver/driver.config';
 import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config';
@@ -384,6 +385,14 @@ export async function seedDevelopment(prisma: Prisma) {
 
   await seedPromotionsFixtures(prisma);
   await seedReferralFixtures(prisma);
+  await seedOperationsRideFixtures(prisma);
+  console.log('  -> Seeded multi-status operations rides, dispatches, timelines, and ratings');
+
+  await seedSupportFixtures(prisma);
+  console.log('  -> Seeded support categories, agents, tickets, messages, and SLA assignments');
+
+  await seedSafetyFixtures(prisma);
+  console.log('  -> Seeded safety SOS incidents, mishap reports, misconduct events, and evidence');
 }
 
 async function seedCities(prisma: Prisma) {
@@ -1884,4 +1893,1209 @@ async function ensureReferralRow(
       expiresAt: input.expiresAt,
     },
   });
+}
+
+async function seedOperationsRideFixtures(prisma: Prisma) {
+  const passengerUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000002', deletedAt: null },
+    include: { profile: true },
+  });
+  const inviteUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000004', deletedAt: null },
+    include: { profile: true },
+  });
+  const driverUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000001', deletedAt: null },
+    include: { profile: true },
+  });
+
+  if (!passengerUser || !driverUser) return;
+
+  const driver = await prisma.driver.findUnique({
+    where: { userId: driverUser.id },
+    include: { profile: true },
+  });
+  if (!driver?.currentVehicleId) return;
+
+  const vehicle = await prisma.vehicle.findUnique({ where: { id: driver.currentVehicleId } });
+  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY' } });
+  if (!vehicle || !cabType) return;
+
+  const now = new Date();
+
+  // 1. IN_PROGRESS Ride
+  const inProgressRideCode = 'R-OPS-1001';
+  const inProgressRide = await prisma.ride.findUnique({ where: { rideCode: inProgressRideCode } });
+  if (!inProgressRide) {
+    const reqId = randomUUID();
+    const rideId = randomUUID();
+    const acceptedAt = new Date(now.getTime() - 25 * 60 * 1000);
+    const startedAt = new Date(now.getTime() - 15 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.0837, 74.7973,
+               ST_SetSRID(ST_MakePoint(74.7973, 34.0837), 4326)::geography,
+               34.1215, 74.8640,
+               ST_SetSRID(ST_MakePoint(74.8640, 34.1215), 4326)::geography,
+               'Lal Chowk, Srinagar', 'Nishat Garden, Srinagar',
+               'MATCHED', 1.25, 'UPI', $4)`,
+      reqId,
+      passengerUser.id,
+      cabType.id,
+      acceptedAt,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO rides
+         (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+          status, payment_method, payment_status, pickup_location, pickup_address,
+          drop_location, drop_address, accepted_at, started_at,
+          wait_time_min, is_scheduled, created_at, updated_at)
+       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+               'IN_PROGRESS', 'UPI', 'PENDING',
+               ST_SetSRID(ST_MakePoint(74.7973, 34.0837), 4326)::geography, 'Lal Chowk, Srinagar',
+               ST_SetSRID(ST_MakePoint(74.8640, 34.1215), 4326)::geography, 'Nishat Garden, Srinagar',
+               $8, $9,
+               2, false, $8, $9)`,
+      rideId,
+      inProgressRideCode,
+      reqId,
+      passengerUser.id,
+      driver.id,
+      vehicle.id,
+      cabType.id,
+      acceptedAt,
+      startedAt,
+    );
+
+    await prisma.rideRequest.update({ where: { id: reqId }, data: { rideId } });
+
+    await prisma.rideFare.create({
+      data: {
+        rideId,
+        currency: 'INR',
+        baseFare: 60,
+        distanceFare: 180,
+        timeFare: 40,
+        waitingCharge: 10,
+        surgeMultiplier: 1.25,
+        surgeAmount: 50,
+        subtotal: 330,
+        discountAmount: 20,
+        taxAmount: 16.5,
+        tollAmount: 0,
+        platformFee: 15,
+        tipAmount: 0,
+        totalFare: 341.5,
+        driverEarning: 275,
+        platformCommission: 66.5,
+      },
+    });
+
+    await prisma.rideFareLine.createMany({
+      data: [
+        { rideId, lineType: 'BASE_FARE', label: 'Base Fare', amount: 60, sequence: 1 },
+        {
+          rideId,
+          lineType: 'DISTANCE_FARE',
+          label: 'Distance (12.4 km)',
+          amount: 180,
+          sequence: 2,
+        },
+        { rideId, lineType: 'TIME_FARE', label: 'Duration (25 min)', amount: 40, sequence: 3 },
+        { rideId, lineType: 'SURGE', label: 'Surge Fare (1.25x)', amount: 50, sequence: 4 },
+        { rideId, lineType: 'WAITING', label: 'Waiting Charge (2 min)', amount: 10, sequence: 5 },
+        { rideId, lineType: 'DISCOUNT', label: 'Welcome Promo Discount', amount: -20, sequence: 6 },
+        { rideId, lineType: 'TAX', label: 'GST (5%)', amount: 16.5, sequence: 7 },
+      ],
+    });
+
+    await prisma.rideStatusEvent.createMany({
+      data: [
+        {
+          rideId,
+          fromStatus: null,
+          toStatus: 'REQUESTED',
+          actorType: 'CUSTOMER',
+          actorId: passengerUser.id,
+          reason: 'Ride requested by customer',
+          createdAt: new Date(acceptedAt.getTime() - 2 * 60 * 1000),
+        },
+        {
+          rideId,
+          fromStatus: 'REQUESTED',
+          toStatus: 'ACCEPTED',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver accepted ride offer',
+          createdAt: acceptedAt,
+        },
+        {
+          rideId,
+          fromStatus: 'ACCEPTED',
+          toStatus: 'DRIVER_ARRIVING',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver is on the way to pickup location',
+          createdAt: new Date(acceptedAt.getTime() + 3 * 60 * 1000),
+        },
+        {
+          rideId,
+          fromStatus: 'DRIVER_ARRIVING',
+          toStatus: 'DRIVER_ARRIVED',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver reached pickup point',
+          createdAt: new Date(startedAt.getTime() - 2 * 60 * 1000),
+        },
+        {
+          rideId,
+          fromStatus: 'DRIVER_ARRIVED',
+          toStatus: 'IN_PROGRESS',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Start OTP verified, trip in progress',
+          createdAt: startedAt,
+        },
+      ],
+    });
+
+    await prisma.rideOtp.create({
+      data: {
+        rideId,
+        otpHash: 'hashed_otp_4820',
+        purpose: 'START',
+        attempts: 1,
+        verified: true,
+        verifiedAt: startedAt,
+        expiresAt: new Date(startedAt.getTime() + 15 * 60 * 1000),
+      },
+    });
+
+    // Update driver location in Srinagar
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO driver_locations
+         (driver_id, latitude, longitude, location, heading, bearing, speed_kmh, accuracy_meters, is_mock_location, ride_id, recorded_at)
+       VALUES ($1::uuid, 34.0950, 74.8250, ST_SetSRID(ST_MakePoint(74.8250, 34.0950), 4326)::geography, 45, 45, 40, 5, false, $2::uuid, now())
+       ON CONFLICT (driver_id) DO UPDATE SET
+         latitude = 34.0950, longitude = 74.8250, location = ST_SetSRID(ST_MakePoint(74.8250, 34.0950), 4326)::geography,
+         ride_id = $2::uuid, recorded_at = now()`,
+      driver.id,
+      rideId,
+    );
+  }
+
+  // 2. DRIVER_ARRIVING Ride
+  const arrivingRideCode = 'R-OPS-1002';
+  const arrivingRide = await prisma.ride.findUnique({ where: { rideCode: arrivingRideCode } });
+  if (!arrivingRide) {
+    const reqId = randomUUID();
+    const rideId = randomUUID();
+    const acceptedAt = new Date(now.getTime() - 6 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.1250, 74.8400,
+               ST_SetSRID(ST_MakePoint(74.8400, 34.1250), 4326)::geography,
+               34.0050, 74.7700,
+               ST_SetSRID(ST_MakePoint(74.7700, 34.0050), 4326)::geography,
+               'Hazratbal Dargah, Srinagar', 'Airport Road, Srinagar',
+               'MATCHED', 1.0, 'CARD', $4)`,
+      reqId,
+      (inviteUser ?? passengerUser).id,
+      cabType.id,
+      acceptedAt,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO rides
+         (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+          status, payment_method, payment_status, pickup_location, pickup_address,
+          drop_location, drop_address, accepted_at,
+          wait_time_min, is_scheduled, created_at, updated_at)
+       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+               'DRIVER_ARRIVING', 'CARD', 'PENDING',
+               ST_SetSRID(ST_MakePoint(74.8400, 34.1250), 4326)::geography, 'Hazratbal Dargah, Srinagar',
+               ST_SetSRID(ST_MakePoint(74.7700, 34.0050), 4326)::geography, 'Airport Road, Srinagar',
+               $8,
+               0, false, $8, now())`,
+      rideId,
+      arrivingRideCode,
+      reqId,
+      (inviteUser ?? passengerUser).id,
+      driver.id,
+      vehicle.id,
+      cabType.id,
+      acceptedAt,
+    );
+
+    await prisma.rideRequest.update({ where: { id: reqId }, data: { rideId } });
+
+    await prisma.rideFare.create({
+      data: {
+        rideId,
+        baseFare: 50,
+        distanceFare: 150,
+        timeFare: 30,
+        waitingCharge: 0,
+        surgeMultiplier: 1.0,
+        surgeAmount: 0,
+        subtotal: 230,
+        discountAmount: 0,
+        taxAmount: 11.5,
+        tollAmount: 0,
+        platformFee: 15,
+        tipAmount: 0,
+        totalFare: 241.5,
+        driverEarning: 195,
+        platformCommission: 46.5,
+      },
+    });
+
+    await prisma.rideStatusEvent.createMany({
+      data: [
+        {
+          rideId,
+          fromStatus: null,
+          toStatus: 'ACCEPTED',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver accepted ride',
+          createdAt: acceptedAt,
+        },
+        {
+          rideId,
+          fromStatus: 'ACCEPTED',
+          toStatus: 'DRIVER_ARRIVING',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver is navigating to pickup',
+          createdAt: new Date(acceptedAt.getTime() + 1 * 60 * 1000),
+        },
+      ],
+    });
+
+    await prisma.rideOtp.create({
+      data: {
+        rideId,
+        otpHash: 'hashed_otp_9201',
+        purpose: 'START',
+        attempts: 0,
+        verified: false,
+        expiresAt: new Date(now.getTime() + 30 * 60 * 1000),
+      },
+    });
+  }
+
+  // 3. DRIVER_ARRIVED Ride
+  const arrivedRideCode = 'R-OPS-1003';
+  const arrivedRide = await prisma.ride.findUnique({ where: { rideCode: arrivedRideCode } });
+  if (!arrivedRide) {
+    const reqId = randomUUID();
+    const rideId = randomUUID();
+    const acceptedAt = new Date(now.getTime() - 10 * 60 * 1000);
+    const arrivedAt = new Date(now.getTime() - 2 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.0750, 74.8700,
+               ST_SetSRID(ST_MakePoint(74.8700, 34.0750), 4326)::geography,
+               34.0880, 74.8200,
+               ST_SetSRID(ST_MakePoint(74.8200, 34.0880), 4326)::geography,
+               'Pari Mahal, Srinagar', 'Dal Gate, Srinagar',
+               'MATCHED', 1.0, 'CASH', $4)`,
+      reqId,
+      passengerUser.id,
+      cabType.id,
+      acceptedAt,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO rides
+         (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+          status, payment_method, payment_status, pickup_location, pickup_address,
+          drop_location, drop_address, accepted_at, arrived_at,
+          wait_time_min, is_scheduled, created_at, updated_at)
+       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+               'DRIVER_ARRIVED', 'CASH', 'PENDING',
+               ST_SetSRID(ST_MakePoint(74.8700, 34.0750), 4326)::geography, 'Pari Mahal, Srinagar',
+               ST_SetSRID(ST_MakePoint(74.8200, 34.0880), 4326)::geography, 'Dal Gate, Srinagar',
+               $8, $9,
+               2, false, $8, now())`,
+      rideId,
+      arrivedRideCode,
+      reqId,
+      passengerUser.id,
+      driver.id,
+      vehicle.id,
+      cabType.id,
+      acceptedAt,
+      arrivedAt,
+    );
+
+    await prisma.rideRequest.update({ where: { id: reqId }, data: { rideId } });
+
+    await prisma.rideFare.create({
+      data: {
+        rideId,
+        baseFare: 50,
+        distanceFare: 80,
+        timeFare: 20,
+        waitingCharge: 0,
+        surgeMultiplier: 1.0,
+        surgeAmount: 0,
+        subtotal: 150,
+        discountAmount: 0,
+        taxAmount: 7.5,
+        tollAmount: 0,
+        platformFee: 15,
+        tipAmount: 0,
+        totalFare: 157.5,
+        driverEarning: 125,
+        platformCommission: 32.5,
+      },
+    });
+
+    await prisma.rideStatusEvent.createMany({
+      data: [
+        {
+          rideId,
+          fromStatus: null,
+          toStatus: 'ACCEPTED',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver accepted ride',
+          createdAt: acceptedAt,
+        },
+        {
+          rideId,
+          fromStatus: 'ACCEPTED',
+          toStatus: 'DRIVER_ARRIVING',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver en route',
+          createdAt: new Date(acceptedAt.getTime() + 2 * 60 * 1000),
+        },
+        {
+          rideId,
+          fromStatus: 'DRIVER_ARRIVING',
+          toStatus: 'DRIVER_ARRIVED',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver waiting at pickup',
+          createdAt: arrivedAt,
+        },
+      ],
+    });
+  }
+
+  // 4. CANCELLED_BY_CUSTOMER Ride
+  const cancelledCustCode = 'R-OPS-1004';
+  const cancelledCustRide = await prisma.ride.findUnique({
+    where: { rideCode: cancelledCustCode },
+  });
+  if (!cancelledCustRide) {
+    const reqId = randomUUID();
+    const rideId = randomUUID();
+    const acceptedAt = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const cancelledAt = new Date(now.getTime() - 110 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.0850, 74.8300,
+               ST_SetSRID(ST_MakePoint(74.8300, 34.0850), 4326)::geography,
+               34.0700, 74.8400,
+               ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography,
+               'Boulevard Road, Srinagar', 'Shankaracharya Hill, Srinagar',
+               'CANCELLED_BY_CUSTOMER', 1.0, 'WALLET', $4)`,
+      reqId,
+      passengerUser.id,
+      cabType.id,
+      acceptedAt,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO rides
+         (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+          status, payment_method, payment_status, pickup_location, pickup_address,
+          drop_location, drop_address, accepted_at, cancelled_at,
+          wait_time_min, is_scheduled, created_at, updated_at)
+       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+               'CANCELLED_BY_CUSTOMER', 'WALLET', 'CANCELLED',
+               ST_SetSRID(ST_MakePoint(74.8300, 34.0850), 4326)::geography, 'Boulevard Road, Srinagar',
+               ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography, 'Shankaracharya Hill, Srinagar',
+               $8, $9,
+               0, false, $8, $9)`,
+      rideId,
+      cancelledCustCode,
+      reqId,
+      passengerUser.id,
+      driver.id,
+      vehicle.id,
+      cabType.id,
+      acceptedAt,
+      cancelledAt,
+    );
+
+    await prisma.rideRequest.update({ where: { id: reqId }, data: { rideId } });
+
+    await prisma.rideCancellation.create({
+      data: {
+        rideId,
+        cancelledBy: 'CUSTOMER',
+        actorId: passengerUser.id,
+        reasonCode: 'WAIT_TIME_TOO_LONG',
+        reasonText: 'Driver took longer than expected to arrive',
+        cancelledAtStatus: 'DRIVER_ARRIVING',
+        cancellationFee: 30,
+        feeCharged: true,
+      },
+    });
+
+    await prisma.rideStatusEvent.createMany({
+      data: [
+        {
+          rideId,
+          fromStatus: null,
+          toStatus: 'ACCEPTED',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver accepted ride',
+          createdAt: acceptedAt,
+        },
+        {
+          rideId,
+          fromStatus: 'ACCEPTED',
+          toStatus: 'CANCELLED_BY_CUSTOMER',
+          actorType: 'CUSTOMER',
+          actorId: passengerUser.id,
+          reason: 'Customer cancelled: driver took too long',
+          createdAt: cancelledAt,
+        },
+      ],
+    });
+  }
+
+  // 5. CANCELLED_BY_SYSTEM Ride
+  const cancelledSysCode = 'R-OPS-1005';
+  const cancelledSysRide = await prisma.ride.findUnique({ where: { rideCode: cancelledSysCode } });
+  if (!cancelledSysRide) {
+    const reqId = randomUUID();
+    const rideId = randomUUID();
+    const acceptedAt = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+    const cancelledAt = new Date(now.getTime() - 235 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.0800, 74.8000,
+               ST_SetSRID(ST_MakePoint(74.8000, 34.0800), 4326)::geography,
+               34.0600, 74.7800,
+               ST_SetSRID(ST_MakePoint(74.7800, 34.0600), 4326)::geography,
+               'SMHS Hospital, Srinagar', 'Bemina, Srinagar',
+               'CANCELLED_BY_SYSTEM', 1.0, 'CASH', $4)`,
+      reqId,
+      (inviteUser ?? passengerUser).id,
+      cabType.id,
+      acceptedAt,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO rides
+         (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+          status, payment_method, payment_status, pickup_location, pickup_address,
+          drop_location, drop_address, accepted_at, cancelled_at,
+          wait_time_min, is_scheduled, created_at, updated_at)
+       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+               'CANCELLED_BY_SYSTEM', 'CASH', 'CANCELLED',
+               ST_SetSRID(ST_MakePoint(74.8000, 34.0800), 4326)::geography, 'SMHS Hospital, Srinagar',
+               ST_SetSRID(ST_MakePoint(74.7800, 34.0600), 4326)::geography, 'Bemina, Srinagar',
+               $8, $9,
+               0, false, $8, $9)`,
+      rideId,
+      cancelledSysCode,
+      reqId,
+      (inviteUser ?? passengerUser).id,
+      driver.id,
+      vehicle.id,
+      cabType.id,
+      acceptedAt,
+      cancelledAt,
+    );
+
+    await prisma.rideRequest.update({ where: { id: reqId }, data: { rideId } });
+
+    await prisma.rideCancellation.create({
+      data: {
+        rideId,
+        cancelledBy: 'SYSTEM',
+        reasonCode: 'DISPATCH_TIMEOUT',
+        reasonText: 'Driver inactivity during arrival window',
+        cancelledAtStatus: 'ACCEPTED',
+        cancellationFee: 0,
+        feeCharged: false,
+      },
+    });
+
+    await prisma.rideStatusEvent.createMany({
+      data: [
+        {
+          rideId,
+          fromStatus: null,
+          toStatus: 'ACCEPTED',
+          actorType: 'DRIVER',
+          actorId: driverUser.id,
+          reason: 'Driver accepted ride',
+          createdAt: acceptedAt,
+        },
+        {
+          rideId,
+          fromStatus: 'ACCEPTED',
+          toStatus: 'CANCELLED_BY_SYSTEM',
+          actorType: 'SYSTEM',
+          reason: 'Automated timeout cancellation',
+          createdAt: cancelledAt,
+        },
+      ],
+    });
+  }
+
+  // 6. COMPLETED Ride with Rating & Dispute
+  const completedRideCode = 'R-OPS-1007';
+  const completedRide = await prisma.ride.findUnique({ where: { rideCode: completedRideCode } });
+  if (!completedRide) {
+    const reqId = randomUUID();
+    const rideId = randomUUID();
+    const acceptedAt = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+    const completedAt = new Date(now.getTime() - 280 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.0700, 74.8100,
+               ST_SetSRID(ST_MakePoint(74.8100, 34.0700), 4326)::geography,
+               34.0600, 74.8200,
+               ST_SetSRID(ST_MakePoint(74.8200, 34.0600), 4326)::geography,
+               'Rajbagh, Srinagar', 'Jawahar Nagar, Srinagar',
+               'MATCHED', 1.0, 'CASH', $4)`,
+      reqId,
+      passengerUser.id,
+      cabType.id,
+      acceptedAt,
+    );
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO rides
+         (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+          status, payment_method, payment_status, pickup_location, pickup_address,
+          drop_location, drop_address, accepted_at, started_at, completed_at,
+          wait_time_min, is_scheduled, created_at, updated_at)
+       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+               'COMPLETED', 'CASH', 'PAID',
+               ST_SetSRID(ST_MakePoint(74.8100, 34.0700), 4326)::geography, 'Rajbagh, Srinagar',
+               ST_SetSRID(ST_MakePoint(74.8200, 34.0600), 4326)::geography, 'Jawahar Nagar, Srinagar',
+               $8, $8, $9,
+               1, false, $8, $9)`,
+      rideId,
+      completedRideCode,
+      reqId,
+      passengerUser.id,
+      driver.id,
+      vehicle.id,
+      cabType.id,
+      acceptedAt,
+      completedAt,
+    );
+
+    await prisma.rideRequest.update({ where: { id: reqId }, data: { rideId } });
+
+    await prisma.rideFare.create({
+      data: {
+        rideId,
+        baseFare: 45,
+        distanceFare: 60,
+        timeFare: 15,
+        waitingCharge: 0,
+        surgeMultiplier: 1.0,
+        surgeAmount: 0,
+        subtotal: 120,
+        discountAmount: 0,
+        taxAmount: 6,
+        tollAmount: 0,
+        platformFee: 10,
+        tipAmount: 10,
+        totalFare: 136,
+        driverEarning: 110,
+        platformCommission: 26,
+      },
+    });
+
+    await prisma.ridePayment.create({
+      data: {
+        rideId,
+        amount: 136,
+        method: 'CASH',
+        status: 'PAID',
+        settledAt: completedAt,
+      },
+    });
+
+    await prisma.rideReceipt.create({
+      data: {
+        rideId,
+        receiptNumber: 'RCP-2026-OPS-007',
+        snapshotJson: { totalFare: 136, subtotal: 120, tax: 6, method: 'CASH' },
+        issuedAt: completedAt,
+      },
+    });
+
+    await prisma.rideRating.create({
+      data: {
+        rideId,
+        ratedBy: 'CUSTOMER',
+        rating: 5,
+        tags: ['Punctual', 'Clean Vehicle', 'Polite Driver'],
+        comment: 'Excellent service and very polite driver!',
+      },
+    });
+  }
+
+  // 7. SEARCHING Request with multiple dispatches (Round 1 rejected, Round 2 pending)
+  const existingSearching = await prisma.rideRequest.findFirst({
+    where: {
+      customerId: passengerUser.id,
+      status: 'SEARCHING',
+      pickupAddress: 'NIT Srinagar, Hazratbal',
+    },
+  });
+
+  if (!existingSearching) {
+    const reqId = randomUUID();
+    const createdAt = new Date(now.getTime() - 3 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, estimated_distance_km, estimated_duration_min,
+          quoted_fare, created_at, expires_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.1250, 74.8380,
+               ST_SetSRID(ST_MakePoint(74.8380, 34.1250), 4326)::geography,
+               34.0720, 74.8150,
+               ST_SetSRID(ST_MakePoint(74.8150, 34.0720), 4326)::geography,
+               'NIT Srinagar, Hazratbal', 'TRC Srinagar',
+               'SEARCHING', 1.15, 'UPI', 11.2, 22,
+               220.0, $4, $5)`,
+      reqId,
+      passengerUser.id,
+      cabType.id,
+      createdAt,
+      new Date(now.getTime() + 10 * 60 * 1000),
+    );
+
+    await prisma.rideDispatch.createMany({
+      data: [
+        {
+          requestId: reqId,
+          driverId: driver.id,
+          vehicleId: vehicle.id,
+          dispatchRound: 1,
+          response: 'REJECTED',
+          rejectReason: 'DRIVER_BUSY',
+          driverDistanceM: 3200,
+          driverEtaSeconds: 420,
+          offeredAt: new Date(createdAt.getTime() + 10 * 1000),
+          respondedAt: new Date(createdAt.getTime() + 30 * 1000),
+        },
+      ],
+    });
+  }
+
+  // 8. EXPIRED Request (No drivers responded)
+  const existingExpired = await prisma.rideRequest.findFirst({
+    where: {
+      customerId: (inviteUser ?? passengerUser).id,
+      status: 'EXPIRED',
+      pickupAddress: 'Gulmarg Road, Tangmarg',
+    },
+  });
+
+  if (!existingExpired) {
+    const reqId = randomUUID();
+    const createdAt = new Date(now.getTime() - 45 * 60 * 1000);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO ride_requests
+         (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+          drop_lat, drop_lng, drop_location, pickup_address, drop_address,
+          status, surge_multiplier, payment_method, estimated_distance_km, estimated_duration_min,
+          quoted_fare, created_at, expires_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 34.0500, 74.4200,
+               ST_SetSRID(ST_MakePoint(74.4200, 34.0500), 4326)::geography,
+               34.0550, 74.3800,
+               ST_SetSRID(ST_MakePoint(74.3800, 34.0550), 4326)::geography,
+               'Gulmarg Road, Tangmarg', 'Gondola Point, Gulmarg',
+               'EXPIRED', 1.5, 'CASH', 14.5, 35,
+               550.0, $4, $5)`,
+      reqId,
+      (inviteUser ?? passengerUser).id,
+      cabType.id,
+      createdAt,
+      new Date(createdAt.getTime() + 5 * 60 * 1000),
+    );
+
+    await prisma.rideDispatch.create({
+      data: {
+        requestId: reqId,
+        driverId: driver.id,
+        vehicleId: vehicle.id,
+        dispatchRound: 1,
+        response: 'TIMEOUT',
+        driverDistanceM: 5400,
+        driverEtaSeconds: 650,
+        offeredAt: createdAt,
+        expiresAt: new Date(createdAt.getTime() + 45 * 1000),
+      },
+    });
+  }
+}
+
+async function seedSupportFixtures(prisma: Prisma) {
+  // 1. Seed Support Categories
+  const categories: Array<{
+    code: string;
+    name: string;
+    defaultPriority: TicketPriority;
+    sortOrder: number;
+  }> = [
+    { code: 'RIDE_ISSUE', name: 'Ride & Route Issue', defaultPriority: 'NORMAL', sortOrder: 1 },
+    {
+      code: 'DRIVER_COMPLAINT',
+      name: 'Driver Behavior / Conduct',
+      defaultPriority: 'HIGH',
+      sortOrder: 2,
+    },
+    { code: 'PAYMENT', name: 'Fare & Payment Dispute', defaultPriority: 'NORMAL', sortOrder: 3 },
+    { code: 'SAFETY', name: 'Safety & Incident Report', defaultPriority: 'URGENT', sortOrder: 4 },
+    { code: 'LOST_ITEM', name: 'Lost & Found Item', defaultPriority: 'NORMAL', sortOrder: 5 },
+    { code: 'APP_ISSUE', name: 'Technical / App Bug', defaultPriority: 'LOW', sortOrder: 6 },
+    { code: 'BILLING_REFUND', name: 'Refund Request', defaultPriority: 'NORMAL', sortOrder: 7 },
+  ];
+
+  for (const cat of categories) {
+    await prisma.supportCategory.upsert({
+      where: { code: cat.code },
+      update: {
+        name: cat.name,
+        defaultPriority: cat.defaultPriority,
+        sortOrder: cat.sortOrder,
+        isActive: true,
+      },
+      create: {
+        code: cat.code,
+        name: cat.name,
+        defaultPriority: cat.defaultPriority,
+        sortOrder: cat.sortOrder,
+        isActive: true,
+      },
+    });
+  }
+
+  // 2. Ensure Support Agent for admin user
+  const adminUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000000' } });
+  let agent: SupportAgent | null = null;
+  if (adminUser) {
+    agent = await prisma.supportAgent.upsert({
+      where: { userId: adminUser.id },
+      update: { displayName: 'Senior Support Ops', status: 'AVAILABLE', maxConcurrent: 15 },
+      create: {
+        userId: adminUser.id,
+        displayName: 'Senior Support Ops',
+        status: 'AVAILABLE',
+        maxConcurrent: 15,
+      },
+    });
+  }
+
+  // 3. Seed Support Tickets
+  const customerUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000002' } });
+  if (!customerUser) return;
+
+  const rideIssueCat = await prisma.supportCategory.findUnique({ where: { code: 'RIDE_ISSUE' } });
+  const driverComplaintCat = await prisma.supportCategory.findUnique({
+    where: { code: 'DRIVER_COMPLAINT' },
+  });
+  const paymentCat = await prisma.supportCategory.findUnique({ where: { code: 'PAYMENT' } });
+  const lostItemCat = await prisma.supportCategory.findUnique({ where: { code: 'LOST_ITEM' } });
+
+  const completedRide = await prisma.ride.findFirst({ where: { status: 'COMPLETED' } });
+  const inProgressRide = await prisma.ride.findFirst({ where: { status: 'IN_PROGRESS' } });
+
+  const now = new Date();
+
+  // Ticket 1: OPEN - Ride Issue
+  const t1Number = 'TKT-260830-001';
+  let t1 = await prisma.supportTicket.findUnique({ where: { ticketNumber: t1Number } });
+  if (!t1) {
+    t1 = await prisma.supportTicket.create({
+      data: {
+        ticketNumber: t1Number,
+        userId: customerUser.id,
+        categoryId: rideIssueCat?.id ?? null,
+        rideId: completedRide?.id ?? null,
+        subject: 'Driver took an unnecessary detour through congested bypass',
+        description:
+          'The driver took a route 6 km longer than the GPS navigation recommended and charged extra.',
+        status: 'OPEN',
+        priority: 'NORMAL',
+        channel: 'APP',
+        createdAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+      },
+    });
+
+    await prisma.supportTicketMessage.create({
+      data: {
+        ticketId: t1.id,
+        authorType: 'CUSTOMER',
+        authorId: customerUser.id,
+        body: 'The driver took a route 6 km longer than the GPS navigation recommended and charged extra.',
+        isInternal: false,
+        createdAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+      },
+    });
+  }
+
+  // Ticket 2: IN_PROGRESS - Driver Complaint with messages & assignment
+  const t2Number = 'TKT-260830-002';
+  let t2 = await prisma.supportTicket.findUnique({ where: { ticketNumber: t2Number } });
+  if (!t2) {
+    t2 = await prisma.supportTicket.create({
+      data: {
+        ticketNumber: t2Number,
+        userId: customerUser.id,
+        categoryId: driverComplaintCat?.id ?? null,
+        rideId: inProgressRide?.id ?? null,
+        subject: 'Driver was rude and refused to turn on AC',
+        description:
+          'Driver started arguing when requested to switch on air conditioning despite premium fare.',
+        status: 'IN_PROGRESS',
+        priority: 'HIGH',
+        channel: 'APP',
+        assignedAgentId: agent?.id ?? null,
+        firstResponseAt: new Date(now.getTime() - 50 * 60 * 1000),
+        createdAt: new Date(now.getTime() - 60 * 60 * 1000),
+      },
+    });
+
+    await prisma.supportTicketMessage.createMany({
+      data: [
+        {
+          ticketId: t2.id,
+          authorType: 'CUSTOMER',
+          authorId: customerUser.id,
+          body: 'Driver started arguing when requested to switch on air conditioning despite premium fare.',
+          isInternal: false,
+          createdAt: new Date(now.getTime() - 60 * 60 * 1000),
+        },
+        {
+          ticketId: t2.id,
+          authorType: 'AGENT',
+          authorId: adminUser?.id ?? null,
+          body: 'Internal Note: Checking driver rating and prior complaints history.',
+          isInternal: true,
+          createdAt: new Date(now.getTime() - 52 * 60 * 1000),
+        },
+        {
+          ticketId: t2.id,
+          authorType: 'AGENT',
+          authorId: adminUser?.id ?? null,
+          body: 'Hello, we are actively reviewing your trip telemetry and driver record. We apologize for the inconvenience.',
+          isInternal: false,
+          createdAt: new Date(now.getTime() - 50 * 60 * 1000),
+        },
+      ],
+    });
+
+    if (agent) {
+      await prisma.ticketAssignment.create({
+        data: {
+          ticketId: t2.id,
+          agentId: agent.id,
+          assignedBy: adminUser?.id ?? null,
+          reason: 'High priority complaint assigned to senior ops',
+          status: 'ACTIVE',
+          assignedAt: new Date(now.getTime() - 55 * 60 * 1000),
+        },
+      });
+    }
+  }
+
+  // Ticket 3: RESOLVED - Payment Dispute
+  const t3Number = 'TKT-260830-003';
+  let t3 = await prisma.supportTicket.findUnique({ where: { ticketNumber: t3Number } });
+  if (!t3) {
+    t3 = await prisma.supportTicket.create({
+      data: {
+        ticketNumber: t3Number,
+        userId: customerUser.id,
+        categoryId: paymentCat?.id ?? null,
+        rideId: completedRide?.id ?? null,
+        subject: 'Double debit for ride fare via UPI and cash',
+        description: 'UPI transaction went through and driver still demanded cash.',
+        status: 'RESOLVED',
+        priority: 'NORMAL',
+        channel: 'APP',
+        assignedAgentId: agent?.id ?? null,
+        firstResponseAt: new Date(now.getTime() - 20 * 60 * 1000),
+        resolvedAt: new Date(now.getTime() - 5 * 60 * 1000),
+        createdAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+      },
+    });
+
+    await prisma.supportTicketMessage.createMany({
+      data: [
+        {
+          ticketId: t3.id,
+          authorType: 'CUSTOMER',
+          authorId: customerUser.id,
+          body: 'UPI transaction went through and driver still demanded cash.',
+          isInternal: false,
+          createdAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+        },
+        {
+          ticketId: t3.id,
+          authorType: 'AGENT',
+          authorId: adminUser?.id ?? null,
+          body: '[Resolution Notes]: Transaction verified in payment gateway. Cash amount of ₹150 refunded to customer wallet.',
+          isInternal: false,
+          createdAt: new Date(now.getTime() - 5 * 60 * 1000),
+        },
+      ],
+    });
+  }
+
+  // Ticket 4: CLOSED - Lost Item
+  const t4Number = 'TKT-260830-004';
+  const t4 = await prisma.supportTicket.findUnique({ where: { ticketNumber: t4Number } });
+  if (!t4) {
+    await prisma.supportTicket.create({
+      data: {
+        ticketNumber: t4Number,
+        userId: customerUser.id,
+        categoryId: lostItemCat?.id ?? null,
+        rideId: completedRide?.id ?? null,
+        subject: 'Left Ray-Ban sunglasses in backseat',
+        description: 'Left black Ray-Ban sunglasses on the rear seat.',
+        status: 'CLOSED',
+        priority: 'LOW',
+        channel: 'PHONE',
+        assignedAgentId: agent?.id ?? null,
+        resolvedAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
+        closedAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
+        createdAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
+      },
+    });
+  }
+}
+
+async function seedSafetyFixtures(prisma: Prisma) {
+  const customerUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000002' } });
+  const driverUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000001' } });
+  const adminUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000000' } });
+
+  if (!customerUser) return;
+
+  const inProgressRide = await prisma.ride.findFirst({ where: { status: 'IN_PROGRESS' } });
+  const completedRide = await prisma.ride.findFirst({ where: { status: 'COMPLETED' } });
+
+  const now = new Date();
+
+  // 1. OPEN Critical SOS Incident
+  const inc1Number = 'SOS-260830-001';
+  let inc1 = await prisma.safetyIncident.findUnique({ where: { incidentNumber: inc1Number } });
+  if (!inc1) {
+    inc1 = await prisma.safetyIncident.create({
+      data: {
+        incidentNumber: inc1Number,
+        type: 'SOS',
+        severity: 'CRITICAL',
+        status: 'OPEN',
+        rideId: inProgressRide?.id ?? null,
+        reporterUserId: customerUser.id,
+        subjectUserId: driverUser?.id ?? null,
+        latitude: 34.088,
+        longitude: 74.821,
+        locationAddress: 'Foreshore Road near Habak Crossing, Srinagar',
+        description:
+          'Passenger activated SOS trigger due to speeding and refusal to stop on request.',
+        createdAt: new Date(now.getTime() - 12 * 60 * 1000),
+      },
+    });
+
+    await prisma.safetyIncidentEvent.create({
+      data: {
+        incidentId: inc1.id,
+        eventType: 'TRIGGERED',
+        actorId: customerUser.id,
+        notes: 'SOS triggered by rider mobile app during trip.',
+        metadata: { source: 'mobile_app', speedKmh: 68 },
+        createdAt: new Date(now.getTime() - 12 * 60 * 1000),
+      },
+    });
+  }
+
+  // 2. ACKNOWLEDGED Misconduct Incident
+  const inc2Number = 'INC-260830-002';
+  let inc2 = await prisma.safetyIncident.findUnique({ where: { incidentNumber: inc2Number } });
+  if (!inc2) {
+    inc2 = await prisma.safetyIncident.create({
+      data: {
+        incidentNumber: inc2Number,
+        type: 'MISCONDUCT',
+        severity: 'HIGH',
+        status: 'ACKNOWLEDGED',
+        rideId: completedRide?.id ?? null,
+        reporterUserId: customerUser.id,
+        subjectUserId: driverUser?.id ?? null,
+        latitude: 34.0837,
+        longitude: 74.7973,
+        locationAddress: 'Dal Lake Gate 2, Boulevard Road',
+        description: 'Driver used inappropriate verbal language during fare payment.',
+        acknowledgedAt: new Date(now.getTime() - 25 * 60 * 1000),
+        acknowledgedBy: adminUser?.id ?? null,
+        createdAt: new Date(now.getTime() - 45 * 60 * 1000),
+      },
+    });
+
+    await prisma.safetyIncidentEvent.createMany({
+      data: [
+        {
+          incidentId: inc2.id,
+          eventType: 'TRIGGERED',
+          actorId: customerUser.id,
+          notes: 'Reported via trip feedback.',
+          createdAt: new Date(now.getTime() - 45 * 60 * 1000),
+        },
+        {
+          incidentId: inc2.id,
+          eventType: 'ACKNOWLEDGED',
+          actorId: adminUser?.id ?? null,
+          notes: 'Ops specialist assigned for driver conduct review.',
+          createdAt: new Date(now.getTime() - 25 * 60 * 1000),
+        },
+      ],
+    });
+  }
+
+  // 3. RESOLVED Lost Item Incident
+  const inc3Number = 'INC-260830-003';
+  let inc3 = await prisma.safetyIncident.findUnique({ where: { incidentNumber: inc3Number } });
+  if (!inc3) {
+    inc3 = await prisma.safetyIncident.create({
+      data: {
+        incidentNumber: inc3Number,
+        type: 'LOST_FOUND',
+        severity: 'MEDIUM',
+        status: 'RESOLVED',
+        rideId: completedRide?.id ?? null,
+        reporterUserId: customerUser.id,
+        subjectUserId: driverUser?.id ?? null,
+        locationAddress: 'Terminal 1, Srinagar Airport',
+        description: 'Left MacBook bag in car trunk.',
+        acknowledgedAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+        acknowledgedBy: adminUser?.id ?? null,
+        resolvedAt: new Date(now.getTime() - 30 * 60 * 1000),
+        resolvedBy: adminUser?.id ?? null,
+        resolutionType: 'RETURNED_TO_OWNER',
+        resolutionNotes:
+          'Driver returned the bag at the Srinagar Operations center; customer confirmed receipt.',
+        createdAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+      },
+    });
+
+    await prisma.safetyIncidentEvent.createMany({
+      data: [
+        {
+          incidentId: inc3.id,
+          eventType: 'TRIGGERED',
+          actorId: customerUser.id,
+          notes: 'Customer reported lost laptop bag.',
+          createdAt: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+        },
+        {
+          incidentId: inc3.id,
+          eventType: 'NOTE',
+          actorId: adminUser?.id ?? null,
+          notes: 'Contacted driver partner who confirmed bag is safely stored in vehicle trunk.',
+          createdAt: new Date(now.getTime() - 90 * 60 * 1000),
+        },
+        {
+          incidentId: inc3.id,
+          eventType: 'RESOLVED',
+          actorId: adminUser?.id ?? null,
+          notes: 'Returned to owner at Srinagar hub.',
+          createdAt: new Date(now.getTime() - 30 * 60 * 1000),
+        },
+      ],
+    });
+  }
+
+  // 4. INVESTIGATING Accident / Mishap
+  const inc4Number = 'INC-260830-004';
+  let inc4 = await prisma.safetyIncident.findUnique({ where: { incidentNumber: inc4Number } });
+  if (!inc4) {
+    inc4 = await prisma.safetyIncident.create({
+      data: {
+        incidentNumber: inc4Number,
+        type: 'ACCIDENT',
+        severity: 'HIGH',
+        status: 'INVESTIGATING',
+        reporterUserId: (driverUser ?? customerUser).id,
+        latitude: 34.075,
+        longitude: 74.81,
+        locationAddress: 'Lal Chowk Clock Tower Intersection',
+        description:
+          'Rear bumper scratch from a two-wheeler collision during slow traffic. No injuries reported.',
+        acknowledgedAt: new Date(now.getTime() - 4 * 60 * 60 * 1000),
+        acknowledgedBy: adminUser?.id ?? null,
+        createdAt: new Date(now.getTime() - 5 * 60 * 60 * 1000),
+      },
+    });
+
+    await prisma.safetyIncidentEvent.createMany({
+      data: [
+        {
+          incidentId: inc4.id,
+          eventType: 'TRIGGERED',
+          actorId: (driverUser ?? customerUser).id,
+          notes: 'Driver reported minor vehicle collision.',
+          createdAt: new Date(now.getTime() - 5 * 60 * 60 * 1000),
+        },
+        {
+          incidentId: inc4.id,
+          eventType: 'ACKNOWLEDGED',
+          actorId: adminUser?.id ?? null,
+          notes: 'Case taken over by insurance claim desk.',
+          createdAt: new Date(now.getTime() - 4 * 60 * 60 * 1000),
+        },
+      ],
+    });
+  }
 }

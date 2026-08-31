@@ -140,16 +140,34 @@ export const PERMISSION_SEED = [
     description: 'View live rides, complaints, and operations consoles',
   },
   {
+    code: 'operations:write',
+    resource: 'operations',
+    action: 'write',
+    description: 'Perform operational actions on rides, live operations, and dispatch',
+  },
+  {
     code: 'safety:read',
     resource: 'safety',
     action: 'read',
     description: 'Read SOS and safety evidence',
   },
   {
+    code: 'safety:write',
+    resource: 'safety',
+    action: 'write',
+    description: 'Acknowledge, update, and resolve SOS and safety incidents',
+  },
+  {
     code: 'support:read',
     resource: 'support',
     action: 'read',
     description: 'Read dispute evidence and support material',
+  },
+  {
+    code: 'support:write',
+    resource: 'support',
+    action: 'write',
+    description: 'Create, assign, update, and resolve support tickets',
   },
   {
     code: 'rides:read_any',
@@ -256,8 +274,11 @@ export const ROLE_PERMISSIONS: Readonly<Record<RoleSlug, readonly PermissionCode
     support: Object.freeze([
       'riders:read',
       'operations:read',
+      'operations:write',
       'safety:read',
+      'safety:write',
       'support:read',
+      'support:write',
       'rides:read_any',
     ] as const),
     // Deliberately NOT drivers:verify or drivers:write — finance moves money,
