@@ -6,6 +6,7 @@ import { driverConfig } from '../../../src/config/driver/driver.config';
 import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config';
 import { assignRole, RoleSlug, seedRoles } from '../shared/roles';
 import { seedVehicleTypes } from '../shared/vehicle-types';
+import { seedNotificationTemplates } from '../shared/notification-templates';
 
 type Prisma = ProviderClient;
 
@@ -267,6 +268,7 @@ export async function seedDevelopment(prisma: Prisma) {
   // The service catalog — reference data, same as roles: every environment
   // needs it, and no client can obtain a vehicleTypeId without it.
   await seedVehicleTypes(prisma);
+  await seedNotificationTemplates(prisma);
 
   const fixtures: Array<{
     phone: string;
@@ -1904,6 +1906,14 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
     where: { phoneNumber: '+10000000004', deletedAt: null },
     include: { profile: true },
   });
+  const referredUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000005', deletedAt: null },
+    include: { profile: true },
+  });
+  const searchingCustomerUser = await prisma.user.findFirst({
+    where: { phoneNumber: '+10000000006', deletedAt: null },
+    include: { profile: true },
+  });
   const driverUser = await prisma.user.findFirst({
     where: { phoneNumber: '+10000000001', deletedAt: null },
     include: { profile: true },
@@ -1920,6 +1930,49 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
   const vehicle = await prisma.vehicle.findUnique({ where: { id: driver.currentVehicleId } });
   const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY' } });
   if (!vehicle || !cabType) return;
+
+  // Active rides are unique per driver/customer — use dedicated ops drivers for demo fixtures.
+  const opsDriver2User = await ensureUser(prisma, '+10000000009', {
+    firstName: 'Ops',
+    lastName: 'Driver Two',
+  });
+  await assignRole(prisma, opsDriver2User.id, 'driver');
+  const opsDriver2 = await ensureDriver(prisma, opsDriver2User.id, {
+    driverCode: 'DRV0009',
+    verificationStatus: 'VERIFIED',
+    fullLegalName: 'Ops Driver Two',
+  });
+  await ensureDriverDocuments(prisma, opsDriver2.id, 'VERIFIED');
+  const vehicle2 = await ensureAssignedVehicle(prisma, opsDriver2.id, {
+    registrationNumber: 'JK03EF9012',
+    verified: true,
+    make: 'Hyundai',
+    model: 'i20',
+    color: 'Blue',
+  });
+
+  const opsDriver3User = await ensureUser(prisma, '+10000000010', {
+    firstName: 'Ops',
+    lastName: 'Driver Three',
+  });
+  await assignRole(prisma, opsDriver3User.id, 'driver');
+  const opsDriver3 = await ensureDriver(prisma, opsDriver3User.id, {
+    driverCode: 'DRV0010',
+    verificationStatus: 'VERIFIED',
+    fullLegalName: 'Ops Driver Three',
+  });
+  await ensureDriverDocuments(prisma, opsDriver3.id, 'VERIFIED');
+  const vehicle3 = await ensureAssignedVehicle(prisma, opsDriver3.id, {
+    registrationNumber: 'JK04GH3456',
+    verified: true,
+    make: 'Tata',
+    model: 'Indica',
+    color: 'Yellow',
+  });
+
+  const arrivingCustomer = inviteUser ?? searchingCustomerUser ?? referredUser;
+  const arrivedCustomer = referredUser ?? inviteUser ?? searchingCustomerUser;
+  const searchingCustomer = searchingCustomerUser ?? inviteUser ?? referredUser;
 
   const now = new Date();
 
@@ -2109,7 +2162,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
                'Hazratbal Dargah, Srinagar', 'Airport Road, Srinagar',
                'MATCHED', 1.0, 'CARD', $4)`,
       reqId,
-      (inviteUser ?? passengerUser).id,
+      arrivingCustomer?.id ?? passengerUser.id,
       cabType.id,
       acceptedAt,
     );
@@ -2129,9 +2182,9 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
       rideId,
       arrivingRideCode,
       reqId,
-      (inviteUser ?? passengerUser).id,
-      driver.id,
-      vehicle.id,
+      arrivingCustomer?.id ?? passengerUser.id,
+      opsDriver2.id,
+      vehicle2.id,
       cabType.id,
       acceptedAt,
     );
@@ -2166,7 +2219,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           fromStatus: null,
           toStatus: 'ACCEPTED',
           actorType: 'DRIVER',
-          actorId: driverUser.id,
+          actorId: opsDriver2User.id,
           reason: 'Driver accepted ride',
           createdAt: acceptedAt,
         },
@@ -2175,7 +2228,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           fromStatus: 'ACCEPTED',
           toStatus: 'DRIVER_ARRIVING',
           actorType: 'DRIVER',
-          actorId: driverUser.id,
+          actorId: opsDriver2User.id,
           reason: 'Driver is navigating to pickup',
           createdAt: new Date(acceptedAt.getTime() + 1 * 60 * 1000),
         },
@@ -2215,7 +2268,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
                'Pari Mahal, Srinagar', 'Dal Gate, Srinagar',
                'MATCHED', 1.0, 'CASH', $4)`,
       reqId,
-      passengerUser.id,
+      arrivedCustomer?.id ?? passengerUser.id,
       cabType.id,
       acceptedAt,
     );
@@ -2235,9 +2288,9 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
       rideId,
       arrivedRideCode,
       reqId,
-      passengerUser.id,
-      driver.id,
-      vehicle.id,
+      arrivedCustomer?.id ?? passengerUser.id,
+      opsDriver3.id,
+      vehicle3.id,
       cabType.id,
       acceptedAt,
       arrivedAt,
@@ -2273,7 +2326,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           fromStatus: null,
           toStatus: 'ACCEPTED',
           actorType: 'DRIVER',
-          actorId: driverUser.id,
+          actorId: opsDriver3User.id,
           reason: 'Driver accepted ride',
           createdAt: acceptedAt,
         },
@@ -2282,7 +2335,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           fromStatus: 'ACCEPTED',
           toStatus: 'DRIVER_ARRIVING',
           actorType: 'DRIVER',
-          actorId: driverUser.id,
+          actorId: opsDriver3User.id,
           reason: 'Driver en route',
           createdAt: new Date(acceptedAt.getTime() + 2 * 60 * 1000),
         },
@@ -2291,7 +2344,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           fromStatus: 'DRIVER_ARRIVING',
           toStatus: 'DRIVER_ARRIVED',
           actorType: 'DRIVER',
-          actorId: driverUser.id,
+          actorId: opsDriver3User.id,
           reason: 'Driver waiting at pickup',
           createdAt: arrivedAt,
         },
@@ -2320,7 +2373,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
                34.0700, 74.8400,
                ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography,
                'Boulevard Road, Srinagar', 'Shankaracharya Hill, Srinagar',
-               'CANCELLED_BY_CUSTOMER', 1.0, 'WALLET', $4)`,
+               'MATCHED', 1.0, 'WALLET', $4)`,
       reqId,
       passengerUser.id,
       cabType.id,
@@ -2334,7 +2387,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           drop_location, drop_address, accepted_at, cancelled_at,
           wait_time_min, is_scheduled, created_at, updated_at)
        VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
-               'CANCELLED_BY_CUSTOMER', 'WALLET', 'CANCELLED',
+               'CANCELLED_BY_CUSTOMER', 'WALLET', 'PENDING',
                ST_SetSRID(ST_MakePoint(74.8300, 34.0850), 4326)::geography, 'Boulevard Road, Srinagar',
                ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography, 'Shankaracharya Hill, Srinagar',
                $8, $9,
@@ -2408,7 +2461,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
                34.0600, 74.7800,
                ST_SetSRID(ST_MakePoint(74.7800, 34.0600), 4326)::geography,
                'SMHS Hospital, Srinagar', 'Bemina, Srinagar',
-               'CANCELLED_BY_SYSTEM', 1.0, 'CASH', $4)`,
+               'MATCHED', 1.0, 'CASH', $4)`,
       reqId,
       (inviteUser ?? passengerUser).id,
       cabType.id,
@@ -2422,7 +2475,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           drop_location, drop_address, accepted_at, cancelled_at,
           wait_time_min, is_scheduled, created_at, updated_at)
        VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
-               'CANCELLED_BY_SYSTEM', 'CASH', 'CANCELLED',
+               'CANCELLED_BY_SYSTEM', 'CASH', 'PENDING',
                ST_SetSRID(ST_MakePoint(74.8000, 34.0800), 4326)::geography, 'SMHS Hospital, Srinagar',
                ST_SetSRID(ST_MakePoint(74.7800, 34.0600), 4326)::geography, 'Bemina, Srinagar',
                $8, $9,
@@ -2580,13 +2633,13 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
   // 7. SEARCHING Request with multiple dispatches (Round 1 rejected, Round 2 pending)
   const existingSearching = await prisma.rideRequest.findFirst({
     where: {
-      customerId: passengerUser.id,
+      customerId: searchingCustomer?.id ?? passengerUser.id,
       status: 'SEARCHING',
       pickupAddress: 'NIT Srinagar, Hazratbal',
     },
   });
 
-  if (!existingSearching) {
+  if (!existingSearching && searchingCustomer) {
     const reqId = randomUUID();
     const createdAt = new Date(now.getTime() - 3 * 60 * 1000);
 
@@ -2604,7 +2657,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
                'SEARCHING', 1.15, 'UPI', 11.2, 22,
                220.0, $4, $5)`,
       reqId,
-      passengerUser.id,
+      searchingCustomer.id,
       cabType.id,
       createdAt,
       new Date(now.getTime() + 10 * 60 * 1000),

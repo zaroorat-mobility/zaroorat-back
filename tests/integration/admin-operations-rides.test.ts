@@ -200,7 +200,14 @@ describe('admin operations rides (integration)', () => {
     assert.equal(body.meta.page, 1);
     assert.ok(body.meta.total >= 1);
     assert.ok(Array.isArray(body.data));
-    const found = body.data.find((r) => r.id === fixture.rideId);
+    const found = body.data.find(
+      (r: {
+        id: string;
+        status: string;
+        customer: { name: string; phoneNumber: string };
+        driver: { phoneNumber: string };
+      }) => r.id === fixture.rideId,
+    );
     assert.ok(found, 'Seeded ride should be in the list');
     assert.equal(found.status, 'IN_PROGRESS');
     assert.equal(found.customer.name, 'Jane Doe');

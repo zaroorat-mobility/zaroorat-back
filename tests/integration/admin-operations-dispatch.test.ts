@@ -86,17 +86,20 @@ describe('admin operations dispatch console (integration)', () => {
     });
 
     const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
-    const driver1Id = await makeDriver(driver1User.userId, { isAvailable: true });
+    const driver1Id = await makeDriver(driver1User.userId);
     const vehicle1Id = await makeVehicle(vehicleTypeId);
-    const driver2Id = await makeDriver(driver2User.userId, { isAvailable: true });
+    const driver2Id = await makeDriver(driver2User.userId);
     const vehicle2Id = await makeVehicle(vehicleTypeId);
 
-    const reqId = await makeRideRequest(customer.userId, vehicleTypeId, {
-      status: 'SEARCHING',
-      pickupAddress: 'Kashmir University, Srinagar',
-      dropAddress: 'Airport, Srinagar',
-      surgeMultiplier: 1.2,
-      quotedFare: 450,
+    const reqId = await makeRideRequest(customer.userId, vehicleTypeId);
+    await db().client.rideRequest.update({
+      where: { id: reqId },
+      data: {
+        pickupAddress: 'Kashmir University, Srinagar',
+        dropAddress: 'Airport, Srinagar',
+        surgeMultiplier: 1.2,
+        quotedFare: 450,
+      },
     });
 
     await db().client.rideDispatch.createMany({
@@ -161,7 +164,7 @@ describe('admin operations dispatch console (integration)', () => {
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json();
     assert.equal(Array.isArray(body.data), true);
-    const item = body.data.find((r) => r.id === fixture.reqId);
+    const item = body.data.find((r: { id: string }) => r.id === fixture.reqId);
     assert.ok(item);
     assert.equal(item.status, 'SEARCHING');
     assert.equal(item.customerName, 'Diana Customer');

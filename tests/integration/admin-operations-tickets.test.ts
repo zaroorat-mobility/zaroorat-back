@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
@@ -72,7 +73,7 @@ describe('admin operations support tickets (integration)', () => {
 
     const category = await client.supportCategory.create({
       data: {
-        code: `RIDE_TEST_${Math.floor(1000 + Math.random() * 9000)}`,
+        code: `RIDE_TEST_${randomUUID().slice(0, 8).toUpperCase()}`,
         name: 'Ride Fare Issue',
         defaultPriority: 'NORMAL',
         isActive: true,
@@ -102,7 +103,7 @@ describe('admin operations support tickets (integration)', () => {
       },
     });
 
-    const ticketNumber = `TKT-${Math.floor(100000 + Math.random() * 900000)}`;
+    const ticketNumber = `TKT-${randomUUID().slice(0, 8).toUpperCase()}`;
     const ticket = await client.supportTicket.create({
       data: {
         ticketNumber,
@@ -160,7 +161,16 @@ describe('admin operations support tickets (integration)', () => {
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json();
     assert.equal(Array.isArray(body.data), true);
-    const item = body.data.find((t) => t.id === fixture.ticket.id);
+    const item = body.data.find(
+      (t: {
+        id: string;
+        ticketNumber: string;
+        user: { fullName: string };
+        category: { name: string };
+        status: string;
+        messagesCount: number;
+      }) => t.id === fixture.ticket.id,
+    );
     assert.ok(item);
     assert.equal(item.ticketNumber, fixture.ticket.ticketNumber);
     assert.equal(item.user.fullName, 'Amina Customer');

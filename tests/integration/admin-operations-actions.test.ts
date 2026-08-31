@@ -192,7 +192,9 @@ describe('admin operations actions & notes (integration)', () => {
     const auditBody = resAudit.json();
     assert.ok(Array.isArray(auditBody.data));
     assert.ok(auditBody.data.length >= 1);
-    const cancelLog = auditBody.data.find((l) => l.action === 'UPDATE');
+    const cancelLog = auditBody.data.find(
+      (l: { action: string; summary: string }) => l.action === 'UPDATE',
+    );
     assert.ok(cancelLog);
     assert.match(cancelLog.summary, /Operations admin cancelled ride/);
   });

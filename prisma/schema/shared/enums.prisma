@@ -124,6 +124,15 @@ enum NotificationPriority {
   CRITICAL
 }
 
+enum AdminBroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
 enum ChatConversationType {
   RIDE
   SUPPORT

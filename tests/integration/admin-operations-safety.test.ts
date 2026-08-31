@@ -129,7 +129,15 @@ describe('admin operations safety center & incidents (integration)', () => {
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json();
     assert.equal(Array.isArray(body.data), true);
-    const item = body.data.find((inc) => inc.id === fixture.incident.id);
+    const item = body.data.find(
+      (inc: {
+        id: string;
+        incidentNumber: string;
+        type: string;
+        severity: string;
+        reporter: { fullName: string };
+      }) => inc.id === fixture.incident.id,
+    );
     assert.ok(item);
     assert.equal(item.incidentNumber, fixture.incident.incidentNumber);
     assert.equal(item.type, 'SOS');

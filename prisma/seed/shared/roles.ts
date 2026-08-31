@@ -247,6 +247,60 @@ export const PERMISSION_SEED = [
     action: 'read',
     description: 'View platform audit logs',
   },
+  {
+    code: 'settings:read',
+    resource: 'settings',
+    action: 'read',
+    description: 'View platform and integration settings',
+  },
+  {
+    code: 'settings:write',
+    resource: 'settings',
+    action: 'write',
+    description: 'Update platform and integration settings',
+  },
+  {
+    code: 'monitoring:read',
+    resource: 'monitoring',
+    action: 'read',
+    description: 'View system health, performance, and alerts',
+  },
+  {
+    code: 'security:read',
+    resource: 'security',
+    action: 'read',
+    description: 'View admin security events, sessions, and login history',
+  },
+  {
+    code: 'security:write',
+    resource: 'security',
+    action: 'write',
+    description: 'Manage admin sessions, policies, and security settings',
+  },
+  {
+    code: 'jobs:read',
+    resource: 'jobs',
+    action: 'read',
+    description: 'View background job queues and job details',
+  },
+  {
+    code: 'jobs:write',
+    resource: 'jobs',
+    action: 'write',
+    description: 'Retry or remove background jobs',
+  },
+  {
+    code: 'communications:read',
+    resource: 'communications',
+    action: 'read',
+    description: 'View notification templates and delivery history',
+  },
+  {
+    code: 'communications:write',
+    resource: 'communications',
+    action: 'write',
+    description: 'Send notifications and manage templates',
+  },
 ] as const;
 
 export type PermissionCode = (typeof PERMISSION_SEED)[number]['code'];

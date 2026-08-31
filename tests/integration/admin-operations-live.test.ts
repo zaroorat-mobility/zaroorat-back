@@ -79,7 +79,7 @@ describe('admin operations live dashboard (integration)', () => {
     });
 
     const vehicleTypeId = await vehicleTypeIdByCode('AUTO');
-    const driverId = await makeDriver(driverUser.userId, { isAvailable: true });
+    const driverId = await makeDriver(driverUser.userId);
     const vehicleId = await makeVehicle(vehicleTypeId);
 
     await db().client.vehicleAssignment.create({
@@ -100,12 +100,16 @@ describe('admin operations live dashboard (integration)', () => {
       },
     });
 
-    const reqId = await makeRideRequest(customer.userId, vehicleTypeId, {
-      status: 'MATCHED',
-      pickupAddress: 'Lal Chowk, Srinagar',
-      dropAddress: 'Dal Lake, Srinagar',
-      surgeMultiplier: 1.0,
-      quotedFare: 150,
+    const reqId = await makeRideRequest(customer.userId, vehicleTypeId);
+    await db().client.rideRequest.update({
+      where: { id: reqId },
+      data: {
+        status: 'MATCHED',
+        pickupAddress: 'Lal Chowk, Srinagar',
+        dropAddress: 'Dal Lake, Srinagar',
+        surgeMultiplier: 1.0,
+        quotedFare: 150,
+      },
     });
 
     const rideId = await makeRide({
@@ -114,14 +118,24 @@ describe('admin operations live dashboard (integration)', () => {
       driverId,
       vehicleId,
       vehicleTypeId,
-      rideCode: `R-LIVE-${randomUUID().slice(0, 4).toUpperCase()}`,
       status: 'IN_PROGRESS',
-      paymentMethod: 'CASH',
-      paymentStatus: 'PENDING',
-      pickupAddress: 'Lal Chowk, Srinagar',
-      dropAddress: 'Dal Lake, Srinagar',
-      acceptedAt: new Date(Date.now() - 10 * 60 * 1000),
-      startedAt: new Date(Date.now() - 5 * 60 * 1000),
+    });
+
+    const rideCode = `R-LIVE-${randomUUID().slice(0, 4).toUpperCase()}`;
+    await db().client.ride.update({
+      where: { id: rideId },
+      data: {
+        rideCode,
+        paymentMethod: 'CASH',
+        pickupAddress: 'Lal Chowk, Srinagar',
+        dropAddress: 'Dal Lake, Srinagar',
+        acceptedAt: new Date(Date.now() - 10 * 60 * 1000),
+        startedAt: new Date(Date.now() - 5 * 60 * 1000),
+      },
+    });
+    await db().client.rideRequest.update({
+      where: { id: reqId },
+      data: { rideId },
     });
 
     const ride = await db().client.ride.findUnique({ where: { id: rideId } });
@@ -191,7 +205,15 @@ describe('admin operations live dashboard (integration)', () => {
     const body = res.json();
     assert.equal(Array.isArray(body.data), true);
     assert.equal(body.data.length >= 1, true);
-    const item = body.data.find((r) => r.id === fixture.ride?.id);
+    const item = body.data.find(
+      (r: {
+        id: string;
+        status: string;
+        customer: { fullName: string };
+        driver: { fullName: string };
+        driverLocation: unknown;
+      }) => r.id === fixture.ride?.id,
+    );
     assert.ok(item);
     assert.equal(item.status, 'IN_PROGRESS');
     assert.equal(item.customer.fullName, 'Alice Customer');
@@ -214,7 +236,7 @@ describe('admin operations live dashboard (integration)', () => {
     assert.equal(Array.isArray(body.rides), true);
     assert.equal(Array.isArray(body.drivers), true);
     assert.equal(
-      body.rides.some((r) => r.id === fixture.ride?.id),
+      body.rides.some((r: { id: string }) => r.id === fixture.ride?.id),
       true,
     );
   });

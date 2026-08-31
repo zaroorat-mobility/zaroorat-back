@@ -3,6 +3,7 @@ import { maskSecret } from '@shared/crypto/encryption.util.js';
 import { SystemSettingService } from '../../services/system-setting.service.js';
 import { SystemSettingsCache } from '../../cache/system-settings.cache.js';
 import { MapProviderHealthService } from './map-provider-health.service.js';
+import type { IntegrationHealthService } from '../../integrations/services/integration-health.service.js';
 import { MapSettingsValidator } from '../validators/map-settings.validator.js';
 import {
   DEFAULT_BASE_URLS,
@@ -17,12 +18,14 @@ import type {
   TestProviderHealthResult,
   UpdateMapSettingsBody,
 } from '../types/map-settings.types.js';
+import type { MapClientConfigView } from '../../integrations/types/integration-settings.types.js';
 
 export class AdminMapSettingsService {
   constructor(
     private readonly systemSettingService: SystemSettingService,
     private readonly systemSettingsCache: SystemSettingsCache,
     private readonly mapProviderHealthService: MapProviderHealthService,
+    private readonly integrationHealthService: IntegrationHealthService,
     private readonly databaseService: DatabaseService,
     private readonly txManager: TransactionManager,
   ) {}
@@ -93,10 +96,41 @@ export class AdminMapSettingsService {
   }
 
   /**
+   * Public-safe map configuration for frontend clients (no secrets).
+   */
+  async getMapClientConfig(): Promise<MapClientConfigView> {
+    const settings = await this.getMapSettings();
+    return {
+      primaryProvider: settings.primaryProvider,
+      providers: {
+        ola: {
+          enabled: settings.providers.ola.enabled,
+          baseUrl: settings.providers.ola.baseUrl ?? DEFAULT_BASE_URLS.OLA,
+        },
+        google: {
+          enabled: settings.providers.google.enabled,
+          baseUrl: settings.providers.google.baseUrl ?? DEFAULT_BASE_URLS.GOOGLE,
+        },
+        mappls: {
+          enabled: settings.providers.mappls.enabled,
+          baseUrl: settings.providers.mappls.baseUrl ?? DEFAULT_BASE_URLS.MAPPLS,
+        },
+      },
+    };
+  }
+
+  /**
    * Test provider credentials and connectivity.
    */
   async testProviderHealth(input: TestProviderHealthInput): Promise<TestProviderHealthResult> {
-    return this.mapProviderHealthService.testProviderHealth(input);
+    const result = await this.mapProviderHealthService.testProviderHealth(input);
+    await this.integrationHealthService.recordProbe('maps', input.providerName, {
+      ok: result.ok,
+      responseTimeMs: result.responseTimeMs,
+      message: result.message,
+      configured: true,
+    });
+    return result;
   }
 
   /**
