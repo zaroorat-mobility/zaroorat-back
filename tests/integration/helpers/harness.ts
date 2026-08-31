@@ -12,6 +12,7 @@ import type { PrismaClientProvider } from '../../../src/core/database/client/Pri
 import type { OtpGenerator } from '../../../src/modules/auth/services/otp/otp.generator.js';
 import { seedRoles } from '../../../prisma/seed/shared/roles.js';
 import { seedVehicleTypes } from '../../../prisma/seed/shared/vehicle-types.js';
+import { seedNotificationTemplates } from '../../../prisma/seed/shared/notification-templates.js';
 import { registerEventConsumers } from '../../../src/bootstrap/events.bootstrap.js';
 import type { Unsubscribe } from '../../../src/core/events/index.js';
 import type { OutboxRelay } from '../../../src/core/events/OutboxRelay.js';
@@ -93,7 +94,8 @@ export async function resetState(): Promise<void> {
       // them, so `admin-geographic`'s "creates a new state" passed on a virgin
       // database and failed with a unique violation on every run after — a test
       // that can only be green once is not a test.
-      '"surge_zones", "service_zones", "cities", "states", "countries" ' +
+      '"surge_zones", "service_zones", "cities", "states", "countries", ' +
+      '"notification_templates", "notification_deliveries", "admin_broadcasts", "notifications" ' +
       'RESTART IDENTITY CASCADE',
   );
   // Vehicle types are reference data, like the RBAC roles — except `roles` is
@@ -103,6 +105,7 @@ export async function resetState(): Promise<void> {
   // and no test has to seed the platform's own catalog itself.
   await seedRoles(db().client);
   await seedVehicleTypes(db().client);
+  await seedNotificationTemplates(db().client);
   await redis.flushdb();
 }
 

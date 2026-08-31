@@ -1,17 +1,14 @@
 export type MapProviderName = 'ola' | 'google' | 'mappls';
 
+/** Admin GET view — never includes secret values, only configured flags. */
 export interface MapProviderConfigView {
   enabled: boolean;
   configured: boolean;
-  apiKey?: string | undefined;
-  clientId?: string | undefined;
-  clientSecret?: string | undefined;
   baseUrl?: string | undefined;
 }
 
 export interface MapSettingsView {
   primaryProvider: string;
-  fallbackProviders: string[];
   providers: {
     ola: MapProviderConfigView;
     google: MapProviderConfigView;
@@ -22,7 +19,6 @@ export interface MapSettingsView {
 
 export interface UpdateMapSettingsBody {
   primaryProvider: MapProviderName;
-  fallbackProviders: MapProviderName[];
   expectedVersion?: number | undefined;
   providers?:
     | {
@@ -43,6 +39,7 @@ export interface UpdateMapSettingsBody {
         mappls?:
           | {
               enabled?: boolean | undefined;
+              restApiKey?: string | undefined;
               clientId?: string | undefined;
               clientSecret?: string | undefined;
               baseUrl?: string | undefined;
@@ -55,6 +52,7 @@ export interface UpdateMapSettingsBody {
 export interface TestProviderHealthInput {
   providerName: MapProviderName;
   apiKey?: string | undefined;
+  restApiKey?: string | undefined;
   clientId?: string | undefined;
   clientSecret?: string | undefined;
   baseUrl?: string | undefined;

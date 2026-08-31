@@ -18,7 +18,6 @@ import { container } from '@core/di';
 
 export interface MapProviderServiceOptions {
   primaryProvider?: MapProvider;
-  fallbackProviders?: MapProvider[];
   providersRegistry?: Record<string, MapProvider>;
   systemSettingService?: SystemSettingService;
   redisService?: RedisService;
@@ -26,7 +25,6 @@ export interface MapProviderServiceOptions {
 
 interface CachedMapSettings {
   primaryProvider: string;
-  fallbackProviders: string[];
   keys?: Record<string, string>;
   baseUrls?: Record<string, string>;
 }
@@ -122,6 +120,10 @@ export class MapProviderService {
             '',
           googleKey:
             settingsMap.get('map.google.api_key')?.value ?? process.env.GOOGLE_MAPS_API_KEY ?? '',
+          mapplsRestKey:
+            settingsMap.get('map.mappls.rest_api_key')?.value ??
+            process.env.MAPPLS_REST_API_KEY ??
+            '',
           mapplsId:
             settingsMap.get('map.mappls.client_id')?.value ?? process.env.MAPPLS_CLIENT_ID ?? '',
           mapplsSecret:
@@ -142,7 +144,6 @@ export class MapProviderService {
         if (redis) {
           const toCache: CachedMapSettings = {
             primaryProvider: primary,
-            fallbackProviders: [],
             keys,
             baseUrls,
           };
@@ -188,15 +189,31 @@ export class MapProviderService {
         this.registry['google'] = provider;
       }
     } else if (primaryName === 'mappls') {
+      const restApiKey = keys?.mapplsRestKey
+        ? decryptSecret(keys.mapplsRestKey)
+        : (process.env.MAPPLS_REST_API_KEY ?? '');
       const clientId = keys?.mapplsId
         ? decryptSecret(keys.mapplsId)
         : (process.env.MAPPLS_CLIENT_ID ?? '');
       const clientSecret = keys?.mapplsSecret
         ? decryptSecret(keys.mapplsSecret)
         : (process.env.MAPPLS_CLIENT_SECRET ?? '');
-      if (clientId && clientSecret && (!provider || !provider.isConfigured())) {
-        const baseUrl = baseUrls?.mapplsUrl || process.env.MAPPLS_BASE_URL;
-        provider = new MapplsProvider({ clientId, clientSecret, ...(baseUrl ? { baseUrl } : {}) });
+      const baseUrl = baseUrls?.mapplsUrl || process.env.MAPPLS_BASE_URL;
+
+      const config =
+        clientId && clientSecret
+          ? {
+              clientId,
+              clientSecret,
+              ...(restApiKey ? { restApiKey } : {}),
+              ...(baseUrl ? { baseUrl } : {}),
+            }
+          : restApiKey || (!clientSecret && clientId)
+            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
+            : null;
+
+      if (config && (!provider || !provider.isConfigured())) {
+        provider = new MapplsProvider(config);
         this.registry['mappls'] = provider;
       }
     }

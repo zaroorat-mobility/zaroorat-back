@@ -64,6 +64,28 @@ export function filesMaintenanceQueue(): Queue {
 export function usersMaintenanceQueue(): Queue {
   return maintenanceQueue(QUEUE_NAMES.USERS_MAINTENANCE);
 }
+export function allQueueNames(): QueueName[] {
+  return Object.values(QUEUE_NAMES);
+}
+
+export function resolveQueue(name: string): Queue | null {
+  if (name === QUEUE_NAMES.AUTH_OTP) return otpQueue();
+  if (!(Object.values(QUEUE_NAMES) as string[]).includes(name)) return null;
+  return maintenanceQueue(name as QueueName);
+}
+
+export function allManagedQueues(): Array<{
+  name: QueueName | typeof QUEUE_NAMES.AUTH_OTP;
+  kind: 'maintenance' | 'otp';
+}> {
+  return [
+    ...Object.values(QUEUE_NAMES).map((name) => ({
+      name,
+      kind: name === QUEUE_NAMES.AUTH_OTP ? ('otp' as const) : ('maintenance' as const),
+    })),
+  ];
+}
+
 export async function closeQueues(): Promise<void> {
   const queues = [...open.values()];
   open.clear();

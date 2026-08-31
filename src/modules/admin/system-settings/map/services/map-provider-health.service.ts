@@ -1,13 +1,68 @@
 import { logger } from '@shared/logger/index.js';
 import { OlaMapsProvider } from '@modules/location/providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '@modules/location/providers/google-maps.provider.js';
-import { MapplsProvider } from '@modules/location/providers/mappls.provider.js';
+import {
+  MapplsProvider,
+  formatMapplsHealthError,
+} from '@modules/location/providers/mappls.provider.js';
+import type { MapplsConfig } from '../../../../../integrations/mappls/mappls.client.js';
 import type { SystemSettingService } from '../../services/system-setting.service.js';
 import type {
   TestProviderHealthInput,
   TestProviderHealthResult,
 } from '../types/map-settings.types.js';
 import { MAP_SETTING_KEYS } from '../constants/map-settings.constants.js';
+
+async function resolveMapplsConfig(
+  input: TestProviderHealthInput,
+  settingService: SystemSettingService,
+): Promise<MapplsConfig | null> {
+  const restApiKey =
+    input.restApiKey && !input.restApiKey.startsWith('***')
+      ? input.restApiKey
+      : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)) ??
+        process.env.MAPPLS_REST_API_KEY ??
+        '');
+
+  const clientId =
+    input.clientId && !input.clientId.startsWith('***')
+      ? input.clientId
+      : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)) ??
+        process.env.MAPPLS_CLIENT_ID ??
+        '');
+
+  const clientSecret =
+    input.clientSecret && !input.clientSecret.startsWith('***')
+      ? input.clientSecret
+      : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)) ??
+        process.env.MAPPLS_CLIENT_SECRET ??
+        '');
+
+  const baseUrl = input.baseUrl ?? process.env.MAPPLS_BASE_URL;
+
+  // Backward compat: legacy installs stored REST key in client_id with no secret.
+  const effectiveRestKey = restApiKey.trim() || (!clientSecret.trim() ? clientId.trim() : '');
+  const oauthId = clientSecret.trim() ? clientId.trim() : '';
+  const oauthSecret = clientSecret.trim();
+
+  if (oauthId && oauthSecret) {
+    return {
+      clientId: oauthId,
+      clientSecret: oauthSecret,
+      ...(effectiveRestKey ? { restApiKey: effectiveRestKey } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
+    };
+  }
+
+  if (effectiveRestKey) {
+    return {
+      restApiKey: effectiveRestKey,
+      ...(baseUrl ? { baseUrl } : {}),
+    };
+  }
+
+  return null;
+}
 
 export class MapProviderHealthService {
   constructor(private readonly systemSettingService: SystemSettingService) {}
@@ -60,7 +115,7 @@ export class MapProviderHealthService {
           ...(baseUrl ? { baseUrl } : {}),
         });
 
-        await tempClient.getDirections(testCoord1, testCoord2);
+        await tempClient.verifyConnectivity(testCoord1, testCoord2);
       } else if (input.providerName === 'google') {
         const apiKey =
           input.apiKey && !input.apiKey.startsWith('***')
@@ -99,29 +154,19 @@ export class MapProviderHealthService {
 
         await tempClient.getDirections(testCoord1, testCoord2);
       } else if (input.providerName === 'mappls') {
-        const clientId =
-          input.clientId && !input.clientId.startsWith('***')
-            ? input.clientId
-            : ((await this.systemSettingService.getSettingValue(
-                MAP_SETTING_KEYS.MAPPLS_CLIENT_ID,
-              )) ??
-              process.env.MAPPLS_CLIENT_ID ??
-              '');
-        const clientSecret =
-          input.clientSecret && !input.clientSecret.startsWith('***')
-            ? input.clientSecret
-            : ((await this.systemSettingService.getSettingValue(
-                MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET,
-              )) ??
-              process.env.MAPPLS_CLIENT_SECRET ??
-              '');
+        const mapplsConfig = await resolveMapplsConfig(input, this.systemSettingService);
+        if (!mapplsConfig) {
+          return {
+            ok: false,
+            providerName: input.providerName,
+            message:
+              'Provider health check failed: provide a REST API key, or OAuth Client ID + Client secret (not both mixed incorrectly).',
+            responseTimeMs: 1,
+          };
+        }
 
-        if (
-          !clientId ||
-          !clientSecret ||
-          clientId.startsWith('invalid_') ||
-          clientSecret.startsWith('invalid_')
-        ) {
+        const probeKey = mapplsConfig.restApiKey ?? mapplsConfig.clientId ?? '';
+        if (probeKey.startsWith('invalid_') || mapplsConfig.clientSecret?.startsWith('invalid_')) {
           return {
             ok: false,
             providerName: input.providerName,
@@ -131,9 +176,9 @@ export class MapProviderHealthService {
         }
         if (
           isTestEnv ||
-          clientId.startsWith('test_') ||
-          clientSecret.startsWith('test_') ||
-          clientId.startsWith('mock_')
+          probeKey.startsWith('test_') ||
+          mapplsConfig.clientSecret?.startsWith('test_') ||
+          probeKey.startsWith('mock_')
         ) {
           return {
             ok: true,
@@ -143,13 +188,7 @@ export class MapProviderHealthService {
           };
         }
 
-        const baseUrl = input.baseUrl ?? process.env.MAPPLS_BASE_URL;
-        const tempClient = new MapplsProvider({
-          clientId,
-          clientSecret,
-          ...(baseUrl ? { baseUrl } : {}),
-        });
-
+        const tempClient = new MapplsProvider(mapplsConfig);
         await tempClient.getDirections(testCoord1, testCoord2);
       }
 
@@ -160,7 +199,12 @@ export class MapProviderHealthService {
         responseTimeMs: Date.now() - startTime,
       };
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Connectivity check failed';
+      const errorMsg =
+        input.providerName === 'mappls'
+          ? formatMapplsHealthError(err)
+          : err instanceof Error
+            ? err.message
+            : 'Connectivity check failed';
       logger.warn(
         { err, providerName: input.providerName },
         '[MapProviderHealthService] Health check failed',

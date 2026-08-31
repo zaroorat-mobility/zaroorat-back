@@ -4,7 +4,6 @@ export const mapProviderNameSchema = z.enum(['ola', 'google', 'mappls']);
 
 export const updateMapSettingsBodySchema = z.object({
   primaryProvider: mapProviderNameSchema,
-  fallbackProviders: z.array(mapProviderNameSchema),
   expectedVersion: z.number().int().positive().optional(),
   providers: z
     .object({
@@ -25,6 +24,7 @@ export const updateMapSettingsBodySchema = z.object({
       mappls: z
         .object({
           enabled: z.boolean().optional(),
+          restApiKey: z.string().optional(),
           clientId: z.string().optional(),
           clientSecret: z.string().optional(),
           baseUrl: z.string().url().optional(),
@@ -37,6 +37,7 @@ export const updateMapSettingsBodySchema = z.object({
 export const testProviderHealthBodySchema = z.object({
   providerName: mapProviderNameSchema,
   apiKey: z.string().optional(),
+  restApiKey: z.string().optional(),
   clientId: z.string().optional(),
   clientSecret: z.string().optional(),
   baseUrl: z.string().url().optional(),

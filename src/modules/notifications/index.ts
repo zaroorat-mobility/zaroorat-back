@@ -7,7 +7,9 @@ import {
 import { NotificationService } from './notification.service';
 export type { SmsProvider, SmsMessage, SmsSendResult } from './providers/sms.provider';
 export type { PushProvider, PushMessage, PushSendResult } from './providers/push.provider';
+export type { EmailProvider, EmailMessage, EmailSendResult } from './providers/email.provider';
 export { MockProvider } from './providers/mock.provider';
+export { SmtpEmailProvider, type SmtpConfig } from './providers/smtp.provider.js';
 export { Msg91Provider, type Msg91Config } from '../../integrations/msg91/msg91.client.js';
 export { MockPushProvider } from './providers/mock-push.provider';
 export {

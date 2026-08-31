@@ -36,4 +36,12 @@ export class SystemSettingsCache {
       logger.warn({ err }, '[SystemSettingsCache] Failed to write map settings cache');
     }
   }
+
+  async invalidateCategory(category: string): Promise<void> {
+    try {
+      await this.redisService.provider.client.del(`system_settings:${category}`);
+    } catch (err) {
+      logger.warn({ err, category }, '[SystemSettingsCache] Failed to invalidate category cache');
+    }
+  }
 }

@@ -1,0 +1,51 @@
+model SafetyIncident {
+  id              String               @id @default(uuid(7)) @db.Uuid
+  incidentNumber  String               @unique @map("incident_number")
+  type            SafetyIncidentType   @default(SOS)
+  severity        SafetySeverity       @default(HIGH)
+  status          SafetyIncidentStatus @default(OPEN)
+  rideId          String?              @map("ride_id") @db.Uuid
+  reporterUserId  String               @map("reporter_user_id") @db.Uuid
+  subjectUserId   String?              @map("subject_user_id") @db.Uuid
+  latitude        Float?
+  longitude       Float?
+  locationAddress String?              @map("location_address")
+  description     String?
+  acknowledgedAt  DateTime?            @map("acknowledged_at")
+  acknowledgedBy  String?              @map("acknowledged_by") @db.Uuid
+  resolvedAt      DateTime?            @map("resolved_at")
+  resolvedBy      String?              @map("resolved_by") @db.Uuid
+  resolutionType  String?              @map("resolution_type")
+  resolutionNotes String?              @map("resolution_notes")
+  evidenceFileIds String[]             @default([]) @map("evidence_file_ids")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  ride         Ride?                 @relation(fields: [rideId], references: [id])
+  reporterUser User                  @relation("IncidentReporter", fields: [reporterUserId], references: [id])
+  subjectUser  User?                 @relation("IncidentSubject", fields: [subjectUserId], references: [id])
+  events       SafetyIncidentEvent[]
+
+  @@index([status])
+  @@index([type])
+  @@index([severity])
+  @@index([rideId])
+  @@index([reporterUserId])
+  @@map("safety_incidents")
+}
+
+model SafetyIncidentEvent {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  incidentId String   @map("incident_id") @db.Uuid
+  eventType  String   @map("event_type")
+  actorId    String?  @map("actor_id") @db.Uuid
+  notes      String?
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  incident SafetyIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  actor    User?          @relation(fields: [actorId], references: [id])
+
+  @@index([incidentId, createdAt])
+  @@map("safety_incident_events")
+}
