@@ -55,6 +55,7 @@ export async function operationsManagementRoutes(fastify: FastifyInstance): Prom
   fastify.get('/rides/:id/driver-location', canRead, (req, reply) =>
     rideController.getDriverLocation(req, reply),
   );
+  fastify.get('/rides/:id/route', canRead, (req, reply) => rideController.getRoute(req, reply));
   fastify.get('/rides/:id/notes', canRead, (req, reply) => rideController.listNotes(req, reply));
   fastify.post('/rides/:id/notes', canWrite, (req, reply) => rideController.addNote(req, reply));
   fastify.post('/rides/:id/actions/cancel', canWrite, (req, reply) =>

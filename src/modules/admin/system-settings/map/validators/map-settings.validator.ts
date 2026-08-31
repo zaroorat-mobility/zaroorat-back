@@ -1,10 +1,10 @@
 import type { MapSettingsView, UpdateMapSettingsBody } from '../types/map-settings.types.js';
 
-const ALLOWED_PROVIDERS = ['ola', 'google', 'mappls'];
+const ALLOWED_PROVIDERS = ['ola', 'google', 'mappls'] as const;
 
 export class MapSettingsValidator {
   static validateUpdateInput(input: UpdateMapSettingsBody, currentSettings: MapSettingsView): void {
-    const { primaryProvider, fallbackProviders } = input;
+    const { primaryProvider } = input;
 
     if (!ALLOWED_PROVIDERS.includes(primaryProvider)) {
       throw new Error(
@@ -12,16 +12,10 @@ export class MapSettingsValidator {
       );
     }
 
-    if (fallbackProviders && fallbackProviders.length > 0) {
-      throw new Error(
-        'Multiple active providers or fallback providers are prohibited. Exactly ONE map provider may be active.',
-      );
-    }
-
-    // Ensure non-primary providers are NOT set to enabled: true
+    // Reject enabling any non-primary provider — exactly one active at a time
     for (const provider of ALLOWED_PROVIDERS) {
       if (provider !== primaryProvider) {
-        const provConfig = input.providers?.[provider as keyof typeof input.providers];
+        const provConfig = input.providers?.[provider];
         if (provConfig && 'enabled' in provConfig && provConfig.enabled === true) {
           throw new Error(
             `Cannot enable provider '${provider}'. Exactly ONE map provider ('${primaryProvider}') may be active at any time.`,
@@ -31,8 +25,7 @@ export class MapSettingsValidator {
     }
 
     const primaryConfig =
-      input.providers?.[primaryProvider as keyof typeof input.providers] ??
-      currentSettings.providers[primaryProvider as keyof typeof currentSettings.providers];
+      input.providers?.[primaryProvider] ?? currentSettings.providers[primaryProvider];
     if (primaryConfig && 'enabled' in primaryConfig && primaryConfig.enabled === false) {
       throw new Error(`Active provider '${primaryProvider}' cannot be disabled.`);
     }

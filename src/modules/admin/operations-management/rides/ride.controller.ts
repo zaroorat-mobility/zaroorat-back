@@ -49,6 +49,12 @@ export class AdminRideController {
     reply.send({ data });
   }
 
+  async getRoute(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = rideIdParamSchema.parse(req.params);
+    const data = await this.adminRideService.getRoute(id);
+    reply.send({ data });
+  }
+
   async exportCsv(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const query = exportAdminRidesQuerySchema.parse(req.query);
     const csv = await this.adminRideService.exportCsv(query);

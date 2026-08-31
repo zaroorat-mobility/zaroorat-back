@@ -13,9 +13,11 @@ import type {
   SuggestedPlace,
 } from '../types/map-provider.types.js';
 import { logger } from '@shared/logger/index.js';
+import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
 interface GoogleDirectionsResponse {
   routes?: Array<{
+    overview_polyline?: { points?: string };
     legs?: Array<{
       distance?: { value: number };
       duration?: { value: number };
@@ -129,6 +131,7 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
         distanceMeters: 12400,
         durationSeconds: 1860,
         providerName: this.providerName,
+        path: buildInterpolatedPath(origin, destination),
       };
     }
 
@@ -142,15 +145,23 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
       throw new Error('[GoogleMaps] getDirections: no route found');
     }
 
-    const leg = response.routes[0]?.legs?.[0];
+    const route = response.routes[0]!;
+    const leg = route.legs?.[0];
     if (!leg?.distance?.value || !leg?.duration?.value) {
       throw new Error('[GoogleMaps] getDirections: route leg has no distance/duration');
     }
+
+    const encodedPolyline = route.overview_polyline?.points;
+    const path = encodedPolyline
+      ? decodeEncodedPolyline(encodedPolyline)
+      : buildInterpolatedPath(origin, destination);
 
     return {
       distanceMeters: leg.distance.value,
       durationSeconds: leg.duration.value,
       providerName: this.providerName,
+      ...(encodedPolyline ? { encodedPolyline } : {}),
+      path,
     };
   }
 

@@ -55,13 +55,25 @@ export function registerLocationModule(container: AwilixContainer): void {
     }).singleton(),
 
     mapplsProvider: asFunction(() => {
+      const restApiKey = process.env.MAPPLS_REST_API_KEY ?? '';
       const clientId = process.env.MAPPLS_CLIENT_ID ?? '';
       const clientSecret = process.env.MAPPLS_CLIENT_SECRET ?? '';
       const baseUrl = process.env.MAPPLS_BASE_URL;
-      return new MapplsProvider({ clientId, clientSecret, ...(baseUrl ? { baseUrl } : {}) });
+      const config =
+        clientId && clientSecret
+          ? {
+              clientId,
+              clientSecret,
+              ...(restApiKey ? { restApiKey } : {}),
+              ...(baseUrl ? { baseUrl } : {}),
+            }
+          : restApiKey || clientId
+            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
+            : { restApiKey: '' };
+      return new MapplsProvider(config);
     }).singleton(),
 
-    // Unified Composite Map Provider Service (Handles Primary + Fallback chain)
+    // Unified map provider service — exactly one active provider (no fallback chain)
     mapProviderService: asFunction(
       ({
         olaMapsProvider,
@@ -77,10 +89,6 @@ export function registerLocationModule(container: AwilixContainer): void {
         redisService?: RedisService;
       }) => {
         const primaryName = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
-        const fallbackNames = (process.env.MAP_PROVIDER_FALLBACK ?? 'google,mappls')
-          .split(',')
-          .map((s) => s.trim().toLowerCase())
-          .filter(Boolean);
 
         const providerMap: Record<string, MapProvider> = {
           ola: olaMapsProvider,
@@ -89,15 +97,9 @@ export function registerLocationModule(container: AwilixContainer): void {
         };
 
         const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
-        const fallbackProviders = fallbackNames
-          .map((name) => providerMap[name])
-          .filter((p): p is MapProvider =>
-            Boolean(p && p.providerName !== primaryProvider.providerName),
-          );
 
         return new MapProviderService({
           primaryProvider,
-          fallbackProviders,
           providersRegistry: providerMap,
           ...(systemSettingService ? { systemSettingService } : {}),
           ...(redisService ? { redisService } : {}),

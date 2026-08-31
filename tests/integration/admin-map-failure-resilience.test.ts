@@ -95,7 +95,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       headers: customerHeaders,
       payload: {
         primaryProvider: 'google',
-        fallbackProviders: [],
+
         providers: { google: { apiKey: 'test_google_key' } },
       },
     });
@@ -141,7 +141,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: {
           ola: { apiKey: realSecretKey },
         },
@@ -181,30 +181,16 @@ describe('admin map configuration failure, fallback & resilience (integration)',
 
   // ─── 4. INPUT VALIDATION & INVALID CONFIGURATIONS ─────────────────────────
 
-  it('4.1 rejects invalid provider configurations (fallback non-empty, disabled primary)', async () => {
+  it('4.1 rejects invalid provider configurations (disabled primary)', async () => {
     const adminHeaders = await loginAdmin();
 
-    // 1. Non-empty fallback list
-    const primaryInFallback = await app.inject({
-      method: 'PUT',
-      url: '/api/v1/admin/settings/maps',
-      headers: adminHeaders,
-      payload: {
-        primaryProvider: 'ola',
-        fallbackProviders: ['google'],
-        providers: { ola: { apiKey: 'test_ola_key' } },
-      },
-    });
-    assert.equal(primaryInFallback.statusCode, 400);
-
-    // 2. Disabled primary provider
+    // Disabled primary provider
     const disabledPrimary = await app.inject({
       method: 'PUT',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
         providers: {
           ola: { enabled: false, apiKey: 'test_ola_key' },
         },
@@ -225,7 +211,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: { ola: { apiKey: 'test_ola_key' } },
       },
     });
@@ -238,7 +224,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       headers: adminHeaders,
       payload: {
         primaryProvider: 'google',
-        fallbackProviders: [],
+
         expectedVersion: 1, // Stale version!
         providers: { google: { apiKey: 'test_google_key' } },
       },
@@ -261,7 +247,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: { ola: { apiKey: 'test_ola_key_111' } },
       },
     });
@@ -278,7 +264,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       headers: adminHeaders,
       payload: {
         primaryProvider: 'google',
-        fallbackProviders: [],
+
         providers: { google: { apiKey: 'test_google_key_222' } },
       },
     });
@@ -352,7 +338,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: { ola: { apiKey: 'test_ola_key_888' } },
       },
     });

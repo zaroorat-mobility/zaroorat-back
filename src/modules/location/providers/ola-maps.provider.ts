@@ -13,6 +13,7 @@ import type {
   SuggestedPlace,
 } from '../types/map-provider.types.js';
 import { logger } from '@shared/logger/index.js';
+import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
 // ─── Raw Ola Maps response shapes ─────────────────────────────────────────────
 
@@ -40,9 +41,10 @@ interface OlaReverseGeocodeResponse {
 }
 
 interface OlaRoute {
+  overview_polyline?: string;
   legs?: Array<{
-    distance?: { value: number };
-    duration?: { value: number };
+    distance?: number | { value: number };
+    duration?: number | { value: number };
   }>;
 }
 
@@ -52,8 +54,8 @@ interface OlaDirectionsResponse {
 }
 
 interface OlaMatrixElement {
-  distance?: { value: number };
-  duration?: { value: number };
+  distance?: number | { value: number };
+  duration?: number | { value: number };
   status?: string;
 }
 
@@ -69,6 +71,18 @@ interface OlaDistanceMatrixResponse {
 /**
  * OlaMapsProvider — Gateway to Ola Maps API endpoints implementing MapProvider.
  */
+function readOlaMetric(value: number | { value: number } | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === 'number' ? value : value.value;
+}
+
+const OLA_SUCCESS_STATUSES = new Set(['OK', 'SUCCESS']);
+
+function isOlaSuccessStatus(status: string | undefined): boolean {
+  if (!status) return true;
+  return OLA_SUCCESS_STATUSES.has(status.toUpperCase());
+}
+
 export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
   readonly providerName = 'ola';
 
@@ -78,6 +92,22 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
 
   isConfigured(): boolean {
     return Boolean(this.config.apiKey && this.config.apiKey.trim().length > 0);
+  }
+
+  /** Lightweight connectivity probe for admin health checks. */
+  async verifyConnectivity(origin: Coordinate, destination: Coordinate): Promise<void> {
+    const response = await this.post<OlaDirectionsResponse>('routing/v1/directions/basic', {
+      origin: `${origin.latitude},${origin.longitude}`,
+      destination: `${destination.latitude},${destination.longitude}`,
+    });
+
+    if (response.status && !isOlaSuccessStatus(response.status)) {
+      throw new Error(`[OlaMaps] connectivity check failed: ${response.status}`);
+    }
+
+    if (!response.routes || response.routes.length === 0) {
+      throw new Error('[OlaMaps] connectivity check: no route returned');
+    }
   }
 
   // ─── Address Search ─────────────────────────────────────────────────────────
@@ -151,30 +181,43 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
         distanceMeters: 12400,
         durationSeconds: 1860,
         providerName: this.providerName,
+        path: buildInterpolatedPath(origin, destination),
       };
     }
 
     const response = await this.post<OlaDirectionsResponse>('routing/v1/directions', {
       origin: `${origin.latitude},${origin.longitude}`,
       destination: `${destination.latitude},${destination.longitude}`,
-      alternatives: false,
-      steps: false,
-      overview: 'false',
+      overview: 'full',
     });
+
+    if (response.status && !isOlaSuccessStatus(response.status)) {
+      throw new Error(`[OlaMaps] getDirections: API status ${response.status}`);
+    }
 
     if (!response.routes || response.routes.length === 0) {
       throw new Error('[OlaMaps] getDirections: no route found');
     }
 
-    const leg = response.routes[0]?.legs?.[0];
-    if (!leg?.distance?.value || !leg?.duration?.value) {
+    const route = response.routes[0]!;
+    const leg = route.legs?.[0];
+    const distanceMeters = readOlaMetric(leg?.distance);
+    const durationSeconds = readOlaMetric(leg?.duration);
+    if (distanceMeters === undefined || durationSeconds === undefined) {
       throw new Error('[OlaMaps] getDirections: route leg has no distance/duration');
     }
 
+    const encodedPolyline = route.overview_polyline;
+    const path = encodedPolyline
+      ? decodeEncodedPolyline(encodedPolyline)
+      : buildInterpolatedPath(origin, destination);
+
     return {
-      distanceMeters: leg.distance.value,
-      durationSeconds: leg.duration.value,
+      distanceMeters,
+      durationSeconds,
       providerName: this.providerName,
+      ...(encodedPolyline ? { encodedPolyline } : {}),
+      path,
     };
   }
 
@@ -189,7 +232,7 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
     }
 
     try {
-      const response = await this.post<OlaDistanceMatrixResponse>('routing/v1/distanceMatrix', {
+      const response = await this.get<OlaDistanceMatrixResponse>('routing/v1/distanceMatrix', {
         origins: origins.map((o) => `${o.latitude},${o.longitude}`).join('|'),
         destinations: destinations.map((d) => `${d.latitude},${d.longitude}`).join('|'),
       });
@@ -200,8 +243,8 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
 
       const cells: MatrixCell[][] = response.rows.map((row) =>
         (row.elements ?? []).map((el) => ({
-          distanceMeters: el.distance?.value ?? 0,
-          durationSeconds: el.duration?.value ?? 0,
+          distanceMeters: readOlaMetric(el.distance) ?? 0,
+          durationSeconds: readOlaMetric(el.duration) ?? 0,
           status: el.status === 'OK' ? 'OK' : 'ZERO_RESULTS',
         })),
       );

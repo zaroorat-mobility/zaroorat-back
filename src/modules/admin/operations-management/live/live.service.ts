@@ -1,5 +1,7 @@
 import { DatabaseService } from '@core/database';
 import { Prisma } from '../../../../generated/prisma/index.js';
+import type { MapProviderService } from '@modules/location/business-services/map-provider.service.js';
+import { coordinatesToLatLngPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 import {
   ActiveRidesQuery,
   LiveAlertsQuery,
@@ -88,6 +90,7 @@ export interface AdminLiveMapDto {
     drop: { address: string; lat: number; lng: number };
     driverLocation: { lat: number; lng: number; heading: number | null } | null;
     encodedPolyline: string | null;
+    path: Array<{ lat: number; lng: number }> | null;
   }>;
   drivers: Array<{
     id: string;
@@ -145,7 +148,10 @@ export interface AdminLiveAlertDto {
 }
 
 export class AdminLiveService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly mapProviderService?: MapProviderService,
+  ) {}
 
   private get client() {
     return this.db.client;
@@ -403,33 +409,59 @@ export class AdminLiveService {
       },
     });
 
-    const rides = activeRides.map((ride) => {
-      const driverLoc = ride.driver?.location
-        ? {
-            lat: Number(ride.driver.location.latitude ?? 0),
-            lng: Number(ride.driver.location.longitude ?? 0),
-            heading: ride.driver.location.heading ? Number(ride.driver.location.heading) : null,
-          }
-        : null;
+    const ridesWithPaths = await Promise.all(
+      activeRides.map(async (ride) => {
+        const driverLoc = ride.driver?.location
+          ? {
+              lat: Number(ride.driver.location.latitude ?? 0),
+              lng: Number(ride.driver.location.longitude ?? 0),
+              heading: ride.driver.location.heading ? Number(ride.driver.location.heading) : null,
+            }
+          : null;
 
-      return {
-        id: ride.id,
-        rideCode: ride.rideCode,
-        status: ride.status,
-        pickup: {
-          address: ride.pickupAddress ?? '',
-          lat: Number(ride.request?.pickupLat ?? 0),
-          lng: Number(ride.request?.pickupLng ?? 0),
-        },
-        drop: {
-          address: ride.dropAddress ?? '',
-          lat: Number(ride.request?.dropLat ?? 0),
-          lng: Number(ride.request?.dropLng ?? 0),
-        },
-        driverLocation: driverLoc,
-        encodedPolyline: ride.routePlan?.encodedPolyline ?? null,
-      };
-    });
+        const pickupLat = Number(ride.request?.pickupLat ?? 0);
+        const pickupLng = Number(ride.request?.pickupLng ?? 0);
+        const dropLat = Number(ride.request?.dropLat ?? 0);
+        const dropLng = Number(ride.request?.dropLng ?? 0);
+        const encodedPolyline = ride.routePlan?.encodedPolyline ?? null;
+
+        let path: Array<{ lat: number; lng: number }> | null = null;
+        if (encodedPolyline) {
+          path = coordinatesToLatLngPath(decodeEncodedPolyline(encodedPolyline));
+        } else if (this.mapProviderService && pickupLat && pickupLng && dropLat && dropLng) {
+          try {
+            const routing = await this.mapProviderService.getDirections(
+              { latitude: pickupLat, longitude: pickupLng },
+              { latitude: dropLat, longitude: dropLng },
+            );
+            path = routing.path ? coordinatesToLatLngPath(routing.path) : null;
+          } catch {
+            path = null;
+          }
+        }
+
+        return {
+          id: ride.id,
+          rideCode: ride.rideCode,
+          status: ride.status,
+          pickup: {
+            address: ride.pickupAddress ?? '',
+            lat: pickupLat,
+            lng: pickupLng,
+          },
+          drop: {
+            address: ride.dropAddress ?? '',
+            lat: dropLat,
+            lng: dropLng,
+          },
+          driverLocation: driverLoc,
+          encodedPolyline,
+          path,
+        };
+      }),
+    );
+
+    const rides = ridesWithPaths;
 
     const driversWithLocation = await this.client.driver.findMany({
       where: {

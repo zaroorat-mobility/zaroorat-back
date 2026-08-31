@@ -1,5 +1,4 @@
 import { DatabaseService, TransactionManager } from '@core/database';
-import { maskSecret } from '@shared/crypto/encryption.util.js';
 import { SystemSettingService } from '../../services/system-setting.service.js';
 import { SystemSettingsCache } from '../../cache/system-settings.cache.js';
 import { MapProviderHealthService } from './map-provider-health.service.js';
@@ -31,8 +30,9 @@ export class AdminMapSettingsService {
   ) {}
 
   /**
-   * Get current map configuration (secrets masked as '********').
-   * Enforces strict single active provider mode (fallbackProviders = []).
+   * Get current map configuration.
+   * Secrets are never returned — only `configured` flags and non-secret fields.
+   * Exactly one provider is active (primaryProvider).
    */
   async getMapSettings(): Promise<MapSettingsView> {
     const settings = await this.systemSettingService.getCategorySettings(MAP_SETTINGS_CATEGORY);
@@ -51,22 +51,27 @@ export class AdminMapSettingsService {
       settings.get(MAP_SETTING_KEYS.OLA_API_KEY)?.value ?? process.env.OLA_MAPS_API_KEY ?? '';
     const googleKey =
       settings.get(MAP_SETTING_KEYS.GOOGLE_API_KEY)?.value ?? process.env.GOOGLE_MAPS_API_KEY ?? '';
+    const mapplsRestKey =
+      settings.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value ??
+      process.env.MAPPLS_REST_API_KEY ??
+      '';
     const mapplsId =
       settings.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value ?? process.env.MAPPLS_CLIENT_ID ?? '';
     const mapplsSecret =
       settings.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value ??
       process.env.MAPPLS_CLIENT_SECRET ??
       '';
+    const mapplsConfigured = Boolean(
+      mapplsRestKey.trim() || (mapplsId.trim() && mapplsSecret.trim()) || mapplsId.trim(),
+    );
 
     return {
       primaryProvider,
-      fallbackProviders: [],
       version: maxVersion,
       providers: {
         ola: {
           enabled: primaryProvider === 'ola',
           configured: Boolean(olaKey && olaKey.trim().length > 0),
-          apiKey: maskSecret(olaKey),
           baseUrl:
             settings.get(MAP_SETTING_KEYS.OLA_BASE_URL)?.value ??
             process.env.OLA_MAPS_BASE_URL ??
@@ -75,7 +80,6 @@ export class AdminMapSettingsService {
         google: {
           enabled: primaryProvider === 'google',
           configured: Boolean(googleKey && googleKey.trim().length > 0),
-          apiKey: maskSecret(googleKey),
           baseUrl:
             settings.get(MAP_SETTING_KEYS.GOOGLE_BASE_URL)?.value ??
             process.env.GOOGLE_MAPS_BASE_URL ??
@@ -83,9 +87,7 @@ export class AdminMapSettingsService {
         },
         mappls: {
           enabled: primaryProvider === 'mappls',
-          configured: Boolean(mapplsId && mapplsSecret),
-          clientId: maskSecret(mapplsId),
-          clientSecret: maskSecret(mapplsSecret),
+          configured: mapplsConfigured,
           baseUrl:
             settings.get(MAP_SETTING_KEYS.MAPPLS_BASE_URL)?.value ??
             process.env.MAPPLS_BASE_URL ??
@@ -96,25 +98,76 @@ export class AdminMapSettingsService {
   }
 
   /**
-   * Public-safe map configuration for frontend clients (no secrets).
+   * Map configuration for authenticated admin clients (LiveMap tile layers).
+   * Includes the active provider's API key — required for browser-side tile requests.
+   * Only exposed to admins with settings:read; server-side routing keeps keys internal.
    */
   async getMapClientConfig(): Promise<MapClientConfigView> {
-    const settings = await this.getMapSettings();
+    const settingsMap = await this.systemSettingService.getCategorySettings(MAP_SETTINGS_CATEGORY);
+
+    const primaryProvider =
+      settingsMap.get(MAP_SETTING_KEYS.PRIMARY_PROVIDER)?.value ??
+      process.env.MAP_PROVIDER ??
+      DEFAULT_MAP_PROVIDERS.PRIMARY;
+
+    const olaKey =
+      settingsMap.get(MAP_SETTING_KEYS.OLA_API_KEY)?.value?.trim() ||
+      process.env.OLA_MAPS_API_KEY?.trim() ||
+      '';
+    const googleKey =
+      settingsMap.get(MAP_SETTING_KEYS.GOOGLE_API_KEY)?.value?.trim() ||
+      process.env.GOOGLE_MAPS_API_KEY?.trim() ||
+      '';
+    const mapplsRestKey =
+      settingsMap.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value?.trim() ||
+      process.env.MAPPLS_REST_API_KEY?.trim() ||
+      settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value?.trim() ||
+      process.env.MAPPLS_CLIENT_ID?.trim() ||
+      '';
+
+    const olaBase =
+      settingsMap.get(MAP_SETTING_KEYS.OLA_BASE_URL)?.value ??
+      process.env.OLA_MAPS_BASE_URL ??
+      DEFAULT_BASE_URLS.OLA;
+    const googleBase =
+      settingsMap.get(MAP_SETTING_KEYS.GOOGLE_BASE_URL)?.value ??
+      process.env.GOOGLE_MAPS_BASE_URL ??
+      DEFAULT_BASE_URLS.GOOGLE;
+    const mapplsBase =
+      settingsMap.get(MAP_SETTING_KEYS.MAPPLS_BASE_URL)?.value ??
+      process.env.MAPPLS_BASE_URL ??
+      DEFAULT_BASE_URLS.MAPPLS;
+
+    const buildProvider = (
+      name: 'ola' | 'google' | 'mappls',
+      enabled: boolean,
+      baseUrl: string,
+      apiKey: string,
+    ) => {
+      const normalizedBase = baseUrl.replace(/\/+$/, '');
+      const config: {
+        enabled: boolean;
+        baseUrl: string;
+        apiKey?: string;
+        tileUrl?: string;
+      } = { enabled, baseUrl: normalizedBase };
+
+      if (enabled && apiKey) {
+        config.apiKey = apiKey;
+        if (name === 'ola') {
+          config.tileUrl = `${normalizedBase}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;
+        }
+      }
+
+      return config;
+    };
+
     return {
-      primaryProvider: settings.primaryProvider,
+      primaryProvider,
       providers: {
-        ola: {
-          enabled: settings.providers.ola.enabled,
-          baseUrl: settings.providers.ola.baseUrl ?? DEFAULT_BASE_URLS.OLA,
-        },
-        google: {
-          enabled: settings.providers.google.enabled,
-          baseUrl: settings.providers.google.baseUrl ?? DEFAULT_BASE_URLS.GOOGLE,
-        },
-        mappls: {
-          enabled: settings.providers.mappls.enabled,
-          baseUrl: settings.providers.mappls.baseUrl ?? DEFAULT_BASE_URLS.MAPPLS,
-        },
+        ola: buildProvider('ola', primaryProvider === 'ola', olaBase, olaKey),
+        google: buildProvider('google', primaryProvider === 'google', googleBase, googleKey),
+        mappls: buildProvider('mappls', primaryProvider === 'mappls', mapplsBase, mapplsRestKey),
       },
     };
   }
@@ -134,8 +187,8 @@ export class AdminMapSettingsService {
   }
 
   /**
-   * Atomically update map configuration in database, record audit logs, and invalidate Redis cache.
-   * Enforces strict single active provider mode.
+   * Atomically update map configuration: exactly one active provider.
+   * Requires a successful health check before activation.
    */
   async updateMapSettings(
     input: UpdateMapSettingsBody,
@@ -146,7 +199,6 @@ export class AdminMapSettingsService {
 
     const { primaryProvider } = input;
 
-    // Safely extract health test input for target primary provider
     const healthInput: TestProviderHealthInput = {
       providerName: primaryProvider as MapProviderName,
     };
@@ -157,11 +209,13 @@ export class AdminMapSettingsService {
     } else if (primaryProvider === 'google' && input.providers?.google) {
       if (input.providers.google.apiKey) healthInput.apiKey = input.providers.google.apiKey;
       if (input.providers.google.baseUrl) healthInput.baseUrl = input.providers.google.baseUrl;
-    } else if (primaryProvider === 'mappls' && input.providers?.mappls) {
-      if (input.providers.mappls.clientId) healthInput.clientId = input.providers.mappls.clientId;
-      if (input.providers.mappls.clientSecret)
+    } else if (primaryProvider === 'mappls') {
+      if (input.providers?.mappls?.restApiKey)
+        healthInput.restApiKey = input.providers.mappls.restApiKey;
+      if (input.providers?.mappls?.clientId) healthInput.clientId = input.providers.mappls.clientId;
+      if (input.providers?.mappls?.clientSecret)
         healthInput.clientSecret = input.providers.mappls.clientSecret;
-      if (input.providers.mappls.baseUrl) healthInput.baseUrl = input.providers.mappls.baseUrl;
+      if (input.providers?.mappls?.baseUrl) healthInput.baseUrl = input.providers.mappls.baseUrl;
     }
 
     const healthResult = await this.testProviderHealth(healthInput);
@@ -172,7 +226,6 @@ export class AdminMapSettingsService {
       );
     }
 
-    // Execute DB Transaction
     await this.txManager.execute(async (tx) => {
       const changes: Array<{
         fieldName: string;
@@ -208,9 +261,9 @@ export class AdminMapSettingsService {
       };
 
       await saveSetting(MAP_SETTING_KEYS.PRIMARY_PROVIDER, primaryProvider);
-      await saveSetting(MAP_SETTING_KEYS.FALLBACK_PROVIDERS, ''); // Strict single-provider mode: no fallback providers
+      // Clear any legacy fallback setting — single-provider mode only
+      await saveSetting(MAP_SETTING_KEYS.FALLBACK_PROVIDERS, '');
 
-      // Atomically enable primary provider and disable others
       await saveSetting(MAP_SETTING_KEYS.OLA_ENABLED, String(primaryProvider === 'ola'));
       await saveSetting(MAP_SETTING_KEYS.GOOGLE_ENABLED, String(primaryProvider === 'google'));
       await saveSetting(MAP_SETTING_KEYS.MAPPLS_ENABLED, String(primaryProvider === 'mappls'));
@@ -231,6 +284,8 @@ export class AdminMapSettingsService {
 
       if (input.providers?.mappls) {
         const p = input.providers.mappls;
+        if (p.restApiKey && !p.restApiKey.startsWith('***'))
+          await saveSetting(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY, p.restApiKey, true);
         if (p.clientId && !p.clientId.startsWith('***'))
           await saveSetting(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID, p.clientId, true);
         if (p.clientSecret && !p.clientSecret.startsWith('***'))
@@ -246,7 +301,7 @@ export class AdminMapSettingsService {
             entityType: 'SystemSetting',
             entityId: null,
             summary: `Updated active map provider to '${primaryProvider}'`,
-            metadata: { primaryProvider, fallbackProviders: [] },
+            metadata: { primaryProvider },
           },
         });
 
@@ -261,7 +316,6 @@ export class AdminMapSettingsService {
       }
     });
 
-    // Invalidate Redis settings cache after successful DB commit
     await this.systemSettingsCache.clearMapSettingsCache();
 
     return this.getMapSettings();

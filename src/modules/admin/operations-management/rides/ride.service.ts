@@ -7,6 +7,9 @@ import {
 import { recordAdminAction } from '../../audit/index.js';
 import { LifecycleService } from '../../../rides/services/lifecycle/lifecycle.service.js';
 import { RideNotFoundError } from '../operations.errors.js';
+import type { MapProviderService } from '@modules/location/business-services/map-provider.service.js';
+import { RoutingProviderUnavailableError } from '@modules/location/errors/location.errors.js';
+import { coordinatesToLatLngPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 import type { PrismaTx } from '../operations.types.js';
 import type {
   AddRideNoteBody,
@@ -132,6 +135,7 @@ export class AdminRideService {
   constructor(
     private readonly db: DatabaseService,
     private readonly lifecycleService: LifecycleService,
+    private readonly mapProviderService?: MapProviderService,
   ) {}
 
   private get client() {
@@ -784,6 +788,75 @@ export class AdminRideService {
       isLive: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'].includes(
         ride.status,
       ),
+    };
+  }
+
+  async getRoute(idOrCode: string) {
+    const isUuid = UUID_REGEX.test(idOrCode);
+    const ride = await this.client.ride.findFirst({
+      where: isUuid ? { OR: [{ id: idOrCode }, { rideCode: idOrCode }] } : { rideCode: idOrCode },
+      select: {
+        id: true,
+        request: {
+          select: {
+            pickupLat: true,
+            pickupLng: true,
+            dropLat: true,
+            dropLng: true,
+          },
+        },
+        routePlan: {
+          select: {
+            encodedPolyline: true,
+          },
+        },
+      },
+    });
+
+    if (!ride) {
+      throw new RideNotFoundError(`Ride '${idOrCode}' was not found`);
+    }
+
+    const pickupLat = ride.request?.pickupLat != null ? Number(ride.request.pickupLat) : null;
+    const pickupLng = ride.request?.pickupLng != null ? Number(ride.request.pickupLng) : null;
+    const dropLat = ride.request?.dropLat != null ? Number(ride.request.dropLat) : null;
+    const dropLng = ride.request?.dropLng != null ? Number(ride.request.dropLng) : null;
+
+    if (pickupLat == null || pickupLng == null || dropLat == null || dropLng == null) {
+      return {
+        path: [] as Array<{ lat: number; lng: number }>,
+        provider: null,
+        distanceMeters: null,
+        durationSeconds: null,
+      };
+    }
+
+    const storedPolyline = ride.routePlan?.encodedPolyline;
+    if (storedPolyline) {
+      return {
+        path: coordinatesToLatLngPath(decodeEncodedPolyline(storedPolyline)),
+        provider: 'stored',
+        distanceMeters: null,
+        durationSeconds: null,
+        encodedPolyline: storedPolyline,
+      };
+    }
+
+    if (!this.mapProviderService) {
+      throw new RoutingProviderUnavailableError();
+    }
+
+    const routing = await this.mapProviderService.getDirections(
+      { latitude: pickupLat, longitude: pickupLng },
+      { latitude: dropLat, longitude: dropLng },
+    );
+
+    return {
+      path: routing.path ? coordinatesToLatLngPath(routing.path) : [],
+      provider: routing.providerName,
+      distanceMeters: routing.distanceMeters,
+      durationSeconds: routing.durationSeconds,
+      ...(routing.encodedPolyline ? { encodedPolyline: routing.encodedPolyline } : {}),
     };
   }
 

@@ -127,11 +127,20 @@ export interface IntegrationsStatusView {
   integrations: IntegrationHealthSnapshot[];
 }
 
+export interface MapClientConfigProviderView {
+  enabled: boolean;
+  baseUrl: string;
+  /** Client-side tile key for the active provider (browser tile requests require this). */
+  apiKey?: string;
+  /** Optional raster tile template (Leaflet `{z}/{x}/{y}` placeholders). */
+  tileUrl?: string;
+}
+
 export interface MapClientConfigView {
   primaryProvider: string;
   providers: {
-    ola: { enabled: boolean; baseUrl: string };
-    google: { enabled: boolean; baseUrl: string };
-    mappls: { enabled: boolean; baseUrl: string };
+    ola: MapClientConfigProviderView;
+    google: MapClientConfigProviderView;
+    mappls: MapClientConfigProviderView;
   };
 }

@@ -4,6 +4,10 @@ export interface RoutingResult {
   distanceMeters: number;
   durationSeconds: number;
   providerName: string;
+  /** Encoded polyline from the provider, when available. */
+  encodedPolyline?: string;
+  /** Decoded route geometry from origin to destination. */
+  path?: Coordinate[];
 }
 
 export interface SuggestedPlace {
