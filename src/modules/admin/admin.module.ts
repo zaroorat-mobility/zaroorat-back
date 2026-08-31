@@ -69,8 +69,24 @@ import {
   AdminGeographicService,
 } from './geographic-management/index.js';
 
+import {
+  systemSettingsRoutes,
+  SystemSettingRepository,
+  SystemSettingService,
+  SystemSettingsCache,
+  MapProviderHealthService,
+  AdminMapSettingsService,
+  AdminMapSettingsController,
+} from './system-settings/index.js';
+
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
+    systemSettingRepository: asClass(SystemSettingRepository).singleton(),
+    systemSettingService: asClass(SystemSettingService).singleton(),
+    systemSettingsCache: asClass(SystemSettingsCache).singleton(),
+    mapProviderHealthService: asClass(MapProviderHealthService).singleton(),
+    adminMapSettingsService: asClass(AdminMapSettingsService).singleton(),
+    adminMapSettingsController: asClass(AdminMapSettingsController).singleton(),
     adminSurgeService: asClass(AdminSurgeService).singleton(),
     adminSurgeController: asClass(AdminSurgeController).singleton(),
     adminFareService: asClass(AdminFareService).singleton(),
@@ -117,6 +133,7 @@ export function registerAdminModule(container: AwilixContainer): void {
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
+  await app.register(systemSettingsRoutes);
   await app.register(pricingManagementRoutes);
   await app.register(promotionsManagementRoutes);
   await app.register(referralManagementRoutes);

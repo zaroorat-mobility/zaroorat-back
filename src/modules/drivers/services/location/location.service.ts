@@ -12,7 +12,7 @@ import {
   MockLocationRejectedError,
 } from '../../errors/driver.errors.js';
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
-import { GeoService, haversineKm } from '@modules/geo';
+import { GeoService, haversineKm } from '@modules/location';
 import { assessPlausibility } from './location-plausibility.js';
 import { RedisService } from '@core/cache/RedisService.js';
 import type { DriverLocation } from '../../types';

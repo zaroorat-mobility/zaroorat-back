@@ -14,7 +14,7 @@ import {
 } from '../../errors/driver.errors.js';
 import { driverEvent, DRIVER_EVENT_CATALOG } from '../../events/catalog.js';
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
-import { GeoService } from '@modules/geo';
+import { GeoService } from '@modules/location';
 import type { DriverOnlineStatus } from '../../types';
 export class StatusService {
   constructor(

@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 
 import './helpers/load-test-env.js';
 import { container } from '../../src/core/di.js';
-import { GeographicCoverageService } from '../../src/modules/geographic/index.js';
+import { GeographicCoverageService } from '../../src/modules/location/index.js';
 import { bootApp, db, resetState } from './helpers/harness.js';
 import { ensureCity, ensureServiceZone } from './helpers/fixtures.js';
 

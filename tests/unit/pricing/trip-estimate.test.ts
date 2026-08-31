@@ -17,8 +17,8 @@ const PICKUP = { latitude: 12.9716, longitude: 77.5946 };
 /// enough that the arithmetic stays readable.
 const DROP = { latitude: 12.9806, longitude: 77.5946 };
 
-function estimate() {
-  return pricingService.estimateTrip({
+async function estimate() {
+  return await pricingService.estimateTrip({
     pickupLat: PICKUP.latitude,
     pickupLng: PICKUP.longitude,
     dropLat: DROP.latitude,
@@ -38,7 +38,7 @@ describe('trip estimation reads its constants from config (L-3)', () => {
     assert.equal(pricingConfig.minutesPerKm, 6);
   });
 
-  it('scales the straight line by the configured road factor', () => {
+  it('scales the straight line by the configured road factor', async () => {
     const straightLineKm = calculateHaversineDistanceKm(
       PICKUP.latitude,
       PICKUP.longitude,
@@ -47,24 +47,25 @@ describe('trip estimation reads its constants from config (L-3)', () => {
     );
     const expected = Math.round(straightLineKm * pricingConfig.roadDistanceFactor * 100) / 100;
 
-    assert.equal(estimate().distanceKm, expected);
+    const res = await estimate();
+    assert.equal(res.distanceKm, expected);
     assert.notEqual(
-      estimate().distanceKm,
+      res.distanceKm,
       Math.round(straightLineKm * 1.3 * 100) / 100,
       'the hardcoded 1.3 is back',
     );
   });
 
-  it('derives the duration from the configured minutes per kilometre', () => {
-    const { distanceKm, durationMin } = estimate();
+  it('derives the duration from the configured minutes per kilometre', async () => {
+    const { distanceKm, durationMin } = await estimate();
     assert.equal(durationMin, Math.round(distanceKm * pricingConfig.minutesPerKm));
     assert.notEqual(durationMin, Math.round(distanceKm * 3), 'the hardcoded 3 is back');
   });
 
-  it('still never quotes a trip as taking no time at all', () => {
+  it('still never quotes a trip as taking no time at all', async () => {
     // A very short but non-zero journey rounds its duration to zero minutes;
     // the floor of one is what stops the time component vanishing.
-    const shortTrip = pricingService.estimateTrip({
+    const shortTrip = await pricingService.estimateTrip({
       pickupLat: PICKUP.latitude,
       pickupLng: PICKUP.longitude,
       dropLat: PICKUP.latitude + 0.0001,

@@ -8,6 +8,7 @@ import {
 } from '../../../src/modules/pricing';
 import type { PricingRuleRepository } from '../../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import type { PricingRule } from '../../../src/generated/prisma/index.js';
+import type { TripEstimate } from '../../../src/modules/pricing/domain/pricing.types.js';
 
 type PricingRuleOverrides = Partial<Record<keyof PricingRule, unknown>>;
 
@@ -371,8 +372,8 @@ describe('waiting charges honour the free period', () => {
 describe('a trip with nowhere to go (L-6)', () => {
   const BLR = { latitude: 12.9716, longitude: 77.5946 };
 
-  function estimate(drop: { latitude: number; longitude: number }) {
-    return pricingService.estimateTrip({
+  async function estimate(drop: { latitude: number; longitude: number }) {
+    return await pricingService.estimateTrip({
       pickupLat: BLR.latitude,
       pickupLng: BLR.longitude,
       dropLat: drop.latitude,
@@ -380,22 +381,22 @@ describe('a trip with nowhere to go (L-6)', () => {
     });
   }
 
-  it('refuses a drop that is the pickup', () => {
-    assert.throws(() => estimate(BLR), ZeroDistanceTripError);
+  it('refuses a drop that is the pickup', async () => {
+    await assert.rejects(async () => await estimate(BLR), ZeroDistanceTripError);
   });
 
-  it('refuses a drop too close to price, not only an exact match', () => {
+  it('refuses a drop too close to price, not only an exact match', async () => {
     // ~1m north — a second GPS read of the same spot, which rounds to no
     // distance at all once the road factor and 2dp rounding are applied.
-    assert.throws(
-      () => estimate({ latitude: BLR.latitude + 0.00001, longitude: BLR.longitude }),
+    await assert.rejects(
+      async () => await estimate({ latitude: BLR.latitude + 0.00001, longitude: BLR.longitude }),
       ZeroDistanceTripError,
     );
   });
 
-  it('is refused with a code a client can act on, not a 500', () => {
+  it('is refused with a code a client can act on, not a 500', async () => {
     try {
-      estimate(BLR);
+      await estimate(BLR);
       assert.fail('expected a refusal');
     } catch (err) {
       const coded = err as { code?: string; statusCode?: number };
@@ -404,9 +405,9 @@ describe('a trip with nowhere to go (L-6)', () => {
     }
   });
 
-  it('still prices a real trip', () => {
+  it('still prices a real trip', async () => {
     // ~1km north.
-    const trip = estimate({ latitude: BLR.latitude + 0.009, longitude: BLR.longitude });
+    const trip = await estimate({ latitude: BLR.latitude + 0.009, longitude: BLR.longitude });
     assert.ok(trip.distanceKm > 0);
     assert.ok(trip.durationMin >= 1);
   });
@@ -431,7 +432,7 @@ describe('a quote estimates the journey once (L-4)', () => {
   const BLR = { latitude: 12.9716, longitude: 77.5946 };
   const NEARBY = { latitude: 12.9806, longitude: 77.5946 };
 
-  function quote(trip?: { distanceKm: number; durationMin: number }) {
+  function quote(trip?: TripEstimate) {
     return pricingService.calculateFareQuote({
       pickupLat: BLR.latitude,
       pickupLng: BLR.longitude,
@@ -445,7 +446,7 @@ describe('a quote estimates the journey once (L-4)', () => {
   it('prices the trip it was handed rather than re-deriving one', async () => {
     // Coordinates a kilometre apart, but the caller says fifty. If the supplied
     // trip were ignored the fare would come out at the short one.
-    const supplied = await quote({ distanceKm: 50, durationMin: 100 });
+    const supplied = await quote({ distanceKm: 50, durationMin: 100, source: 'ola' });
     const derived = await quote();
 
     assert.ok(
@@ -455,7 +456,7 @@ describe('a quote estimates the journey once (L-4)', () => {
   });
 
   it('agrees with the estimate it would have made when none is handed in', async () => {
-    const trip = pricingService.estimateTrip({
+    const trip = await pricingService.estimateTrip({
       pickupLat: BLR.latitude,
       pickupLng: BLR.longitude,
       dropLat: NEARBY.latitude,

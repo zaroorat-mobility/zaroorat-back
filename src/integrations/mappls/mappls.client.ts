@@ -1,23 +1,33 @@
 import { logger } from '@shared/logger/index.js';
+
 export interface MapplsConfig {
   clientId: string;
   clientSecret: string;
+  baseUrl?: string;
   timeoutMs?: number;
 }
+
 interface MapplsTokenResponse {
   access_token: string;
   token_type: string;
   expires_in: number;
 }
+
 export class MapplsClient {
   private static readonly OAUTH_URL = 'https://outpost.mapmyindia.com/api/security/oauth/token';
-  private static readonly API_BASE_URL = 'https://apis.mappls.com/advancedmaps/v1';
+  private readonly apiBaseUrl: string;
   private accessToken: string | null = null;
   private tokenExpiresAt: number = 0;
-  constructor(private readonly config: MapplsConfig) {}
+
+  constructor(protected readonly config: MapplsConfig) {
+    const rawBaseUrl =
+      config.baseUrl ?? process.env.MAPPLS_BASE_URL ?? 'https://apis.mappls.com/advancedmaps/v1';
+    this.apiBaseUrl = rawBaseUrl.replace(/\/+$/, '');
+  }
+
   private async getAccessToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpiresAt - 60000) {
-      return this.accessToken; // Return cached token if valid for at least 1 more minute
+      return this.accessToken;
     }
     const params = new URLSearchParams();
     params.append('grant_type', 'client_credentials');
@@ -26,9 +36,7 @@ export class MapplsClient {
     try {
       const response = await fetch(MapplsClient.OAUTH_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString(),
         signal: AbortSignal.timeout(this.config.timeoutMs ?? 5000),
       });
@@ -44,16 +52,14 @@ export class MapplsClient {
       throw error;
     }
   }
-  /**
-   * Helper to make authenticated requests to Mappls API.
-   * @param endpoint e.g., 'route_adv/driving/...'
-   */
+
   protected async makeAuthenticatedRequest<T>(
     endpoint: string,
     options: RequestInit = {},
   ): Promise<T> {
     const token = await this.getAccessToken();
-    const url = `${MapplsClient.API_BASE_URL}/${endpoint}`;
+    const cleanEndpoint = endpoint.replace(/^\/+/, '');
+    const url = `${this.apiBaseUrl}/${cleanEndpoint}`;
 
     const headers = new Headers(options.headers);
     headers.set('Authorization', `Bearer ${token}`);

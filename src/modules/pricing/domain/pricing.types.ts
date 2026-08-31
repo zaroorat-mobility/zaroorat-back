@@ -28,6 +28,8 @@ export interface FareCalculationParams {
 export interface TripEstimate {
   distanceKm: number;
   durationMin: number;
+  /// Name of the provider that supplied this estimate (e.g. 'ola', 'google', 'mappls', 'haversine').
+  source: string;
 }
 
 export interface FinalFareParams {

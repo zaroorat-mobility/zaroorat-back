@@ -1,5 +1,5 @@
 import type { ProviderClient } from '@core/database/index.js';
-import { GeographicCoverageService } from '@modules/geographic';
+import { GeographicCoverageService } from '@modules/location';
 import type { Prisma, PricingRule, RideServiceType } from '../../../generated/prisma/index.js';
 
 /// The effective-window predicate, in one place.
