@@ -1,7 +1,7 @@
 import { Prisma } from '../../../../generated/prisma/index.js';
 import type { DatabaseService } from '@core/database';
 import type { SurgeZone } from '../../../../generated/prisma/index.js';
-import { assertValidPolygon, polygonGeoJson } from '../../../geographic/utils/postgis.js';
+import { assertValidPolygon, polygonGeoJson } from '@modules/location';
 import { uuidV7 } from '@shared/crypto';
 import { recordAdminAction } from '../../audit/index.js';
 import { SurgeWindowNotFoundError, SurgeZoneNotFoundError } from '../pricing.errors.js';

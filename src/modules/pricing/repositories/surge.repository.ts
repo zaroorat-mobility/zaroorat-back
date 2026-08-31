@@ -1,6 +1,6 @@
 import { Prisma } from '../../../generated/prisma/index.js';
 import type { ProviderClient } from '@core/database/index.js';
-import { GeographicCoverageService } from '@modules/geographic';
+import { GeographicCoverageService } from '@modules/location';
 import type { SurgeZone, SurgeWindow } from '../../../generated/prisma/index.js';
 
 /// The zones a pickup point falls in, from both geographies.

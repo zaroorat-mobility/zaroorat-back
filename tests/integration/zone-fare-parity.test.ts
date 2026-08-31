@@ -16,7 +16,7 @@ import {
 import { container } from '../../src/core/di.js';
 import { PricingRuleRepository } from '../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import { PricingService } from '../../src/modules/pricing/services/pricing.service.js';
-import { GeographicCoverageService } from '../../src/modules/geographic/index.js';
+import { GeographicCoverageService } from '../../src/modules/location/index.js';
 
 /// Srinagar, wide enough to contain the airport polygon below.
 const CITY_POLYGON: number[][][] = [

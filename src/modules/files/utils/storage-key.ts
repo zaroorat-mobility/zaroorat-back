@@ -5,7 +5,7 @@ import {
   type FilePurposeName,
 } from '@config/file/file.config.js';
 export const STORAGE_KEY_PATTERN =
-  /^(pi|dd|vd|vi|se|de)\/\d{4}\/(0[1-9]|1[0-2])\/[0-9a-f]{32}\.(jpg|png|webp|pdf|mp4)$/;
+  /^(pi|dd|vd|vi|se|de|pb)\/\d{4}\/(0[1-9]|1[0-2])\/[0-9a-f]{32}\.(jpg|png|webp|pdf|mp4)$/;
 export function buildStorageKey(
   purpose: FilePurposeName,
   contentType: string,

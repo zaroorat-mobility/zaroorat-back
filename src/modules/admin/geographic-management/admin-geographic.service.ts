@@ -9,7 +9,7 @@ import {
   assertZoneWithinCity,
   pointGeoJson,
   polygonGeoJson,
-} from '../../geographic/utils/postgis.js';
+} from '@modules/location';
 import type {
   CreateCityBody,
   CreateServiceZoneBody,

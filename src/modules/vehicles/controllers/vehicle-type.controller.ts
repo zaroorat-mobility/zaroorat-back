@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { PricingRateCard } from '@config';
 import { PricingService } from '@modules/pricing';
-import { GeographicCoverageService } from '@modules/geographic';
+import { GeographicCoverageService } from '@modules/location';
 import { VehicleTypeService } from '../services/vehicle-type.service.js';
 import type { VehicleType } from '../types/index.js';
 
