@@ -13,8 +13,7 @@ import type { RedisService } from '@core/cache';
 import { OlaMapsProvider } from '../providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '../providers/google-maps.provider.js';
 import { MapplsProvider } from '../providers/mappls.provider.js';
-import { decryptSecret } from '@shared/crypto/encryption.util.js';
-import { container } from '@core/di';
+import { decryptSecret, encryptSecret } from '@shared/crypto/encryption.util.js';
 
 export interface MapProviderServiceOptions {
   primaryProvider?: MapProvider;
@@ -64,22 +63,20 @@ export class MapProviderService {
     return this.staticProviders.map((p) => p.providerName);
   }
 
+  /// Both arrive through the constructor. `registerLocationModule` resolves them
+  /// from the container explicitly rather than through a destructured parameter,
+  /// which `InjectionMode.CLASSIC` cannot read — see the note there.
+  ///
+  /// These used to fall back to `container.resolve(...)`. That import of the DI
+  /// root closed a cycle (location barrel -> here -> @core/di -> module
+  /// registration -> location barrel, still half-evaluated) which left 9 unit
+  /// test files unable to load at all.
   private getSettingService(): SystemSettingService | undefined {
-    if (this.systemSettingService) return this.systemSettingService;
-    try {
-      return container.resolve('systemSettingService');
-    } catch {
-      return undefined;
-    }
+    return this.systemSettingService;
   }
 
   private getRedis(): RedisService | undefined {
-    if (this.redisService) return this.redisService;
-    try {
-      return container.resolve('redisService');
-    } catch {
-      return undefined;
-    }
+    return this.redisService;
   }
 
   /**
@@ -138,12 +135,22 @@ export class MapProviderService {
             settingsMap.get('map.mappls.base_url')?.value ?? process.env.MAPPLS_BASE_URL ?? '',
         };
 
-        // Cache in Redis for 1 hour
+        // Cache in Redis for 1 hour.
+        //
+        // The credentials are re-encrypted first. `getCategorySettings` decrypts
+        // every secret it returns, so caching `keys` as-is put the provider API
+        // keys in Redis in clear text for an hour — readable by anything with
+        // access to the instance, and outliving a key rotation in the database.
+        // Keys sourced from the environment are plaintext too and are covered by
+        // the same pass. `decryptSecret` in `buildProviderChain` is idempotent,
+        // so the read side needs no change.
         if (redis) {
           const toCache: CachedMapSettings = {
             primaryProvider: primary,
             fallbackProviders: [],
-            keys,
+            keys: Object.fromEntries(
+              Object.entries(keys).map(([name, value]) => [name, encryptSecret(value)]),
+            ),
             baseUrls,
           };
           await redis.provider.client.set('geo:settings:maps', JSON.stringify(toCache), 'EX', 3600);
@@ -173,7 +180,12 @@ export class MapProviderService {
       const apiKey = keys?.olaKey
         ? decryptSecret(keys.olaKey)
         : (process.env.OLA_MAPS_API_KEY ?? process.env.MAPS_API_KEY ?? '');
-      if (apiKey && (!provider || !provider.isConfigured())) {
+      // The resolved key wins outright. This used to keep an existing provider
+      // whenever it was already `isConfigured()`, so on a deployment that also
+      // sets the environment key the env provider was built first and the
+      // admin-selected credential was never applied — switching providers in the
+      // admin UI silently did nothing.
+      if (apiKey) {
         const baseUrl = baseUrls?.olaUrl || process.env.OLA_MAPS_BASE_URL;
         provider = new OlaMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
         this.registry['ola'] = provider;
@@ -182,7 +194,12 @@ export class MapProviderService {
       const apiKey = keys?.googleKey
         ? decryptSecret(keys.googleKey)
         : (process.env.GOOGLE_MAPS_API_KEY ?? '');
-      if (apiKey && (!provider || !provider.isConfigured())) {
+      // The resolved key wins outright. This used to keep an existing provider
+      // whenever it was already `isConfigured()`, so on a deployment that also
+      // sets the environment key the env provider was built first and the
+      // admin-selected credential was never applied — switching providers in the
+      // admin UI silently did nothing.
+      if (apiKey) {
         const baseUrl = baseUrls?.googleUrl || process.env.GOOGLE_MAPS_BASE_URL;
         provider = new GoogleMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
         this.registry['google'] = provider;
@@ -194,7 +211,7 @@ export class MapProviderService {
       const clientSecret = keys?.mapplsSecret
         ? decryptSecret(keys.mapplsSecret)
         : (process.env.MAPPLS_CLIENT_SECRET ?? '');
-      if (clientId && clientSecret && (!provider || !provider.isConfigured())) {
+      if (clientId && clientSecret) {
         const baseUrl = baseUrls?.mapplsUrl || process.env.MAPPLS_BASE_URL;
         provider = new MapplsProvider({ clientId, clientSecret, ...(baseUrl ? { baseUrl } : {}) });
         this.registry['mappls'] = provider;
