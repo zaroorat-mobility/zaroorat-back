@@ -465,3 +465,16 @@ Production Readiness:               NOT READY
 ---
 
 _Coordinate order was verified independently across all 11 `ST_MakePoint` call sites — every one passes `(longitude, latitude)` with SRID 4326, correct for PostGIS. Ola and Google receive `lat,lng`; Mappls receives `lng,lat`, each correct for that vendor's API. Confirmed empirically: a stored saved place reads back as `POINT(77.5946 12.9716)` and the Bengaluru containment test returns true for the MG Road point._
+
+---
+
+## 30. Remediation — 2026-09-01
+
+Recorded after the fact; the verification above was read-only and stands as written.
+
+- **Q-1, Q-2, Q-3 — closed.** The hardcoded `12400 m / 1860 s` is removed from the Ola, Google and Mappls providers. Its replacement, `location/utils/offline-route.ts`, is gated on `APP_ENV`/`NODE_ENV === 'test'` alone — the two credential-shaped conditions (`apiKey.startsWith('test_')`, `'mock_'`) that made it reachable in production are gone — and derives distance from the coordinates, so distance-sensitive behaviour is exercised rather than dead. Verified: 2 km → ₹60.78, 20 km → ₹279.33, cross-city → ₹282.46, same point → `400 TRIP_HAS_NO_DISTANCE`. Quote suite 49/50.
+- **Q-4 — closed.** Provider credentials are re-encrypted before the Redis cache write. `getCategorySettings` decrypts what it returns, so the previous code cached plaintext API keys for an hour.
+- **Q-7 — unchanged.** The haversine branch in `PricingService.estimateTrip` is still unreachable whenever `MapProviderService` is registered, which is every non-unit-test path. Still P3 dead code; fail-closed routing remains correct.
+- **Q-5, Q-6 — unchanged.**
+
+Full detail, including the fixes made outside the quote flow, is in §53 of `BACKEND_PRODUCTION_RIDE_PLATFORM_60K_CUSTOMER_30K_DRIVER_VERIFICATION.md`.
