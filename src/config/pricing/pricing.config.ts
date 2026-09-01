@@ -28,6 +28,10 @@ export interface PricingConfig {
   /// Minutes allowed per road kilometre — the inverse of an assumed average
   /// city speed. The default of 3 is 20 km/h.
   minutesPerKm: number;
+  /// P-1. How far above the accepted quote the final fare may land, as a
+  /// percentage. 0 makes the quote binding; the cap never applies downward,
+  /// because billing a shorter trip for less is not a promise being broken.
+  maxFareIncreaseOverQuotePct: number;
 }
 
 const defaultRateCard: PricingRateCard = Object.freeze({
@@ -53,4 +57,8 @@ export const pricingConfig: PricingConfig = Object.freeze({
   // every quoted duration were the only ones an operator could not touch.
   roadDistanceFactor: numericEnv('RIDE_ROAD_DISTANCE_FACTOR', 1.3, { min: 1, max: 3 }),
   minutesPerKm: numericEnv('RIDE_MINUTES_PER_KM', 3, { min: 0.1, max: 60 }),
+  maxFareIncreaseOverQuotePct: numericEnv('RIDE_MAX_FARE_INCREASE_OVER_QUOTE_PCT', 10, {
+    min: 0,
+    max: 100,
+  }),
 });

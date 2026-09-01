@@ -47,6 +47,9 @@ export interface FinalFareParams {
   surgeMultiplier?: number;
   waitingMinutes?: number;
   discountAmount?: number;
+  /// P-1. Cap on the final total, derived from the fare the customer was quoted.
+  /// Omitted for a ride with no recorded quote, which then bills uncapped as before.
+  fareCeiling?: number;
   rateCard?: PricingRateCard;
 }
 
