@@ -190,6 +190,9 @@ export class PricingService {
       surgeMultiplier?: number;
       waitingMinutes?: number;
       discountAmount?: number;
+      /// Upper bound on `totalFare`, from the accepted quote. See the ceiling
+      /// solve below.
+      fareCeiling?: number;
     },
   ): ItemizedFareResult {
     const billableDistanceKm = Math.max(0, distanceKm);
@@ -237,7 +240,37 @@ export class PricingService {
     /// second half of FR-008 is that what we record is what we actually granted —
     /// not what was asked for.
     const requestedDiscount = Prisma.Decimal.max(ZERO, D(params.discountAmount ?? 0));
-    const discount = toPaise(Prisma.Decimal.min(requestedDiscount, flooredFare));
+
+    /// P-1. The quote the customer accepted is a ceiling, not a suggestion.
+    ///
+    /// The final fare is recomputed from measured distance and duration, so a
+    /// trip that sat in traffic billed more than quoted with nothing bounding
+    /// the difference. `pricingConfig.maxFareIncreaseOverQuotePct` bounds it;
+    /// the caller passes the ceiling because only the ride knows what was quoted.
+    ///
+    /// It lands here, in the discount lane, so the arithmetic stays exact —
+    /// `netFare` is what tax and the platform fee are computed from, so solving
+    /// for it hits the ceiling to the paisa instead of clamping the total and
+    /// leaving the components not summing to it.
+    ///
+    /// `driverEarning` is taken from pre-discount `rideRevenue`, which means the
+    /// platform absorbs the capped amount. That is deliberate: the platform made
+    /// the promise, and the driver should not be paid less because of traffic.
+    let ceilingDiscount = ZERO;
+    if (params.fareCeiling != null && Number.isFinite(params.fareCeiling)) {
+      const ceiling = Prisma.Decimal.max(ZERO, D(params.fareCeiling));
+      // total = net·(1 + tax%) + fee, where the fee is either a share of net or flat.
+      const netMultiplier = D(1).plus(D(card.taxRatePct).dividedBy(100));
+      const maxNet =
+        card.platformFeePct > 0
+          ? ceiling.dividedBy(netMultiplier.plus(D(card.platformFeePct).dividedBy(100)))
+          : ceiling.minus(D(card.platformFeeFlat)).dividedBy(netMultiplier);
+      ceilingDiscount = Prisma.Decimal.max(ZERO, flooredFare.minus(maxNet));
+    }
+
+    const discount = toPaise(
+      Prisma.Decimal.min(Prisma.Decimal.max(requestedDiscount, ceilingDiscount), flooredFare),
+    );
     const netFare = toPaise(flooredFare.minus(discount));
 
     const taxAmount = toPaise(netFare.times(D(card.taxRatePct)).dividedBy(100));

@@ -95,12 +95,10 @@ export class MapProviderHealthService {
             responseTimeMs: 1,
           };
         }
-        if (
-          isTestEnv ||
-          apiKey.startsWith('test_') ||
-          apiKey.startsWith('mock_') ||
-          apiKey.startsWith('demo_')
-        ) {
+        // Only the environment may short-circuit a health check. Keying it on the
+        // shape of the credential meant a production key beginning `test_` was
+        // reported healthy without any request ever leaving the process.
+        if (isTestEnv) {
           return {
             ok: true,
             providerName: input.providerName,
@@ -132,12 +130,10 @@ export class MapProviderHealthService {
             responseTimeMs: 1,
           };
         }
-        if (
-          isTestEnv ||
-          apiKey.startsWith('test_') ||
-          apiKey.startsWith('mock_') ||
-          apiKey.startsWith('demo_')
-        ) {
+        // Only the environment may short-circuit a health check. Keying it on the
+        // shape of the credential meant a production key beginning `test_` was
+        // reported healthy without any request ever leaving the process.
+        if (isTestEnv) {
           return {
             ok: true,
             providerName: input.providerName,

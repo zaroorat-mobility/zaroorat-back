@@ -3,6 +3,7 @@ import {
   type GoogleMapsConfig,
 } from '../../../integrations/google-maps/google-maps.client.js';
 import type { Coordinate } from '../types/geo.types.js';
+import { offlineMatrixResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
@@ -172,6 +173,9 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
     if (origins.length === 0 || destinations.length === 0) {
       return { status: 'no_drivers', cells: [], providerName: this.providerName };
     }
+
+    const offline = offlineMatrixResult(origins, destinations, this.providerName);
+    if (offline) return offline;
 
     try {
       const response = await this.get<GoogleMatrixResponse>('distancematrix/json', {

@@ -3,6 +3,7 @@ import {
   type OlaMapsConfig,
 } from '../../../integrations/ola-maps/ola-maps.client.js';
 import type { Coordinate } from '../types/geo.types.js';
+import { offlineMatrixResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
@@ -230,6 +231,9 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
     if (origins.length === 0 || destinations.length === 0) {
       return { status: 'no_drivers', cells: [], providerName: this.providerName };
     }
+
+    const offline = offlineMatrixResult(origins, destinations, this.providerName);
+    if (offline) return offline;
 
     try {
       const response = await this.get<OlaDistanceMatrixResponse>('routing/v1/distanceMatrix', {

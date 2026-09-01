@@ -11,6 +11,12 @@ import {
   paymentExtension,
   pricingExtension,
 } from '../extensions';
+/// A query slower than this is warned about. Configurable because the useful
+/// value differs by environment: a containerised Postgres on a developer laptop
+/// crosses 100ms on writes that are entirely healthy in production, and the
+/// resulting stream of warnings buries everything else in the terminal.
+const SLOW_QUERY_MS = Number(process.env.DB_SLOW_QUERY_MS ?? 100);
+
 interface PrismaQueryEvent {
   query: string;
   params: string;
@@ -57,7 +63,7 @@ export class PrismaClientFactory {
     (prisma.$on as (event: 'query', cb: (e: PrismaQueryEvent) => void) => void)(
       'query',
       (e: PrismaQueryEvent) => {
-        if (e.duration > 100) {
+        if (e.duration > SLOW_QUERY_MS) {
           this.databaseMetrics.recordSlowQuery(e.query, e.duration);
         }
       },
