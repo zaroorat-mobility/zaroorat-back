@@ -13,7 +13,10 @@ import type { RedisService } from '@core/cache';
 import { OlaMapsProvider } from '../providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '../providers/google-maps.provider.js';
 import { MapplsProvider } from '../providers/mappls.provider.js';
-import { decryptSecret } from '@shared/crypto/encryption.util.js';
+import {
+  buildMapplsProviderConfig,
+  resolveMapCredential,
+} from '../../../integrations/mappls/mappls-credentials.util.js';
 
 export interface MapProviderServiceOptions {
   primaryProvider?: MapProvider;
@@ -85,12 +88,17 @@ export class MapProviderService {
     const redis = this.getRedis();
 
     if (!settingService) {
-      return this.staticProviders.slice(0, 1);
+      logger.warn(
+        '[MapProviderService] SystemSettingService unavailable — using env credentials only',
+      );
+      const envChain = this.buildProviderChainFromEnv();
+      if (envChain.length > 0) return envChain;
+      return this.fallbackStaticChain();
     }
 
-    try {
-      // 1. Check Redis cache
-      if (redis) {
+    // 1. Check Redis cache (isolated — a cache outage must not skip DB resolution)
+    if (redis) {
+      try {
         const cachedJson = await redis.provider.client.get('geo:settings:maps');
         if (cachedJson) {
           const cached = JSON.parse(cachedJson) as CachedMapSettings;
@@ -100,59 +108,80 @@ export class MapProviderService {
             cached.baseUrls,
           );
           if (chain.length > 0) return chain;
+          try {
+            await redis.provider.client.del('geo:settings:maps');
+          } catch {
+            // ignore cache delete failures
+          }
         }
+      } catch (err) {
+        logger.warn({ err }, '[MapProviderService] Redis map settings cache read failed');
       }
+    }
 
-      // 2. Query Database SystemSettings
+    // 2. Query Database SystemSettings
+    try {
       const settingsMap = await settingService.getCategorySettings('maps');
       if (settingsMap.size > 0) {
         const primary =
-          settingsMap.get('map.primary_provider')?.value ?? process.env.MAP_PROVIDER ?? 'ola';
+          settingsMap.get('map.primary_provider')?.value?.trim() ||
+          process.env.MAP_PROVIDER?.trim() ||
+          'ola';
 
         const keys: Record<string, string> = {
-          olaKey:
-            settingsMap.get('map.ola.api_key')?.value ??
-            process.env.OLA_MAPS_API_KEY ??
-            process.env.MAPS_API_KEY ??
-            '',
-          googleKey:
-            settingsMap.get('map.google.api_key')?.value ?? process.env.GOOGLE_MAPS_API_KEY ?? '',
-          mapplsRestKey:
-            settingsMap.get('map.mappls.rest_api_key')?.value ??
-            process.env.MAPPLS_REST_API_KEY ??
-            '',
-          mapplsId:
-            settingsMap.get('map.mappls.client_id')?.value ?? process.env.MAPPLS_CLIENT_ID ?? '',
-          mapplsSecret:
-            settingsMap.get('map.mappls.client_secret')?.value ??
-            process.env.MAPPLS_CLIENT_SECRET ??
-            '',
+          olaKey: resolveMapCredential(
+            settingsMap.get('map.ola.api_key')?.value,
+            process.env.OLA_MAPS_API_KEY,
+            process.env.MAPS_API_KEY,
+          ),
+          googleKey: resolveMapCredential(
+            settingsMap.get('map.google.api_key')?.value,
+            process.env.GOOGLE_MAPS_API_KEY,
+          ),
+          mapplsRestKey: resolveMapCredential(
+            settingsMap.get('map.mappls.rest_api_key')?.value,
+            process.env.MAPPLS_REST_API_KEY,
+            process.env.EXPO_PUBLIC_MAPPLS_REST_KEY,
+          ),
+          mapplsId: resolveMapCredential(
+            settingsMap.get('map.mappls.client_id')?.value,
+            process.env.MAPPLS_CLIENT_ID,
+            process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID,
+          ),
+          mapplsSecret: resolveMapCredential(
+            settingsMap.get('map.mappls.client_secret')?.value,
+            process.env.MAPPLS_CLIENT_SECRET,
+            process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET,
+          ),
         };
 
         const baseUrls: Record<string, string> = {
-          olaUrl: settingsMap.get('map.ola.base_url')?.value ?? process.env.OLA_MAPS_BASE_URL ?? '',
+          olaUrl:
+            settingsMap.get('map.ola.base_url')?.value?.trim() ||
+            process.env.OLA_MAPS_BASE_URL?.trim() ||
+            '',
           googleUrl:
-            settingsMap.get('map.google.base_url')?.value ?? process.env.GOOGLE_MAPS_BASE_URL ?? '',
+            settingsMap.get('map.google.base_url')?.value?.trim() ||
+            process.env.GOOGLE_MAPS_BASE_URL?.trim() ||
+            '',
           mapplsUrl:
-            settingsMap.get('map.mappls.base_url')?.value ?? process.env.MAPPLS_BASE_URL ?? '',
+            settingsMap.get('map.mappls.base_url')?.value?.trim() ||
+            process.env.MAPPLS_BASE_URL?.trim() ||
+            '',
         };
 
-        // Cache in Redis for 1 hour.
-        //
-        // The credentials are re-encrypted first. `getCategorySettings` decrypts
-        // every secret it returns, so caching `keys` as-is put the provider API
-        // keys in Redis in clear text for an hour — readable by anything with
-        // access to the instance, and outliving a key rotation in the database.
-        // Keys sourced from the environment are plaintext too and are covered by
-        // the same pass. `decryptSecret` in `buildProviderChain` is idempotent,
-        // so the read side needs no change.
         if (redis) {
-          const toCache: CachedMapSettings = {
-            primaryProvider: primary,
-            keys,
-            baseUrls,
-          };
-          await redis.provider.client.set('geo:settings:maps', JSON.stringify(toCache), 'EX', 3600);
+          try {
+            const toCache: CachedMapSettings = { primaryProvider: primary, keys, baseUrls };
+            await redis.provider.client.set(
+              'geo:settings:maps',
+              JSON.stringify(toCache),
+              'EX',
+              3600,
+            );
+          } catch (err) {
+            logger.warn({ err }, '[MapProviderService] Redis map settings cache write failed');
+          }
         }
 
         const chain = this.buildProviderChain(primary, keys, baseUrls);
@@ -165,7 +194,39 @@ export class MapProviderService {
       );
     }
 
-    return this.staticProviders.slice(0, 1);
+    const envOnlyChain = this.buildProviderChainFromEnv();
+    if (envOnlyChain.length > 0) return envOnlyChain;
+
+    return this.fallbackStaticChain();
+  }
+
+  private buildProviderChainFromEnv(): MapProvider[] {
+    const envPrimary = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
+    return this.buildProviderChain(envPrimary, {
+      olaKey: resolveMapCredential(process.env.OLA_MAPS_API_KEY, process.env.MAPS_API_KEY),
+      googleKey: resolveMapCredential(process.env.GOOGLE_MAPS_API_KEY),
+      mapplsRestKey: resolveMapCredential(
+        process.env.MAPPLS_REST_API_KEY,
+        process.env.EXPO_PUBLIC_MAPPLS_REST_KEY,
+      ),
+      mapplsId: resolveMapCredential(
+        process.env.MAPPLS_CLIENT_ID,
+        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID,
+      ),
+      mapplsSecret: resolveMapCredential(
+        process.env.MAPPLS_CLIENT_SECRET,
+        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET,
+      ),
+    });
+  }
+
+  private fallbackStaticChain(): MapProvider[] {
+    if (this.staticProviders.length > 0) {
+      return this.staticProviders.slice(0, 1);
+    }
+
+    const configured = Object.values(this.registry).find((p) => p?.isConfigured());
+    return configured ? [configured] : [];
   }
 
   private buildProviderChain(
@@ -173,61 +234,53 @@ export class MapProviderService {
     keys?: Record<string, string>,
     baseUrls?: Record<string, string>,
   ): MapProvider[] {
-    let provider = this.registry[primaryName];
+    const normalizedPrimary = primaryName.trim().toLowerCase();
+    let provider = this.registry[normalizedPrimary];
 
-    if (primaryName === 'ola') {
-      const apiKey = keys?.olaKey
-        ? decryptSecret(keys.olaKey)
-        : (process.env.OLA_MAPS_API_KEY ?? process.env.MAPS_API_KEY ?? '');
-      // The resolved key wins outright. This used to keep an existing provider
-      // whenever it was already `isConfigured()`, so on a deployment that also
-      // sets the environment key the env provider was built first and the
-      // admin-selected credential was never applied — switching providers in the
-      // admin UI silently did nothing.
+    if (normalizedPrimary === 'ola') {
+      const apiKey = resolveMapCredential(
+        keys?.olaKey,
+        process.env.OLA_MAPS_API_KEY,
+        process.env.MAPS_API_KEY,
+      );
       if (apiKey) {
         const baseUrl = baseUrls?.olaUrl || process.env.OLA_MAPS_BASE_URL;
         provider = new OlaMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
         this.registry['ola'] = provider;
       }
-    } else if (primaryName === 'google') {
-      const apiKey = keys?.googleKey
-        ? decryptSecret(keys.googleKey)
-        : (process.env.GOOGLE_MAPS_API_KEY ?? '');
-      // The resolved key wins outright. This used to keep an existing provider
-      // whenever it was already `isConfigured()`, so on a deployment that also
-      // sets the environment key the env provider was built first and the
-      // admin-selected credential was never applied — switching providers in the
-      // admin UI silently did nothing.
+    } else if (normalizedPrimary === 'google') {
+      const apiKey = resolveMapCredential(keys?.googleKey, process.env.GOOGLE_MAPS_API_KEY);
       if (apiKey) {
         const baseUrl = baseUrls?.googleUrl || process.env.GOOGLE_MAPS_BASE_URL;
         provider = new GoogleMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
         this.registry['google'] = provider;
       }
-    } else if (primaryName === 'mappls') {
-      const restApiKey = keys?.mapplsRestKey
-        ? decryptSecret(keys.mapplsRestKey)
-        : (process.env.MAPPLS_REST_API_KEY ?? '');
-      const clientId = keys?.mapplsId
-        ? decryptSecret(keys.mapplsId)
-        : (process.env.MAPPLS_CLIENT_ID ?? '');
-      const clientSecret = keys?.mapplsSecret
-        ? decryptSecret(keys.mapplsSecret)
-        : (process.env.MAPPLS_CLIENT_SECRET ?? '');
+    } else if (normalizedPrimary === 'mappls') {
+      const restApiKey = resolveMapCredential(
+        keys?.mapplsRestKey,
+        process.env.MAPPLS_REST_API_KEY,
+        process.env.EXPO_PUBLIC_MAPPLS_REST_KEY,
+      );
+      const clientId = resolveMapCredential(
+        keys?.mapplsId,
+        process.env.MAPPLS_CLIENT_ID,
+        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID,
+      );
+      const clientSecret = resolveMapCredential(
+        keys?.mapplsSecret,
+        process.env.MAPPLS_CLIENT_SECRET,
+        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET,
+      );
       const baseUrl = baseUrls?.mapplsUrl || process.env.MAPPLS_BASE_URL;
 
-      const config =
-        clientId && clientSecret
-          ? {
-              clientId,
-              clientSecret,
-              ...(restApiKey ? { restApiKey } : {}),
-              ...(baseUrl ? { baseUrl } : {}),
-            }
-          : restApiKey || (!clientSecret && clientId)
-            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
-            : null;
+      const config = buildMapplsProviderConfig({
+        restApiKey,
+        clientId,
+        clientSecret,
+        ...(baseUrl ? { baseUrl } : {}),
+      });
 
-      if (config && (!provider || !provider.isConfigured())) {
+      if (config) {
         provider = new MapplsProvider(config);
         this.registry['mappls'] = provider;
       }

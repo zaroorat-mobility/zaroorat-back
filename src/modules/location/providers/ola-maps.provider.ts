@@ -41,12 +41,19 @@ interface OlaReverseGeocodeResponse {
   status?: string;
 }
 
+interface OlaRouteStep {
+  end_location?: { lat?: number; lng?: number };
+}
+
+interface OlaRouteLeg {
+  distance?: number | { value: number };
+  duration?: number | { value: number };
+  steps?: OlaRouteStep[];
+}
+
 interface OlaRoute {
   overview_polyline?: string;
-  legs?: Array<{
-    distance?: number | { value: number };
-    duration?: number | { value: number };
-  }>;
+  legs?: OlaRouteLeg[];
 }
 
 interface OlaDirectionsResponse {
@@ -75,6 +82,20 @@ interface OlaDistanceMatrixResponse {
 function readOlaMetric(value: number | { value: number } | undefined): number | undefined {
   if (value === undefined) return undefined;
   return typeof value === 'number' ? value : value.value;
+}
+
+function pathFromOlaSteps(leg: OlaRouteLeg | undefined): Coordinate[] | null {
+  const steps = leg?.steps;
+  if (!steps?.length) return null;
+
+  const path: Coordinate[] = [];
+  for (const step of steps) {
+    const end = step.end_location;
+    if (end?.lat != null && end?.lng != null) {
+      path.push({ latitude: end.lat, longitude: end.lng });
+    }
+  }
+  return path.length >= 2 ? path : null;
 }
 
 const OLA_SUCCESS_STATUSES = new Set(['OK', 'SUCCESS']);
@@ -186,11 +207,21 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
       };
     }
 
-    const response = await this.post<OlaDirectionsResponse>('routing/v1/directions', {
+    const params = {
       origin: `${origin.latitude},${origin.longitude}`,
       destination: `${destination.latitude},${destination.longitude}`,
-      overview: 'full',
-    });
+    };
+
+    let response: OlaDirectionsResponse;
+    try {
+      response = await this.post<OlaDirectionsResponse>('routing/v1/directions', {
+        ...params,
+        overview: 'full',
+      });
+    } catch (primaryErr) {
+      logger.warn({ err: primaryErr }, '[OlaMaps] full directions failed — trying basic');
+      response = await this.post<OlaDirectionsResponse>('routing/v1/directions/basic', params);
+    }
 
     if (response.status && !isOlaSuccessStatus(response.status)) {
       throw new Error(`[OlaMaps] getDirections: API status ${response.status}`);
@@ -202,16 +233,18 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
 
     const route = response.routes[0]!;
     const leg = route.legs?.[0];
-    const distanceMeters = readOlaMetric(leg?.distance);
-    const durationSeconds = readOlaMetric(leg?.duration);
-    if (distanceMeters === undefined || durationSeconds === undefined) {
-      throw new Error('[OlaMaps] getDirections: route leg has no distance/duration');
-    }
+    const distanceMeters = readOlaMetric(leg?.distance) ?? 0;
+    const durationSeconds = readOlaMetric(leg?.duration) ?? 0;
 
     const encodedPolyline = route.overview_polyline;
-    const path = encodedPolyline
-      ? decodeEncodedPolyline(encodedPolyline)
-      : buildInterpolatedPath(origin, destination);
+    const path =
+      (encodedPolyline ? decodeEncodedPolyline(encodedPolyline) : null) ??
+      pathFromOlaSteps(leg) ??
+      buildInterpolatedPath(origin, destination);
+
+    if (path.length < 2) {
+      throw new Error('[OlaMaps] getDirections: route has no usable geometry');
+    }
 
     return {
       distanceMeters,

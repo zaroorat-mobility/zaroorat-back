@@ -8,7 +8,6 @@ import { recordAdminAction } from '../../audit/index.js';
 import { LifecycleService } from '../../../rides/services/lifecycle/lifecycle.service.js';
 import { RideNotFoundError } from '../operations.errors.js';
 import type { MapProviderService } from '@modules/location/business-services/map-provider.service.js';
-import { RoutingProviderUnavailableError } from '@modules/location/errors/location.errors.js';
 import { coordinatesToLatLngPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 import type { PrismaTx } from '../operations.types.js';
 import type {
@@ -843,21 +842,38 @@ export class AdminRideService {
     }
 
     if (!this.mapProviderService) {
-      throw new RoutingProviderUnavailableError();
+      return {
+        path: [] as Array<{ lat: number; lng: number }>,
+        provider: null,
+        distanceMeters: null,
+        durationSeconds: null,
+        routingError: 'Map routing is not configured on this server',
+      };
     }
 
-    const routing = await this.mapProviderService.getDirections(
-      { latitude: pickupLat, longitude: pickupLng },
-      { latitude: dropLat, longitude: dropLng },
-    );
+    try {
+      const routing = await this.mapProviderService.getDirections(
+        { latitude: pickupLat, longitude: pickupLng },
+        { latitude: dropLat, longitude: dropLng },
+      );
 
-    return {
-      path: routing.path ? coordinatesToLatLngPath(routing.path) : [],
-      provider: routing.providerName,
-      distanceMeters: routing.distanceMeters,
-      durationSeconds: routing.durationSeconds,
-      ...(routing.encodedPolyline ? { encodedPolyline: routing.encodedPolyline } : {}),
-    };
+      return {
+        path: routing.path ? coordinatesToLatLngPath(routing.path) : [],
+        provider: routing.providerName,
+        distanceMeters: routing.distanceMeters,
+        durationSeconds: routing.durationSeconds,
+        ...(routing.encodedPolyline ? { encodedPolyline: routing.encodedPolyline } : {}),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Routing provider unavailable';
+      return {
+        path: [] as Array<{ lat: number; lng: number }>,
+        provider: null,
+        distanceMeters: null,
+        durationSeconds: null,
+        routingError: message,
+      };
+    }
   }
 
   async exportCsv(query: ExportAdminRidesQuery): Promise<string> {

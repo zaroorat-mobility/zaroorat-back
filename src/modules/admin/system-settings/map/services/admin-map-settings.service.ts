@@ -5,11 +5,14 @@ import { MapProviderHealthService } from './map-provider-health.service.js';
 import type { IntegrationHealthService } from '../../integrations/services/integration-health.service.js';
 import { MapSettingsValidator } from '../validators/map-settings.validator.js';
 import {
+  buildMapplsTileUrl,
   DEFAULT_BASE_URLS,
   DEFAULT_MAP_PROVIDERS,
   MAP_SETTING_KEYS,
   MAP_SETTINGS_CATEGORY,
 } from '../constants/map-settings.constants.js';
+import { resolveMapplsTileLicenseKey } from '../../../../../integrations/mappls/mappls-credentials.util.js';
+import { maxSettingVersion } from '../../integrations/utils/integration-settings.util.js';
 import type {
   MapProviderName,
   MapSettingsView,
@@ -42,10 +45,7 @@ export class AdminMapSettingsService {
       process.env.MAP_PROVIDER ??
       DEFAULT_MAP_PROVIDERS.PRIMARY;
 
-    let maxVersion = 1;
-    for (const item of settings.values()) {
-      if (item.version > maxVersion) maxVersion = item.version;
-    }
+    const maxVersion = maxSettingVersion(settings);
 
     const olaKey =
       settings.get(MAP_SETTING_KEYS.OLA_API_KEY)?.value ?? process.env.OLA_MAPS_API_KEY ?? '';
@@ -54,6 +54,7 @@ export class AdminMapSettingsService {
     const mapplsRestKey =
       settings.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value ??
       process.env.MAPPLS_REST_API_KEY ??
+      process.env.EXPO_PUBLIC_MAPPLS_REST_KEY ??
       '';
     const mapplsId =
       settings.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value ?? process.env.MAPPLS_CLIENT_ID ?? '';
@@ -121,9 +122,23 @@ export class AdminMapSettingsService {
     const mapplsRestKey =
       settingsMap.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value?.trim() ||
       process.env.MAPPLS_REST_API_KEY?.trim() ||
+      process.env.EXPO_PUBLIC_MAPPLS_REST_KEY?.trim() ||
+      '';
+    const mapplsClientId =
       settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value?.trim() ||
       process.env.MAPPLS_CLIENT_ID?.trim() ||
+      process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID?.trim() ||
       '';
+    const mapplsClientSecret =
+      settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value?.trim() ||
+      process.env.MAPPLS_CLIENT_SECRET?.trim() ||
+      process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET?.trim() ||
+      '';
+    const mapplsTileKey = resolveMapplsTileLicenseKey({
+      restApiKey: mapplsRestKey,
+      clientId: mapplsClientId,
+      clientSecret: mapplsClientSecret,
+    });
 
     const olaBase =
       settingsMap.get(MAP_SETTING_KEYS.OLA_BASE_URL)?.value ??
@@ -133,10 +148,6 @@ export class AdminMapSettingsService {
       settingsMap.get(MAP_SETTING_KEYS.GOOGLE_BASE_URL)?.value ??
       process.env.GOOGLE_MAPS_BASE_URL ??
       DEFAULT_BASE_URLS.GOOGLE;
-    const mapplsBase =
-      settingsMap.get(MAP_SETTING_KEYS.MAPPLS_BASE_URL)?.value ??
-      process.env.MAPPLS_BASE_URL ??
-      DEFAULT_BASE_URLS.MAPPLS;
 
     const buildProvider = (
       name: 'ola' | 'google' | 'mappls',
@@ -156,6 +167,9 @@ export class AdminMapSettingsService {
         config.apiKey = apiKey;
         if (name === 'ola') {
           config.tileUrl = `${normalizedBase}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;
+        } else if (name === 'mappls') {
+          config.tileUrl = buildMapplsTileUrl(apiKey);
+          config.baseUrl = DEFAULT_BASE_URLS.MAPPLS_TILES;
         }
       }
 
@@ -167,7 +181,12 @@ export class AdminMapSettingsService {
       providers: {
         ola: buildProvider('ola', primaryProvider === 'ola', olaBase, olaKey),
         google: buildProvider('google', primaryProvider === 'google', googleBase, googleKey),
-        mappls: buildProvider('mappls', primaryProvider === 'mappls', mapplsBase, mapplsRestKey),
+        mappls: buildProvider(
+          'mappls',
+          primaryProvider === 'mappls',
+          DEFAULT_BASE_URLS.MAPPLS_TILES,
+          mapplsTileKey,
+        ),
       },
     };
   }
@@ -227,6 +246,19 @@ export class AdminMapSettingsService {
     }
 
     await this.txManager.execute(async (tx) => {
+      if (input.expectedVersion !== undefined) {
+        const currentSettings = await this.systemSettingService.getCategorySettings(
+          MAP_SETTINGS_CATEGORY,
+          tx,
+        );
+        const currentVersion = maxSettingVersion(currentSettings);
+        if (currentVersion !== input.expectedVersion) {
+          throw new Error(
+            `Map settings conflict: current version ${currentVersion}, expected ${input.expectedVersion}. Refresh and retry.`,
+          );
+        }
+      }
+
       const changes: Array<{
         fieldName: string;
         oldValue: string | null;
@@ -243,9 +275,6 @@ export class AdminMapSettingsService {
             value,
             category: MAP_SETTINGS_CATEGORY,
             isSecret,
-            ...(input.expectedVersion !== undefined
-              ? { expectedVersion: input.expectedVersion }
-              : {}),
             ...(actorId ? { updatedBy: actorId } : {}),
           },
           tx,

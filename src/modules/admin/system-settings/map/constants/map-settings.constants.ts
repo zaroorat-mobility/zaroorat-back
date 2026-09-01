@@ -25,5 +25,24 @@ export const DEFAULT_MAP_PROVIDERS = {
 export const DEFAULT_BASE_URLS = {
   OLA: 'https://api.olamaps.io',
   GOOGLE: 'https://maps.googleapis.com/maps/api',
+  /** Server-side routing (static REST / legacy fallback). Not used for map tiles. */
   MAPPLS: 'https://route.mappls.com/route/direction',
+  /** Leaflet raster tiles — license key is embedded in the path. */
+  MAPPLS_TILES: 'https://apis.mappls.com/advancedmaps/v1',
 } as const;
+
+/**
+ * Raster layer path segment. The `map` street layer requires Maps API enabled in the
+ * Mappls console; `bhuvan_imagery` works with more REST keys out of the box.
+ */
+export const DEFAULT_MAPPLS_TILE_LAYER = 'bhuvan_imagery';
+
+export function buildMapplsTileUrl(
+  licenseKey: string,
+  tilesBase: string = DEFAULT_BASE_URLS.MAPPLS_TILES,
+  tileLayer: string = process.env.MAPPLS_TILE_LAYER ?? DEFAULT_MAPPLS_TILE_LAYER,
+): string {
+  const base = tilesBase.replace(/\/+$/, '');
+  const layer = tileLayer.replace(/^\/+|\/+$/g, '');
+  return `${base}/${encodeURIComponent(licenseKey.trim())}/${layer}/{z}/{x}/{y}.png`;
+}
