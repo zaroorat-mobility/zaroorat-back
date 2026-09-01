@@ -19,13 +19,12 @@ export class EpochInvalidationConsumer {
     return () => unsubscribes.forEach((off) => off());
   }
   private async handle(envelope: EventEnvelope): Promise<void> {
-    const userId =
-      envelope.subject?.userId ??
-      (
-        envelope.data as {
-          userId?: string;
-        }
-      )?.userId;
+    const data = envelope.data as { userId?: string; initialGrant?: boolean } | undefined;
+    // The default role granted while the account is being created is not a
+    // privilege change against any existing session — there are none — and
+    // bumping for it invalidated the very tokens registration had just issued.
+    if (data?.initialGrant === true) return;
+    const userId = envelope.subject?.userId ?? data?.userId;
     if (!userId) {
       logger.warn(
         { eventId: envelope.eventId, type: envelope.type },

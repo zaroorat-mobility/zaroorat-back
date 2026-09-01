@@ -252,7 +252,17 @@ export class AuthService {
         await this.eventPublisher.publish(
           authEvent('account.role.granted', {
             subjectUserId: user.id,
-            data: { userId: user.id, roleSlug: DEFAULT_ROLE_SLUG },
+            // `initialGrant` keeps the audit record but stops the epoch bump.
+            //
+            // The token pair above is minted inside this transaction at the
+            // current epoch. The relay then delivers this event and the epoch
+            // consumer bumps, so the tokens the customer was just handed were
+            // already stale — a 401 on the first authenticated call after
+            // signing up, racing whenever the relay happened to run.
+            //
+            // Bumping exists to end sessions that predate a privilege change.
+            // An account created moments ago has none.
+            data: { userId: user.id, roleSlug: DEFAULT_ROLE_SLUG, initialGrant: true },
           }),
           tx,
         );
