@@ -3,6 +3,8 @@ import type { Server as HttpServer } from 'node:http';
 import { realtimeConfig } from '@config';
 import { isCodedError } from '@core/errors/envelope.js';
 import { logger } from '@shared/logger/index.js';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { createRedisClient } from '@core/cache/client.js';
 import { CLIENT_COMMAND, SOCKET_EVENT, room, type SocketEnvelope } from './events.js';
 import { RealtimeError, SocketUnauthenticatedError } from './realtime.errors.js';
 import { SocketAuthService, type SocketPrincipal } from './socket-auth.service.js';
@@ -24,6 +26,7 @@ function ack(callback: unknown, response: Record<string, unknown>): void {
 /// client (`emitToRoom`). Nothing outside this class touches `io`.
 export class RealtimeGateway {
   private io: SocketServer | null = null;
+  private adapterClients: ReturnType<typeof createRedisClient>[] = [];
 
   constructor(
     private readonly socketAuthService: SocketAuthService,
@@ -48,8 +51,6 @@ export class RealtimeGateway {
     // connection handler and therefore no authentication — harmless only
     // because `startup()` exits on the throw. Validating first removes the
     // dependency on that.
-    this.assertAdapterSupported();
-
     this.io = new SocketServer(httpServer, {
       path: realtimeConfig.path,
       cors: { origin: realtimeConfig.corsOrigins, credentials: true },
@@ -57,6 +58,8 @@ export class RealtimeGateway {
       pingTimeout: realtimeConfig.pingTimeoutMs,
       maxHttpBufferSize: realtimeConfig.maxPayloadBytes,
     });
+
+    this.attachAdapter(this.io);
 
     this.io.use((socket: AuthedSocket, next) => {
       this.socketAuthService
@@ -82,13 +85,17 @@ export class RealtimeGateway {
   /// instance A never sees an emit made on instance B — so `REALTIME_ADAPTER`
   /// exists to make the requirement explicit and to fail loudly rather than
   /// silently dropping half the traffic.
-  private assertAdapterSupported(): void {
+  private attachAdapter(io: SocketServer): void {
     if (realtimeConfig.adapter !== 'redis') return;
-    throw new Error(
-      'REALTIME_ADAPTER=redis requires the @socket.io/redis-adapter package, which is not ' +
-        'installed. Install it and wire it here before running more than one API instance; ' +
-        'until then rooms are process-local and a multi-instance deployment WILL drop events.',
-    );
+    // Two dedicated connections, not the shared application client: the pub/sub
+    // protocol puts a connection into subscriber mode, where it may issue nothing
+    // but (un)subscribe commands. Reusing `redis` here would break every ordinary
+    // command the rest of the process makes on it.
+    const pubClient = createRedisClient();
+    const subClient = pubClient.duplicate();
+    io.adapter(createAdapter(pubClient, subClient));
+    this.adapterClients = [pubClient, subClient];
+    logger.info('[realtime] redis adapter attached; rooms are shared across instances');
   }
 
   private async onConnection(socket: AuthedSocket): Promise<void> {
@@ -245,6 +252,11 @@ export class RealtimeGateway {
     // Disconnects every client, then closes the underlying engine. The HTTP
     // server itself is Fastify's to close.
     await new Promise<void>((resolve) => io.close(() => resolve()));
+    // The adapter's own pub/sub connections are ours to release; `io.close()`
+    // does not own them.
+    const clients = this.adapterClients;
+    this.adapterClients = [];
+    await Promise.all(clients.map((client) => client.quit().catch(() => client.disconnect())));
     logger.info('[realtime] socket server closed');
   }
 }
