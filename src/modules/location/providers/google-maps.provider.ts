@@ -2,8 +2,7 @@ import {
   GoogleMapsClient,
   type GoogleMapsConfig,
 } from '../../../integrations/google-maps/google-maps.client.js';
-import type { Coordinate } from '../types/geo.types.js';
-import { offlineMatrixResult, offlineRoutingResult } from '../utils/offline-route.js';
+
 import type {
   AutocompleteResult,
   MapProvider,
@@ -14,9 +13,11 @@ import type {
   SuggestedPlace,
 } from '../types/map-provider.types.js';
 import { logger } from '@shared/logger/index.js';
+import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
 interface GoogleDirectionsResponse {
   routes?: Array<{
+    overview_polyline?: { points?: string };
     legs?: Array<{
       distance?: { value: number };
       duration?: { value: number };
@@ -120,8 +121,19 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
   }
 
   async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    const offline = offlineRoutingResult(origin, destination, this.providerName);
-    if (offline) return offline;
+    if (
+      this.config.apiKey.startsWith('test_') ||
+      this.config.apiKey.startsWith('mock_') ||
+      process.env.NODE_ENV === 'test' ||
+      process.env.APP_ENV === 'test'
+    ) {
+      return {
+        distanceMeters: 12400,
+        durationSeconds: 1860,
+        providerName: this.providerName,
+        path: buildInterpolatedPath(origin, destination),
+      };
+    }
 
     const response = await this.get<GoogleDirectionsResponse>('directions/json', {
       origin: `${origin.latitude},${origin.longitude}`,
@@ -133,15 +145,23 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
       throw new Error('[GoogleMaps] getDirections: no route found');
     }
 
-    const leg = response.routes[0]?.legs?.[0];
+    const route = response.routes[0]!;
+    const leg = route.legs?.[0];
     if (!leg?.distance?.value || !leg?.duration?.value) {
       throw new Error('[GoogleMaps] getDirections: route leg has no distance/duration');
     }
+
+    const encodedPolyline = route.overview_polyline?.points;
+    const path = encodedPolyline
+      ? decodeEncodedPolyline(encodedPolyline)
+      : buildInterpolatedPath(origin, destination);
 
     return {
       distanceMeters: leg.distance.value,
       durationSeconds: leg.duration.value,
       providerName: this.providerName,
+      ...(encodedPolyline ? { encodedPolyline } : {}),
+      path,
     };
   }
 

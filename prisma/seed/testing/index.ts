@@ -1,6 +1,7 @@
 import { ProviderClient } from '../../../src/core/database';
 import { seedRoles } from '../shared/roles';
 import { seedVehicleTypes } from '../shared/vehicle-types';
+import { seedNotificationTemplates } from '../shared/notification-templates';
 
 export async function seedTesting(prisma: ProviderClient) {
   console.log('  -> Seeding testing data...');
@@ -10,4 +11,5 @@ export async function seedTesting(prisma: ProviderClient) {
   // The service catalog — reference data, same as roles: every environment
   // needs it, and no client can obtain a vehicleTypeId without it.
   await seedVehicleTypes(prisma);
+  await seedNotificationTemplates(prisma);
 }

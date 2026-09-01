@@ -81,7 +81,7 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: {
           ola: { apiKey: 'test_ola_key_live_999' },
         },
@@ -90,8 +90,9 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
     assert.equal(updateRes.statusCode, 200, updateRes.payload);
     const updatedData = updateRes.json().data;
     assert.equal(updatedData.primaryProvider, 'ola');
-    assert.deepEqual(updatedData.fallbackProviders, []);
-    assert.equal(updatedData.providers.ola.apiKey, '********'); // Masked in response
+    assert.equal(updatedData.fallbackProviders, undefined);
+    assert.equal(updatedData.providers.ola.apiKey, undefined); // Secrets never returned
+    assert.equal(updatedData.providers.ola.configured, true);
 
     // Step 3: Verify DB Encryption
     const dbKey = await db().client.systemSetting.findUnique({
@@ -107,7 +108,7 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: {
           ola: { apiKey: '********' }, // Masked string sent back by UI!
         },
@@ -138,7 +139,7 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: { ola: { apiKey: 'test_ola_key_111' } },
       },
     });
@@ -153,7 +154,7 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       headers: adminHeaders,
       payload: {
         primaryProvider: 'google',
-        fallbackProviders: [],
+
         providers: { google: { apiKey: 'test_google_key_222' } },
       },
     });
@@ -169,7 +170,7 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       headers: adminHeaders,
       payload: {
         primaryProvider: 'mappls',
-        fallbackProviders: [],
+
         providers: { mappls: { clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' } },
       },
     });

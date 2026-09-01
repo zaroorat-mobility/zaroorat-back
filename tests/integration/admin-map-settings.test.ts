@@ -71,7 +71,7 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(forbidden.statusCode, 403);
   });
 
-  it('retrieves map configuration with secrets masked as ********', async () => {
+  it('retrieves map configuration without exposing secrets', async () => {
     const adminHeaders = await loginAdmin();
     const res = await app.inject({
       method: 'GET',
@@ -83,22 +83,17 @@ describe('admin map provider configuration (integration)', () => {
     const body = res.json();
     assert.ok(body.data);
     assert.equal(typeof body.data.primaryProvider, 'string');
-    assert.ok(Array.isArray(body.data.fallbackProviders));
+    assert.equal(body.data.fallbackProviders, undefined);
     assert.ok(body.data.providers.ola);
     assert.ok(body.data.providers.google);
     assert.ok(body.data.providers.mappls);
 
-    // Verify secrets are masked and NOT returned in plaintext
-    const secretValues = [
-      body.data.providers.ola.apiKey,
-      body.data.providers.google.apiKey,
-      body.data.providers.mappls.clientId,
-      body.data.providers.mappls.clientSecret,
-    ].filter(Boolean);
-
-    for (const val of secretValues) {
-      assert.equal(val, '********');
-    }
+    // Secrets must never appear in the payload (not even masked)
+    assert.equal(body.data.providers.ola.apiKey, undefined);
+    assert.equal(body.data.providers.google.apiKey, undefined);
+    assert.equal(body.data.providers.mappls.clientId, undefined);
+    assert.equal(body.data.providers.mappls.clientSecret, undefined);
+    assert.equal(typeof body.data.providers.ola.configured, 'boolean');
   });
 
   it('encrypts secrets at rest in database and decrypts properly', () => {
@@ -131,7 +126,7 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(typeof body.data.responseTimeMs, 'number');
   });
 
-  it('validates provider config during update and rejects primary provider in fallback list', async () => {
+  it('ignores legacy fallbackProviders field on update', async () => {
     const adminHeaders = await loginAdmin();
     const invalidRes = await app.inject({
       method: 'PUT',
@@ -140,11 +135,14 @@ describe('admin map provider configuration (integration)', () => {
       payload: {
         primaryProvider: 'ola',
         fallbackProviders: ['ola', 'google'],
+        providers: { ola: { apiKey: 'test_ola_key' } },
       },
     });
 
-    assert.equal(invalidRes.statusCode, 400);
-    assert.equal(invalidRes.json().error.code, 'SETTINGS_UPDATE_FAILED');
+    // Zod strips unknown keys — update succeeds; response has no fallbackProviders
+    assert.equal(invalidRes.statusCode, 200, invalidRes.payload);
+    assert.equal(invalidRes.json().data.fallbackProviders, undefined);
+    assert.equal(invalidRes.json().data.primaryProvider, 'ola');
   });
 
   it('updates map configuration atomically, audits changes with redacted secrets, and invalidates Redis', async () => {
@@ -156,7 +154,6 @@ describe('admin map provider configuration (integration)', () => {
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
         providers: {
           ola: { apiKey: 'new_ola_key_999' },
         },
@@ -166,7 +163,9 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(updateRes.statusCode, 200, updateRes.payload);
     const updated = updateRes.json().data;
     assert.equal(updated.primaryProvider, 'ola');
-    assert.deepEqual(updated.fallbackProviders, []);
+    assert.equal(updated.fallbackProviders, undefined);
+    assert.equal(updated.providers.ola.apiKey, undefined);
+    assert.equal(updated.providers.ola.configured, true);
 
     // Check DB setting creation
     const dbPrimary = await db().client.systemSetting.findUnique({
@@ -199,5 +198,33 @@ describe('admin map provider configuration (integration)', () => {
     const dynamicChain = await mapProviderService.resolveProviderChain();
     assert.ok(dynamicChain.length === 1);
     assert.equal(dynamicChain[0]?.providerName, 'ola');
+  });
+
+  it('returns active provider tile key via GET /settings/maps/client-config', async () => {
+    const adminHeaders = await loginAdmin();
+
+    await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+      payload: {
+        primaryProvider: 'ola',
+        providers: { ola: { apiKey: 'test_ola_key_for_tiles' } },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/maps/client-config',
+      headers: adminHeaders,
+    });
+
+    assert.equal(res.statusCode, 200, res.payload);
+    const body = res.json().data;
+    assert.equal(body.primaryProvider, 'ola');
+    assert.equal(body.providers.ola.enabled, true);
+    assert.equal(body.providers.ola.apiKey, 'test_ola_key_for_tiles');
+    assert.ok(body.providers.ola.tileUrl?.includes('/tiles/v1/styles/default-light-standard/'));
+    assert.equal(body.providers.google.apiKey, undefined);
   });
 });

@@ -122,6 +122,8 @@ model Ride {
   chatConversations      ChatConversation[]
   supportTickets         SupportTicket[]
   redeemedCoupons        Coupon[]
+  safetyIncidents        SafetyIncident[]
+  opsNotes               RideOpsNote[]
 
   @@index([customerId])
   @@index([driverId])
@@ -358,4 +360,18 @@ model RideDispute {
   @@index([rideId])
   @@index([status])
   @@map("ride_disputes")
+}
+
+model RideOpsNote {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  rideId    String   @map("ride_id") @db.Uuid
+  authorId  String   @map("author_id") @db.Uuid
+  note      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  ride   Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id])
+
+  @@index([rideId, createdAt])
+  @@map("ride_ops_notes")
 }

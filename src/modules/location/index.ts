@@ -30,16 +30,6 @@ export * from './constants/index.js';
 export * from './types/index.js';
 export * from './utils/index.js';
 
-/// A registration that may legitimately be absent — the admin and cache modules
-/// are not part of every container this module is assembled into.
-function tryResolve<T>(container: AwilixContainer, name: string): T | undefined {
-  try {
-    return container.resolve<T>(name);
-  } catch {
-    return undefined;
-  }
-}
-
 export function registerLocationModule(container: AwilixContainer): void {
   container.register({
     // Metrics
@@ -65,65 +55,57 @@ export function registerLocationModule(container: AwilixContainer): void {
     }).singleton(),
 
     mapplsProvider: asFunction(() => {
+      const restApiKey = process.env.MAPPLS_REST_API_KEY ?? '';
       const clientId = process.env.MAPPLS_CLIENT_ID ?? '';
       const clientSecret = process.env.MAPPLS_CLIENT_SECRET ?? '';
       const baseUrl = process.env.MAPPLS_BASE_URL;
-      return new MapplsProvider({ clientId, clientSecret, ...(baseUrl ? { baseUrl } : {}) });
+      const config =
+        clientId && clientSecret
+          ? {
+              clientId,
+              clientSecret,
+              ...(restApiKey ? { restApiKey } : {}),
+              ...(baseUrl ? { baseUrl } : {}),
+            }
+          : restApiKey || clientId
+            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
+            : { restApiKey: '' };
+      return new MapplsProvider(config);
     }).singleton(),
 
-    // Unified Composite Map Provider Service (Handles Primary + Fallback chain)
-    // Dependencies are resolved from the container here rather than declared as
-    // parameters.
-    //
-    // The container runs in `InjectionMode.CLASSIC`, which resolves a function's
-    // dependencies **by parameter name**. A single destructured object parameter
-    // exposes no names, so Awilix injected nothing: this factory received
-    // `undefined` for all five and `staticProviders` was always empty. Nothing
-    // failed loudly, because `MapProviderService` fell back to
-    // `container.resolve(...)` internally — a service locator that quietly did
-    // the whole job, and whose import of `@core/di` closed an import cycle that
-    // left 9 unit test files unable to load.
-    //
-    // Confirmed against awilix directly: under CLASSIC,
-    // `asFunction(({a, b}) => ...)` resolves to `{}`, `asFunction((a, b) => ...)`
-    // resolves both.
-    mapProviderService: asFunction(() => {
-      const olaMapsProvider = container.resolve<OlaMapsProvider>('olaMapsProvider');
-      const googleMapsProvider = container.resolve<GoogleMapsProvider>('googleMapsProvider');
-      const mapplsProvider = container.resolve<MapplsProvider>('mapplsProvider');
-      const systemSettingService = tryResolve<SystemSettingService>(
-        container,
-        'systemSettingService',
-      );
-      const redisService = tryResolve<RedisService>(container, 'redisService');
+    // Unified map provider service — exactly one active provider (no fallback chain)
+    mapProviderService: asFunction(
+      ({
+        olaMapsProvider,
+        googleMapsProvider,
+        mapplsProvider,
+        systemSettingService,
+        redisService,
+      }: {
+        olaMapsProvider: OlaMapsProvider;
+        googleMapsProvider: GoogleMapsProvider;
+        mapplsProvider: MapplsProvider;
+        systemSettingService?: SystemSettingService;
+        redisService?: RedisService;
+      }) => {
+        const primaryName = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
 
-      const primaryName = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
-      const fallbackNames = (process.env.MAP_PROVIDER_FALLBACK ?? 'google,mappls')
-        .split(',')
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean);
+        const providerMap: Record<string, MapProvider> = {
+          ola: olaMapsProvider,
+          google: googleMapsProvider,
+          mappls: mapplsProvider,
+        };
 
-      const providerMap: Record<string, MapProvider> = {
-        ola: olaMapsProvider,
-        google: googleMapsProvider,
-        mappls: mapplsProvider,
-      };
+        const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
 
-      const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
-      const fallbackProviders = fallbackNames
-        .map((name) => providerMap[name])
-        .filter((p): p is MapProvider =>
-          Boolean(p && p.providerName !== primaryProvider.providerName),
-        );
-
-      return new MapProviderService({
-        primaryProvider,
-        fallbackProviders,
-        providersRegistry: providerMap,
-        ...(systemSettingService ? { systemSettingService } : {}),
-        ...(redisService ? { redisService } : {}),
-      });
-    }).singleton(),
+        return new MapProviderService({
+          primaryProvider,
+          providersRegistry: providerMap,
+          ...(systemSettingService ? { systemSettingService } : {}),
+          ...(redisService ? { redisService } : {}),
+        });
+      },
+    ).singleton(),
 
     // Core services
     coordinateService: asClass(CoordinateService).singleton(),

@@ -1,9 +1,9 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AdminMapSettingsService } from '../services/admin-map-settings.service.js';
-import type {
-  UpdateMapSettingsBody,
-  TestProviderHealthInput,
-} from '../types/map-settings.types.js';
+import {
+  updateMapSettingsBodySchema,
+  testProviderHealthBodySchema,
+} from '../schemas/map-settings.schema.js';
 import { errorEnvelope } from '@core/errors/envelope.js';
 import { logger } from '@shared/logger/index.js';
 
@@ -23,7 +23,7 @@ export class AdminMapSettingsController {
 
   async updateMapSettings(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
-      const body = request.body as UpdateMapSettingsBody;
+      const body = updateMapSettingsBodySchema.parse(request.body);
       const actorId = request.auth?.userId;
       const data = await this.adminMapSettingsService.updateMapSettings(body, actorId);
       reply.send({ data });
@@ -36,7 +36,7 @@ export class AdminMapSettingsController {
 
   async testProvider(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
-      const body = request.body as TestProviderHealthInput;
+      const body = testProviderHealthBodySchema.parse(request.body);
       const data = await this.adminMapSettingsService.testProviderHealth(body);
       reply.send({ data });
     } catch (error) {

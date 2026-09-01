@@ -11,13 +11,11 @@ export interface OlaMapsConfig {
 /**
  * Thin HTTP client for the Ola Maps REST API.
  *
- * Authentication: Bearer <api_key> in the Authorization header.
- * Base URL configurable via OLA_MAPS_BASE_URL (defaults to https://api.olamaps.io).
+ * Authentication: API keys are passed as the `api_key` query parameter
+ * (Ola Maps docs). Bearer Authorization is only for OAuth 2.0 access tokens,
+ * not static API keys — using Bearer with an API key causes 401 Unauthorized.
  *
- * Unlike Mappls, Ola Maps uses a static API key — no OAuth token refresh is
- * required. Every request attaches the key in the Authorization header; the
- * key is also accepted as `api_key` query param, but the header is preferred
- * so the secret does not appear in server access logs.
+ * Base URL configurable via OLA_MAPS_BASE_URL (defaults to https://api.olamaps.io).
  */
 export class OlaMapsClient {
   private readonly baseUrl: string;
@@ -33,23 +31,39 @@ export class OlaMapsClient {
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value);
     }
+    url.searchParams.set('api_key', this.config.apiKey);
     return this.request<T>(url.toString(), { method: 'GET' });
   }
 
-  protected async post<T>(endpoint: string, body: unknown): Promise<T> {
+  protected async post<T>(
+    endpoint: string,
+    params: Record<string, string> = {},
+    body?: unknown,
+  ): Promise<T> {
     const cleanEndpoint = endpoint.replace(/^\/+/, '');
-    const url = `${this.baseUrl}/${cleanEndpoint}`;
-    return this.request<T>(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const url = new URL(`${this.baseUrl}/${cleanEndpoint}`);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    url.searchParams.set('api_key', this.config.apiKey);
+
+    const headers = new Headers();
+    const init: RequestInit = { method: 'POST', headers };
+
+    if (body !== undefined) {
+      headers.set('Content-Type', 'application/json');
+      init.body = JSON.stringify(body);
+    }
+
+    return this.request<T>(url.toString(), init);
   }
 
   private async request<T>(url: string, options: RequestInit): Promise<T> {
     const headers = new Headers(options.headers);
-    headers.set('Authorization', `Bearer ${this.config.apiKey}`);
     headers.set('X-Request-Id', crypto.randomUUID());
+
+    // Redact api_key from logged URLs
+    const safeUrl = url.replace(/([?&]api_key=)[^&]*/i, '$1[REDACTED]');
 
     try {
       const response = await fetch(url, {
@@ -65,7 +79,7 @@ export class OlaMapsClient {
 
       return (await response.json()) as T;
     } catch (error) {
-      logger.error({ error, url }, '[OlaMaps] API request failed');
+      logger.error({ error, url: safeUrl }, '[OlaMaps] API request failed');
       throw error;
     }
   }

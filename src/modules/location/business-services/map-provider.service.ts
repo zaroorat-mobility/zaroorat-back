@@ -13,11 +13,10 @@ import type { RedisService } from '@core/cache';
 import { OlaMapsProvider } from '../providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '../providers/google-maps.provider.js';
 import { MapplsProvider } from '../providers/mappls.provider.js';
-import { decryptSecret, encryptSecret } from '@shared/crypto/encryption.util.js';
+import { decryptSecret } from '@shared/crypto/encryption.util.js';
 
 export interface MapProviderServiceOptions {
   primaryProvider?: MapProvider;
-  fallbackProviders?: MapProvider[];
   providersRegistry?: Record<string, MapProvider>;
   systemSettingService?: SystemSettingService;
   redisService?: RedisService;
@@ -25,7 +24,6 @@ export interface MapProviderServiceOptions {
 
 interface CachedMapSettings {
   primaryProvider: string;
-  fallbackProviders: string[];
   keys?: Record<string, string>;
   baseUrls?: Record<string, string>;
 }
@@ -119,6 +117,10 @@ export class MapProviderService {
             '',
           googleKey:
             settingsMap.get('map.google.api_key')?.value ?? process.env.GOOGLE_MAPS_API_KEY ?? '',
+          mapplsRestKey:
+            settingsMap.get('map.mappls.rest_api_key')?.value ??
+            process.env.MAPPLS_REST_API_KEY ??
+            '',
           mapplsId:
             settingsMap.get('map.mappls.client_id')?.value ?? process.env.MAPPLS_CLIENT_ID ?? '',
           mapplsSecret:
@@ -147,10 +149,7 @@ export class MapProviderService {
         if (redis) {
           const toCache: CachedMapSettings = {
             primaryProvider: primary,
-            fallbackProviders: [],
-            keys: Object.fromEntries(
-              Object.entries(keys).map(([name, value]) => [name, encryptSecret(value)]),
-            ),
+            keys,
             baseUrls,
           };
           await redis.provider.client.set('geo:settings:maps', JSON.stringify(toCache), 'EX', 3600);
@@ -205,15 +204,31 @@ export class MapProviderService {
         this.registry['google'] = provider;
       }
     } else if (primaryName === 'mappls') {
+      const restApiKey = keys?.mapplsRestKey
+        ? decryptSecret(keys.mapplsRestKey)
+        : (process.env.MAPPLS_REST_API_KEY ?? '');
       const clientId = keys?.mapplsId
         ? decryptSecret(keys.mapplsId)
         : (process.env.MAPPLS_CLIENT_ID ?? '');
       const clientSecret = keys?.mapplsSecret
         ? decryptSecret(keys.mapplsSecret)
         : (process.env.MAPPLS_CLIENT_SECRET ?? '');
-      if (clientId && clientSecret) {
-        const baseUrl = baseUrls?.mapplsUrl || process.env.MAPPLS_BASE_URL;
-        provider = new MapplsProvider({ clientId, clientSecret, ...(baseUrl ? { baseUrl } : {}) });
+      const baseUrl = baseUrls?.mapplsUrl || process.env.MAPPLS_BASE_URL;
+
+      const config =
+        clientId && clientSecret
+          ? {
+              clientId,
+              clientSecret,
+              ...(restApiKey ? { restApiKey } : {}),
+              ...(baseUrl ? { baseUrl } : {}),
+            }
+          : restApiKey || (!clientSecret && clientId)
+            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
+            : null;
+
+      if (config && (!provider || !provider.isConfigured())) {
+        provider = new MapplsProvider(config);
         this.registry['mappls'] = provider;
       }
     }

@@ -609,6 +609,14 @@ export class AuthService {
         }),
         tx,
       );
+      await tx.adminSession.create({
+        data: {
+          userId: input.user.id,
+          expiresAt: session.expiresAt,
+          ...(input.ip != null ? { ipAddress: input.ip } : {}),
+          ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+        },
+      });
       const profile = await this.userProfileRepository.findByUserId(input.user.id, tx);
       const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || null;
       return { session, pair, name };

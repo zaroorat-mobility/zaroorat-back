@@ -64,7 +64,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: { ola: { apiKey: 'test_ola_key_111' } },
       },
     });
@@ -85,7 +85,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'google',
-        fallbackProviders: [],
+
         providers: { google: { apiKey: 'test_google_key_222' } },
       },
     });
@@ -106,7 +106,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'mappls',
-        fallbackProviders: [],
+
         providers: { mappls: { clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' } },
       },
     });
@@ -129,7 +129,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: {
           ola: { apiKey: 'test_ola_key' },
           google: { enabled: true, apiKey: 'test_google_key' }, // REJECT!
@@ -141,7 +141,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
     assert.ok(res.json().error.message.includes('Exactly ONE map provider'));
   });
 
-  it('2.2 rejects non-empty fallback providers list', async () => {
+  it('2.2 ignores legacy fallbackProviders field (single-provider mode)', async () => {
     const adminHeaders = await loginAdmin();
     const res = await app.inject({
       method: 'PUT',
@@ -149,12 +149,16 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: ['google'], // REJECT!
+        fallbackProviders: ['google'], // ignored / stripped — not part of API
+        providers: { ola: { apiKey: 'test_ola_key' } },
       },
     });
 
-    assert.equal(res.statusCode, 400);
-    assert.ok(res.json().error.message.includes('fallback providers are prohibited'));
+    assert.equal(res.statusCode, 200, res.payload);
+    assert.equal(res.json().data.primaryProvider, 'ola');
+    assert.equal(res.json().data.fallbackProviders, undefined);
+    assert.equal(res.json().data.providers.ola.enabled, true);
+    assert.equal(res.json().data.providers.google.enabled, false);
   });
 
   // ─── 3. REJECT ZERO ACTIVE PROVIDERS / INVALID PROVIDERS ──────────────────
@@ -167,7 +171,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: {
           ola: { enabled: false }, // REJECT!
         },
@@ -186,7 +190,6 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'invalid_provider_name' as unknown as MapProviderName,
-        fallbackProviders: [],
       },
     });
 
@@ -205,7 +208,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        fallbackProviders: [],
+
         providers: { ola: { apiKey: 'test_ola_key' } },
       },
     });
@@ -217,7 +220,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'google',
-        fallbackProviders: [],
+
         providers: { google: { apiKey: 'invalid_failing_key' } }, // Explicitly failing key!
       },
     });
@@ -247,7 +250,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'google',
-        fallbackProviders: [],
+
         providers: { google: { apiKey: 'test_google_key' } },
       },
     });
