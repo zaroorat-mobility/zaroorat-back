@@ -3,6 +3,7 @@ import {
   type OlaMapsConfig,
 } from '../../../integrations/ola-maps/ola-maps.client.js';
 import type { Coordinate } from '../types/geo.types.js';
+import { offlineRoutingResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
@@ -141,18 +142,8 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
   // ─── Directions (Distance + ETA) ─────────────────────────────────────────────
 
   async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    if (
-      this.config.apiKey.startsWith('test_') ||
-      this.config.apiKey.startsWith('mock_') ||
-      process.env.NODE_ENV === 'test' ||
-      process.env.APP_ENV === 'test'
-    ) {
-      return {
-        distanceMeters: 12400,
-        durationSeconds: 1860,
-        providerName: this.providerName,
-      };
-    }
+    const offline = offlineRoutingResult(origin, destination, this.providerName);
+    if (offline) return offline;
 
     const response = await this.post<OlaDirectionsResponse>('routing/v1/directions', {
       origin: `${origin.latitude},${origin.longitude}`,

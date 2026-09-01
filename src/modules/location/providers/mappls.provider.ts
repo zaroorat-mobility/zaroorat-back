@@ -1,5 +1,6 @@
 import { MapplsClient, type MapplsConfig } from '../../../integrations/mappls/mappls.client.js';
 import type { Coordinate } from '../types/geo.types.js';
+import { offlineRoutingResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
@@ -102,19 +103,8 @@ export class MapplsProvider extends MapplsClient implements MapProvider {
   }
 
   async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    if (
-      this.config.clientId.startsWith('test_') ||
-      this.config.clientSecret.startsWith('test_') ||
-      this.config.clientId.startsWith('mock_') ||
-      process.env.NODE_ENV === 'test' ||
-      process.env.APP_ENV === 'test'
-    ) {
-      return {
-        distanceMeters: 12400,
-        durationSeconds: 1860,
-        providerName: this.providerName,
-      };
-    }
+    const offline = offlineRoutingResult(origin, destination, this.providerName);
+    if (offline) return offline;
 
     const coordinates = `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}`;
     const endpoint = `route_adv/driving/${coordinates}?steps=false&alternatives=false`;

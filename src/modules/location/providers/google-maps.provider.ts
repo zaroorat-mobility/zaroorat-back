@@ -3,6 +3,7 @@ import {
   type GoogleMapsConfig,
 } from '../../../integrations/google-maps/google-maps.client.js';
 import type { Coordinate } from '../types/geo.types.js';
+import { offlineRoutingResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
@@ -119,18 +120,8 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
   }
 
   async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    if (
-      this.config.apiKey.startsWith('test_') ||
-      this.config.apiKey.startsWith('mock_') ||
-      process.env.NODE_ENV === 'test' ||
-      process.env.APP_ENV === 'test'
-    ) {
-      return {
-        distanceMeters: 12400,
-        durationSeconds: 1860,
-        providerName: this.providerName,
-      };
-    }
+    const offline = offlineRoutingResult(origin, destination, this.providerName);
+    if (offline) return offline;
 
     const response = await this.get<GoogleDirectionsResponse>('directions/json', {
       origin: `${origin.latitude},${origin.longitude}`,
