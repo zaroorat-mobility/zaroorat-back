@@ -2,7 +2,8 @@ import {
   GoogleMapsClient,
   type GoogleMapsConfig,
 } from '../../../integrations/google-maps/google-maps.client.js';
-
+import type { Coordinate } from '../types/geo.types.js';
+import { offlineMatrixResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,

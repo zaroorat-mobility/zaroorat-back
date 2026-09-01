@@ -1,4 +1,9 @@
-import { MapplsClient } from '../../../integrations/mappls/mappls.client.js';
+import {
+  MapplsClient,
+  formatMapplsHealthError,
+  type MapplsConfig,
+} from '../../../integrations/mappls/mappls.client.js';
+import type { Coordinate } from '../types/geo.types.js';
 import type {
   AutocompleteResult,
   MapProvider,

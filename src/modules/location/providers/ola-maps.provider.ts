@@ -2,7 +2,8 @@ import {
   OlaMapsClient,
   type OlaMapsConfig,
 } from '../../../integrations/ola-maps/ola-maps.client.js';
-
+import type { Coordinate } from '../types/geo.types.js';
+import { offlineMatrixResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
