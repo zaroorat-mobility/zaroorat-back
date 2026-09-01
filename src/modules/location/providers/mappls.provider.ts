@@ -1,6 +1,6 @@
 import { MapplsClient, type MapplsConfig } from '../../../integrations/mappls/mappls.client.js';
 import type { Coordinate } from '../types/geo.types.js';
-import { offlineRoutingResult } from '../utils/offline-route.js';
+import { offlineMatrixResult, offlineRoutingResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
@@ -133,6 +133,9 @@ export class MapplsProvider extends MapplsClient implements MapProvider {
     if (origins.length === 0 || destinations.length === 0) {
       return { status: 'no_drivers', cells: [], providerName: this.providerName };
     }
+
+    const offline = offlineMatrixResult(origins, destinations, this.providerName);
+    if (offline) return offline;
 
     // Mappls Distance Matrix uses directions or matrix endpoint:
     // Simple 1:1 or N:1 fallback using getDirections per origin

@@ -1,5 +1,5 @@
 import type { Coordinate } from '../types/geo.types.js';
-import type { RoutingResult } from '../types/map-provider.types.js';
+import type { MatrixResult, RoutingResult } from '../types/map-provider.types.js';
 import { haversineMeters } from './coordinate.util.js';
 
 /// Straight line to road distance. The same assumption `pricingConfig.roadDistanceFactor`
@@ -52,4 +52,34 @@ export function offlineRoutingResult(
     distanceMeters === 0 ? 0 : Math.round((distanceMeters / 1000) * MINUTES_PER_KM * 60);
 
   return { distanceMeters, durationSeconds, providerName };
+}
+
+/// The offline stand-in for a provider's distance-matrix call, used only under `test`.
+///
+/// Routing had a stand-in and the matrix did not, so every quote in a test
+/// environment reported `matrix_unavailable` and the driver-ETA path — Redis GEO
+/// candidates through to the ETA the customer is shown — could never be exercised.
+/// A provider error in production still returns `unavailable`, unchanged.
+///
+/// Returns `null` outside a test environment, so the caller falls through to the
+/// real provider request.
+export function offlineMatrixResult(
+  origins: Coordinate[],
+  destinations: Coordinate[],
+  providerName: string,
+): MatrixResult | null {
+  if (!isTestEnvironment()) return null;
+
+  const cells = origins.map((origin) =>
+    destinations.map((destination) => {
+      const route = offlineRoutingResult(origin, destination, providerName);
+      return {
+        distanceMeters: route?.distanceMeters ?? 0,
+        durationSeconds: route?.durationSeconds ?? 0,
+        status: 'OK' as const,
+      };
+    }),
+  );
+
+  return { status: 'ok', cells, providerName };
 }
