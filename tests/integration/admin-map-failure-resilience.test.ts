@@ -159,7 +159,12 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     assert.equal(getRes.statusCode, 200);
     const bodyStr = JSON.stringify(getRes.json());
     assert.equal(bodyStr.includes(realSecretKey), false);
-    assert.ok(getRes.json().data.providers.ola.apiKey === '********');
+    // The read model omits the credential entirely rather than returning a masked
+    // placeholder — `configured` is what the admin UI needs, and a field that is
+    // never populated cannot leak. This asserted `apiKey === '********'` against an
+    // older response shape that did carry the field.
+    assert.equal(getRes.json().data.providers.ola.apiKey, undefined);
+    assert.equal(getRes.json().data.providers.ola.configured, true);
 
     // 2. Verify Database Audit Log redacts secret value as '[REDACTED]'
     const auditLogs = await db().client.adminActivityLog.findMany({
@@ -170,8 +175,12 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     assert.ok(auditLogs.length > 0);
     for (const log of auditLogs) {
       for (const fc of log.fieldChanges) {
-        assert.equal(fc.oldValue?.includes(realSecretKey), false);
-        assert.equal(fc.newValue?.includes(realSecretKey), false);
+        // `assert.equal(fc.oldValue?.includes(...), false)` failed on a null
+        // oldValue — the optional chain yields `undefined`, which is not `false`.
+        // A field written for the first time has no previous value, so that is the
+        // normal case, not a leak. What matters is that the secret is absent.
+        assert.ok(!fc.oldValue?.includes(realSecretKey));
+        assert.ok(!fc.newValue?.includes(realSecretKey));
         if (fc.fieldName.includes('api_key')) {
           assert.equal(fc.newValue, '[REDACTED]');
         }

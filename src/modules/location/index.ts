@@ -30,6 +30,17 @@ export * from './constants/index.js';
 export * from './types/index.js';
 export * from './utils/index.js';
 
+/// Both are registered by other modules, and a unit test may build a container
+/// without them. `container.resolve` throws on a missing registration, so the
+/// optional dependencies need this rather than a bare resolve.
+function tryResolve<T>(container: AwilixContainer, name: string): T | undefined {
+  try {
+    return container.resolve<T>(name);
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerLocationModule(container: AwilixContainer): void {
   container.register({
     // Metrics
@@ -74,38 +85,38 @@ export function registerLocationModule(container: AwilixContainer): void {
     }).singleton(),
 
     // Unified map provider service — exactly one active provider (no fallback chain)
-    mapProviderService: asFunction(
-      ({
-        olaMapsProvider,
-        googleMapsProvider,
-        mapplsProvider,
-        systemSettingService,
-        redisService,
-      }: {
-        olaMapsProvider: OlaMapsProvider;
-        googleMapsProvider: GoogleMapsProvider;
-        mapplsProvider: MapplsProvider;
-        systemSettingService?: SystemSettingService;
-        redisService?: RedisService;
-      }) => {
-        const primaryName = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
+    //
+    // Resolved explicitly rather than through a destructured factory parameter.
+    // The container runs in `InjectionMode.CLASSIC`, which injects by reading the
+    // factory's *parameter names*; a destructured `({ a, b }) => ...` parameter is
+    // named `{ a, b }` and matches no registration, so this factory used to receive
+    // `undefined` for all five dependencies. MapProviderService therefore never got
+    // the settings service or Redis, and the admin-selected provider was silently
+    // ignored in favour of whatever the environment configured at boot.
+    mapProviderService: asFunction((): MapProviderService => {
+      const primaryName = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
 
-        const providerMap: Record<string, MapProvider> = {
-          ola: olaMapsProvider,
-          google: googleMapsProvider,
-          mappls: mapplsProvider,
-        };
+      const providerMap: Record<string, MapProvider> = {
+        ola: container.resolve<OlaMapsProvider>('olaMapsProvider'),
+        google: container.resolve<GoogleMapsProvider>('googleMapsProvider'),
+        mappls: container.resolve<MapplsProvider>('mapplsProvider'),
+      };
 
-        const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
+      const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
 
-        return new MapProviderService({
-          primaryProvider,
-          providersRegistry: providerMap,
-          ...(systemSettingService ? { systemSettingService } : {}),
-          ...(redisService ? { redisService } : {}),
-        });
-      },
-    ).singleton(),
+      const systemSettingService = tryResolve<SystemSettingService>(
+        container,
+        'systemSettingService',
+      );
+      const redisService = tryResolve<RedisService>(container, 'redisService');
+
+      return new MapProviderService({
+        primaryProvider,
+        providersRegistry: providerMap,
+        ...(systemSettingService ? { systemSettingService } : {}),
+        ...(redisService ? { redisService } : {}),
+      });
+    }).singleton(),
 
     // Core services
     coordinateService: asClass(CoordinateService).singleton(),

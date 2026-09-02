@@ -13,7 +13,7 @@ import type { RedisService } from '@core/cache';
 import { OlaMapsProvider } from '../providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '../providers/google-maps.provider.js';
 import { MapplsProvider } from '../providers/mappls.provider.js';
-import { decryptSecret } from '@shared/crypto/encryption.util.js';
+import { decryptSecret, encryptSecret } from '@shared/crypto/encryption.util.js';
 
 export interface MapProviderServiceOptions {
   primaryProvider?: MapProvider;
@@ -149,7 +149,12 @@ export class MapProviderService {
         if (redis) {
           const toCache: CachedMapSettings = {
             primaryProvider: primary,
-            keys,
+            keys: Object.fromEntries(
+              Object.entries(keys).map(([name, value]) => [
+                name,
+                value ? encryptSecret(value) : '',
+              ]),
+            ),
             baseUrls,
           };
           await redis.provider.client.set('geo:settings:maps', JSON.stringify(toCache), 'EX', 3600);
@@ -227,7 +232,10 @@ export class MapProviderService {
             ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
             : null;
 
-      if (config && (!provider || !provider.isConfigured())) {
+      // The resolved credential wins outright, as it does for ola and google above:
+      // keeping an already-`isConfigured()` provider meant the env-built one was
+      // never replaced, so switching provider in the admin UI did nothing.
+      if (config) {
         provider = new MapplsProvider(config);
         this.registry['mappls'] = provider;
       }

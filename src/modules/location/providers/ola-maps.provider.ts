@@ -3,7 +3,7 @@ import {
   type OlaMapsConfig,
 } from '../../../integrations/ola-maps/ola-maps.client.js';
 import type { Coordinate } from '../types/geo.types.js';
-import { offlineMatrixResult } from '../utils/offline-route.js';
+import { offlineMatrixResult, offlineRoutingResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
@@ -172,18 +172,14 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
   // ─── Directions (Distance + ETA) ─────────────────────────────────────────────
 
   async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    if (
-      this.config.apiKey.startsWith('test_') ||
-      this.config.apiKey.startsWith('mock_') ||
-      process.env.NODE_ENV === 'test' ||
-      process.env.APP_ENV === 'test'
-    ) {
-      return {
-        distanceMeters: 12400,
-        durationSeconds: 1860,
-        providerName: this.providerName,
-        path: buildInterpolatedPath(origin, destination),
-      };
+    // The offline stand-in is gated on the environment alone. It used to also
+    // fire on a credential *shape* — `apiKey.startsWith('test_')`/`'mock_'` — so a
+    // production key that happened to begin with those characters served a fixed
+    // 12.4 km / 31 min route for every journey, while still naming this provider
+    // as the source.
+    const offline = offlineRoutingResult(origin, destination, this.providerName);
+    if (offline) {
+      return { ...offline, path: buildInterpolatedPath(origin, destination) };
     }
 
     const response = await this.post<OlaDirectionsResponse>('routing/v1/directions', {
