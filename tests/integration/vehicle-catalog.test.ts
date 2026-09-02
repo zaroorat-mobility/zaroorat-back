@@ -13,6 +13,14 @@ const DRIVER = '+919876710002';
 const PICKUP = { pickupLat: 12.9716, pickupLng: 77.5946 };
 const DROP = { dropLat: 12.9352, dropLng: 77.6245 };
 
+/// FR-041 / BD-9. The catalog publishes a rate figure only when it is given the
+/// pickup point, because only a point can resolve the city and zone rules the
+/// quote will actually charge on. Without one it advertised the GLOBAL card
+/// while the quote charged a zone card — the defect this URL exists to close.
+/// Deliberately the same coordinates as `PICKUP`, so catalog and quote are being
+/// asked about the same place.
+const CATALOG_AT_PICKUP = `/api/v1/vehicle-types?lat=${PICKUP.pickupLat}&lng=${PICKUP.pickupLng}`;
+
 describe('vehicle type catalog and multi-category quote (integration)', () => {
   let app: FastifyInstance;
 
@@ -63,7 +71,20 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
       assert.equal(bike.name, 'Bike');
       assert.equal(bike.icon, 'bike');
       assert.equal(bike.isActive, true);
-      assert.equal(typeof bike.perKmRate, 'number', 'pricing must reach the client as a number');
+      // Rate figures require the pickup point (FR-041); without it the catalog
+      // publishes no price rather than a GLOBAL one the quote will not honour.
+      assert.equal(bike.perKmRate, null, 'no coordinates, no advertised rate');
+
+      const priced = (await get(CATALOG_AT_PICKUP, customer)).json().data as Record<
+        string,
+        unknown
+      >[];
+      const pricedBike = priced.find((type) => type.code === 'BIKE')!;
+      assert.equal(
+        typeof pricedBike.perKmRate,
+        'number',
+        'pricing must reach the client as a number',
+      );
     });
 
     it('orders the catalog by displayOrder so the picker is stable', async () => {
@@ -343,7 +364,7 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
 
     it('advertises the same per-km rate in the catalog that it charges in a quote', async () => {
       const customer = await loginAs(app, CUSTOMER);
-      const types = (await get('/api/v1/vehicle-types', customer)).json().data as {
+      const types = (await get(CATALOG_AT_PICKUP, customer)).json().data as {
         id: string;
         code: string;
         perKmRate: number;
@@ -465,11 +486,10 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
           effectiveTo: new Date(Date.now() - DAY),
         });
 
-        // The catalog reads through `findGlobalRules`, the quote through
-        // `findActiveRule`. Both had the same gap, so both had to be closed —
-        // otherwise the picker advertises a retired rate the quote no longer
-        // charges.
-        const types = (await get('/api/v1/vehicle-types', customer)).json().data as {
+        // Both ends now resolve through the same precedence ladder in
+        // `PricingRuleRepository`, given the same point — otherwise the picker
+        // advertises a retired rate the quote no longer charges.
+        const types = (await get(CATALOG_AT_PICKUP, customer)).json().data as {
           id: string;
           perKmRate: number;
         }[];

@@ -243,6 +243,7 @@ model ServiceZone {
   name          String
   zoneType      ServiceZoneType                        @default(SERVICE) @map("zone_type")
   boundary      Unsupported("geography(Polygon,4326)")
+  priority      Int                                    @default(0) @db.SmallInt
   allowsPickup  Boolean                                @default(true) @map("allows_pickup")
   allowsDropoff Boolean                                @default(true) @map("allows_dropoff")
   isActive      Boolean                                @default(true) @map("is_active")
@@ -251,10 +252,12 @@ model ServiceZone {
 
   city         City                     @relation(fields: [cityId], references: [id])
   pricingRules PricingRule[]
+  surgeWindows SurgeWindow[]
   vehicleTypes ServiceZoneVehicleType[]
 
   @@unique([cityId, code])
   @@index([cityId, zoneType])
+  @@index([cityId, priority, createdAt])
   @@map("service_zones")
 }
 

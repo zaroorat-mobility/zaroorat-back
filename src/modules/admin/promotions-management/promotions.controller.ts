@@ -1,12 +1,12 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
-import { AdminPromotionService } from './promotion.service.js';
-import { AdminCampaignService } from './campaign.service.js';
-import { AdminSegmentService } from './segment.service.js';
-import { AdminCouponService } from './coupon.service.js';
-import { AdminBannerService } from './banner.service.js';
-import { AdminPromoReportService } from './report.service.js';
-import { AdminCityService } from './city.service.js';
+import { AdminPromotionService } from './promotions/promotion.service.js';
+import { AdminCampaignService } from './campaigns/campaign.service.js';
+import { AdminSegmentService } from './segments/segment.service.js';
+import { AdminCouponService } from './coupons/coupon.service.js';
+import { AdminBannerService } from './banners/banner.service.js';
+import { AdminPromoReportService } from './reports/report.service.js';
+import { AdminCityService } from './cities/city.service.js';
 import {
   createBannerBodySchema,
   createCampaignBodySchema,

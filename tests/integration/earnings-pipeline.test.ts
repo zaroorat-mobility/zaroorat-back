@@ -111,7 +111,22 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       const entries = await db().client.paymentLedgerEntry.findMany({
         where: { referenceType: 'RIDE', referenceId: rideId },
       });
-      assert.equal(entries.length, 3, 'customer debit + driver credit + commission credit');
+      // FR-006. Four destinations now, not two: the driver, the tax collected,
+      // the platform fee and the platform's commission. Tax and the fee used to
+      // have no leg of their own because commission was levied on the whole
+      // total and so silently absorbed them.
+      assert.equal(
+        entries.length,
+        5,
+        'customer debit + driver, tax, platform-fee and commission credits',
+      );
+      assert.deepEqual(entries.map((e) => e.account).sort(), [
+        'DRIVER_PAYABLE',
+        'GATEWAY_CLEARING',
+        'PLATFORM_COMMISSION',
+        'PLATFORM_FEE',
+        'TAX_PAYABLE',
+      ]);
 
       const debits = entries
         .filter((e) => e.direction === 'DEBIT')
@@ -130,6 +145,15 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.equal(
         (await accountBalance('PLATFORM_COMMISSION', { rideId })).toFixed(2),
         new Decimal(fare.platformCommission).toFixed(2),
+      );
+      assert.equal(
+        (await accountBalance('TAX_PAYABLE', { rideId })).toFixed(2),
+        new Decimal(fare.taxAmount).toFixed(2),
+        'tax is owed to the state, not kept as commission',
+      );
+      assert.equal(
+        (await accountBalance('PLATFORM_FEE', { rideId })).toFixed(2),
+        new Decimal(fare.platformFee).toFixed(2),
       );
     });
 
@@ -163,13 +187,28 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       const entries = await db().client.paymentLedgerEntry.findMany({
         where: { referenceType: 'RIDE', referenceId: rideId },
       });
-      assert.equal(entries.length, 2, 'driver debit + commission credit');
+      // FR-006. The driver's debit is matched by three credits now — commission,
+      // tax and the platform fee — because all three are money the driver is
+      // holding that is not theirs.
+      assert.equal(entries.length, 4, 'driver debit + commission, tax and fee credits');
+
+      const debits = entries
+        .filter((e) => e.direction === 'DEBIT')
+        .reduce((sum, e) => sum.add(e.amount), new Decimal(0));
+      const credits = entries
+        .filter((e) => e.direction === 'CREDIT')
+        .reduce((sum, e) => sum.add(e.amount), new Decimal(0));
+      assert.equal(debits.toFixed(2), credits.toFixed(2), 'the cash group must balance');
 
       const payable = await accountBalance('DRIVER_PAYABLE', { accountRefId: w.driverId });
+      // What the driver owes is everything they collected that is not theirs.
+      // Charging only the commission left them holding the tax and the fee with
+      // nothing on the books saying so.
+      const owed = new Decimal(fare.totalFare).sub(new Decimal(fare.driverEarning));
       assert.equal(
         payable.toFixed(2),
-        new Decimal(fare.platformCommission).neg().toFixed(2),
-        'the driver owes the commission on a cash ride',
+        owed.neg().toFixed(2),
+        'the driver owes the whole platform share on a cash ride',
       );
       assert.ok(payable.lt(0));
     });
@@ -246,9 +285,15 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       });
 
       assert.equal(new Decimal(settlement.grossEarnings).toFixed(2), '0.00', 'nothing collected');
-      assert.equal(
-        new Decimal(settlement.netPayable).toFixed(2),
-        new Decimal(cash.fare.platformCommission).neg().toFixed(2),
+      // FR-006. The driver took the whole fare in cash, so what they owe back is
+      // everything that is not their earning — the commission plus the tax and
+      // the platform fee they are also holding. Netting only the commission left
+      // the tax and the fee in the driver's pocket, settlement after settlement.
+      const owed = new Decimal(cash.fare.totalFare).sub(new Decimal(cash.fare.driverEarning));
+      assert.equal(new Decimal(settlement.netPayable).toFixed(2), owed.neg().toFixed(2));
+      assert.ok(
+        owed.gt(new Decimal(cash.fare.platformCommission)),
+        'the debt must exceed the commission alone whenever tax or a fee applies',
       );
     });
 

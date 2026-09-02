@@ -5,20 +5,20 @@ import {
   reviewDriverDocumentSchema,
   reviewVerificationSchema,
 } from '@modules/drivers/schemas/driver.schemas.js';
-import { AdminDriverService } from './driver.service.js';
-import { AdminApplicationService } from './application.service.js';
+import { AdminDriverService } from './drivers/driver.service.js';
+import { AdminApplicationService } from './applications/application.service.js';
 import {
   driverIdParamSchema,
   listDriversQuerySchema,
   suspendDriverBodySchema,
-} from './driver.schemas.js';
+} from './drivers/driver.schemas.js';
 import {
   applicationDocumentParamSchema,
   applicationIdParamSchema,
   applicationNotesBodySchema,
   createManualApplicationBodySchema,
   listApplicationsQuerySchema,
-} from './application.schemas.js';
+} from './applications/application.schemas.js';
 
 export class AdminDriverManagementController {
   constructor(

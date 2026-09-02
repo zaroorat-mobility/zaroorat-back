@@ -77,8 +77,6 @@ describe('admin fare rules (integration)', () => {
       perMinuteRate: 1.5,
       freeWaitingMinutes: 5,
       waitingChargePerMinute: 3,
-      nightEnabled: true,
-      nightChargePercentage: 25,
       status: 'active',
       effectiveFrom: `${nextYear}-01-01`,
       ...overrides,
@@ -98,8 +96,11 @@ describe('admin fare rules (integration)', () => {
     const rule = created.json().data;
     assert.equal(rule.vehicleType, 'cab');
     assert.equal(rule.status, 'active');
-    assert.equal(rule.nightEnabled, true);
-    assert.equal(rule.nightChargePercentage, 25);
+    // FR-047. `nightEnabled` and `nightChargePercentage` are gone from the DTO:
+    // they reached `night_multiplier`, which only a branch gated on an
+    // `isNightTrip` flag no caller ever set could charge.
+    assert.equal(rule.nightEnabled, undefined);
+    assert.equal(rule.nightChargePercentage, undefined);
 
     const listed = await app.inject({
       method: 'GET',
@@ -126,7 +127,25 @@ describe('admin fare rules (integration)', () => {
     assert.equal(activated.json().data.status, 'active');
   });
 
-  it('creates SGR rules with service type, zone, and fee fields', async () => {
+  /// BD-5 B. `scheduled`, `rental` and `outstation` are no longer creatable:
+  /// nothing in the ride paths passes a `serviceType`, so a rule created for any
+  /// of them was listable, activatable and unreachable by every ride the platform
+  /// prices. Rejecting the write is the point — the previous version of this test
+  /// asserted that such a rule could be created, which was true and useless.
+  it('refuses a service type no ride path can ever select (BD-5)', async () => {
+    const authHeader = await loginAdmin();
+    await ensureCity('SGR', 'Srinagar', 'Jammu & Kashmir');
+
+    const scheduled = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/fare-rules',
+      headers: authHeader,
+      payload: basePayload({ cityCode: 'SGR', serviceType: 'scheduled' }),
+    });
+    assert.equal(scheduled.statusCode, 400, scheduled.payload);
+  });
+
+  it('creates SGR rules with zone and fee fields', async () => {
     const authHeader = await loginAdmin();
     await ensureCity('SGR', 'Srinagar', 'Jammu & Kashmir');
     const airportZoneId = await ensureServiceZone(
@@ -142,19 +161,18 @@ describe('admin fare rules (integration)', () => {
       headers: authHeader,
       payload: basePayload({
         cityCode: 'SGR',
-        serviceType: 'scheduled',
+        serviceType: 'instant',
         serviceZoneId: airportZoneId,
         bookingFee: 12,
         platformFeePct: 5,
         taxRatePct: 18,
         commissionRatePct: 20,
-        ruleName: 'SGR Airport Scheduled Cab',
       }),
     });
     assert.equal(created.statusCode, 201, created.payload);
     const rule = created.json().data;
     assert.equal(rule.cityCode, 'SGR');
-    assert.equal(rule.serviceType, 'scheduled');
+    assert.equal(rule.serviceType, 'instant');
     assert.equal(rule.serviceZoneId, airportZoneId);
     assert.equal(rule.serviceZoneName, 'SGR Airport');
     assert.equal(rule.bookingFee, 12);
@@ -218,7 +236,6 @@ describe('admin fare rules (integration)', () => {
         cityCode: 'SGR',
         serviceType: 'instant',
         baseFare: 55,
-        ruleName: 'SGR Instant V1',
       }),
     });
     assert.equal(first.statusCode, 201, first.payload);
@@ -232,7 +249,6 @@ describe('admin fare rules (integration)', () => {
         cityCode: 'SGR',
         serviceType: 'instant',
         baseFare: 65,
-        ruleName: 'SGR Instant V2',
       }),
     });
     assert.equal(second.statusCode, 201, second.payload);

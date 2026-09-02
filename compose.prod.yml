@@ -30,7 +30,9 @@ x-app-env: &app-env
   APP_NAME: zaroorat-backend
   APP_ENV: production
   NODE_ENV: production
-  DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-zaroorat}
+  # Through PgBouncer, not straight at Postgres. See the `pgbouncer` service for
+  # the connection arithmetic; `migrate` deliberately still goes direct.
+  DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@pgbouncer:6432/${POSTGRES_DB:-zaroorat}
   REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required (min 32 chars)}
   JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required (min 32 chars)}
@@ -103,7 +105,7 @@ services:
     ports:
       - '${API_PORT:-3000}:3000'
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -121,7 +123,7 @@ services:
     expose:
       - '3001'
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -141,6 +143,62 @@ services:
     # Must exceed WORKER_SHUTDOWN_GRACE_MS (default 120000) so in-flight jobs
     # drain instead of being SIGKILLed mid-transaction.
     stop_grace_period: 150s
+
+  # Connection multiplexer. Without it every app replica holds its own pool
+  # straight against Postgres, so `DB_POOL_MAX` x replicas is bounded by
+  # `max_connections` (100 by default) and the stack tops out at roughly ten
+  # replicas regardless of how much CPU is available.
+  #
+  # Sizing, all on one (user, database) pair:
+  #   MAX_CLIENT_CONN     ceiling on app-side connections *into* pgbouncer.
+  #                       Must exceed DB_POOL_MAX x replicas x (api + worker).
+  #                       These are cheap — pgbouncer holds them, Postgres does not.
+  #   DEFAULT_POOL_SIZE   server connections pgbouncer keeps *to* Postgres.
+  #                       This is the number that must fit inside max_connections,
+  #                       leaving headroom for RESERVE_POOL_SIZE, superuser slots
+  #                       and `make migrate-prod` running alongside.
+  #
+  # pool_mode=transaction is what makes the multiplexing worth anything: a server
+  # connection is returned between statements rather than being held for the life
+  # of the client. It costs session-scoped state — SET, LISTEN/NOTIFY, session
+  # advisory locks and cursors outside a transaction do not survive. Prisma's
+  # `@prisma/adapter-pg` runs unnamed statements over node-postgres, so it is safe
+  # here; `max_prepared_statements` is set as insurance for named ones.
+  #
+  # NOT yet measured under load. Raising DB_POOL_MAX above its default of 10 is
+  # the next step and belongs with a staging load test, not with a guess here.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
+    environment:
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_USER: ${POSTGRES_USER:-zaroorat}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      DB_NAME: ${POSTGRES_DB:-zaroorat}
+      # The image listens on 5432 unless told otherwise, which would have
+      # silently not matched the :6432 in DATABASE_URL above.
+      LISTEN_PORT: '6432'
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-40}
+      RESERVE_POOL_SIZE: ${PGBOUNCER_RESERVE_POOL_SIZE:-10}
+      MIN_POOL_SIZE: ${PGBOUNCER_MIN_POOL_SIZE:-5}
+      MAX_PREPARED_STATEMENTS: ${PGBOUNCER_MAX_PREPARED_STATEMENTS:-200}
+      # Bounded so a stuck client cannot hold a server connection indefinitely.
+      SERVER_IDLE_TIMEOUT: '60'
+      QUERY_WAIT_TIMEOUT: '30'
+    # No `ports`. Reachable only over the compose network, same as postgres.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 6432 -U ${POSTGRES_USER:-zaroorat}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: always
 
   postgres:
     # Official tags are amd64-only; Apple Silicon runs this under emulation.

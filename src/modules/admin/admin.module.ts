@@ -68,9 +68,86 @@ import {
   AdminGeographicController,
   AdminGeographicService,
 } from './geographic-management/index.js';
+import {
+  operationsManagementRoutes,
+  AdminRideController,
+  AdminRideService,
+  AdminLiveController,
+  AdminLiveService,
+  AdminDispatchController,
+  AdminDispatchService,
+  AdminTicketController,
+  AdminTicketService,
+  AdminSafetyController,
+  AdminSafetyService,
+} from './operations-management/index.js';
+import { AdminDashboardController, AdminDashboardService } from './dashboard/index.js';
+import {
+  communicationsManagementRoutes,
+  AdminCommunicationsController,
+  AdminCommunicationsTemplateService,
+  AdminCommunicationsHistoryService,
+  AdminCommunicationsPushService,
+} from './communications-management/index.js';
+import {
+  AdminMonitoringController,
+  AdminMonitoringService,
+  monitoringManagementRoutes,
+} from './monitoring-management/index.js';
+import {
+  AdminSecurityController,
+  AdminSecurityService,
+  securityManagementRoutes,
+} from './security-management/index.js';
+import {
+  AdminAuditController,
+  AdminAuditService,
+  auditManagementRoutes,
+} from './audit-management/index.js';
+import {
+  AdminJobsController,
+  AdminJobsService,
+  jobsManagementRoutes,
+} from './jobs-management/index.js';
+
+import {
+  systemSettingsRoutes,
+  SystemSettingRepository,
+  SystemSettingService,
+  SystemSettingsCache,
+  MapProviderHealthService,
+  AdminMapSettingsService,
+  AdminMapSettingsController,
+  PlatformConfigResolver,
+  FeatureFlagService,
+  AdminPlatformSettingsService,
+  AdminPlatformSettingsController,
+  IntegrationHealthService,
+  AdminPaymentSettingsService,
+  AdminSmsSettingsService,
+  AdminPushSettingsService,
+  AdminEmailSettingsService,
+  AdminIntegrationSettingsController,
+} from './system-settings/index.js';
 
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
+    systemSettingRepository: asClass(SystemSettingRepository).singleton(),
+    systemSettingService: asClass(SystemSettingService).singleton(),
+    systemSettingsCache: asClass(SystemSettingsCache).singleton(),
+    mapProviderHealthService: asClass(MapProviderHealthService).singleton(),
+    adminMapSettingsService: asClass(AdminMapSettingsService).singleton(),
+    adminMapSettingsController: asClass(AdminMapSettingsController).singleton(),
+    platformConfigResolver: asClass(PlatformConfigResolver).singleton(),
+    featureFlagService: asClass(FeatureFlagService).singleton(),
+    adminPlatformSettingsService: asClass(AdminPlatformSettingsService).singleton(),
+    adminPlatformSettingsController: asClass(AdminPlatformSettingsController).singleton(),
+    integrationHealthService: asClass(IntegrationHealthService).singleton(),
+    adminPaymentSettingsService: asClass(AdminPaymentSettingsService).singleton(),
+    adminSmsSettingsService: asClass(AdminSmsSettingsService).singleton(),
+    adminPushSettingsService: asClass(AdminPushSettingsService).singleton(),
+    adminEmailSettingsService: asClass(AdminEmailSettingsService).singleton(),
+    adminIntegrationSettingsController: asClass(AdminIntegrationSettingsController).singleton(),
     adminSurgeService: asClass(AdminSurgeService).singleton(),
     adminSurgeController: asClass(AdminSurgeController).singleton(),
     adminFareService: asClass(AdminFareService).singleton(),
@@ -107,6 +184,30 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminRiderController: asClass(AdminRiderController).singleton(),
     adminGeographicService: asClass(AdminGeographicService).singleton(),
     adminGeographicController: asClass(AdminGeographicController).singleton(),
+    adminRideService: asClass(AdminRideService).singleton(),
+    adminRideController: asClass(AdminRideController).singleton(),
+    adminLiveService: asClass(AdminLiveService).singleton(),
+    adminLiveController: asClass(AdminLiveController).singleton(),
+    adminDispatchService: asClass(AdminDispatchService).singleton(),
+    adminDispatchController: asClass(AdminDispatchController).singleton(),
+    adminTicketService: asClass(AdminTicketService).singleton(),
+    adminTicketController: asClass(AdminTicketController).singleton(),
+    adminSafetyService: asClass(AdminSafetyService).singleton(),
+    adminSafetyController: asClass(AdminSafetyController).singleton(),
+    adminDashboardService: asClass(AdminDashboardService).singleton(),
+    adminDashboardController: asClass(AdminDashboardController).singleton(),
+    adminMonitoringService: asClass(AdminMonitoringService).singleton(),
+    adminMonitoringController: asClass(AdminMonitoringController).singleton(),
+    adminSecurityService: asClass(AdminSecurityService).singleton(),
+    adminSecurityController: asClass(AdminSecurityController).singleton(),
+    adminAuditService: asClass(AdminAuditService).singleton(),
+    adminAuditController: asClass(AdminAuditController).singleton(),
+    adminJobsService: asClass(AdminJobsService).singleton(),
+    adminJobsController: asClass(AdminJobsController).singleton(),
+    adminCommunicationsTemplateService: asClass(AdminCommunicationsTemplateService).singleton(),
+    adminCommunicationsHistoryService: asClass(AdminCommunicationsHistoryService).singleton(),
+    adminCommunicationsPushService: asClass(AdminCommunicationsPushService).singleton(),
+    adminCommunicationsController: asClass(AdminCommunicationsController).singleton(),
   });
 
   registerFileReference('PROMO_BANNER', {
@@ -117,6 +218,7 @@ export function registerAdminModule(container: AwilixContainer): void {
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
+  await app.register(systemSettingsRoutes);
   await app.register(pricingManagementRoutes);
   await app.register(promotionsManagementRoutes);
   await app.register(referralManagementRoutes);
@@ -127,4 +229,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   await app.register(rbacManagementRoutes);
   await app.register(riderManagementRoutes);
   await app.register(geographicManagementRoutes, { prefix: '/geographic' });
+  await app.register(operationsManagementRoutes, { prefix: '/operations' });
+  await app.register(monitoringManagementRoutes, { prefix: '/monitoring' });
+  await app.register(securityManagementRoutes, { prefix: '/security' });
+  await app.register(auditManagementRoutes, { prefix: '/audit' });
+  await app.register(jobsManagementRoutes, { prefix: '/jobs' });
+  await app.register(communicationsManagementRoutes, { prefix: '/communications' });
 }

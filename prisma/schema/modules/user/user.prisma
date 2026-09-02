@@ -59,6 +59,10 @@ model User {
   featureFlagOverrides          FeatureFlagOverride[]
   adminSessions                 AdminSession[]
   deletionRequests              AccountDeletionRequest[]
+  safetyIncidentsReported       SafetyIncident[]               @relation("IncidentReporter")
+  safetyIncidentsSubject        SafetyIncident[]               @relation("IncidentSubject")
+  safetyIncidentEvents          SafetyIncidentEvent[]
+  rideOpsNotes                  RideOpsNote[]
 
   @@index([status])
   @@map("users")

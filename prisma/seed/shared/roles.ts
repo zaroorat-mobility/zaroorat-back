@@ -140,16 +140,34 @@ export const PERMISSION_SEED = [
     description: 'View live rides, complaints, and operations consoles',
   },
   {
+    code: 'operations:write',
+    resource: 'operations',
+    action: 'write',
+    description: 'Perform operational actions on rides, live operations, and dispatch',
+  },
+  {
     code: 'safety:read',
     resource: 'safety',
     action: 'read',
     description: 'Read SOS and safety evidence',
   },
   {
+    code: 'safety:write',
+    resource: 'safety',
+    action: 'write',
+    description: 'Acknowledge, update, and resolve SOS and safety incidents',
+  },
+  {
     code: 'support:read',
     resource: 'support',
     action: 'read',
     description: 'Read dispute evidence and support material',
+  },
+  {
+    code: 'support:write',
+    resource: 'support',
+    action: 'write',
+    description: 'Create, assign, update, and resolve support tickets',
   },
   {
     code: 'rides:read_any',
@@ -229,6 +247,60 @@ export const PERMISSION_SEED = [
     action: 'read',
     description: 'View platform audit logs',
   },
+  {
+    code: 'settings:read',
+    resource: 'settings',
+    action: 'read',
+    description: 'View platform and integration settings',
+  },
+  {
+    code: 'settings:write',
+    resource: 'settings',
+    action: 'write',
+    description: 'Update platform and integration settings',
+  },
+  {
+    code: 'monitoring:read',
+    resource: 'monitoring',
+    action: 'read',
+    description: 'View system health, performance, and alerts',
+  },
+  {
+    code: 'security:read',
+    resource: 'security',
+    action: 'read',
+    description: 'View admin security events, sessions, and login history',
+  },
+  {
+    code: 'security:write',
+    resource: 'security',
+    action: 'write',
+    description: 'Manage admin sessions, policies, and security settings',
+  },
+  {
+    code: 'jobs:read',
+    resource: 'jobs',
+    action: 'read',
+    description: 'View background job queues and job details',
+  },
+  {
+    code: 'jobs:write',
+    resource: 'jobs',
+    action: 'write',
+    description: 'Retry or remove background jobs',
+  },
+  {
+    code: 'communications:read',
+    resource: 'communications',
+    action: 'read',
+    description: 'View notification templates and delivery history',
+  },
+  {
+    code: 'communications:write',
+    resource: 'communications',
+    action: 'write',
+    description: 'Send notifications and manage templates',
+  },
 ] as const;
 
 export type PermissionCode = (typeof PERMISSION_SEED)[number]['code'];
@@ -256,8 +328,11 @@ export const ROLE_PERMISSIONS: Readonly<Record<RoleSlug, readonly PermissionCode
     support: Object.freeze([
       'riders:read',
       'operations:read',
+      'operations:write',
       'safety:read',
+      'safety:write',
       'support:read',
+      'support:write',
       'rides:read_any',
     ] as const),
     // Deliberately NOT drivers:verify or drivers:write — finance moves money,

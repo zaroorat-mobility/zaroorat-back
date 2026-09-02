@@ -18,7 +18,7 @@ import { NotificationService } from '@modules/notifications';
 import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
 import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
 import { VehicleAssignmentRepository } from '@modules/vehicles/repositories/vehicle-assignment.repository.js';
-import { cashConfirmationRequired } from '@config';
+import { cashConfirmationRequired, pricingConfig } from '@config';
 import { logger } from '@shared/logger/index.js';
 import {
   InvalidRideStateTransitionError,
@@ -604,13 +604,24 @@ export class LifecycleService {
       }
       const waitingMinutes = ride.waitTimeMin ?? 0;
 
+      // FR-001/FR-002. The rule the customer was quoted and booked on. Null only
+      // for requests written before the column existed, where `calculateFinalFare`
+      // falls back to live resolution.
+      const pricingRuleId = request?.pricingRuleId ?? null;
+
       let discountAmount = 0;
       let resolvedPromo: Awaited<ReturnType<PromotionService['validateAndResolve']>> | null = null;
       if (request?.promoCode) {
+        // The preview needs the booked rule as much as the final fare does: it
+        // is the subtotal a promotion's `minFare` eligibility and percentage
+        // discount are computed against, so pricing it on the GLOBAL default
+        // card while billing on the zone card applied the discount to a number
+        // the customer was never charged.
         const preview = await this.pricingService.calculateFinalFare({
           actualDistanceKm,
           actualDurationMin,
           vehicleTypeId: ride.vehicleTypeId,
+          pricingRuleId,
           waitingMinutes,
         });
         try {
@@ -632,14 +643,35 @@ export class LifecycleService {
       }
 
       const surgeMultiplier = Number(request?.surgeMultiplier ?? 1);
+
+      // P-1. The accepted quote caps the bill.
+      //
+      // The final fare is recomputed from measured distance and duration, so a
+      // trip that sat in traffic used to bill more than quoted with nothing
+      // bounding it. A request with no recorded quote — rows written before the
+      // column existed — bills uncapped, as it did before.
+      const quotedFare = request?.quotedFare != null ? Number(request.quotedFare) : null;
+      const fareCeiling =
+        quotedFare != null && Number.isFinite(quotedFare) && quotedFare > 0
+          ? quotedFare * (1 + pricingConfig.maxFareIncreaseOverQuotePct / 100)
+          : null;
+
       const itemizedFare = await this.pricingService.calculateFinalFare({
         actualDistanceKm: billedDistanceKm,
         actualDurationMin: billedDurationMin,
         vehicleTypeId: ride.vehicleTypeId,
+        pricingRuleId,
         surgeMultiplier,
         waitingMinutes,
         ...(discountAmount > 0 ? { discountAmount } : {}),
+        ...(fareCeiling != null ? { fareCeiling } : {}),
       });
+      if (fareCeiling != null && itemizedFare.totalFare >= fareCeiling) {
+        logger.info(
+          { rideId, quotedFare, fareCeiling, totalFare: itemizedFare.totalFare },
+          '[rides] final fare capped at the quoted ceiling',
+        );
+      }
       // BD-5. With the flag off this is byte-identical to before: a cash ride
       // is PAID the moment it ends. With it on, cash waits for someone to say
       // the money changed hands, so it completes PENDING like every other
@@ -704,7 +736,12 @@ export class LifecycleService {
           {
             totalFare: new Decimal(itemizedFare.totalFare),
             driverPayable: new Decimal(itemizedFare.driverEarning),
+            driverEarning: new Decimal(itemizedFare.driverEarning),
             platformCommission: new Decimal(itemizedFare.platformCommission),
+            // FR-006. Tax and the platform fee are now distinct destinations
+            // rather than amounts swallowed by the commission line.
+            taxAmount: new Decimal(itemizedFare.taxAmount),
+            platformFee: new Decimal(itemizedFare.platformFee),
             customerUserId: ride.customerId,
             driverId: ride.driverId,
             rideId,

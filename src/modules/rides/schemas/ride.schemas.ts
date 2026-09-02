@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { latitudeSchema, longitudeSchema } from '@modules/geo';
+import { latitudeSchema, longitudeSchema } from '@modules/location';
 import { RIDE_OTP_LENGTH } from '../constants/ride.constants.js';
 /// Drop coordinates are required, not optional.
 ///

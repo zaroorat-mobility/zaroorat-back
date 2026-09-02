@@ -12,6 +12,7 @@ import { vehicleRoutes, vehicleTypeRoutes } from '@modules/vehicles/routes';
 import { paymentRoutes, ridePaymentRoutes } from '@modules/payments/routes';
 import { referralRoutes } from '@modules/referrals/routes/referral.routes.js';
 import { adminRoutes } from '@modules/admin';
+import { dashboardRoutes } from '@modules/admin/dashboard/index.js';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(healthRoute, { prefix: '/api/v1' });
@@ -36,4 +37,5 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // staff-only actions on the public domain prefixes. The `/admin` segment is
   // what keeps them distinct — and is the path every admin test asserts.
   await app.register(adminRoutes, { prefix: '/api/v1/admin' });
+  await app.register(dashboardRoutes, { prefix: '/api/v1/dashboard' });
 }

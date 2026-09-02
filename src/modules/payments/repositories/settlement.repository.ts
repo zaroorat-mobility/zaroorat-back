@@ -68,6 +68,15 @@ export class SettlementRepository {
     collectedFare: Decimal;
     commission: Decimal;
     driverEarning: Decimal;
+    /// FR-006. What the platform owes the driver for rides it collected itself.
+    earnedOnCollected: Decimal;
+    /// Commission on those same rides — the platform's share of the money it
+    /// already holds, which is never paid out and never owed back.
+    commissionOnCollected: Decimal;
+    /// FR-006. What the driver owes back for rides they took the cash on: the
+    /// whole fare less their earning, which is commission **plus** the tax and
+    /// the platform fee they are also holding.
+    owedOnCash: Decimal;
     rideCount: number;
   }> {
     const client = tx ?? this.db.client;
@@ -76,6 +85,9 @@ export class SettlementRepository {
         collected_fare: Decimal | null;
         commission: Decimal | null;
         driver_earning: Decimal | null;
+        earned_on_collected: Decimal | null;
+        commission_on_collected: Decimal | null;
+        owed_on_cash: Decimal | null;
         ride_count: bigint;
       }[]
     >`
@@ -84,6 +96,16 @@ export class SettlementRepository {
           AS collected_fare,
         COALESCE(SUM(f."platform_commission"), 0) AS commission,
         COALESCE(SUM(f."driver_earning"), 0)      AS driver_earning,
+        COALESCE(
+          SUM(f."driver_earning") FILTER (WHERE r."payment_method" <> 'CASH'), 0
+        ) AS earned_on_collected,
+        COALESCE(
+          SUM(f."platform_commission") FILTER (WHERE r."payment_method" <> 'CASH'), 0
+        ) AS commission_on_collected,
+        COALESCE(
+          SUM(f."total_fare" - f."driver_earning")
+            FILTER (WHERE r."payment_method" = 'CASH'), 0
+        ) AS owed_on_cash,
         COUNT(*)                                  AS ride_count
       FROM "rides" r
       JOIN "ride_fares" f ON f."ride_id" = r."id"
@@ -97,6 +119,9 @@ export class SettlementRepository {
       collectedFare: new Decimal(row?.collected_fare ?? 0),
       commission: new Decimal(row?.commission ?? 0),
       driverEarning: new Decimal(row?.driver_earning ?? 0),
+      earnedOnCollected: new Decimal(row?.earned_on_collected ?? 0),
+      commissionOnCollected: new Decimal(row?.commission_on_collected ?? 0),
+      owedOnCash: new Decimal(row?.owed_on_cash ?? 0),
       rideCount: Number(row?.ride_count ?? 0),
     };
   }
@@ -172,7 +197,10 @@ export class SettlementRepository {
   ): Promise<Decimal> {
     const client = tx ?? this.db.client;
     const rows = await client.$queryRaw<{ recovered: Decimal | null }[]>`
-      SELECT COALESCE(SUM(f."platform_commission"), 0) AS recovered
+      -- FR-006. The cash confirmation now debits the driver's settlement wallet
+      -- for the whole platform share, not the commission alone, so what has
+      -- already been recovered is that same amount.
+      SELECT COALESCE(SUM(f."total_fare" - f."driver_earning"), 0) AS recovered
       FROM "rides" r
       JOIN "ride_fares" f ON f."ride_id" = r."id"
       WHERE r."driver_id" = ${driverId}::uuid

@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { pricingConfig } from '../../../src/config/pricing/pricing.config.js';
-import { PricingService, ZeroDistanceTripError } from '../../../src/modules/pricing';
+import {
+  PricingMetrics,
+  PricingService,
+  ZeroDistanceTripError,
+} from '../../../src/modules/pricing';
 import type { PricingRuleRepository } from '../../../src/modules/pricing/repositories/pricing-rule.repository.js';
 import type { PricingRule } from '../../../src/generated/prisma/index.js';
+import type { TripEstimate } from '../../../src/modules/pricing/domain/pricing.types.js';
 
 type PricingRuleOverrides = Partial<Record<keyof PricingRule, unknown>>;
 
@@ -60,7 +65,9 @@ const pricingRuleRepository = {
   },
 } as unknown as PricingRuleRepository;
 
-const pricingService = new PricingService(pricingRuleRepository);
+// The real metrics class: it increments an in-process counter and logs, with no
+// I/O, so stubbing it would only risk the stub drifting from the constructor.
+const pricingService = new PricingService(pricingRuleRepository, new PricingMetrics());
 
 describe('Itemized fare calculation', () => {
   it('computes an itemized quote whose parts reconcile to the total', async () => {
@@ -78,8 +85,15 @@ describe('Itemized fare calculation', () => {
     assert.ok(result.driverEarning > 0);
     assert.ok(result.platformCommission > 0);
 
+    // FR-006. The old assertion here was `driver + commission === totalFare`,
+    // which held only because commission was levied on the whole total including
+    // tax and the platform fee. Those belong to the state and to the platform
+    // respectively, so the reconciliation has four terms, not two.
     assert.equal(
-      Math.round((result.driverEarning + result.platformCommission) * 100) / 100,
+      Math.round(
+        (result.driverEarning + result.platformCommission + result.platformFee + result.taxAmount) *
+          100,
+      ) / 100,
       result.totalFare,
     );
   });
@@ -148,7 +162,19 @@ describe('Itemized fare calculation', () => {
 
     assert.equal(result.taxAmount, 5);
     assert.equal(result.platformFee, 10);
-    assert.equal(result.platformCommission, Math.round(result.totalFare * 0.2 * 100) / 100);
+
+    // FR-007 / BD-1 A. Commission is 20% of the ride revenue (100), not of the
+    // total (115). The old expectation, `totalFare * 0.2` = 23.00, charged the
+    // driver commission on the 5.00 of tax and the 10.00 platform fee as well.
+    assert.equal(result.platformCommission, 20);
+    assert.equal(result.driverEarning, 80);
+    assert.equal(
+      Math.round(
+        (result.driverEarning + result.platformCommission + result.platformFee + result.taxAmount) *
+          100,
+      ) / 100,
+      result.totalFare,
+    );
   });
 });
 
@@ -283,9 +309,12 @@ describe('Final fare (billed on actual trip values)', () => {
 /// *before* something starts measuring the wait — otherwise the first rider
 /// billed for waiting is overcharged for the grace period they were promised.
 describe('waiting charges honour the free period', () => {
+  // FR-012. This used to also set `freeWaitingMinutes`, a second field carrying
+  // the same number that nothing ever read. `freeWaitingMin` is the one the
+  // fare is computed from.
   const rateCard = {
     ...pricingConfig.defaultRateCard,
-    freeWaitingMinutes: 3,
+    freeWaitingMin: 3,
     perWaitingMinute: 3,
   };
 
@@ -343,8 +372,8 @@ describe('waiting charges honour the free period', () => {
 describe('a trip with nowhere to go (L-6)', () => {
   const BLR = { latitude: 12.9716, longitude: 77.5946 };
 
-  function estimate(drop: { latitude: number; longitude: number }) {
-    return pricingService.estimateTrip({
+  async function estimate(drop: { latitude: number; longitude: number }) {
+    return await pricingService.estimateTrip({
       pickupLat: BLR.latitude,
       pickupLng: BLR.longitude,
       dropLat: drop.latitude,
@@ -352,22 +381,22 @@ describe('a trip with nowhere to go (L-6)', () => {
     });
   }
 
-  it('refuses a drop that is the pickup', () => {
-    assert.throws(() => estimate(BLR), ZeroDistanceTripError);
+  it('refuses a drop that is the pickup', async () => {
+    await assert.rejects(async () => await estimate(BLR), ZeroDistanceTripError);
   });
 
-  it('refuses a drop too close to price, not only an exact match', () => {
+  it('refuses a drop too close to price, not only an exact match', async () => {
     // ~1m north — a second GPS read of the same spot, which rounds to no
     // distance at all once the road factor and 2dp rounding are applied.
-    assert.throws(
-      () => estimate({ latitude: BLR.latitude + 0.00001, longitude: BLR.longitude }),
+    await assert.rejects(
+      async () => await estimate({ latitude: BLR.latitude + 0.00001, longitude: BLR.longitude }),
       ZeroDistanceTripError,
     );
   });
 
-  it('is refused with a code a client can act on, not a 500', () => {
+  it('is refused with a code a client can act on, not a 500', async () => {
     try {
-      estimate(BLR);
+      await estimate(BLR);
       assert.fail('expected a refusal');
     } catch (err) {
       const coded = err as { code?: string; statusCode?: number };
@@ -376,9 +405,9 @@ describe('a trip with nowhere to go (L-6)', () => {
     }
   });
 
-  it('still prices a real trip', () => {
+  it('still prices a real trip', async () => {
     // ~1km north.
-    const trip = estimate({ latitude: BLR.latitude + 0.009, longitude: BLR.longitude });
+    const trip = await estimate({ latitude: BLR.latitude + 0.009, longitude: BLR.longitude });
     assert.ok(trip.distanceKm > 0);
     assert.ok(trip.durationMin >= 1);
   });
@@ -403,7 +432,7 @@ describe('a quote estimates the journey once (L-4)', () => {
   const BLR = { latitude: 12.9716, longitude: 77.5946 };
   const NEARBY = { latitude: 12.9806, longitude: 77.5946 };
 
-  function quote(trip?: { distanceKm: number; durationMin: number }) {
+  function quote(trip?: TripEstimate) {
     return pricingService.calculateFareQuote({
       pickupLat: BLR.latitude,
       pickupLng: BLR.longitude,
@@ -417,7 +446,7 @@ describe('a quote estimates the journey once (L-4)', () => {
   it('prices the trip it was handed rather than re-deriving one', async () => {
     // Coordinates a kilometre apart, but the caller says fifty. If the supplied
     // trip were ignored the fare would come out at the short one.
-    const supplied = await quote({ distanceKm: 50, durationMin: 100 });
+    const supplied = await quote({ distanceKm: 50, durationMin: 100, source: 'ola' });
     const derived = await quote();
 
     assert.ok(
@@ -427,7 +456,7 @@ describe('a quote estimates the journey once (L-4)', () => {
   });
 
   it('agrees with the estimate it would have made when none is handed in', async () => {
-    const trip = pricingService.estimateTrip({
+    const trip = await pricingService.estimateTrip({
       pickupLat: BLR.latitude,
       pickupLng: BLR.longitude,
       dropLat: NEARBY.latitude,

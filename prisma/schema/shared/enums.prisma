@@ -124,6 +124,15 @@ enum NotificationPriority {
   CRITICAL
 }
 
+enum AdminBroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
 enum ChatConversationType {
   RIDE
   SUPPORT
@@ -212,6 +221,29 @@ enum AgentStatus {
   BUSY
   AWAY
   OFFLINE
+}
+
+enum SafetyIncidentType {
+  SOS
+  MISCONDUCT
+  ACCIDENT
+  LOST_FOUND
+  OTHER
+}
+
+enum SafetyIncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  INVESTIGATING
+  RESOLVED
+  CLOSED
+}
+
+enum SafetySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
 }
 
 enum ReferralProgramAudience {

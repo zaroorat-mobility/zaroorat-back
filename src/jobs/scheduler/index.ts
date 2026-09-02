@@ -83,6 +83,15 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     // (the window this job settles) are all in.
     pattern: process.env.DRIVER_SETTLEMENT_CRON ?? '30 2 * * *',
   },
+  {
+    queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
+    name: JOB_NAMES.REFERRAL_PENDING_REWARD_SWEEP,
+    // Hourly. A reward is credited in the same transaction that creates it, so
+    // anything still PENDING is already wrong — this only decides how long it
+    // stays unnoticed, and hourly is frequent enough for a condition that should
+    // never occur at all.
+    pattern: process.env.REFERRAL_PENDING_REWARD_SWEEP_CRON ?? '20 * * * *',
+  },
 ]);
 export async function registerJobSchedules(): Promise<void> {
   for (const schedule of JOB_SCHEDULES) {

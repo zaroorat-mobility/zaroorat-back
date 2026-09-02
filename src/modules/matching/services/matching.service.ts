@@ -1,5 +1,5 @@
 import { DatabaseService } from '@core/database';
-import { GeoService } from '@modules/geo';
+import { GeoService } from '@modules/location';
 import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
 export interface MatchCandidate {
   driverId: string;

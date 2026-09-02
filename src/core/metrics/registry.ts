@@ -88,6 +88,23 @@ export function renderMetrics(): string {
   }
   return `${lines.join('\n')}\n`;
 }
+export interface MetricSample {
+  name: string;
+  type: 'counter' | 'gauge';
+  labels: Record<string, string>;
+  value: number;
+}
+
+export function snapshotMetrics(): MetricSample[] {
+  const out: MetricSample[] = [];
+  for (const entry of series.values()) {
+    for (const { labels, value } of entry.values.values()) {
+      out.push({ name: entry.name, type: entry.type, labels, value });
+    }
+  }
+  return out;
+}
+
 export function collectProcessMetrics(): void {
   const memory = process.memoryUsage();
   setGauge('process_resident_memory_bytes', memory.rss);

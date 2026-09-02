@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { latitudeSchema, longitudeSchema } from '@modules/geo';
+import { latitudeSchema, longitudeSchema } from '@modules/location';
 export const updateDriverProfileSchema = z.object({
   fullLegalName: z.string().min(2).max(100).optional(),
   dateOfBirth: z.string().datetime().optional(),

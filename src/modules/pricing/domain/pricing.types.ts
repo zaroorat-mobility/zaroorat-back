@@ -18,7 +18,6 @@ export interface FareCalculationParams {
   surgeMultiplier?: number;
   waitingMinutes?: number;
   discountAmount?: number;
-  isNightTrip?: boolean;
   rateCard?: PricingRateCard;
   /// Pre-estimated trip, for the same reason as `rateCard`: the multi-category
   /// quote works out the journey once and prices every category against it,
@@ -29,12 +28,18 @@ export interface FareCalculationParams {
 export interface TripEstimate {
   distanceKm: number;
   durationMin: number;
+  /// Name of the provider that supplied this estimate (e.g. 'ola', 'google', 'mappls', 'haversine').
+  source: string;
 }
 
 export interface FinalFareParams {
   actualDistanceKm: number;
   actualDurationMin: number;
   vehicleTypeId: string;
+  /// FR-002. The rule the ride was quoted and booked on. When present it decides
+  /// the card outright; the city/coordinate fields below are only the fallback
+  /// for requests written before the column existed.
+  pricingRuleId?: string | null;
   cityCode?: string;
   serviceType?: RideServiceType;
   pickupLat?: number;
@@ -42,7 +47,9 @@ export interface FinalFareParams {
   surgeMultiplier?: number;
   waitingMinutes?: number;
   discountAmount?: number;
-  isNightTrip?: boolean;
+  /// P-1. Cap on the final total, derived from the fare the customer was quoted.
+  /// Omitted for a ride with no recorded quote, which then bills uncapped as before.
+  fareCeiling?: number;
   rateCard?: PricingRateCard;
 }
 
@@ -54,7 +61,6 @@ export interface ItemizedFareResult {
   timeFare: number;
   waitingCharge: number;
   bookingFee: number;
-  nightAdjustment: number;
   surgeMultiplier: number;
   surgeAmount: number;
   subtotal: number;

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { LifecycleService } from '../../../src/modules/rides/services/lifecycle/lifecycle.service.js';
-import { PricingService } from '../../../src/modules/pricing';
+import { PricingMetrics, PricingService } from '../../../src/modules/pricing';
 import { VehicleEligibilityService } from '../../../src/modules/vehicles/services/vehicle-eligibility.service.js';
 import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config.js';
 import {
@@ -230,11 +230,28 @@ function makeWorld() {
     // relied on when it stubbed the old VehicleTypeRepository's `findById`.
     // The stub tracks the pricing repository interface; it must not be
     // narrowed to whatever the service happens to call today.
-    new PricingService({
-      async findActiveRule() {
-        return null;
-      },
-    } as never),
+    new PricingService(
+      {
+        // The stub tracks the repository's real surface, not the subset the
+        // service happened to call on any given day. `findActiveRule` alone was
+        // already insufficient at 703a76f — that merge moved the service onto
+        // `findBestActiveRule` without updating this stub, and every completion
+        // test in this file has thrown "is not a function" ever since.
+        // `findById` is the FR-002 path: completion re-reads the rule the ride was
+        // booked on. Null from all three keeps the deterministic default card this
+        // suite prices against.
+        async findActiveRule() {
+          return null;
+        },
+        async findBestActiveRule() {
+          return null;
+        },
+        async findById() {
+          return null;
+        },
+      } as never,
+      new PricingMetrics(),
+    ),
     {} as never, // PromotionService
     {
       async create(f: { rideId: string }) {

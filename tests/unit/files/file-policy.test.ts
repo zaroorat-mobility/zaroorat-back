@@ -14,11 +14,12 @@ import { jwtConfig } from '../../../src/config/jwt/jwt.config.js';
 describe('file purpose policy', () => {
   const purposes = Object.keys(filePurposePolicy) as FilePurposeName[];
 
-  it('covers all six purposes', () => {
+  it('covers all seven purposes', () => {
     assert.deepEqual(purposes.sort(), [
       'DISPUTE_EVIDENCE',
       'DRIVER_DOCUMENT',
       'PROFILE_IMAGE',
+      'PROMO_BANNER',
       'SOS_EVIDENCE',
       'VEHICLE_DOCUMENT',
       'VEHICLE_IMAGE',
@@ -90,9 +91,12 @@ describe('file purpose policy', () => {
     ]);
   });
 
-  it('starts only the profile-image clock at something FILES can see (doc 03 §6)', () => {
+  it('starts only the profile-image and promo-banner clock at something FILES can see (doc 03 §6)', () => {
     assert.equal(filePurposePolicy.PROFILE_IMAGE.retention.trigger, 'REPLACED');
-    for (const purpose of purposes.filter((name) => name !== 'PROFILE_IMAGE')) {
+    assert.equal(filePurposePolicy.PROMO_BANNER.retention.trigger, 'REPLACED');
+    for (const purpose of purposes.filter(
+      (name) => name !== 'PROFILE_IMAGE' && name !== 'PROMO_BANNER',
+    )) {
       assert.notEqual(filePurposePolicy[purpose].retention.trigger, 'REPLACED', purpose);
     }
   });

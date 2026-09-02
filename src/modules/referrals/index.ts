@@ -8,9 +8,13 @@ import {
   ReferralRideCompletedConsumer,
   ReferralDriverVerifiedConsumer,
 } from './consumers/index.js';
+import { ReferralMetrics } from './referral.metrics.js';
+import { ReferralPendingRewardSweepJob } from './jobs/pending-reward-sweep.job.js';
 
 export function registerReferralsModule(container: AwilixContainer): void {
   container.register({
+    referralMetrics: asClass(ReferralMetrics).singleton(),
+    referralPendingRewardSweepJob: asClass(ReferralPendingRewardSweepJob).singleton(),
     referralRuntimeService: asClass(ReferralRuntimeService).singleton(),
     referralCodeService: asClass(ReferralCodeService).singleton(),
     referralApplyService: asClass(ReferralApplyService).singleton(),
@@ -20,6 +24,11 @@ export function registerReferralsModule(container: AwilixContainer): void {
   });
 }
 
+export { ReferralMetrics } from './referral.metrics.js';
+export {
+  ReferralPendingRewardSweepJob,
+  type PendingRewardSweepReport,
+} from './jobs/pending-reward-sweep.job.js';
 export { ReferralApplyService } from './referral-apply.service.js';
 export { ReferralCodeService } from './referral-code.service.js';
 export { ReferralRuntimeService } from './referral-runtime.service.js';

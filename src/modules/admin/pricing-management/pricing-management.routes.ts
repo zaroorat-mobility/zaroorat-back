@@ -2,11 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 import { container } from '@core/di';
 import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
-import { AdminSurgeController } from './surge.controller.js';
-import { AdminFareController } from './fare.controller.js';
-import { AdminCancellationController } from './cancellation.controller.js';
-import { AdminServiceZoneController } from './service-zone.controller.js';
-import { AdminInvoiceController } from './invoice.controller.js';
+import { AdminSurgeController } from './surge/surge.controller.js';
+import { AdminFareController } from './fare/fare.controller.js';
+import { AdminCancellationController } from './cancellation/cancellation.controller.js';
+import { AdminServiceZoneController } from './service-zone/service-zone.controller.js';
+import { AdminInvoiceController } from './invoice/invoice.controller.js';
 
 const uuidParams = {
   type: 'object',

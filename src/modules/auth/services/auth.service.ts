@@ -248,12 +248,25 @@ export class AuthService {
         }),
         tx,
       );
-      // Skip publishing account.role.granted for new accounts to prevent the
-      // EpochInvalidationConsumer from asynchronously bumping the epoch and
-      // instantly invalidating the token we just minted.
-      //
-      // The default role is already saved to the database via ensureDefaultRole()
-      // and included in the token payload.
+      if (isNew) {
+        await this.eventPublisher.publish(
+          authEvent('account.role.granted', {
+            subjectUserId: user.id,
+            // `initialGrant` keeps the audit record but stops the epoch bump.
+            //
+            // The token pair above is minted inside this transaction at the
+            // current epoch. The relay then delivers this event and the epoch
+            // consumer bumps, so the tokens the customer was just handed were
+            // already stale — a 401 on the first authenticated call after
+            // signing up, racing whenever the relay happened to run.
+            //
+            // Bumping exists to end sessions that predate a privilege change.
+            // An account created moments ago has none.
+            data: { userId: user.id, roleSlug: DEFAULT_ROLE_SLUG, initialGrant: true },
+          }),
+          tx,
+        );
+      }
       return { user, isNew, roles, session, pair };
     });
     await this.sessionService.enforceCap(
@@ -596,6 +609,14 @@ export class AuthService {
         }),
         tx,
       );
+      await tx.adminSession.create({
+        data: {
+          userId: input.user.id,
+          expiresAt: session.expiresAt,
+          ...(input.ip != null ? { ipAddress: input.ip } : {}),
+          ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
+        },
+      });
       const profile = await this.userProfileRepository.findByUserId(input.user.id, tx);
       const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || null;
       return { session, pair, name };

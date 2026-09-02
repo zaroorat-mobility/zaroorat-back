@@ -8,7 +8,15 @@ export async function createApp(): Promise<FastifyInstance> {
   const app = Fastify({
     loggerInstance: logger as FastifyBaseLogger,
     logController: new LogController({
-      disableRequestLogging: false,
+      // Fastify's own request logging is off because `on-request.hook` and
+      // `on-response.hook` already log both ends. With it on, every request
+      // produced FOUR lines — Fastify's "incoming request"/"request completed"
+      // and the hooks' "Incoming request"/"Request completed" — differing only
+      // in capitalisation. The hooks are the ones kept: they carry the
+      // requestId, a duration measured with `process.hrtime.bigint()` rather
+      // than Fastify's coarser `elapsedTime`, and the http_requests_total
+      // counter.
+      disableRequestLogging: true,
       requestIdLogLabel: 'requestId',
     }),
     requestIdHeader: 'x-request-id',

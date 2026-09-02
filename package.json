@@ -46,6 +46,7 @@
     "@fastify/swagger-ui": "^6.1.1",
     "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
+    "@socket.io/redis-adapter": "^8.3.0",
     "awilix": "^13.0.5",
     "bullmq": "^6.0.7",
     "dotenv": "^17.4.2",

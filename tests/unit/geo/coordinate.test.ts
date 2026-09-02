@@ -8,12 +8,12 @@ import {
   isValidLatitude,
   isValidLongitude,
   normalizeCoordinate,
-} from '../../../src/modules/geo/utils/coordinate.util.js';
-import { CoordinateService } from '../../../src/modules/geo/services/coordinate.service.js';
+} from '../../../src/modules/location/utils/coordinate.util.js';
+import { CoordinateService } from '../../../src/modules/location/core-services/coordinate.service.js';
 import {
   InvalidCoordinateError,
   InvalidSearchRadiusError,
-} from '../../../src/modules/geo/errors/geo.errors.js';
+} from '../../../src/modules/location/errors/location.errors.js';
 import { geoConfig } from '../../../src/config/geo/geo.config.js';
 
 const DELHI = { latitude: 28.6139, longitude: 77.209 };

@@ -1,11 +1,14 @@
 model NotificationTemplate {
   id            String               @id @default(uuid(7)) @db.Uuid
   code          String
+  eventKey      String?              @map("event_key")
   channel       NotificationChannel
   locale        String               @default("en")
   category      NotificationCategory @default(TRANSACTIONAL)
+  subject       String?
   titleTemplate String?              @map("title_template")
   bodyTemplate  String               @map("body_template")
+  variables     Json?
   isActive      Boolean              @default(true) @map("is_active")
   version       Int                  @default(1)
   createdAt     DateTime             @default(now()) @map("created_at")
@@ -13,7 +16,10 @@ model NotificationTemplate {
 
   notifications Notification[]
   campaigns     NotificationCampaign[]
+  deliveries    NotificationDelivery[] @relation("TemplateDeliveries")
 
+  @@unique([channel, eventKey])
+  @@index([channel, isActive])
   @@map("notification_templates")
 }
 
@@ -62,8 +68,10 @@ model Notification {
 
 model NotificationDelivery {
   id                String              @id @default(uuid(7)) @db.Uuid
-  notificationId    String              @map("notification_id") @db.Uuid
+  notificationId    String?             @map("notification_id") @db.Uuid
+  templateId        String?             @map("template_id") @db.Uuid
   channel           NotificationChannel
+  recipient         String?
   status            NotificationStatus  @default(PENDING)
   provider          String?
   providerMessageId String?             @map("provider_message_id")
@@ -72,14 +80,20 @@ model NotificationDelivery {
   attempts          Int                 @default(0) @db.SmallInt
   errorCode         String?             @map("error_code")
   errorMessage      String?             @map("error_message")
+  failureReason     String?             @map("failure_reason")
   sentAt            DateTime?           @map("sent_at")
   deliveredAt       DateTime?           @map("delivered_at")
+  openedAt          DateTime?           @map("opened_at")
+  metadata          Json?
   createdAt         DateTime            @default(now()) @map("created_at")
 
-  notification Notification @relation(fields: [notificationId], references: [id])
-  device       UserDevice?  @relation(fields: [deviceId], references: [id])
+  notification Notification?         @relation(fields: [notificationId], references: [id])
+  template     NotificationTemplate? @relation("TemplateDeliveries", fields: [templateId], references: [id])
+  device       UserDevice?           @relation(fields: [deviceId], references: [id])
 
   @@index([notificationId])
+  @@index([templateId])
+  @@index([channel, createdAt])
   @@index([status])
   @@map("notification_deliveries")
 }
@@ -140,6 +154,28 @@ model CampaignRecipient {
   @@unique([campaignId, userId])
   @@index([campaignId])
   @@map("campaign_recipients")
+}
+
+model AdminBroadcast {
+  id              String               @id @default(uuid(7)) @db.Uuid
+  title           String
+  body            String
+  channel         NotificationChannel  @default(PUSH)
+  targeting       Json?
+  status          AdminBroadcastStatus @default(DRAFT)
+  scheduledAt     DateTime?            @map("scheduled_at")
+  sentAt          DateTime?            @map("sent_at")
+  sentCount       Int                  @default(0) @map("sent_count")
+  failedCount     Int                  @default(0) @map("failed_count")
+  totalRecipients Int                  @default(0) @map("total_recipients")
+  failureReason   String?              @map("failure_reason")
+  createdBy       String?              @map("created_by") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  @@index([status, scheduledAt])
+  @@index([channel, createdAt])
+  @@map("admin_broadcasts")
 }
 
 model NotificationProviderLog {

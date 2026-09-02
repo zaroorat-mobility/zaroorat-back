@@ -14,6 +14,15 @@ import type { SettlementService } from '../../src/modules/payments/services/sett
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 
 const FLAG = 'PAYMENT_CASH_CONFIRMATION_REQUIRED';
+/// FR-006. What a cash driver owes back: everything they collected that is not
+/// their earning — the commission **plus** the tax and the platform fee they are
+/// also holding. These assertions used to read `platformCommission`, which was
+/// the same number only because commission was levied on the whole total and so
+/// absorbed the other two.
+function platformShareOf(fare: { totalFare: Decimal; driverEarning: Decimal }): Decimal {
+  return new Decimal(fare.totalFare).sub(new Decimal(fare.driverEarning));
+}
+
 const CUSTOMER = '+919876606001';
 const DRIVER = '+919876606002';
 
@@ -68,8 +77,8 @@ describe('cash settlement with the flag OFF (integration)', () => {
     assert.equal(ride.paymentStatus, 'PAID');
     assert.equal(
       (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
-      new Decimal(fare.platformCommission).neg().toFixed(2),
-      'the driver owes the commission',
+      platformShareOf(fare).neg().toFixed(2),
+      'the driver owes the whole platform share, not the commission alone',
     );
   });
 
@@ -160,8 +169,8 @@ describe('cash settlement with the flag ON (integration)', () => {
     const wallet = await walletOf(w.driverId);
     assert.equal(
       wallet?.balance.toFixed(2),
-      new Decimal(fare.platformCommission).neg().toFixed(2),
-      'the driver now owes the commission -- a negative balance is the debt',
+      platformShareOf(fare).neg().toFixed(2),
+      'the driver now owes the platform share -- a negative balance is the debt',
     );
     const txns = await db().client.driverWalletTransaction.findMany({
       where: { driverId: w.driverId },
@@ -169,7 +178,7 @@ describe('cash settlement with the flag ON (integration)', () => {
     assert.equal(txns.length, 1);
     assert.equal(
       txns[0]?.amount.toFixed(2),
-      new Decimal(fare.platformCommission).neg().toFixed(2),
+      platformShareOf(fare).neg().toFixed(2),
       'recorded negative',
     );
     assert.equal(
@@ -210,7 +219,7 @@ describe('cash settlement with the flag ON (integration)', () => {
 
     assert.equal(
       (await walletOf(w.driverId))?.balance.toFixed(2),
-      new Decimal(fare.platformCommission).neg().toFixed(2),
+      platformShareOf(fare).neg().toFixed(2),
       'charged once',
     );
     assert.equal(
@@ -249,7 +258,7 @@ describe('cash settlement with the flag ON (integration)', () => {
     );
     assert.equal(
       (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
-      new Decimal(fare.platformCommission).neg().toFixed(2),
+      platformShareOf(fare).neg().toFixed(2),
       'and the driver debited once',
     );
   });
@@ -268,7 +277,7 @@ describe('cash settlement with the flag ON (integration)', () => {
     assert.equal(ride.paymentStatus, 'PAID');
     assert.equal(
       (await walletOf(w.driverId))?.balance.toFixed(2),
-      new Decimal(fare.platformCommission).neg().toFixed(2),
+      platformShareOf(fare).neg().toFixed(2),
     );
 
     // An auditor has to be able to tell a timeout from an acknowledgement.
@@ -351,7 +360,7 @@ describe('cash settlement with the flag ON (integration)', () => {
     const w = await world();
     const cash = await cashRide(w);
     await confirmCash(app, w, cash.rideId);
-    const owed = new Decimal(cash.fare.platformCommission);
+    const owed = platformShareOf(cash.fare);
 
     const day = 24 * 60 * 60 * 1000;
     const firstPeriod = { periodStart: new Date(Date.now() - day), periodEnd: new Date() };
@@ -410,7 +419,7 @@ describe('cash settlement with the flag ON (integration)', () => {
 
     assert.equal(
       new Decimal(body.driver.outstanding).toFixed(2),
-      new Decimal(cash.fare.platformCommission).toFixed(2),
+      platformShareOf(cash.fare).toFixed(2),
     );
     // BD-3 approved no driver blocking, so there is nothing here to enforce.
     assert.ok(!('limit' in body.driver), 'no limit for a driver');

@@ -17,7 +17,10 @@ export interface RideConfig {
 }
 
 export const rideConfig: RideConfig = Object.freeze({
-  dispatchTimeoutSeconds: numericEnv('RIDE_DISPATCH_TIMEOUT_SEC', 30, { min: 1, integer: true }),
+  // The business rule is a 10 second acceptance window; the shipped default was
+  // 30, so every deployment that did not set RIDE_DISPATCH_TIMEOUT_SEC ran three
+  // times the specified window.
+  dispatchTimeoutSeconds: numericEnv('RIDE_DISPATCH_TIMEOUT_SEC', 10, { min: 1, integer: true }),
 
   dispatchBatchSize: numericEnv('RIDE_DISPATCH_BATCH_SIZE', 3, {
     min: 1,

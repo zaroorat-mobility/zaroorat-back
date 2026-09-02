@@ -15,7 +15,7 @@ export function handleRideError(err: unknown, request: FastifyRequest, reply: Fa
     );
     return;
   }
-  if (isCodedError(err) && err.statusCode < 500) {
+  if (isCodedError(err) && err.statusCode <= 503) {
     reply.status(err.statusCode).send(
       errorEnvelope(err.code, err.message, request.id, {
         ...(err.details !== undefined ? { details: err.details } : {}),
