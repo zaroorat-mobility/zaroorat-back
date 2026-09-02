@@ -248,15 +248,12 @@ export class AuthService {
         }),
         tx,
       );
-      if (isNew) {
-        await this.eventPublisher.publish(
-          authEvent('account.role.granted', {
-            subjectUserId: user.id,
-            data: { userId: user.id, roleSlug: DEFAULT_ROLE_SLUG },
-          }),
-          tx,
-        );
-      }
+      // Skip publishing account.role.granted for new accounts to prevent the
+      // EpochInvalidationConsumer from asynchronously bumping the epoch and
+      // instantly invalidating the token we just minted.
+      //
+      // The default role is already saved to the database via ensureDefaultRole()
+      // and included in the token payload.
       return { user, isNew, roles, session, pair };
     });
     await this.sessionService.enforceCap(
