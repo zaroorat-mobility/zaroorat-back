@@ -17,6 +17,8 @@ export interface CreateRideInput {
   dropLng?: Decimal | null;
   dropAddress?: string | null;
   isScheduled?: boolean;
+  mapProvider?: string | null;
+  mapConfigVersion?: number | null;
 }
 export class RideRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -42,7 +44,8 @@ export class RideRepository {
         "vehicle_id", "vehicle_type_id", "status", "payment_method",
         "payment_status", "pickup_location", "pickup_address",
         "drop_location", "drop_address", "accepted_at",
-        "wait_time_min", "is_scheduled", "created_at", "updated_at"
+        "wait_time_min", "is_scheduled", "map_provider", "map_config_version",
+        "created_at", "updated_at"
       ) VALUES (
         ${id}::uuid, ${rideCode}, ${input.requestId}::uuid, ${input.customerId}::uuid,
         ${input.driverId}::uuid, ${input.vehicleId}::uuid, ${input.vehicleTypeId}::uuid,
@@ -56,7 +59,9 @@ export class RideRepository {
             : Prisma.sql`NULL`
         },
         ${input.dropAddress ?? null}, now(),
-        0, ${input.isScheduled ?? false}, now(), now()
+        0, ${input.isScheduled ?? false},
+        ${input.mapProvider ?? null}, ${input.mapConfigVersion ?? null},
+        now(), now()
       )
     `;
     return client.ride.findUniqueOrThrow({ where: { id } });
@@ -82,12 +87,15 @@ export class RideRepository {
       },
     });
   }
-  async findActiveByDriver(driverId: string, tx?: TransactionClient): Promise<Ride | null> {
+  async findActiveByDriver(driverId: string, tx?: TransactionClient) {
     const client = tx ?? this.db.client;
     return client.ride.findFirst({
       where: {
         driverId,
         status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+      },
+      include: {
+        request: { select: { dropLat: true, dropLng: true } },
       },
     });
   }

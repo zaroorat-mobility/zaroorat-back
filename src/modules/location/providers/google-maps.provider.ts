@@ -6,13 +6,19 @@ import type { Coordinate } from '../types/geo.types.js';
 import { offlineMatrixResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
+  ForwardGeocodeResult,
   MapProvider,
+  MapProviderAttribution,
   MatrixCell,
   MatrixResult,
   ReverseGeocodeResult,
   RoutingResult,
   SuggestedPlace,
 } from '../types/map-provider.types.js';
+import {
+  DEFAULT_PROVIDER_CAPABILITIES,
+  type MapCapability,
+} from '../types/map-capabilities.types.js';
 import { logger } from '@shared/logger/index.js';
 import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
@@ -39,6 +45,7 @@ interface GooglePlacesAutocompleteResponse {
 interface GoogleGeocodeResponse {
   results?: Array<{
     formatted_address?: string;
+    geometry?: { location?: { lat?: number; lng?: number } };
     address_components?: Array<{ long_name: string; short_name: string; types: string[] }>;
   }>;
   status?: string;
@@ -64,6 +71,38 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
 
   isConfigured(): boolean {
     return Boolean(this.config.apiKey && this.config.apiKey.trim().length > 0);
+  }
+
+  supportedCapabilities(): readonly MapCapability[] {
+    return DEFAULT_PROVIDER_CAPABILITIES.google;
+  }
+
+  attribution(): MapProviderAttribution {
+    return { text: '© Google' };
+  }
+
+  async forwardGeocode(address: string): Promise<ForwardGeocodeResult> {
+    const response = await this.get<GoogleGeocodeResponse>('geocode/json', { address });
+    if (!response.results?.length) {
+      throw new Error('[GoogleMaps] forwardGeocode: no result');
+    }
+    const result = response.results[0]!;
+    const loc = result.geometry?.location;
+    if (loc?.lat == null || loc?.lng == null) {
+      throw new Error('[GoogleMaps] forwardGeocode: missing coordinates');
+    }
+    const components = result.address_components ?? [];
+    const find = (...types: string[]): string =>
+      components.find((c) => types.some((t) => c.types.includes(t)))?.long_name ?? '';
+    return {
+      formattedAddress: result.formatted_address ?? address,
+      latitude: loc.lat,
+      longitude: loc.lng,
+      city: find('locality', 'administrative_area_level_2'),
+      state: find('administrative_area_level_1'),
+      pincode: find('postal_code'),
+      providerName: this.providerName,
+    };
   }
 
   async autocomplete(input: string, location?: Coordinate): Promise<AutocompleteResult> {

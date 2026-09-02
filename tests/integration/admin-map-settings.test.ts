@@ -225,6 +225,42 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(body.providers.ola.enabled, true);
     assert.equal(body.providers.ola.apiKey, 'test_ola_key_for_tiles');
     assert.ok(body.providers.ola.tileUrl?.includes('/tiles/v1/styles/default-light-standard/'));
+    assert.equal(body.providers.google.enabled, false);
     assert.equal(body.providers.google.apiKey, undefined);
+    assert.equal(body.providers.mappls.enabled, false);
+  });
+
+  it('returns Mappls tile key from server REST credentials on client-config', async () => {
+    const adminHeaders = await loginAdmin();
+
+    await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+      payload: {
+        primaryProvider: 'mappls',
+        providers: {
+          mappls: {
+            restApiKey: 'test_mappls_rest_tile_key',
+            clientId: 'test_mappls_id',
+            clientSecret: 'test_mappls_secret',
+          },
+        },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/maps/client-config',
+      headers: adminHeaders,
+    });
+
+    assert.equal(res.statusCode, 200, res.payload);
+    const body = res.json().data;
+    assert.equal(body.primaryProvider, 'mappls');
+    assert.equal(body.providers.mappls.apiKey, 'test_mappls_rest_tile_key');
+    assert.ok(body.providers.mappls.tileUrl?.includes('test_mappls_rest_tile_key'));
+    assert.equal(body.providers.ola.enabled, false);
+    assert.equal(body.providers.ola.apiKey, undefined);
   });
 });

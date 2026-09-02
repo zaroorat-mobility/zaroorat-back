@@ -21,12 +21,17 @@ const FRAME = { latitude: 12.9716, longitude: 77.5946 };
 
 function makeService() {
   const writes: Record<string, unknown>[] = [];
-  const service = new LocationStreamService({
-    async updateLocation(input: Record<string, unknown>) {
-      writes.push(input);
-      return input;
-    },
-  } as never);
+  const service = new LocationStreamService(
+    {
+      async updateLocation(input: Record<string, unknown>) {
+        writes.push(input);
+        return input;
+      },
+    } as never,
+    { findActiveByDriver: async () => null } as never,
+    { recordPoint: async () => false } as never,
+    { refreshEta: async () => null, forget: () => {} } as never,
+  );
   return { service, writes };
 }
 

@@ -15,9 +15,11 @@ import {
   GeoService,
 } from './core-services/index.js';
 import { GeographicCoverageService, MapProviderService } from './business-services/index.js';
+import { MapsController } from './controllers/maps.controller.js';
+import { RideLocationHistoryService } from './services/ride-location-history.service.js';
+import { RideEtaService } from './services/ride-eta.service.js';
 import type { MapProvider } from './types/map-provider.types.js';
-import type { SystemSettingService } from '../admin/system-settings/index.js';
-import type { RedisService } from '../../core/cache/index.js';
+import { buildMapplsProviderConfig } from '../../integrations/mappls/mappls-credentials.util.js';
 
 // Public API — all consumers import from '@modules/location'
 export * from './providers/index.js';
@@ -55,54 +57,43 @@ export function registerLocationModule(container: AwilixContainer): void {
     }).singleton(),
 
     mapplsProvider: asFunction(() => {
-      const restApiKey = process.env.MAPPLS_REST_API_KEY ?? '';
-      const clientId = process.env.MAPPLS_CLIENT_ID ?? '';
-      const clientSecret = process.env.MAPPLS_CLIENT_SECRET ?? '';
-      const baseUrl = process.env.MAPPLS_BASE_URL;
-      const config =
-        clientId && clientSecret
-          ? {
-              clientId,
-              clientSecret,
-              ...(restApiKey ? { restApiKey } : {}),
-              ...(baseUrl ? { baseUrl } : {}),
-            }
-          : restApiKey || clientId
-            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
-            : { restApiKey: '' };
+      const config = buildMapplsProviderConfig({
+        restApiKey: process.env.MAPPLS_REST_API_KEY ?? '',
+        clientId: process.env.MAPPLS_CLIENT_ID ?? '',
+        clientSecret: process.env.MAPPLS_CLIENT_SECRET ?? '',
+        ...(process.env.MAPPLS_BASE_URL ? { baseUrl: process.env.MAPPLS_BASE_URL } : {}),
+      }) ?? { restApiKey: '' };
       return new MapplsProvider(config);
     }).singleton(),
 
     // Unified map provider service — exactly one active provider (no fallback chain)
     mapProviderService: asFunction(
-      ({
+      function mapProviderServiceFactory(
         olaMapsProvider,
         googleMapsProvider,
         mapplsProvider,
         systemSettingService,
         redisService,
-      }: {
-        olaMapsProvider: OlaMapsProvider;
-        googleMapsProvider: GoogleMapsProvider;
-        mapplsProvider: MapplsProvider;
-        systemSettingService?: SystemSettingService;
-        redisService?: RedisService;
-      }) => {
-        const primaryName = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
-
+      ) {
         const providerMap: Record<string, MapProvider> = {
           ola: olaMapsProvider,
           google: googleMapsProvider,
           mappls: mapplsProvider,
         };
 
-        const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
+        const envPrimary = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
+        const primaryProvider: MapProvider =
+          (providerMap[envPrimary]?.isConfigured() ? providerMap[envPrimary] : undefined) ??
+          Object.values(providerMap).find((p) => p.isConfigured()) ??
+          providerMap[envPrimary] ??
+          providerMap.ola ??
+          olaMapsProvider;
 
         return new MapProviderService({
           primaryProvider,
           providersRegistry: providerMap,
-          ...(systemSettingService ? { systemSettingService } : {}),
-          ...(redisService ? { redisService } : {}),
+          systemSettingService,
+          redisService,
         });
       },
     ).singleton(),
@@ -121,5 +112,8 @@ export function registerLocationModule(container: AwilixContainer): void {
 
     // Business services
     geographicCoverageService: asClass(GeographicCoverageService).singleton(),
+    rideLocationHistoryService: asClass(RideLocationHistoryService).singleton(),
+    rideEtaService: asClass(RideEtaService).singleton(),
+    mapsController: asClass(MapsController).singleton(),
   });
 }

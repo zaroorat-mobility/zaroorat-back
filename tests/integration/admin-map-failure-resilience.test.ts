@@ -234,6 +234,51 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     assert.ok(staleUpdate.json().error.message.includes('conflict'));
   });
 
+  it('5.2 saves when category maxVersion matches even if individual keys differ', async () => {
+    const adminHeaders = await loginAdmin();
+
+    const firstUpdate = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+      payload: {
+        primaryProvider: 'ola',
+        providers: { ola: { apiKey: 'test_ola_key', baseUrl: 'https://api.olamaps.io' } },
+      },
+    });
+    assert.equal(firstUpdate.statusCode, 200, firstUpdate.payload);
+
+    const current = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+    });
+    const categoryVersion = current.json().data.version as number;
+
+    const olaBaseUrlRow = await db().client.systemSetting.findUnique({
+      where: { key: 'map.ola.base_url' },
+    });
+    assert.ok(olaBaseUrlRow);
+    assert.ok(
+      olaBaseUrlRow.version <= categoryVersion,
+      'individual keys may lag behind category maxVersion',
+    );
+
+    const saveRes = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+      payload: {
+        primaryProvider: 'ola',
+        expectedVersion: categoryVersion,
+        providers: { ola: { baseUrl: 'https://api.olamaps.io/v2' } },
+      },
+    });
+
+    assert.equal(saveRes.statusCode, 200, saveRes.payload);
+    assert.equal(saveRes.json().data.providers.ola.baseUrl, 'https://api.olamaps.io/v2');
+  });
+
   // ─── 6. DYNAMIC RUNTIME SWITCHING & REDIS CACHE INVALIDATION ───────────────
 
   it('6.1 dynamically resolves active map provider across updates without server restart', async () => {
@@ -293,6 +338,8 @@ describe('admin map configuration failure, fallback & resilience (integration)',
           {
             providerName: 'ola',
             isConfigured: () => true,
+            supportedCapabilities: () => ['route'],
+            attribution: () => ({ text: '© Ola Maps' }),
             getDirections: async () => {
               throw new Error('Ola 500 Internal Error');
             },

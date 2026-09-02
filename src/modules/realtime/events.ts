@@ -32,6 +32,9 @@ export const SOCKET_EVENT = {
 
   /// Server → ride room. The assigned driver's position, for one ride.
   DRIVER_LOCATION: 'ride.driver.location',
+
+  /// Server → ride room. Remaining route distance and ETA refresh.
+  ETA_UPDATED: 'ride.eta.updated',
 } as const;
 
 /// Client → server.

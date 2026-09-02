@@ -6,13 +6,19 @@ import {
 import type { Coordinate } from '../types/geo.types.js';
 import type {
   AutocompleteResult,
+  ForwardGeocodeResult,
   MapProvider,
+  MapProviderAttribution,
   MatrixCell,
   MatrixResult,
   ReverseGeocodeResult,
   RoutingResult,
   SuggestedPlace,
 } from '../types/map-provider.types.js';
+import {
+  DEFAULT_PROVIDER_CAPABILITIES,
+  type MapCapability,
+} from '../types/map-capabilities.types.js';
 import { logger } from '@shared/logger/index.js';
 import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
@@ -45,6 +51,10 @@ interface MapplsGeocodeItem {
   formattedAddress?: string;
   locality?: string;
   city?: string;
+  latitude?: number;
+  longitude?: number;
+  lat?: number;
+  lng?: number;
 }
 
 interface MapplsGeocodeResponse {
@@ -82,11 +92,21 @@ function parseStaticRouteResponse(
   }
 
   const route = response.routes[0]!;
+  const encodedPolyline = route.geometry;
   if (route.distance === undefined || route.duration === undefined) {
+    if (encodedPolyline) {
+      const path = decodeEncodedPolyline(encodedPolyline);
+      return {
+        distanceMeters: route.distance !== undefined ? Math.round(route.distance) : 0,
+        durationSeconds: route.duration !== undefined ? Math.round(route.duration) : 0,
+        providerName,
+        encodedPolyline,
+        path,
+      };
+    }
     throw new Error('[Mappls] getDirections: route missing distance/duration');
   }
 
-  const encodedPolyline = route.geometry;
   const path = encodedPolyline
     ? decodeEncodedPolyline(encodedPolyline)
     : buildInterpolatedPath(origin, destination);
@@ -112,6 +132,41 @@ export class MapplsProvider extends MapplsClient implements MapProvider {
       this.config.restApiKey?.trim() ||
       (this.config.clientId?.trim() && this.config.clientSecret?.trim()),
     );
+  }
+
+  supportedCapabilities(): readonly MapCapability[] {
+    return DEFAULT_PROVIDER_CAPABILITIES.mappls;
+  }
+
+  attribution(): MapProviderAttribution {
+    return { text: 'Powered by Mappls' };
+  }
+
+  async forwardGeocode(address: string): Promise<ForwardGeocodeResult> {
+    const endpoint = `geocode?address=${encodeURIComponent(address)}`;
+    const response = await this.makeAuthenticatedRequest<MapplsGeocodeResponse>(
+      this.searchBase,
+      endpoint,
+    );
+    const items = normalizeGeocodeItems(response);
+    if (items.length === 0) {
+      throw new Error('[Mappls] forwardGeocode: no result');
+    }
+    const item = items[0]!;
+    const latitude = item.latitude ?? item.lat;
+    const longitude = item.longitude ?? item.lng;
+    if (latitude == null || longitude == null) {
+      throw new Error('[Mappls] forwardGeocode: result missing coordinates');
+    }
+    return {
+      formattedAddress: item.formattedAddress ?? item.formatted_address ?? address,
+      latitude,
+      longitude,
+      city: item.city ?? item.locality ?? '',
+      state: '',
+      pincode: '',
+      providerName: this.providerName,
+    };
   }
 
   async autocomplete(input: string, location?: Coordinate): Promise<AutocompleteResult> {
@@ -186,6 +241,12 @@ export class MapplsProvider extends MapplsClient implements MapProvider {
 
     const coordinates = `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}`;
 
+    if (this.getStaticRestKey()) {
+      const endpoint = `route_adv/driving/${coordinates}?steps=false&alternatives=false&rtype=1`;
+      const response = await this.makeStaticRoutingRequest<MapplsRouteResponse>(endpoint);
+      return parseStaticRouteResponse(response, origin, destination, this.providerName);
+    }
+
     if (this.usesOAuth()) {
       const params = new URLSearchParams({
         locations: coordinates,
@@ -217,9 +278,7 @@ export class MapplsProvider extends MapplsClient implements MapProvider {
       };
     }
 
-    const endpoint = `route_adv/driving/${coordinates}?steps=false&alternatives=false&rtype=1`;
-    const response = await this.makeStaticRoutingRequest<MapplsRouteResponse>(endpoint);
-    return parseStaticRouteResponse(response, origin, destination, this.providerName);
+    throw new Error('[Mappls] getDirections: no credentials configured');
   }
 
   async getDistanceMatrix(

@@ -12,6 +12,7 @@ import type {
   TestProviderHealthResult,
 } from '../types/map-settings.types.js';
 import { MAP_SETTING_KEYS } from '../constants/map-settings.constants.js';
+import { buildMapplsProviderConfig } from '../../../../../integrations/mappls/mappls-credentials.util.js';
 
 async function resolveMapplsConfig(
   input: TestProviderHealthInput,
@@ -22,6 +23,7 @@ async function resolveMapplsConfig(
       ? input.restApiKey
       : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)) ??
         process.env.MAPPLS_REST_API_KEY ??
+        process.env.EXPO_PUBLIC_MAPPLS_REST_KEY ??
         '');
 
   const clientId =
@@ -29,6 +31,7 @@ async function resolveMapplsConfig(
       ? input.clientId
       : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)) ??
         process.env.MAPPLS_CLIENT_ID ??
+        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID ??
         '');
 
   const clientSecret =
@@ -36,32 +39,17 @@ async function resolveMapplsConfig(
       ? input.clientSecret
       : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)) ??
         process.env.MAPPLS_CLIENT_SECRET ??
+        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET ??
         '');
 
   const baseUrl = input.baseUrl ?? process.env.MAPPLS_BASE_URL;
 
-  // Backward compat: legacy installs stored REST key in client_id with no secret.
-  const effectiveRestKey = restApiKey.trim() || (!clientSecret.trim() ? clientId.trim() : '');
-  const oauthId = clientSecret.trim() ? clientId.trim() : '';
-  const oauthSecret = clientSecret.trim();
-
-  if (oauthId && oauthSecret) {
-    return {
-      clientId: oauthId,
-      clientSecret: oauthSecret,
-      ...(effectiveRestKey ? { restApiKey: effectiveRestKey } : {}),
-      ...(baseUrl ? { baseUrl } : {}),
-    };
-  }
-
-  if (effectiveRestKey) {
-    return {
-      restApiKey: effectiveRestKey,
-      ...(baseUrl ? { baseUrl } : {}),
-    };
-  }
-
-  return null;
+  return buildMapplsProviderConfig({
+    restApiKey,
+    clientId,
+    clientSecret,
+    ...(baseUrl ? { baseUrl } : {}),
+  });
 }
 
 export class MapProviderHealthService {
