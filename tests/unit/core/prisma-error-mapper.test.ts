@@ -106,4 +106,44 @@ describe('PrismaErrorMapper', () => {
     assert.ok(mapped instanceof UniqueConstraintError);
     assert.match(mapped.message, /phone/);
   });
+
+  /// PATCH /users/me/profile with an email another account already holds
+  /// produced a P2002 whose `meta.target` is empty under the driver adapter,
+  /// so the mapper reported "unknown" and the caller could not tell which
+  /// field collided.
+  it('names the field on a P2002 that only carries adapter detail', () => {
+    const mapped = PrismaErrorMapper.mapError(
+      new Prisma.PrismaClientKnownRequestError('Unique failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: {
+          modelName: 'User',
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              kind: 'UniqueConstraintViolation',
+              originalCode: '23505',
+              originalMessage: 'duplicate key value violates unique constraint "users_email_key"',
+              constraint: { fields: ['email'] },
+            },
+          },
+        },
+      }),
+    );
+    assert.ok(mapped instanceof UniqueConstraintError);
+    assert.match(mapped.message, /users_email_key/);
+    assert.doesNotMatch(mapped.message, /unknown/);
+  });
+
+  it('still says unknown when there is nothing to name', () => {
+    const mapped = PrismaErrorMapper.mapError(
+      new Prisma.PrismaClientKnownRequestError('Unique failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: {},
+      }),
+    );
+    assert.ok(mapped instanceof UniqueConstraintError);
+    assert.match(mapped.message, /unknown/);
+  });
 });

@@ -133,6 +133,13 @@ export const updateProfileBodySchema = {
       type: ['string', 'null'],
       enum: [...userConfig.supportedLanguageCodes, null],
     },
+    email: {
+      type: ['string', 'null'],
+      maxLength: 100,
+      description:
+        'Account email. Unique across accounts — one already in use is refused with ' +
+        '409 EMAIL_IN_USE. Null clears it.',
+    },
   },
 } as const;
 export const phoneChangeBodySchema = {
