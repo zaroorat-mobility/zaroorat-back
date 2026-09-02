@@ -359,6 +359,8 @@ export class LifecycleService {
           dropLat: request.dropLat,
           dropLng: request.dropLng,
           dropAddress: request.dropAddress,
+          mapProvider: request.mapProvider,
+          mapConfigVersion: request.mapConfigVersion,
         },
         tx,
       );

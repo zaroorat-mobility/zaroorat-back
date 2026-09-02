@@ -15,6 +15,9 @@ import {
   GeoService,
 } from './core-services/index.js';
 import { GeographicCoverageService, MapProviderService } from './business-services/index.js';
+import { MapsController } from './controllers/maps.controller.js';
+import { RideLocationHistoryService } from './services/ride-location-history.service.js';
+import { RideEtaService } from './services/ride-eta.service.js';
 import type { MapProvider } from './types/map-provider.types.js';
 import { buildMapplsProviderConfig } from '../../integrations/mappls/mappls-credentials.util.js';
 
@@ -55,11 +58,9 @@ export function registerLocationModule(container: AwilixContainer): void {
 
     mapplsProvider: asFunction(() => {
       const config = buildMapplsProviderConfig({
-        restApiKey:
-          process.env.MAPPLS_REST_API_KEY ?? process.env.EXPO_PUBLIC_MAPPLS_REST_KEY ?? '',
-        clientId: process.env.MAPPLS_CLIENT_ID ?? process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID ?? '',
-        clientSecret:
-          process.env.MAPPLS_CLIENT_SECRET ?? process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET ?? '',
+        restApiKey: process.env.MAPPLS_REST_API_KEY ?? '',
+        clientId: process.env.MAPPLS_CLIENT_ID ?? '',
+        clientSecret: process.env.MAPPLS_CLIENT_SECRET ?? '',
         ...(process.env.MAPPLS_BASE_URL ? { baseUrl: process.env.MAPPLS_BASE_URL } : {}),
       }) ?? { restApiKey: '' };
       return new MapplsProvider(config);
@@ -111,5 +112,8 @@ export function registerLocationModule(container: AwilixContainer): void {
 
     // Business services
     geographicCoverageService: asClass(GeographicCoverageService).singleton(),
+    rideLocationHistoryService: asClass(RideLocationHistoryService).singleton(),
+    rideEtaService: asClass(RideEtaService).singleton(),
+    mapsController: asClass(MapsController).singleton(),
   });
 }

@@ -22,6 +22,8 @@ export interface CreateRideRequestInput {
   promoCode?: string | null;
   scheduledFor?: Date | null;
   expiresAt?: Date | null;
+  mapProvider?: string | null;
+  mapConfigVersion?: number | null;
 }
 export class RideRequestRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -36,7 +38,8 @@ export class RideRequestRepository {
         "drop_lat", "drop_lng", "drop_location", "drop_address",
         "estimated_distance_km", "estimated_duration_min", "quoted_fare",
         "surge_multiplier", "pricing_rule_id", "payment_method", "promo_code",
-        "scheduled_for", "status", "created_at", "expires_at"
+        "scheduled_for", "status", "created_at", "expires_at",
+        "map_provider", "map_config_version"
       ) VALUES (
         ${id}::uuid, ${input.customerId}::uuid, ${input.vehicleTypeId}::uuid,
         ${input.pickupLat}, ${input.pickupLng},
@@ -55,7 +58,8 @@ export class RideRequestRepository {
         ${input.pricingRuleId ?? null}::uuid,
         ${input.paymentMethod ?? null}, ${input.promoCode ?? null},
         ${input.scheduledFor ?? null}, 'CREATED'::"RideRequestStatus",
-        now(), ${input.expiresAt ?? null}
+        now(), ${input.expiresAt ?? null},
+        ${input.mapProvider ?? null}, ${input.mapConfigVersion ?? null}
       )
     `;
     return client.rideRequest.findUniqueOrThrow({ where: { id } });

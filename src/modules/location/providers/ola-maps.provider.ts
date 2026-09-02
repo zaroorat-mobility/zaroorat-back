@@ -7,12 +7,17 @@ import { offlineMatrixResult } from '../utils/offline-route.js';
 import type {
   AutocompleteResult,
   MapProvider,
+  MapProviderAttribution,
   MatrixCell,
   MatrixResult,
   ReverseGeocodeResult,
   RoutingResult,
   SuggestedPlace,
 } from '../types/map-provider.types.js';
+import {
+  DEFAULT_PROVIDER_CAPABILITIES,
+  type MapCapability,
+} from '../types/map-capabilities.types.js';
 import { logger } from '@shared/logger/index.js';
 import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
@@ -114,6 +119,14 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
 
   isConfigured(): boolean {
     return Boolean(this.config.apiKey && this.config.apiKey.trim().length > 0);
+  }
+
+  supportedCapabilities(): readonly MapCapability[] {
+    return DEFAULT_PROVIDER_CAPABILITIES.ola;
+  }
+
+  attribution(): MapProviderAttribution {
+    return { text: '© Ola Maps' };
   }
 
   /** Lightweight connectivity probe for admin health checks. */

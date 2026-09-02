@@ -196,8 +196,16 @@ export class RealtimeGateway {
       const rideRooms = [...socket.rooms].filter((name) => name.startsWith('ride:'));
       for (const rideRoom of rideRooms) {
         socket.to(rideRoom).emit(SOCKET_EVENT.DRIVER_LOCATION, accepted.envelope);
+        if (accepted.etaEnvelope) {
+          socket.to(rideRoom).emit(SOCKET_EVENT.ETA_UPDATED, accepted.etaEnvelope);
+        }
       }
-      ack(callback, { ok: true, persisted: accepted.persisted, rooms: rideRooms.length });
+      ack(callback, {
+        ok: true,
+        persisted: accepted.persisted,
+        rooms: rideRooms.length,
+        fixId: accepted.envelope.data.fixId ?? null,
+      });
     } catch (err) {
       this.failFrom(socket, callback, err);
     }

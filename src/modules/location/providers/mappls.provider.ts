@@ -6,13 +6,19 @@ import {
 import type { Coordinate } from '../types/geo.types.js';
 import type {
   AutocompleteResult,
+  ForwardGeocodeResult,
   MapProvider,
+  MapProviderAttribution,
   MatrixCell,
   MatrixResult,
   ReverseGeocodeResult,
   RoutingResult,
   SuggestedPlace,
 } from '../types/map-provider.types.js';
+import {
+  DEFAULT_PROVIDER_CAPABILITIES,
+  type MapCapability,
+} from '../types/map-capabilities.types.js';
 import { logger } from '@shared/logger/index.js';
 import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
@@ -45,6 +51,10 @@ interface MapplsGeocodeItem {
   formattedAddress?: string;
   locality?: string;
   city?: string;
+  latitude?: number;
+  longitude?: number;
+  lat?: number;
+  lng?: number;
 }
 
 interface MapplsGeocodeResponse {
@@ -122,6 +132,41 @@ export class MapplsProvider extends MapplsClient implements MapProvider {
       this.config.restApiKey?.trim() ||
       (this.config.clientId?.trim() && this.config.clientSecret?.trim()),
     );
+  }
+
+  supportedCapabilities(): readonly MapCapability[] {
+    return DEFAULT_PROVIDER_CAPABILITIES.mappls;
+  }
+
+  attribution(): MapProviderAttribution {
+    return { text: 'Powered by Mappls' };
+  }
+
+  async forwardGeocode(address: string): Promise<ForwardGeocodeResult> {
+    const endpoint = `geocode?address=${encodeURIComponent(address)}`;
+    const response = await this.makeAuthenticatedRequest<MapplsGeocodeResponse>(
+      this.searchBase,
+      endpoint,
+    );
+    const items = normalizeGeocodeItems(response);
+    if (items.length === 0) {
+      throw new Error('[Mappls] forwardGeocode: no result');
+    }
+    const item = items[0]!;
+    const latitude = item.latitude ?? item.lat;
+    const longitude = item.longitude ?? item.lng;
+    if (latitude == null || longitude == null) {
+      throw new Error('[Mappls] forwardGeocode: result missing coordinates');
+    }
+    return {
+      formattedAddress: item.formattedAddress ?? item.formatted_address ?? address,
+      latitude,
+      longitude,
+      city: item.city ?? item.locality ?? '',
+      state: '',
+      pincode: '',
+      providerName: this.providerName,
+    };
   }
 
   async autocomplete(input: string, location?: Coordinate): Promise<AutocompleteResult> {

@@ -338,6 +338,8 @@ describe('admin map configuration failure, fallback & resilience (integration)',
           {
             providerName: 'ola',
             isConfigured: () => true,
+            supportedCapabilities: () => ['route'],
+            attribution: () => ({ text: '© Ola Maps' }),
             getDirections: async () => {
               throw new Error('Ola 500 Internal Error');
             },
