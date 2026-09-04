@@ -120,18 +120,41 @@ async function ensureDriverDocuments(
   driverId: string,
   status: 'PENDING' | 'VERIFIED' | 'REJECTED',
 ) {
-  for (const documentType of driverConfig.requiredDocumentTypes) {
+  const extraTypes = ['PUC', 'AADHAAR', 'POLICE_VERIFICATION'] as const;
+  const documentTypes = [
+    ...new Set([...driverConfig.requiredDocumentTypes, ...extraTypes]),
+  ] as Array<(typeof driverConfig.requiredDocumentTypes)[number] | (typeof extraTypes)[number]>;
+
+  const now = Date.now();
+  const expiryByType: Record<string, Date> = {
+    DRIVING_LICENSE: new Date(now + 20 * 86400000), // expiring soon
+    RC: new Date('2031-05-11'),
+    INSURANCE: new Date(now + 45 * 86400000),
+    PUC: new Date(now - 3 * 86400000), // expired
+    AADHAAR: new Date('2035-01-01'),
+    POLICE_VERIFICATION: new Date('2028-06-01'),
+  };
+
+  for (const documentType of documentTypes) {
+    const docStatus =
+      documentType === 'PUC' && status === 'VERIFIED'
+        ? 'REJECTED'
+        : documentType === 'AADHAAR' && status === 'VERIFIED'
+          ? 'PENDING'
+          : status;
     const existing = await prisma.driverDocument.findUnique({
-      where: { driverId_documentType: { driverId, documentType } },
+      where: { driverId_documentType: { driverId, documentType: documentType as never } },
     });
     if (existing) {
       await prisma.driverDocument.update({
         where: { id: existing.id },
         data: {
-          verificationStatus: status,
+          verificationStatus: docStatus,
           fileUrl: existing.fileUrl ?? `https://example.invalid/${documentType.toLowerCase()}.jpg`,
           documentNumber: existing.documentNumber ?? `${documentType}-SEED-${driverId.slice(0, 6)}`,
-          ...(status === 'VERIFIED'
+          issuedAt: existing.issuedAt ?? new Date(now - 365 * 86400000),
+          expiresAt: expiryByType[documentType] ?? existing.expiresAt,
+          ...(docStatus === 'VERIFIED'
             ? { verifiedAt: existing.verifiedAt ?? new Date() }
             : { verifiedAt: null }),
         },
@@ -141,14 +164,13 @@ async function ensureDriverDocuments(
     await prisma.driverDocument.create({
       data: {
         driverId,
-        documentType,
-        verificationStatus: status,
+        documentType: documentType as never,
+        verificationStatus: docStatus,
         fileUrl: `https://example.invalid/${documentType.toLowerCase()}.jpg`,
         documentNumber: `${documentType}-SEED-${driverId.slice(0, 6)}`,
-        ...(status === 'VERIFIED' ? { verifiedAt: new Date() } : {}),
-        ...(documentType === 'DRIVING_LICENSE' || documentType === 'INSURANCE'
-          ? { expiresAt: new Date('2030-12-31') }
-          : {}),
+        issuedAt: new Date(now - 365 * 86400000),
+        expiresAt: expiryByType[documentType] ?? new Date('2030-12-31'),
+        ...(docStatus === 'VERIFIED' ? { verifiedAt: new Date() } : {}),
       },
     });
   }
@@ -395,6 +417,11 @@ export async function seedDevelopment(prisma: Prisma) {
 
   await seedSafetyFixtures(prisma);
   console.log('  -> Seeded safety SOS incidents, mishap reports, misconduct events, and evidence');
+
+  await seedFinanceFixtures(prisma);
+  console.log(
+    '  -> Seeded finance transactions, refunds, disputes, settlements, and document settings',
+  );
 }
 
 async function seedCities(prisma: Prisma) {
@@ -3149,6 +3176,535 @@ async function seedSafetyFixtures(prisma: Prisma) {
           createdAt: new Date(now.getTime() - 4 * 60 * 60 * 1000),
         },
       ],
+    });
+  }
+}
+
+async function seedFinanceFixtures(prisma: Prisma) {
+  const now = Date.now();
+
+  await prisma.systemSetting.upsert({
+    where: { key: 'documents.alert_threshold_days' },
+    update: { value: '30', category: 'documents' },
+    create: {
+      key: 'documents.alert_threshold_days',
+      value: '30',
+      category: 'documents',
+      description: 'Days before expiry to flag documents as expiring soon',
+    },
+  });
+  await prisma.systemSetting.upsert({
+    where: { key: 'documents.notify_email' },
+    update: { value: 'true', category: 'documents' },
+    create: {
+      key: 'documents.notify_email',
+      value: 'true',
+      category: 'documents',
+      description: 'Email notifications for document expiry',
+    },
+  });
+  await prisma.systemSetting.upsert({
+    where: { key: 'documents.notify_push' },
+    update: { value: 'true', category: 'documents' },
+    create: {
+      key: 'documents.notify_push',
+      value: 'true',
+      category: 'documents',
+      description: 'Push notifications for document expiry',
+    },
+  });
+
+  const completedRides = await prisma.ride.findMany({
+    where: { status: 'COMPLETED' },
+    include: {
+      fare: true,
+      customer: { include: { profile: true } },
+      driver: { include: { profile: true, wallet: true } },
+    },
+    orderBy: { completedAt: 'desc' },
+    take: 12,
+  });
+
+  if (completedRides.length === 0) {
+    console.log('  -> Skipping finance seed (no completed rides)');
+    return;
+  }
+
+  const gateways = ['razorpay', 'phonepe', 'cashfree', 'paytm'] as const;
+  const methods = ['UPI', 'CARD', 'WALLET', 'CASH'] as const;
+  const createdTxnIds: string[] = [];
+
+  for (let i = 0; i < completedRides.length; i++) {
+    const ride = completedRides[i]!;
+    const amount = Number(ride.fare?.totalFare ?? 200);
+    const gateway = gateways[i % gateways.length]!;
+    const method = methods[i % methods.length]!;
+    const idempotencyKey = `seed-intent-${ride.id}`;
+
+    let intent = await prisma.paymentIntent.findFirst({ where: { idempotencyKey } });
+    if (!intent) {
+      intent = await prisma.paymentIntent.create({
+        data: {
+          rideId: ride.id,
+          userId: ride.customerId,
+          amount,
+          currency: 'INR',
+          methodType: method,
+          status: 'CAPTURED',
+          gateway,
+          gatewayIntentId: `gi_seed_${ride.rideCode}`,
+          idempotencyKey,
+          createdAt: ride.completedAt ?? new Date(now - (i + 1) * 3600000),
+        },
+      });
+    }
+
+    let txn = await prisma.paymentTransaction.findFirst({
+      where: { intentId: intent.id, txnType: 'CHARGE' },
+    });
+    if (!txn) {
+      const isFailed = i % 7 === 0;
+      const isVariance = i % 9 === 0 && !isFailed;
+      txn = await prisma.paymentTransaction.create({
+        data: {
+          intentId: intent.id,
+          rideId: ride.id,
+          userId: ride.customerId,
+          txnType: 'CHARGE',
+          amount: isVariance ? amount - 50 : amount,
+          currency: 'INR',
+          status: isFailed ? 'FAILED' : 'SUCCEEDED',
+          gateway,
+          gatewayTxnId: isFailed ? null : `gtxn_seed_${ride.rideCode}`,
+          gatewayFee: isFailed ? 0 : Math.round(amount * 0.02 * 100) / 100,
+          errorCode: isFailed
+            ? (['GATEWAY_TIMEOUT', 'BANK_DECLINED', 'OTP_EXPIRED', 'INSUFFICIENT_FUNDS'] as const)[
+                i % 4
+              ]!
+            : null,
+          errorMessage: isFailed ? 'Seeded gateway failure for admin finance UI' : null,
+          varianceStatus: isVariance ? 'variance_found' : isFailed ? null : 'matched',
+          createdAt: ride.completedAt ?? new Date(now - (i + 1) * 3600000),
+        },
+      });
+    }
+    createdTxnIds.push(txn.id);
+
+    const existingRidePayment = await prisma.ridePayment.findFirst({ where: { rideId: ride.id } });
+    if (!existingRidePayment && txn.status === 'SUCCEEDED') {
+      await prisma.ridePayment.create({
+        data: {
+          rideId: ride.id,
+          amount,
+          method:
+            method === 'CARD'
+              ? 'CARD'
+              : method === 'UPI'
+                ? 'UPI'
+                : method === 'WALLET'
+                  ? 'WALLET'
+                  : 'CASH',
+          status: 'PAID',
+          settledAt: ride.completedAt ?? new Date(),
+        },
+      });
+    }
+  }
+
+  const driver = completedRides.find((r) => r.driver)?.driver;
+  if (driver?.wallet) {
+    const existingLedger = await prisma.driverWalletTransaction.count({
+      where: { driverId: driver.id },
+    });
+    if (existingLedger === 0) {
+      let balance = 0;
+      const ledgerSeed: Array<{
+        txnType: 'RIDE_EARNING' | 'BONUS' | 'INCENTIVE' | 'PENALTY' | 'REFUND' | 'WITHDRAWAL';
+        amount: number;
+        description: string;
+      }> = [
+        { txnType: 'RIDE_EARNING', amount: 280, description: 'Trip earning — completed ride' },
+        { txnType: 'RIDE_EARNING', amount: 195, description: 'Trip earning — completed ride' },
+        { txnType: 'BONUS', amount: 250, description: 'Weekly completion bonus' },
+        { txnType: 'INCENTIVE', amount: 150, description: 'Peak hour surge incentive' },
+        { txnType: 'PENALTY', amount: -100, description: 'Complaint penalty' },
+        { txnType: 'REFUND', amount: -70, description: 'Rider refund deduction' },
+        { txnType: 'WITHDRAWAL', amount: -500, description: 'Settlement payout' },
+      ];
+      for (let i = 0; i < ledgerSeed.length; i++) {
+        const entry = ledgerSeed[i]!;
+        balance = Math.round((balance + entry.amount) * 100) / 100;
+        await prisma.driverWalletTransaction.create({
+          data: {
+            walletId: driver.wallet.id,
+            driverId: driver.id,
+            txnType: entry.txnType,
+            amount: entry.amount,
+            balanceAfter: balance,
+            description: entry.description,
+            createdAt: new Date(now - (ledgerSeed.length - i) * 12 * 3600000),
+          },
+        });
+      }
+      await prisma.driverWallet.update({
+        where: { id: driver.wallet.id },
+        data: { balance: Math.max(balance, 0), lastTransactionAt: new Date() },
+      });
+    }
+  }
+
+  const ride0 = completedRides[0]!;
+  const ride1 = completedRides[1] ?? ride0;
+  const ride2 = completedRides[2] ?? ride0;
+  const driverNameOf = (d: (typeof completedRides)[0]['driver']) =>
+    d?.profile?.fullLegalName ?? 'Demo Driver';
+  const riderNameOf = (r: (typeof completedRides)[0]['customer']) =>
+    `${r.profile?.firstName ?? 'Demo'} ${r.profile?.lastName ?? 'Passenger'}`.trim();
+
+  type DisputeSeed = {
+    ride: (typeof completedRides)[0];
+    type: string;
+    status: string;
+    amount: number;
+    reason: string;
+    assignedTo?: string;
+    resolutionType?: string;
+    resolutionNotes?: string;
+  };
+
+  const disputeSeeds: DisputeSeed[] = [
+    {
+      ride: ride0,
+      type: 'FARE_DIFFERENCE',
+      status: 'open',
+      amount: 70,
+      reason:
+        'Estimated ride fare differed from final charged fare. Rider claims normal traffic should not add extra.',
+    },
+    {
+      ride: ride1,
+      type: 'UNCOLLECTED_CASH',
+      status: 'assigned',
+      amount: Number(ride1.fare?.totalFare ?? 200),
+      reason: 'Driver reports rider left without paying the cash fare.',
+      assignedTo: 'Support Agent A',
+    },
+    {
+      ride: ride2,
+      type: 'DOUBLE_CHARGE',
+      status: 'resolved',
+      amount: 121,
+      reason: 'Passenger was charged twice for the trip after an initial UPI delay.',
+      resolutionType: 'Adjust Fare',
+      resolutionNotes: 'Verified double debit. Reversal initiated for card payment.',
+    },
+  ];
+
+  for (const d of disputeSeeds) {
+    if (!d.ride.driverId) continue;
+    const existing = await prisma.paymentDispute.findFirst({
+      where: { rideId: d.ride.id, type: d.type },
+    });
+    if (existing) continue;
+    const createdAt = new Date(now - 2 * 3600000);
+    await prisma.paymentDispute.create({
+      data: {
+        rideId: d.ride.id,
+        type: d.type,
+        status: d.status,
+        riderUserId: d.ride.customerId,
+        riderName: riderNameOf(d.ride.customer),
+        driverId: d.ride.driverId,
+        driverName: driverNameOf(d.ride.driver),
+        amount: d.amount,
+        requestedAmount: d.amount,
+        reason: d.reason,
+        assignedTo: d.assignedTo ?? null,
+        assignedAt: d.status === 'assigned' ? createdAt : null,
+        resolvedBy: d.status === 'resolved' ? 'Support Agent B' : null,
+        resolvedAt: d.status === 'resolved' ? new Date(now - 3600000) : null,
+        resolutionType: d.resolutionType ?? null,
+        resolutionNotes: d.resolutionNotes ?? null,
+        adjustmentAmount: d.status === 'resolved' ? d.amount : null,
+        timeline: [
+          {
+            action: 'Dispute Created',
+            actor: 'System',
+            timestamp: createdAt.toISOString(),
+            notes: d.reason.slice(0, 80),
+          },
+          ...(d.status === 'assigned'
+            ? [
+                {
+                  action: 'Dispute Assigned',
+                  actor: 'Support Agent A',
+                  timestamp: createdAt.toISOString(),
+                },
+              ]
+            : []),
+          ...(d.status === 'resolved'
+            ? [
+                {
+                  action: 'Dispute Resolved',
+                  actor: 'Support Agent B',
+                  timestamp: new Date(now - 3600000).toISOString(),
+                  notes: d.resolutionNotes,
+                },
+              ]
+            : []),
+        ],
+        createdAt,
+        updatedAt: createdAt,
+      },
+    });
+  }
+
+  const successTxn = await prisma.paymentTransaction.findFirst({
+    where: { id: { in: createdTxnIds }, status: 'SUCCEEDED' },
+    include: { ride: true, user: { include: { profile: true } } },
+  });
+  if (successTxn) {
+    const refundDisplay = 'REF-2026-1001';
+    const existingRefund = await prisma.refund.findFirst({ where: { displayCode: refundDisplay } });
+    if (!existingRefund) {
+      const openDispute = await prisma.paymentDispute.findFirst({ where: { status: 'open' } });
+      await prisma.refund.create({
+        data: {
+          transactionId: successTxn.id,
+          rideId: successTxn.rideId,
+          userId: successTxn.userId,
+          amount: 70,
+          reason: 'Fare overcharge dispute resolution',
+          status: 'PENDING',
+          idempotencyKey: `seed-refund-${successTxn.id}`,
+          displayCode: refundDisplay,
+          refundType: 'DISPUTE_RESOLUTION',
+          workflowStatus: 'requested',
+          approvalLevel: 'support',
+          refundSource: 'dispute',
+          disputeId: openDispute?.id ?? null,
+          riderName:
+            `${successTxn.user.profile?.firstName ?? 'Demo'} ${successTxn.user.profile?.lastName ?? 'Passenger'}`.trim(),
+          timeline: [
+            {
+              action: 'Refund Requested',
+              actor: 'Support Agent A',
+              timestamp: new Date(now - 50 * 60000).toISOString(),
+              notes: 'Logged via fare difference dispute',
+            },
+          ],
+        },
+      });
+    }
+
+    const completedRefundCode = 'REF-2026-1002';
+    const existingCompleted = await prisma.refund.findFirst({
+      where: { displayCode: completedRefundCode },
+    });
+    if (!existingCompleted) {
+      await prisma.refund.create({
+        data: {
+          transactionId: successTxn.id,
+          rideId: successTxn.rideId,
+          userId: successTxn.userId,
+          amount: 121,
+          reason: 'Double payment reversal',
+          status: 'SUCCEEDED',
+          gatewayRefundId: `grf_seed_${successTxn.id.slice(0, 8)}`,
+          idempotencyKey: `seed-refund-completed-${successTxn.id}`,
+          displayCode: completedRefundCode,
+          refundType: 'DOUBLE_PAYMENT',
+          workflowStatus: 'completed',
+          approvalLevel: 'support',
+          refundSource: 'dispute',
+          reviewedBy: 'Support Agent B',
+          reviewedAt: new Date(now - 3 * 3600000),
+          processedBy: 'Finance Supervisor',
+          completedAt: new Date(now - 2 * 3600000),
+          riderName:
+            `${successTxn.user.profile?.firstName ?? 'Demo'} ${successTxn.user.profile?.lastName ?? 'Passenger'}`.trim(),
+          timeline: [
+            {
+              action: 'Refund Requested',
+              actor: 'Support Agent B',
+              timestamp: new Date(now - 4 * 3600000).toISOString(),
+            },
+            {
+              action: 'Refund Approved',
+              actor: 'Support Agent B',
+              timestamp: new Date(now - 3 * 3600000).toISOString(),
+              notes: 'Approve refund amount: ₹121.00',
+            },
+            {
+              action: 'Refund Completed',
+              actor: 'Finance Supervisor',
+              timestamp: new Date(now - 2 * 3600000).toISOString(),
+            },
+          ],
+        },
+      });
+    }
+  }
+
+  const verifiedDrivers = await prisma.driver.findMany({
+    where: { verificationStatus: 'VERIFIED', deletedAt: null },
+    include: { profile: true, wallet: true },
+    take: 3,
+  });
+
+  if (verifiedDrivers.length === 0) return;
+
+  const periodEnd = new Date();
+  periodEnd.setHours(0, 0, 0, 0);
+  const periodStart = new Date(periodEnd.getTime() - 14 * 86400000);
+  const batchNumber = 'SET-2026-1001';
+
+  let batch = await prisma.settlementBatch.findUnique({ where: { batchNumber } });
+  if (!batch) {
+    let totalGross = 0;
+    let totalCommission = 0;
+    let totalNet = 0;
+    const settlementRows: Array<{
+      driverId: string;
+      gross: number;
+      commission: number;
+      net: number;
+    }> = [];
+
+    for (const d of verifiedDrivers) {
+      const earnings = await prisma.rideFare.aggregate({
+        where: {
+          ride: {
+            driverId: d.id,
+            status: 'COMPLETED',
+            completedAt: { gte: periodStart, lte: periodEnd },
+          },
+        },
+        _sum: { driverEarning: true, platformCommission: true, totalFare: true },
+      });
+      const gross = Number(earnings._sum.totalFare ?? 4500);
+      const commission = Number(earnings._sum.platformCommission ?? gross * 0.07);
+      const net = Number(earnings._sum.driverEarning ?? gross - commission);
+      settlementRows.push({ driverId: d.id, gross, commission, net });
+      totalGross += gross;
+      totalCommission += commission;
+      totalNet += net;
+    }
+
+    batch = await prisma.settlementBatch.create({
+      data: {
+        batchNumber,
+        periodStart,
+        periodEnd,
+        status: 'pending',
+        generatedBy: 'Finance Manager',
+        totalDrivers: settlementRows.length,
+        totalGrossAmount: Math.round(totalGross * 100) / 100,
+        totalCommission: Math.round(totalCommission * 100) / 100,
+        totalRefundAdjustments: 70,
+        totalPenalties: 100,
+        totalBonuses: 250,
+        totalNetPayable: Math.round(totalNet * 100) / 100,
+        timeline: [
+          {
+            action: 'Batch Generated',
+            actor: 'Finance Manager',
+            timestamp: new Date(now - 2 * 86400000).toISOString(),
+            notes: 'Seeded settlement batch from completed rides',
+          },
+        ],
+        createdAt: new Date(now - 2 * 86400000),
+      },
+    });
+
+    for (const row of settlementRows) {
+      await prisma.driverSettlement.upsert({
+        where: {
+          driverId_periodStart_periodEnd: {
+            driverId: row.driverId,
+            periodStart,
+            periodEnd,
+          },
+        },
+        update: {
+          grossEarnings: row.gross,
+          commission: row.commission,
+          netPayable: row.net,
+          status: 'PENDING',
+          settlementBatchId: batch.id,
+        },
+        create: {
+          driverId: row.driverId,
+          periodStart,
+          periodEnd,
+          grossEarnings: row.gross,
+          commission: row.commission,
+          adjustments: 0,
+          netPayable: row.net,
+          status: 'PENDING',
+          settlementBatchId: batch.id,
+        },
+      });
+    }
+  }
+
+  const oldBatchNumber = 'SET-2026-1000';
+  const oldEnd = new Date(periodStart.getTime() - 86400000);
+  const oldStart = new Date(oldEnd.getTime() - 14 * 86400000);
+  const oldBatch = await prisma.settlementBatch.findUnique({
+    where: { batchNumber: oldBatchNumber },
+  });
+  if (!oldBatch && verifiedDrivers[0]) {
+    const created = await prisma.settlementBatch.create({
+      data: {
+        batchNumber: oldBatchNumber,
+        periodStart: oldStart,
+        periodEnd: oldEnd,
+        status: 'completed',
+        generatedBy: 'Finance Manager',
+        processedAt: new Date(now - 14 * 86400000),
+        completedAt: new Date(now - 13 * 86400000),
+        totalDrivers: 1,
+        totalGrossAmount: 14500,
+        totalCommission: 1015,
+        totalRefundAdjustments: 0,
+        totalPenalties: 0,
+        totalBonuses: 500,
+        totalNetPayable: 13985,
+        timeline: [
+          {
+            action: 'Batch Generated',
+            actor: 'Finance Manager',
+            timestamp: new Date(now - 15 * 86400000).toISOString(),
+          },
+          {
+            action: 'Settlement Completed',
+            actor: 'System',
+            timestamp: new Date(now - 13 * 86400000).toISOString(),
+          },
+        ],
+      },
+    });
+    await prisma.driverSettlement.upsert({
+      where: {
+        driverId_periodStart_periodEnd: {
+          driverId: verifiedDrivers[0].id,
+          periodStart: oldStart,
+          periodEnd: oldEnd,
+        },
+      },
+      update: { status: 'PAID', settlementBatchId: created.id },
+      create: {
+        driverId: verifiedDrivers[0].id,
+        periodStart: oldStart,
+        periodEnd: oldEnd,
+        grossEarnings: 14500,
+        commission: 1015,
+        adjustments: 0,
+        netPayable: 13985,
+        status: 'PAID',
+        settlementBatchId: created.id,
+      },
     });
   }
 }

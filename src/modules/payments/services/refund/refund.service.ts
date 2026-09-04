@@ -29,7 +29,13 @@ export class RefundService {
       throw new RefundNotAllowedError('Refund amount must be strictly greater than zero');
     }
     const existing = await this.refundRepo.findByIdempotencyKey(data.idempotencyKey);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.status === 'SUCCEEDED') return existing;
+      if (existing.status === 'PENDING') {
+        return this.processPendingRefund(existing.id);
+      }
+      return existing;
+    }
     const transaction = await this.refundRepo.findTransactionForRefund(data.transactionId);
     if (!transaction) {
       throw new RefundNotAllowedError('This transaction cannot be refunded');
@@ -97,6 +103,81 @@ export class RefundService {
         paymentEvent(PAYMENT_EVENT_CATALOG.REFUND_PROCESSED, data.userId, {
           refundId: refundRecord.id,
           amount: data.amount.toNumber(),
+        }),
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  /// Completes an admin-created PENDING refund through the gateway + ledger path.
+  async processPendingRefund(refundId: string): Promise<Refund> {
+    return this.txManager.execute(async (tx) => {
+      const refund = await tx.refund.findUnique({ where: { id: refundId } });
+      if (!refund) {
+        throw new RefundNotAllowedError('Refund was not found');
+      }
+      if (refund.status === 'SUCCEEDED') return refund;
+      if (refund.status !== 'PENDING') {
+        throw new RefundNotAllowedError(`Refund cannot be processed from status ${refund.status}`);
+      }
+
+      const transaction = await this.refundRepo.findTransactionForRefund(refund.transactionId, tx);
+      if (!transaction) {
+        throw new RefundNotAllowedError('This transaction cannot be refunded');
+      }
+
+      const totalAlreadyRefunded = await this.refundRepo.getTotalRefundedForTransaction(
+        refund.transactionId,
+        tx,
+      );
+      // Exclude this PENDING row's amount from the remaining check (it is already counted).
+      const remainingRefundable = transaction.amount.sub(totalAlreadyRefunded).add(refund.amount);
+      if (refund.amount.gt(remainingRefundable)) {
+        this.paymentMetrics.refundFailure({ transactionId: refund.transactionId });
+        throw new RefundNotAllowedError(
+          `Refund amount (${refund.amount}) exceeds remaining captured amount (${remainingRefundable})`,
+        );
+      }
+
+      const gatewayRes = await this.gateway.createRefund(
+        refund.transactionId,
+        refund.amount,
+        refund.idempotencyKey,
+      );
+      const updated = await this.refundRepo.updateStatus(
+        refund.id,
+        'SUCCEEDED',
+        gatewayRes.gatewayRefundId,
+        tx,
+      );
+      await this.ledgerService.postTransactionGroup(
+        [
+          {
+            account: 'CUSTOMER_WALLET',
+            accountRefId: refund.userId,
+            direction: 'DEBIT',
+            amount: refund.amount,
+            referenceType: 'REFUND',
+            referenceId: refund.id,
+            description: `Refund debited for transaction ${refund.transactionId}`,
+          },
+          {
+            account: 'GATEWAY_CLEARING',
+            direction: 'CREDIT',
+            amount: refund.amount,
+            referenceType: 'REFUND',
+            referenceId: refund.id,
+            description: `Gateway refund credit for transaction ${refund.transactionId}`,
+          },
+        ],
+        tx,
+      );
+      this.paymentMetrics.refundProcessed({ refundId: refund.id });
+      await this.eventPublisher.publish(
+        paymentEvent(PAYMENT_EVENT_CATALOG.REFUND_PROCESSED, refund.userId, {
+          refundId: refund.id,
+          amount: refund.amount.toNumber(),
         }),
         tx,
       );
