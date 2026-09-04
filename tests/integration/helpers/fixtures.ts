@@ -175,16 +175,18 @@ export async function makeRide(input: {
 export async function makePaidTransaction(
   userId: string,
   amount: number,
+  options: { rideId?: string; status?: string; gateway?: string; varianceStatus?: string } = {},
 ): Promise<{ intentId: string; transactionId: string }> {
   const intent = await db().client.paymentIntent.create({
     data: {
       userId,
+      ...(options.rideId ? { rideId: options.rideId } : {}),
       amount,
       currency: 'INR',
       methodType: 'CARD',
       idempotencyKey: `seed_${randomUUID()}`,
-      status: 'SUCCEEDED',
-      gateway: 'mock',
+      status: options.status === 'FAILED' ? 'FAILED' : 'SUCCEEDED',
+      gateway: options.gateway ?? 'razorpay',
       gatewayIntentId: `mock_pi_${randomUUID().slice(0, 8)}`,
     },
   });
@@ -192,12 +194,18 @@ export async function makePaidTransaction(
   const transaction = await db().client.paymentTransaction.create({
     data: {
       intentId: intent.id,
+      ...(options.rideId ? { rideId: options.rideId } : {}),
       userId,
-      txnType: 'PAYMENT',
+      txnType: 'CHARGE',
       amount,
       currency: 'INR',
-      status: 'SUCCEEDED',
-      gateway: 'mock',
+      status: options.status ?? 'SUCCEEDED',
+      gateway: options.gateway ?? 'razorpay',
+      gatewayTxnId: options.status === 'FAILED' ? null : `gtxn_${randomUUID().slice(0, 8)}`,
+      ...(options.varianceStatus ? { varianceStatus: options.varianceStatus } : {}),
+      ...(options.status === 'FAILED'
+        ? { errorCode: 'GATEWAY_TIMEOUT', errorMessage: 'Gateway timed out' }
+        : {}),
     },
   });
 

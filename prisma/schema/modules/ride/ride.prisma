@@ -19,8 +19,8 @@ model RideRequest {
   paymentMethod        String?                               @map("payment_method")
   promoCode            String?                               @map("promo_code")
   scheduledFor         DateTime?                             @map("scheduled_for")
-  mapProvider            String?                               @map("map_provider")
-  mapConfigVersion       Int?                                  @map("map_config_version")
+  mapProvider          String?                               @map("map_provider")
+  mapConfigVersion     Int?                                  @map("map_config_version")
   status               RideRequestStatus                     @default(CREATED)
   rideId               String?                               @map("ride_id") @db.Uuid
   createdAt            DateTime                              @default(now()) @map("created_at")
@@ -121,6 +121,7 @@ model Ride {
   paymentTransactions    PaymentTransaction[]
   refunds                Refund[]
   chargebacks            Chargeback[]
+  paymentDisputes        PaymentDispute[]
   payoutItems            PayoutItem[]
   cashbackGrants         CashbackGrant[]
   chatConversations      ChatConversation[]
@@ -382,19 +383,19 @@ model RideOpsNote {
 }
 
 model RideLocationPoint {
-  id              String                               @id @default(uuid(7)) @db.Uuid
-  rideId          String                               @map("ride_id") @db.Uuid
-  driverId        String                               @map("driver_id") @db.Uuid
-  latitude        Decimal                              @db.Decimal(10, 7)
-  longitude       Decimal                              @db.Decimal(10, 7)
-  location        Unsupported("geography(Point,4326)")
-  heading         Decimal?                             @db.Decimal(5, 2)
-  speedKmh        Decimal?                             @map("speed_kmh") @db.Decimal(6, 2)
-  accuracyMeters  Decimal?                             @map("accuracy_meters") @db.Decimal(8, 2)
-  fixId           String                               @map("fix_id")
-  sequence        Int?                                 @db.Integer
-  recordedAt      DateTime                             @map("recorded_at")
-  receivedAt      DateTime                             @default(now()) @map("received_at")
+  id             String                               @id @default(uuid(7)) @db.Uuid
+  rideId         String                               @map("ride_id") @db.Uuid
+  driverId       String                               @map("driver_id") @db.Uuid
+  latitude       Decimal                              @db.Decimal(10, 7)
+  longitude      Decimal                              @db.Decimal(10, 7)
+  location       Unsupported("geography(Point,4326)")
+  heading        Decimal?                             @db.Decimal(5, 2)
+  speedKmh       Decimal?                             @map("speed_kmh") @db.Decimal(6, 2)
+  accuracyMeters Decimal?                             @map("accuracy_meters") @db.Decimal(8, 2)
+  fixId          String                               @map("fix_id")
+  sequence       Int?                                 @db.Integer
+  recordedAt     DateTime                             @map("recorded_at")
+  receivedAt     DateTime                             @default(now()) @map("received_at")
 
   ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
 
