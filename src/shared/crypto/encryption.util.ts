@@ -5,11 +5,28 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const MASKED_SECRET = '********';
 
+/// Key material for settings encryption.
+///
+/// There used to be a third fallback here: a string literal in this file. Any
+/// deployment that had set neither variable encrypted every provider credential,
+/// payment key and SMS secret under a constant that ships in the repository, so
+/// "encrypted at rest" meant nothing to anyone holding a database dump and a
+/// clone. It is gone; there is no default.
+///
+/// `JWT_ACCESS_SECRET` remains as a fallback because the environment schema
+/// already requires it everywhere, which keeps development and test working
+/// without a second secret. It is not good enough for production — rotating the
+/// JWT secret would silently make every stored credential undecryptable — so
+/// `ENCRYPTION_KEY` is required outright in staging and production (see
+/// `src/config/env/schema.ts`).
 function getEncryptionKey(): Buffer {
-  const secret =
-    process.env.ENCRYPTION_KEY ??
-    process.env.JWT_ACCESS_SECRET ??
-    'default_zaroorat_production_encryption_key_32_bytes!';
+  const secret = process.env.ENCRYPTION_KEY ?? process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    throw new Error(
+      'ENCRYPTION_KEY (or JWT_ACCESS_SECRET) must be set to encrypt or decrypt settings. ' +
+        'Refusing to fall back to a built-in key.',
+    );
+  }
   return scryptSync(secret, 'zaroorat_settings_salt', 32);
 }
 
