@@ -1,4 +1,5 @@
 import { logger } from '@shared/logger/index.js';
+import { ProviderHttpError, retryIdempotent } from '../provider-http-error.js';
 
 export interface OlaMapsConfig {
   apiKey: string;
@@ -66,18 +67,24 @@ export class OlaMapsClient {
     const safeUrl = url.replace(/([?&]api_key=)[^&]*/i, '$1[REDACTED]');
 
     try {
-      const response = await fetch(url, {
-        ...options,
-        headers,
-        signal: AbortSignal.timeout(this.config.timeoutMs ?? 5000),
+      // Every Ola endpoint this client calls is a read — autocomplete, geocode,
+      // directions, distance matrix — including the ones Ola models as POST, so
+      // retrying the whole path is safe. Add a mutating call here and it must
+      // opt out.
+      return await retryIdempotent(async () => {
+        const response = await fetch(url, {
+          ...options,
+          headers,
+          signal: AbortSignal.timeout(this.config.timeoutMs ?? 5000),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => response.statusText);
+          throw new ProviderHttpError('Ola Maps', response.status, text.slice(0, 200));
+        }
+
+        return (await response.json()) as T;
       });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => response.statusText);
-        throw new Error(`Ola Maps API error (${response.status}): ${text}`);
-      }
-
-      return (await response.json()) as T;
     } catch (error) {
       logger.error({ error, url: safeUrl }, '[OlaMaps] API request failed');
       throw error;
