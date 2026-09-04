@@ -53,17 +53,44 @@ export function encryptSecret(plaintext: string): string {
   }
 }
 
+/// Raised when an `enc:` value cannot be decrypted.
+///
+/// Almost always means the key changed: ENCRYPTION_KEY was set, rotated, or is
+/// now resolving differently than when the value was written. Distinct from "no
+/// value stored", which is the distinction the old `return ''` destroyed.
+export class SecretDecryptionError extends Error {
+  constructor(cause?: unknown) {
+    super(
+      'Failed to decrypt a stored secret. This usually means ENCRYPTION_KEY differs from ' +
+        'the key the value was encrypted with. Restore the previous key, or re-enter the ' +
+        'affected credentials.',
+      cause !== undefined ? { cause } : undefined,
+    );
+    this.name = 'SecretDecryptionError';
+  }
+}
+
 /**
  * Decrypts an encrypted setting string. Returns input as-is if not encrypted with enc: prefix.
+ *
+ * Throws `SecretDecryptionError` when an `enc:` value will not decrypt. It used
+ * to return `''`, which callers could not tell apart from an unset value: after
+ * a key rotation every provider reported itself "not configured" and routing
+ * returned 503 with nothing anywhere saying why. Callers that must survive one
+ * bad row — `SystemSettingService` reading a whole category — catch it per row.
  */
 export function decryptSecret(ciphertext: string | null | undefined): string {
   if (!ciphertext) return '';
   if (!ciphertext.startsWith('enc:')) return ciphertext;
 
-  try {
-    const parts = ciphertext.split(':');
-    if (parts.length !== 4) return ciphertext;
+  const parts = ciphertext.split(':');
+  if (parts.length !== 4) {
+    // Prefixed `enc:` but not in the format this module writes. Not decryptable,
+    // and returning it verbatim would hand a caller a ciphertext to use as a key.
+    throw new SecretDecryptionError();
+  }
 
+  try {
     const [, ivHex, authTagHex, encryptedHex] = parts;
     const key = getEncryptionKey();
     const iv = Buffer.from(ivHex!, 'hex');
@@ -77,7 +104,7 @@ export function decryptSecret(ciphertext: string | null | undefined): string {
     return decrypted.toString('utf8');
   } catch (error) {
     logger.error({ error }, '[encryption] Failed to decrypt secret');
-    return '';
+    throw new SecretDecryptionError(error);
   }
 }
 

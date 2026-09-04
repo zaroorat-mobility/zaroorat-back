@@ -120,13 +120,53 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     assert.equal(masked, '********');
     assert.equal(maskSecret(null), '');
 
-    // Corrupted ciphertext handling (must NOT crash application)
+    // Corrupted ciphertext raises rather than returning ''. The empty string was
+    // indistinguishable from "no credential stored", so a rotated ENCRYPTION_KEY
+    // presented as every provider being unconfigured, and routing returned 503
+    // with nothing anywhere naming the cause. Not crashing the application is
+    // still required — SystemSettingService contains this per row (below).
     const corrupted = 'enc:invalidiv:invalidtag:invalidcipher';
-    const decryptedCorrupted = decryptSecret(corrupted);
-    assert.equal(decryptedCorrupted, ''); // Returns empty string on corruption safely
+    assert.throws(() => decryptSecret(corrupted), { name: 'SecretDecryptionError' });
+
+    // Prefixed `enc:` but malformed is also a failure, not a passthrough:
+    // returning it verbatim would hand the caller a ciphertext to use as a key.
+    assert.throws(() => decryptSecret('enc:only:three'), { name: 'SecretDecryptionError' });
 
     // Plaintext fallback check (legacy unencrypted setting)
     assert.equal(decryptSecret('plaintext_key_123'), 'plaintext_key_123');
+    assert.equal(decryptSecret(''), '');
+    assert.equal(decryptSecret(null), '');
+  });
+
+  it('2.2 keeps a settings category readable when one stored secret will not decrypt', async () => {
+    const systemSettingService = container.resolve<SystemSettingService>('systemSettingService');
+
+    // A row that decrypts, and a row that cannot — the shape left behind by a
+    // key rotation that only some values were re-encrypted under.
+    await systemSettingService.setSetting({
+      key: 'map.ola.api_key',
+      value: 'readable_key_value',
+      category: 'maps',
+      isSecret: true,
+    });
+    const undecryptable = 'enc:invalidiv:invalidtag:invalidcipher';
+    await db().client.systemSetting.upsert({
+      where: { key: 'map.google.api_key' },
+      update: { value: undecryptable, isSecret: true, category: 'maps' },
+      create: {
+        key: 'map.google.api_key',
+        value: undecryptable,
+        isSecret: true,
+        category: 'maps',
+      },
+    });
+
+    const settings = await systemSettingService.getCategorySettings('maps');
+
+    // The bad row does not take the category down with it, and it reads as null
+    // rather than as a usable empty credential.
+    assert.equal(settings.get('map.ola.api_key')?.value, 'readable_key_value');
+    assert.equal(settings.get('map.google.api_key')?.value, null);
   });
 
   // ─── 3. SECRET SECURITY & AUDIT LOG REDACTION ─────────────────────────────
