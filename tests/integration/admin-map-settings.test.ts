@@ -200,7 +200,7 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(dynamicChain[0]?.providerName, 'ola');
   });
 
-  it('returns active provider tile key via GET /settings/maps/client-config', async () => {
+  it('returns the client SDK key — not the server key — via GET /settings/maps/client-config', async () => {
     const adminHeaders = await loginAdmin();
 
     await app.inject({
@@ -209,7 +209,9 @@ describe('admin map provider configuration (integration)', () => {
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-        providers: { ola: { apiKey: 'test_ola_key_for_tiles' } },
+        providers: {
+          ola: { apiKey: 'test_ola_server_key', clientSdkKey: 'test_ola_client_sdk_key' },
+        },
       },
     });
 
@@ -223,14 +225,50 @@ describe('admin map provider configuration (integration)', () => {
     const body = res.json().data;
     assert.equal(body.primaryProvider, 'ola');
     assert.equal(body.providers.ola.enabled, true);
-    assert.equal(body.providers.ola.apiKey, 'test_ola_key_for_tiles');
+    assert.equal(body.providers.ola.apiKey, 'test_ola_client_sdk_key');
     assert.ok(body.providers.ola.tileUrl?.includes('/tiles/v1/styles/default-light-standard/'));
+    // The whole point of the split: the server key must not reach the browser,
+    // in the key field or anywhere in the payload.
+    assert.ok(!JSON.stringify(body).includes('test_ola_server_key'));
     assert.equal(body.providers.google.enabled, false);
     assert.equal(body.providers.google.apiKey, undefined);
     assert.equal(body.providers.mappls.enabled, false);
   });
 
-  it('returns Mappls tile key from server REST credentials on client-config', async () => {
+  // Google, because `resetState` does not truncate `system_settings`: a
+  // clientSdkKey stored by an earlier test in this file would still be there,
+  // and no test configures one for google.
+  it('withholds the tile key entirely when only a server key is configured', async () => {
+    const adminHeaders = await loginAdmin();
+
+    await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+      payload: {
+        primaryProvider: 'google',
+        providers: { google: { apiKey: 'test_google_server_only_key' } },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/maps/client-config',
+      headers: adminHeaders,
+    });
+
+    assert.equal(res.statusCode, 200, res.payload);
+    const body = res.json().data;
+    // `resolveTileKey` used to fall back to the server REST key here, handing a
+    // full-quota backend credential to the admin bundle. No SDK key now means no
+    // tiles — a blank map is the correct outcome, not a leaked key.
+    assert.equal(body.providers.google.enabled, true);
+    assert.equal(body.providers.google.apiKey, undefined);
+    assert.equal(body.providers.google.tileUrl, undefined);
+    assert.ok(!JSON.stringify(body).includes('test_google_server_only_key'));
+  });
+
+  it('never embeds the Mappls REST credential in a tile URL on client-config', async () => {
     const adminHeaders = await loginAdmin();
 
     await app.inject({
@@ -244,6 +282,7 @@ describe('admin map provider configuration (integration)', () => {
             restApiKey: 'test_mappls_rest_tile_key',
             clientId: 'test_mappls_id',
             clientSecret: 'test_mappls_secret',
+            clientSdkKey: 'test_mappls_sdk_key',
           },
         },
       },
@@ -258,8 +297,13 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json().data;
     assert.equal(body.primaryProvider, 'mappls');
-    assert.equal(body.providers.mappls.apiKey, 'test_mappls_rest_tile_key');
-    assert.ok(body.providers.mappls.tileUrl?.includes('test_mappls_rest_tile_key'));
+    assert.equal(body.providers.mappls.apiKey, 'test_mappls_sdk_key');
+    assert.ok(body.providers.mappls.tileUrl?.includes('test_mappls_sdk_key'));
+    // Mappls puts the key in the URL path, so a leak here also reaches every
+    // proxy and CDN log between the browser and Mappls.
+    const payload = JSON.stringify(body);
+    assert.ok(!payload.includes('test_mappls_rest_tile_key'));
+    assert.ok(!payload.includes('test_mappls_secret'));
     assert.equal(body.providers.ola.enabled, false);
     assert.equal(body.providers.ola.apiKey, undefined);
   });

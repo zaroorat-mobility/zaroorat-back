@@ -144,8 +144,18 @@ export class AdminMapSettingsService {
     const settingsMap = await this.systemSettingService.getCategorySettings(MAP_SETTINGS_CATEGORY);
     const primary = settings.primaryProvider as MapProviderName;
 
-    const resolveTileKey = (name: MapProviderName): string => {
-      const clientSdk = resolveMapCredential(
+    /// The browser-facing tile key: the platform-restricted client SDK key, and
+    /// nothing else.
+    ///
+    /// This used to fall through to the backend REST key when no SDK key was
+    /// configured — `map.ola.api_key`, `map.google.api_key`, the Mappls REST key.
+    /// That key reached the admin bundle as `providers[name].apiKey`, and for
+    /// Mappls it was embedded in the raster tile URL path, so it also travelled
+    /// through every proxy and CDN log between the browser and Mappls. A server
+    /// credential with full account quota and no referrer restriction is not a
+    /// tile key; an unconfigured SDK key now yields no tiles instead.
+    const resolveTileKey = (name: MapProviderName): string =>
+      resolveMapCredential(
         settingsMap.get(
           name === 'ola'
             ? MAP_SETTING_KEYS.OLA_CLIENT_SDK_KEY
@@ -159,43 +169,6 @@ export class AdminMapSettingsService {
             ? process.env.GOOGLE_MAPS_CLIENT_SDK_KEY
             : process.env.MAPPLS_CLIENT_SDK_KEY,
       );
-      if (clientSdk) return clientSdk;
-
-      if (name === 'ola') {
-        return resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.OLA_API_KEY)?.value,
-          process.env.OLA_MAPS_API_KEY,
-          process.env.MAPS_API_KEY,
-        );
-      }
-      if (name === 'google') {
-        return resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.GOOGLE_API_KEY)?.value,
-          process.env.GOOGLE_MAPS_API_KEY,
-        );
-      }
-      return (
-        resolveMapplsTileLicenseKey(
-          buildMapplsProviderConfig({
-            restApiKey: resolveMapCredential(
-              settingsMap.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value,
-              process.env.MAPPLS_REST_API_KEY,
-              process.env.EXPO_PUBLIC_MAPPLS_REST_KEY,
-            ),
-            clientId: resolveMapCredential(
-              settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value,
-              process.env.MAPPLS_CLIENT_ID,
-              process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID,
-            ),
-            clientSecret: resolveMapCredential(
-              settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value,
-              process.env.MAPPLS_CLIENT_SECRET,
-              process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET,
-            ),
-          }) ?? { restApiKey: '' },
-        ) ?? ''
-      );
-    };
 
     const buildProvider = (name: MapProviderName) => {
       const isPrimary = name === primary;
