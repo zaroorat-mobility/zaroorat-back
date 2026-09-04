@@ -55,5 +55,17 @@ export const rateLimits = Object.freeze({
     windowSeconds: Number(process.env.RL_ADMIN_LOGIN_WINDOW ?? 900),
     keyBy: 'ip',
   }),
+  mapsSearch: Object.freeze<RateLimitOptions>({
+    scope: 'rl:maps-search',
+    limit: Number(process.env.RL_MAPS_SEARCH_LIMIT ?? 120),
+    windowSeconds: Number(process.env.RL_MAPS_SEARCH_WINDOW ?? 3600),
+    keyBy: 'user',
+  }),
+  mapsRoute: Object.freeze<RateLimitOptions>({
+    scope: 'rl:maps-route',
+    limit: Number(process.env.RL_MAPS_ROUTE_LIMIT ?? 60),
+    windowSeconds: Number(process.env.RL_MAPS_ROUTE_WINDOW ?? 3600),
+    keyBy: 'user',
+  }),
 });
 export type RateLimits = typeof rateLimits;

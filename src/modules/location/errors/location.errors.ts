@@ -96,3 +96,24 @@ export class RoutingProviderUnavailableError extends GeographicError {
     this.name = 'RoutingProviderUnavailableError';
   }
 }
+
+export class MapProviderAuthError extends GeographicError {
+  constructor(message = 'Map provider authentication failed') {
+    super(message, 'MAP_PROVIDER_AUTH_FAILED', 502);
+    this.name = 'MapProviderAuthError';
+  }
+}
+
+export class MapProviderQuotaError extends GeographicError {
+  constructor(message = 'Map provider quota exceeded') {
+    super(message, 'MAP_PROVIDER_QUOTA_EXCEEDED', 429);
+    this.name = 'MapProviderQuotaError';
+  }
+}
+
+export class MapProviderTimeoutError extends GeographicError {
+  constructor(message = 'Map provider request timed out') {
+    super(message, 'MAP_PROVIDER_TIMEOUT', 504);
+    this.name = 'MapProviderTimeoutError';
+  }
+}

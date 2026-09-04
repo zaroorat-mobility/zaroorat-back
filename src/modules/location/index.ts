@@ -15,9 +15,11 @@ import {
   GeoService,
 } from './core-services/index.js';
 import { GeographicCoverageService, MapProviderService } from './business-services/index.js';
+import { MapsController } from './controllers/maps.controller.js';
+import { RideLocationHistoryService } from './services/ride-location-history.service.js';
+import { RideEtaService } from './services/ride-eta.service.js';
 import type { MapProvider } from './types/map-provider.types.js';
-import type { SystemSettingService } from '../admin/system-settings/index.js';
-import type { RedisService } from '../../core/cache/index.js';
+import { buildMapplsProviderConfig } from '../../integrations/mappls/mappls-credentials.util.js';
 
 // Public API — all consumers import from '@modules/location'
 export * from './providers/index.js';
@@ -29,17 +31,6 @@ export * from './errors/index.js';
 export * from './constants/index.js';
 export * from './types/index.js';
 export * from './utils/index.js';
-
-/// Both are registered by other modules, and a unit test may build a container
-/// without them. `container.resolve` throws on a missing registration, so the
-/// optional dependencies need this rather than a bare resolve.
-function tryResolve<T>(container: AwilixContainer, name: string): T | undefined {
-  try {
-    return container.resolve<T>(name);
-  } catch {
-    return undefined;
-  }
-}
 
 export function registerLocationModule(container: AwilixContainer): void {
   container.register({
@@ -66,57 +57,52 @@ export function registerLocationModule(container: AwilixContainer): void {
     }).singleton(),
 
     mapplsProvider: asFunction(() => {
-      const restApiKey = process.env.MAPPLS_REST_API_KEY ?? '';
-      const clientId = process.env.MAPPLS_CLIENT_ID ?? '';
-      const clientSecret = process.env.MAPPLS_CLIENT_SECRET ?? '';
-      const baseUrl = process.env.MAPPLS_BASE_URL;
-      const config =
-        clientId && clientSecret
-          ? {
-              clientId,
-              clientSecret,
-              ...(restApiKey ? { restApiKey } : {}),
-              ...(baseUrl ? { baseUrl } : {}),
-            }
-          : restApiKey || clientId
-            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
-            : { restApiKey: '' };
+      const config = buildMapplsProviderConfig({
+        restApiKey: process.env.MAPPLS_REST_API_KEY ?? '',
+        clientId: process.env.MAPPLS_CLIENT_ID ?? '',
+        clientSecret: process.env.MAPPLS_CLIENT_SECRET ?? '',
+        ...(process.env.MAPPLS_BASE_URL ? { baseUrl: process.env.MAPPLS_BASE_URL } : {}),
+      }) ?? { restApiKey: '' };
       return new MapplsProvider(config);
     }).singleton(),
 
     // Unified map provider service — exactly one active provider (no fallback chain)
     //
-    // Resolved explicitly rather than through a destructured factory parameter.
-    // The container runs in `InjectionMode.CLASSIC`, which injects by reading the
-    // factory's *parameter names*; a destructured `({ a, b }) => ...` parameter is
-    // named `{ a, b }` and matches no registration, so this factory used to receive
-    // `undefined` for all five dependencies. MapProviderService therefore never got
-    // the settings service or Redis, and the admin-selected provider was silently
-    // ignored in favour of whatever the environment configured at boot.
-    mapProviderService: asFunction((): MapProviderService => {
-      const primaryName = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
+    // The parameters must stay positional and named exactly as registered:
+    // the container runs in `InjectionMode.CLASSIC`, which injects by reading the
+    // factory's parameter names. A destructured `({ a, b }) => ...` parameter is
+    // named `{ a, b }`, matches no registration, and silently yields `undefined`
+    // for every dependency.
+    mapProviderService: asFunction(
+      function mapProviderServiceFactory(
+        olaMapsProvider,
+        googleMapsProvider,
+        mapplsProvider,
+        systemSettingService,
+        redisService,
+      ) {
+        const providerMap: Record<string, MapProvider> = {
+          ola: olaMapsProvider,
+          google: googleMapsProvider,
+          mappls: mapplsProvider,
+        };
 
-      const providerMap: Record<string, MapProvider> = {
-        ola: container.resolve<OlaMapsProvider>('olaMapsProvider'),
-        google: container.resolve<GoogleMapsProvider>('googleMapsProvider'),
-        mappls: container.resolve<MapplsProvider>('mapplsProvider'),
-      };
+        const envPrimary = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
+        const primaryProvider: MapProvider =
+          (providerMap[envPrimary]?.isConfigured() ? providerMap[envPrimary] : undefined) ??
+          Object.values(providerMap).find((p) => p.isConfigured()) ??
+          providerMap[envPrimary] ??
+          providerMap.ola ??
+          olaMapsProvider;
 
-      const primaryProvider = (providerMap[primaryName] ?? providerMap['ola'])!;
-
-      const systemSettingService = tryResolve<SystemSettingService>(
-        container,
-        'systemSettingService',
-      );
-      const redisService = tryResolve<RedisService>(container, 'redisService');
-
-      return new MapProviderService({
-        primaryProvider,
-        providersRegistry: providerMap,
-        ...(systemSettingService ? { systemSettingService } : {}),
-        ...(redisService ? { redisService } : {}),
-      });
-    }).singleton(),
+        return new MapProviderService({
+          primaryProvider,
+          providersRegistry: providerMap,
+          systemSettingService,
+          redisService,
+        });
+      },
+    ).singleton(),
 
     // Core services
     coordinateService: asClass(CoordinateService).singleton(),
@@ -132,5 +118,8 @@ export function registerLocationModule(container: AwilixContainer): void {
 
     // Business services
     geographicCoverageService: asClass(GeographicCoverageService).singleton(),
+    rideLocationHistoryService: asClass(RideLocationHistoryService).singleton(),
+    rideEtaService: asClass(RideEtaService).singleton(),
+    mapsController: asClass(MapsController).singleton(),
   });
 }

@@ -121,7 +121,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
 
   // ─── 2. REJECT MULTIPLE ACTIVE PROVIDERS ──────────────────────────────────
 
-  it('2.1 rejects multiple active providers (Ola + Google)', async () => {
+  it('2.1 rejects enabling a secondary provider while another is primary', async () => {
     const adminHeaders = await loginAdmin();
     const res = await app.inject({
       method: 'PUT',
@@ -129,16 +129,15 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       headers: adminHeaders,
       payload: {
         primaryProvider: 'ola',
-
         providers: {
           ola: { apiKey: 'test_ola_key' },
-          google: { enabled: true, apiKey: 'test_google_key' }, // REJECT!
+          google: { enabled: true, apiKey: 'test_google_key' },
         },
       },
     });
 
     assert.equal(res.statusCode, 400);
-    assert.ok(res.json().error.message.includes('Exactly ONE map provider'));
+    assert.ok(res.json().error.message.includes('Only the active provider'));
   });
 
   it('2.2 ignores legacy fallbackProviders field (single-provider mode)', async () => {
@@ -271,6 +270,8 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
         {
           providerName: 'google',
           isConfigured: () => true,
+          supportedCapabilities: () => ['route'],
+          attribution: () => ({ text: '© Google' }),
           getDirections: async () => {
             throw new Error('Google 500 Error');
           },

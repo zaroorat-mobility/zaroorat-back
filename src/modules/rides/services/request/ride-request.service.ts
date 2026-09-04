@@ -429,6 +429,11 @@ export class RideRequestService {
         if (input.dropAddress !== undefined) createInput.dropAddress = input.dropAddress;
         if (input.paymentMethod !== undefined) createInput.paymentMethod = input.paymentMethod;
         if (input.promoCode?.trim()) createInput.promoCode = input.promoCode.trim().toUpperCase();
+        if (this.mapProviderService) {
+          const policy = await this.mapProviderService.resolvePolicy();
+          createInput.mapProvider = policy.primaryProvider;
+          createInput.mapConfigVersion = policy.configVersion;
+        }
         const request = await this.requestRepo.create(createInput, tx);
         this.rideMetrics.requestCreated({ requestId: request.id });
         await this.eventPublisher.publish(

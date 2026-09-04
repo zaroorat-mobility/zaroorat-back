@@ -58,8 +58,11 @@ Battery is a real constraint for a driver online all day. We **adapt the samplin
 | App backgrounded (driver online) | OS-efficient background updates, batched                         |
 
 - **Batch + debounce** pings; send over WS when connected, else **batch to
-  `POST /drivers/me/location`** ([03](03_offline-resilience.md)). Locations land in Redis GEO
+  `POST /drivers/location`** ([03](03_offline-resilience.md)). Locations land in Redis GEO
   (Volume 6 §04).
+- **Maps data** (autocomplete, geocode, route preview) is fetched from the backend at
+  `/api/v1/maps/*` so provider credentials stay server-side. Map rendering uses the secret-free
+  `/api/v1/maps/config` response (client SDK keys only).
 - **Freshness matters for matching (R-AVAIL-2):** stale fixes make a driver ineligible, so the app
   keeps the fix fresh while online — but no fresher than needed, to save battery.
 

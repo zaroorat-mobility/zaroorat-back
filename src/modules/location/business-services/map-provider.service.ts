@@ -2,18 +2,35 @@ import { logger } from '@shared/logger/index.js';
 import type { Coordinate } from '../types/geo.types.js';
 import type {
   AutocompleteResult,
+  ForwardGeocodeResult,
   MapProvider,
   MatrixResult,
+  PlaceDetailsResult,
   ReverseGeocodeResult,
   RoutingResult,
 } from '../types/map-provider.types.js';
-import { RoutingProviderUnavailableError } from '../errors/location.errors.js';
-import type { SystemSettingService } from '@modules/admin/system-settings/index.js';
+import {
+  MapProviderAuthError,
+  MapProviderQuotaError,
+  MapProviderTimeoutError,
+  RoutingProviderUnavailableError,
+} from '../errors/location.errors.js';
+import type { SystemSettingService } from '@modules/admin/system-settings/services/system-setting.service.js';
 import type { RedisService } from '@core/cache';
 import { OlaMapsProvider } from '../providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '../providers/google-maps.provider.js';
 import { MapplsProvider } from '../providers/mappls.provider.js';
-import { decryptSecret, encryptSecret } from '@shared/crypto/encryption.util.js';
+import {
+  buildMapplsProviderConfig,
+  resolveMapCredential,
+} from '../../../integrations/mappls/mappls-credentials.util.js';
+import type { MapCapability, MapResultMeta } from '../types/map-capabilities.types.js';
+import type { MapProviderName } from '@modules/admin/system-settings/map/types/map-settings.types.js';
+import {
+  buildMapSettingsFromEnv,
+  resolveMapPolicyFromSettings,
+  type CachedMapSettings,
+} from './map-policy-resolver.js';
 
 export interface MapProviderServiceOptions {
   primaryProvider?: MapProvider;
@@ -22,21 +39,15 @@ export interface MapProviderServiceOptions {
   redisService?: RedisService;
 }
 
-interface CachedMapSettings {
-  primaryProvider: string;
-  keys?: Record<string, string>;
-  baseUrls?: Record<string, string>;
+const CACHE_KEY = 'geo:settings:maps';
+
+function attachMeta<T extends { providerName: string; meta?: MapResultMeta }>(
+  result: T,
+  meta: MapResultMeta,
+): T {
+  return { ...result, meta };
 }
 
-/**
- * Single Active MapProviderService — Resolves exactly ONE active map provider.
- *
- * Strict single-active-provider architecture:
- * 1. Checks Redis settings cache ('geo:settings:maps').
- * 2. If miss, queries Database SystemSetting records ('maps' category).
- * 3. Resolves exactly ONE active provider for routing, geocoding, and distance matrix.
- * 4. If the active provider fails, raises controlled error (HTTP 503) without calling secondary providers.
- */
 export class MapProviderService {
   private readonly staticProviders: MapProvider[];
   private readonly registry: Record<string, MapProvider>;
@@ -45,14 +56,11 @@ export class MapProviderService {
 
   constructor(options: MapProviderServiceOptions) {
     const staticList = options.primaryProvider ? [options.primaryProvider] : [];
-
     this.staticProviders = staticList.filter((p) => p && p.isConfigured());
-
     this.registry = options.providersRegistry ?? {};
     if (options.primaryProvider) {
       this.registry[options.primaryProvider.providerName] = options.primaryProvider;
     }
-
     this.systemSettingService = options.systemSettingService;
     this.redisService = options.redisService;
   }
@@ -61,288 +69,252 @@ export class MapProviderService {
     return this.staticProviders.map((p) => p.providerName);
   }
 
-  /// Both arrive through the constructor. `registerLocationModule` resolves them
-  /// from the container explicitly rather than through a destructured parameter,
-  /// which `InjectionMode.CLASSIC` cannot read — see the note there.
-  ///
-  /// These used to fall back to `container.resolve(...)`. That import of the DI
-  /// root closed a cycle (location barrel -> here -> @core/di -> module
-  /// registration -> location barrel, still half-evaluated) which left 9 unit
-  /// test files unable to load at all.
-  private getSettingService(): SystemSettingService | undefined {
-    return this.systemSettingService;
-  }
-
-  private getRedis(): RedisService | undefined {
-    return this.redisService;
-  }
-
-  /**
-   * Resolves the single active map provider for the application.
-   */
-  async resolveProviderChain(): Promise<MapProvider[]> {
-    const settingService = this.getSettingService();
-    const redis = this.getRedis();
+  async resolvePolicy(): Promise<CachedMapSettings> {
+    const settingService = this.systemSettingService;
+    const redis = this.redisService;
 
     if (!settingService) {
-      return this.staticProviders.slice(0, 1);
+      return buildMapSettingsFromEnv();
+    }
+
+    if (redis) {
+      try {
+        const cachedJson = await redis.provider.client.get(CACHE_KEY);
+        if (cachedJson) {
+          const cached = JSON.parse(cachedJson) as CachedMapSettings;
+          if (cached.primaryProvider) return cached;
+          await redis.provider.client.del(CACHE_KEY);
+        }
+      } catch (err) {
+        logger.warn({ err }, '[MapProviderService] Redis map settings cache read failed');
+      }
     }
 
     try {
-      // 1. Check Redis cache
+      const policy = await resolveMapPolicyFromSettings(settingService);
       if (redis) {
-        const cachedJson = await redis.provider.client.get('geo:settings:maps');
-        if (cachedJson) {
-          const cached = JSON.parse(cachedJson) as CachedMapSettings;
-          const chain = this.buildProviderChain(
-            cached.primaryProvider,
-            cached.keys,
-            cached.baseUrls,
-          );
-          if (chain.length > 0) return chain;
+        try {
+          await redis.provider.client.set(CACHE_KEY, JSON.stringify(policy), 'EX', 3600);
+        } catch (err) {
+          logger.warn({ err }, '[MapProviderService] Redis map settings cache write failed');
         }
       }
-
-      // 2. Query Database SystemSettings
-      const settingsMap = await settingService.getCategorySettings('maps');
-      if (settingsMap.size > 0) {
-        const primary =
-          settingsMap.get('map.primary_provider')?.value ?? process.env.MAP_PROVIDER ?? 'ola';
-
-        const keys: Record<string, string> = {
-          olaKey:
-            settingsMap.get('map.ola.api_key')?.value ??
-            process.env.OLA_MAPS_API_KEY ??
-            process.env.MAPS_API_KEY ??
-            '',
-          googleKey:
-            settingsMap.get('map.google.api_key')?.value ?? process.env.GOOGLE_MAPS_API_KEY ?? '',
-          mapplsRestKey:
-            settingsMap.get('map.mappls.rest_api_key')?.value ??
-            process.env.MAPPLS_REST_API_KEY ??
-            '',
-          mapplsId:
-            settingsMap.get('map.mappls.client_id')?.value ?? process.env.MAPPLS_CLIENT_ID ?? '',
-          mapplsSecret:
-            settingsMap.get('map.mappls.client_secret')?.value ??
-            process.env.MAPPLS_CLIENT_SECRET ??
-            '',
-        };
-
-        const baseUrls: Record<string, string> = {
-          olaUrl: settingsMap.get('map.ola.base_url')?.value ?? process.env.OLA_MAPS_BASE_URL ?? '',
-          googleUrl:
-            settingsMap.get('map.google.base_url')?.value ?? process.env.GOOGLE_MAPS_BASE_URL ?? '',
-          mapplsUrl:
-            settingsMap.get('map.mappls.base_url')?.value ?? process.env.MAPPLS_BASE_URL ?? '',
-        };
-
-        // Cache in Redis for 1 hour.
-        //
-        // The credentials are re-encrypted first. `getCategorySettings` decrypts
-        // every secret it returns, so caching `keys` as-is put the provider API
-        // keys in Redis in clear text for an hour — readable by anything with
-        // access to the instance, and outliving a key rotation in the database.
-        // Keys sourced from the environment are plaintext too and are covered by
-        // the same pass. `decryptSecret` in `buildProviderChain` is idempotent,
-        // so the read side needs no change.
-        if (redis) {
-          const toCache: CachedMapSettings = {
-            primaryProvider: primary,
-            keys: Object.fromEntries(
-              Object.entries(keys).map(([name, value]) => [
-                name,
-                value ? encryptSecret(value) : '',
-              ]),
-            ),
-            baseUrls,
-          };
-          await redis.provider.client.set('geo:settings:maps', JSON.stringify(toCache), 'EX', 3600);
-        }
-
-        const chain = this.buildProviderChain(primary, keys, baseUrls);
-        if (chain.length > 0) return chain;
-      }
+      return policy;
     } catch (err) {
-      logger.warn(
-        { err },
-        '[MapProviderService] Dynamic provider resolution failed — using static active provider',
-      );
+      logger.warn({ err }, '[MapProviderService] Dynamic provider resolution failed');
+      return buildMapSettingsFromEnv();
     }
-
-    return this.staticProviders.slice(0, 1);
   }
 
-  private buildProviderChain(
-    primaryName: string,
-    keys?: Record<string, string>,
-    baseUrls?: Record<string, string>,
-  ): MapProvider[] {
-    let provider = this.registry[primaryName];
+  /// The single active provider, as a one-element list.
+  ///
+  /// Every capability call resolves its primary through here, so this stays the
+  /// one seam that decides which provider serves a request. It was briefly a
+  /// parallel path that nothing called, which meant the resilience tests stubbed
+  /// it, the real provider ran anyway, and a provider outage that should have
+  /// surfaced as a 503 quietly returned a route.
+  async resolveProviderChain(): Promise<MapProvider[]> {
+    const policy = await this.resolvePolicy();
+    const provider = this.buildProvider(policy.primaryProvider, policy);
+    return provider ? [provider] : [];
+  }
 
-    if (primaryName === 'ola') {
-      const apiKey = keys?.olaKey
-        ? decryptSecret(keys.olaKey)
-        : (process.env.OLA_MAPS_API_KEY ?? process.env.MAPS_API_KEY ?? '');
-      // The resolved key wins outright. This used to keep an existing provider
-      // whenever it was already `isConfigured()`, so on a deployment that also
-      // sets the environment key the env provider was built first and the
-      // admin-selected credential was never applied — switching providers in the
-      // admin UI silently did nothing.
+  private buildProvider(name: MapProviderName, policy: CachedMapSettings): MapProvider | null {
+    let provider = this.registry[name];
+    if (provider?.isConfigured()) return provider;
+
+    if (name === 'ola') {
+      const apiKey = resolveMapCredential(
+        policy.keys?.olaKey,
+        process.env.OLA_MAPS_API_KEY,
+        process.env.MAPS_API_KEY,
+      );
       if (apiKey) {
-        const baseUrl = baseUrls?.olaUrl || process.env.OLA_MAPS_BASE_URL;
+        const baseUrl = policy.baseUrls?.olaUrl || process.env.OLA_MAPS_BASE_URL;
         provider = new OlaMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
         this.registry['ola'] = provider;
       }
-    } else if (primaryName === 'google') {
-      const apiKey = keys?.googleKey
-        ? decryptSecret(keys.googleKey)
-        : (process.env.GOOGLE_MAPS_API_KEY ?? '');
-      // The resolved key wins outright. This used to keep an existing provider
-      // whenever it was already `isConfigured()`, so on a deployment that also
-      // sets the environment key the env provider was built first and the
-      // admin-selected credential was never applied — switching providers in the
-      // admin UI silently did nothing.
+    } else if (name === 'google') {
+      const apiKey = resolveMapCredential(policy.keys?.googleKey, process.env.GOOGLE_MAPS_API_KEY);
       if (apiKey) {
-        const baseUrl = baseUrls?.googleUrl || process.env.GOOGLE_MAPS_BASE_URL;
+        const baseUrl = policy.baseUrls?.googleUrl || process.env.GOOGLE_MAPS_BASE_URL;
         provider = new GoogleMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
         this.registry['google'] = provider;
       }
-    } else if (primaryName === 'mappls') {
-      const restApiKey = keys?.mapplsRestKey
-        ? decryptSecret(keys.mapplsRestKey)
-        : (process.env.MAPPLS_REST_API_KEY ?? '');
-      const clientId = keys?.mapplsId
-        ? decryptSecret(keys.mapplsId)
-        : (process.env.MAPPLS_CLIENT_ID ?? '');
-      const clientSecret = keys?.mapplsSecret
-        ? decryptSecret(keys.mapplsSecret)
-        : (process.env.MAPPLS_CLIENT_SECRET ?? '');
-      const baseUrl = baseUrls?.mapplsUrl || process.env.MAPPLS_BASE_URL;
-
-      const config =
-        clientId && clientSecret
-          ? {
-              clientId,
-              clientSecret,
-              ...(restApiKey ? { restApiKey } : {}),
-              ...(baseUrl ? { baseUrl } : {}),
-            }
-          : restApiKey || (!clientSecret && clientId)
-            ? { restApiKey: restApiKey || clientId, ...(baseUrl ? { baseUrl } : {}) }
-            : null;
-
-      // The resolved credential wins outright, as it does for ola and google above:
-      // keeping an already-`isConfigured()` provider meant the env-built one was
-      // never replaced, so switching provider in the admin UI did nothing.
+    } else if (name === 'mappls') {
+      const config = buildMapplsProviderConfig({
+        ...(policy.keys?.mapplsRestKey ? { restApiKey: policy.keys.mapplsRestKey } : {}),
+        ...(policy.keys?.mapplsId ? { clientId: policy.keys.mapplsId } : {}),
+        ...(policy.keys?.mapplsSecret ? { clientSecret: policy.keys.mapplsSecret } : {}),
+        ...(policy.baseUrls?.mapplsUrl ? { baseUrl: policy.baseUrls.mapplsUrl } : {}),
+      });
       if (config) {
         provider = new MapplsProvider(config);
         this.registry['mappls'] = provider;
       }
     }
 
-    if (provider && provider.isConfigured()) {
-      return [provider];
-    }
-
-    return [];
+    return provider?.isConfigured() ? provider : null;
   }
 
-  // ─── Directions (Route Distance & ETA) ───────────────────────────────────────
-
-  async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    const chain = await this.resolveProviderChain();
-    const provider = chain[0];
-
-    if (!provider) {
-      logger.error(
-        { origin, destination },
-        '[MapProviderService] No active map provider available',
-      );
+  private async providersForCapability(
+    capability: MapCapability,
+    pinnedProvider?: MapProviderName,
+  ): Promise<{ primary: MapProvider; fallbacks: MapProvider[]; policy: CachedMapSettings }> {
+    const policy = await this.resolvePolicy();
+    const primary = pinnedProvider
+      ? this.buildProvider(pinnedProvider, policy)
+      : ((await this.resolveProviderChain())[0] ?? null);
+    if (!primary) {
       throw new RoutingProviderUnavailableError();
     }
 
-    try {
-      return await provider.getDirections(origin, destination);
-    } catch (err) {
-      logger.warn(
-        { provider: provider.providerName, err, origin, destination },
-        '[MapProviderService] Active map provider call failed',
-      );
-      throw new RoutingProviderUnavailableError();
+    const fallbacks: MapProvider[] = [];
+    if (policy.fallbackEnabled) {
+      const chain = policy.fallbackByCapability[capability] ?? [];
+      for (const name of chain) {
+        if (!policy.enabledProviders.includes(name)) continue;
+        const fb = this.buildProvider(name, policy);
+        if (fb) fallbacks.push(fb);
+      }
     }
+
+    return { primary, fallbacks, policy };
   }
 
-  // ─── Distance Matrix (Driver Candidate ETAs) ──────────────────────────────────
+  private buildMeta(
+    provider: MapProvider,
+    policy: CachedMapSettings,
+    capability: MapCapability,
+    usedFallback: boolean,
+  ): MapResultMeta {
+    const attr = provider.attribution();
+    const generatedAt = new Date();
+    const expiresAt = new Date(generatedAt.getTime() + 5 * 60_000);
+    return {
+      provider: provider.providerName,
+      configVersion: policy.configVersion,
+      capability,
+      generatedAt: generatedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      usedFallback,
+      attribution: attr,
+      provenance: `${provider.providerName}_${capability}`,
+    };
+  }
+
+  private classifyProviderError(err: unknown): never {
+    if (err instanceof MapProviderAuthError || err instanceof MapProviderQuotaError) throw err;
+    if (err instanceof MapProviderTimeoutError) throw err;
+    if (err instanceof RoutingProviderUnavailableError) throw err;
+    throw new RoutingProviderUnavailableError();
+  }
+
+  private async withFallback<T extends { providerName: string }>(
+    capability: MapCapability,
+    pinnedProvider: MapProviderName | undefined,
+    invoke: (provider: MapProvider) => Promise<T>,
+  ): Promise<T> {
+    const { primary, fallbacks, policy } = await this.providersForCapability(
+      capability,
+      pinnedProvider,
+    );
+    const candidates = [primary, ...fallbacks];
+
+    let lastErr: unknown;
+    for (let i = 0; i < candidates.length; i++) {
+      const provider = candidates[i]!;
+      try {
+        const result = await invoke(provider);
+        const meta = this.buildMeta(provider, policy, capability, i > 0);
+        return attachMeta(result, meta);
+      } catch (err) {
+        lastErr = err;
+        logger.warn(
+          { provider: provider.providerName, capability, err },
+          '[MapProviderService] provider call failed',
+        );
+      }
+    }
+
+    this.classifyProviderError(lastErr);
+  }
+
+  async getDirections(
+    origin: Coordinate,
+    destination: Coordinate,
+    pinnedProvider?: MapProviderName,
+  ): Promise<RoutingResult> {
+    return this.withFallback('route', pinnedProvider, (provider) =>
+      provider.getDirections(origin, destination),
+    );
+  }
 
   async getDistanceMatrix(
     origins: Coordinate[],
     destinations: Coordinate[],
+    pinnedProvider?: MapProviderName,
   ): Promise<MatrixResult> {
     if (origins.length === 0 || destinations.length === 0) {
       return { status: 'no_drivers', cells: [], providerName: 'none' };
     }
 
-    const chain = await this.resolveProviderChain();
-    const provider = chain[0];
-
-    if (!provider) {
-      return { status: 'unavailable', cells: [], providerName: 'none' };
-    }
-
-    try {
-      const result = await provider.getDistanceMatrix(origins, destinations);
-      return result;
-    } catch (err) {
-      logger.warn(
-        { provider: provider.providerName, err },
-        '[MapProviderService] Active map provider DistanceMatrix call failed',
-      );
-      return { status: 'unavailable', cells: [], providerName: 'none' };
-    }
+    // A provider outage raises 503 rather than substituting straight-line
+    // distances. The degraded branch that used to live here returned a haversine
+    // matrix labelled `internal_haversine`; the one internal caller
+    // (`RideRequestService`) accepts only `status === 'ok'`, so it was never used
+    // for a driver ETA, and on the public route-matrix endpoint it served
+    // fabricated distances under a 200.
+    return this.withFallback('route_matrix', pinnedProvider, (provider) =>
+      provider.getDistanceMatrix(origins, destinations),
+    );
   }
 
-  // ─── Address Search (Autocomplete) ──────────────────────────────────────────
-
-  async autocomplete(input: string, location?: Coordinate): Promise<AutocompleteResult> {
-    const chain = await this.resolveProviderChain();
-    const provider = chain[0];
-
-    if (!provider) {
-      return { status: 'unavailable', predictions: [], providerName: 'none' };
-    }
-
+  async autocomplete(
+    input: string,
+    location?: Coordinate,
+    pinnedProvider?: MapProviderName,
+  ): Promise<AutocompleteResult> {
     try {
-      return await provider.autocomplete(input, location);
-    } catch (err) {
-      logger.warn(
-        { provider: provider.providerName, err, input },
-        '[MapProviderService] Active map provider Autocomplete call failed',
+      return await this.withFallback('autocomplete', pinnedProvider, (provider) =>
+        provider.autocomplete(input, location),
       );
+    } catch {
       return { status: 'unavailable', predictions: [], providerName: 'none' };
     }
   }
 
-  // ─── Reverse Geocoding ───────────────────────────────────────────────────────
+  async reverseGeocode(
+    coordinate: Coordinate,
+    pinnedProvider?: MapProviderName,
+  ): Promise<ReverseGeocodeResult> {
+    return this.withFallback('reverse_geocode', pinnedProvider, (provider) =>
+      provider.reverseGeocode(coordinate),
+    );
+  }
 
-  async reverseGeocode(coordinate: Coordinate): Promise<ReverseGeocodeResult> {
-    const chain = await this.resolveProviderChain();
-    const provider = chain[0];
+  async forwardGeocode(
+    address: string,
+    pinnedProvider?: MapProviderName,
+  ): Promise<ForwardGeocodeResult> {
+    return this.withFallback('geocode', pinnedProvider, async (provider) => {
+      if (!provider.forwardGeocode) {
+        throw new RoutingProviderUnavailableError('Forward geocoding not supported by provider');
+      }
+      return provider.forwardGeocode(address);
+    });
+  }
 
-    if (!provider) {
-      throw new Error('No active reverse geocoding provider configured');
+  async getPlaceDetails(
+    placeId: string,
+    providerName: MapProviderName,
+  ): Promise<PlaceDetailsResult> {
+    const policy = await this.resolvePolicy();
+    const provider = this.buildProvider(providerName, policy);
+    if (!provider?.getPlaceDetails) {
+      throw new RoutingProviderUnavailableError('Place details not supported');
     }
-
-    try {
-      return await provider.reverseGeocode(coordinate);
-    } catch (err) {
-      logger.warn(
-        { provider: provider.providerName, err, coordinate },
-        '[MapProviderService] Active map provider ReverseGeocode call failed',
-      );
-      throw new Error(`Reverse geocoding failed on active provider '${provider.providerName}'`, {
-        cause: err,
-      });
-    }
+    const result = await provider.getPlaceDetails(placeId);
+    return attachMeta(result, this.buildMeta(provider, policy, 'place_details', false));
   }
 }
