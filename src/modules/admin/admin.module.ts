@@ -47,6 +47,10 @@ import {
 import {
   paymentManagementRoutes,
   AdminPaymentManagementController,
+  AdminFinanceController,
+  AdminFinanceService,
+  DocumentComplianceController,
+  DocumentComplianceService,
 } from './payment-management/index.js';
 import {
   staffManagementRoutes,
@@ -176,6 +180,10 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminVehicleService: asClass(AdminVehicleService).singleton(),
     adminVehicleManagementController: asClass(AdminVehicleManagementController).singleton(),
     adminPaymentManagementController: asClass(AdminPaymentManagementController).singleton(),
+    adminFinanceService: asClass(AdminFinanceService).singleton(),
+    adminFinanceController: asClass(AdminFinanceController).singleton(),
+    documentComplianceService: asClass(DocumentComplianceService).singleton(),
+    documentComplianceController: asClass(DocumentComplianceController).singleton(),
     adminStaffService: asClass(AdminStaffService).singleton(),
     adminStaffController: asClass(AdminStaffController).singleton(),
     adminRbacService: asClass(AdminRbacService).singleton(),

@@ -81,20 +81,23 @@ model PaymentIntent {
 }
 
 model PaymentTransaction {
-  id           String   @id @default(uuid(7)) @db.Uuid
-  intentId     String   @map("intent_id") @db.Uuid
-  rideId       String?  @map("ride_id") @db.Uuid
-  userId       String   @map("user_id") @db.Uuid
-  txnType      String   @map("txn_type")
-  amount       Decimal  @db.Decimal(10, 2)
-  currency     String   @default("INR") @db.Char(3)
-  status       String
-  gateway      String?
-  gatewayTxnId String?  @map("gateway_txn_id")
-  gatewayFee   Decimal  @default(0) @map("gateway_fee") @db.Decimal(10, 2)
-  errorCode    String?  @map("error_code")
-  errorMessage String?  @map("error_message")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id               String    @id @default(uuid(7)) @db.Uuid
+  intentId         String    @map("intent_id") @db.Uuid
+  rideId           String?   @map("ride_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  txnType          String    @map("txn_type")
+  amount           Decimal   @db.Decimal(10, 2)
+  currency         String    @default("INR") @db.Char(3)
+  status           String
+  gateway          String?
+  gatewayTxnId     String?   @map("gateway_txn_id")
+  gatewayFee       Decimal   @default(0) @map("gateway_fee") @db.Decimal(10, 2)
+  errorCode        String?   @map("error_code")
+  errorMessage     String?   @map("error_message")
+  varianceStatus   String?   @map("variance_status")
+  reconciledBy     String?   @map("reconciled_by")
+  lastReconciledAt DateTime? @map("last_reconciled_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   intent      PaymentIntent @relation(fields: [intentId], references: [id])
   ride        Ride?         @relation(fields: [rideId], references: [id])
@@ -135,11 +138,26 @@ model Refund {
   createdAt       DateTime  @default(now()) @map("created_at")
   completedAt     DateTime? @map("completed_at")
 
+  // Admin finance workflow (optional; gateway fields above remain source of truth for payout)
+  displayCode    String?   @map("display_code")
+  refundType     String?   @map("refund_type")
+  workflowStatus String    @default("requested") @map("workflow_status")
+  approvalLevel  String?   @map("approval_level")
+  refundSource   String?   @map("refund_source")
+  disputeId      String?   @map("dispute_id") @db.Uuid
+  reviewedBy     String?   @map("reviewed_by")
+  reviewedAt     DateTime? @map("reviewed_at")
+  processedBy    String?   @map("processed_by")
+  adminNotes     String?   @map("admin_notes")
+  timeline       Json?
+  riderName      String?   @map("rider_name")
+
   transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
   ride        Ride?              @relation(fields: [rideId], references: [id])
   user        User               @relation(fields: [userId], references: [id])
 
   @@index([transactionId])
+  @@index([workflowStatus, createdAt])
   @@map("refunds")
 }
 
@@ -161,23 +179,85 @@ model PaymentLedgerEntry {
   @@map("payment_ledger_entries")
 }
 
-model DriverSettlement {
-  id            String   @id @default(uuid(7)) @db.Uuid
-  driverId      String   @map("driver_id") @db.Uuid
-  periodStart   DateTime @map("period_start") @db.Date
-  periodEnd     DateTime @map("period_end") @db.Date
-  grossEarnings Decimal  @default(0) @map("gross_earnings") @db.Decimal(12, 2)
-  commission    Decimal  @default(0) @db.Decimal(12, 2)
-  adjustments   Decimal  @default(0) @db.Decimal(12, 2)
-  netPayable    Decimal  @default(0) @map("net_payable") @db.Decimal(12, 2)
-  status        String   @default("PENDING")
-  createdAt     DateTime @default(now()) @map("created_at")
+model SettlementBatch {
+  id                     String    @id @default(uuid(7)) @db.Uuid
+  batchNumber            String    @unique @map("batch_number")
+  periodStart            DateTime  @map("period_start") @db.Date
+  periodEnd              DateTime  @map("period_end") @db.Date
+  status                 String    @default("draft")
+  generatedBy            String    @map("generated_by")
+  processedAt            DateTime? @map("processed_at")
+  completedAt            DateTime? @map("completed_at")
+  totalDrivers           Int       @default(0) @map("total_drivers")
+  totalGrossAmount       Decimal   @default(0) @map("total_gross_amount") @db.Decimal(12, 2)
+  totalCommission        Decimal   @default(0) @map("total_commission") @db.Decimal(12, 2)
+  totalRefundAdjustments Decimal   @default(0) @map("total_refund_adjustments") @db.Decimal(12, 2)
+  totalPenalties         Decimal   @default(0) @map("total_penalties") @db.Decimal(12, 2)
+  totalBonuses           Decimal   @default(0) @map("total_bonuses") @db.Decimal(12, 2)
+  totalNetPayable        Decimal   @default(0) @map("total_net_payable") @db.Decimal(12, 2)
+  timeline               Json      @default("[]")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
 
-  driver  Driver         @relation(fields: [driverId], references: [id])
-  payouts DriverPayout[]
+  settlements DriverSettlement[]
+
+  @@index([periodStart, periodEnd])
+  @@index([status, createdAt])
+  @@map("settlement_batches")
+}
+
+model DriverSettlement {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  driverId          String   @map("driver_id") @db.Uuid
+  periodStart       DateTime @map("period_start") @db.Date
+  periodEnd         DateTime @map("period_end") @db.Date
+  grossEarnings     Decimal  @default(0) @map("gross_earnings") @db.Decimal(12, 2)
+  commission        Decimal  @default(0) @db.Decimal(12, 2)
+  adjustments       Decimal  @default(0) @db.Decimal(12, 2)
+  netPayable        Decimal  @default(0) @map("net_payable") @db.Decimal(12, 2)
+  status            String   @default("PENDING")
+  settlementBatchId String?  @map("settlement_batch_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  driver          Driver           @relation(fields: [driverId], references: [id])
+  settlementBatch SettlementBatch? @relation(fields: [settlementBatchId], references: [id])
+  payouts         DriverPayout[]
 
   @@unique([driverId, periodStart, periodEnd])
+  @@index([settlementBatchId])
   @@map("driver_settlements")
+}
+
+model PaymentDispute {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  rideId           String    @map("ride_id") @db.Uuid
+  complaintId      String?   @map("complaint_id") @db.Uuid
+  type             String
+  status           String    @default("open")
+  riderUserId      String    @map("rider_user_id") @db.Uuid
+  riderName        String    @map("rider_name")
+  driverId         String    @map("driver_id") @db.Uuid
+  driverName       String    @map("driver_name")
+  amount           Decimal   @db.Decimal(10, 2)
+  requestedAmount  Decimal?  @map("requested_amount") @db.Decimal(10, 2)
+  reason           String
+  assignedTo       String?   @map("assigned_to")
+  assignedAt       DateTime? @map("assigned_at")
+  resolvedBy       String?   @map("resolved_by")
+  resolvedAt       DateTime? @map("resolved_at")
+  resolutionType   String?   @map("resolution_type")
+  resolutionNotes  String?   @map("resolution_notes")
+  adjustmentAmount Decimal?  @map("adjustment_amount") @db.Decimal(10, 2)
+  version          Int       @default(1)
+  timeline         Json
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  ride Ride @relation(fields: [rideId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([rideId])
+  @@map("payment_disputes")
 }
 
 model DriverPayout {
