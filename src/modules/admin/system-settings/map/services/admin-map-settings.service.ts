@@ -28,11 +28,6 @@ import type {
 } from '../types/map-settings.types.js';
 import type { MapClientConfigView } from '../../integrations/types/integration-settings.types.js';
 
-function parseBoolean(value: string | null | undefined, fallback = false): boolean {
-  if (value == null || value.trim() === '') return fallback;
-  return value.trim().toLowerCase() === 'true';
-}
-
 export class AdminMapSettingsService {
   constructor(
     private readonly systemSettingService: SystemSettingService,
@@ -87,25 +82,9 @@ export class AdminMapSettingsService {
     const googleEnabled = primaryProvider === 'google';
     const mapplsEnabled = primaryProvider === 'mappls';
 
-    let fallbackByCapability: MapSettingsView['fallback']['byCapability'] = {};
-    const fallbackRaw = settings.get(MAP_SETTING_KEYS.FALLBACK_BY_CAPABILITY)?.value;
-    if (fallbackRaw?.trim()) {
-      try {
-        fallbackByCapability = JSON.parse(
-          fallbackRaw,
-        ) as MapSettingsView['fallback']['byCapability'];
-      } catch {
-        fallbackByCapability = {};
-      }
-    }
-
     return {
       primaryProvider,
       version: configVersion,
-      fallback: {
-        enabled: parseBoolean(settings.get(MAP_SETTING_KEYS.FALLBACK_ENABLED)?.value, false),
-        byCapability: fallbackByCapability,
-      },
       providers: {
         ola: {
           enabled: olaEnabled,
@@ -387,17 +366,6 @@ export class AdminMapSettingsService {
 
       await saveSetting(MAP_SETTING_KEYS.PRIMARY_PROVIDER, primaryProvider);
       await saveSetting(MAP_SETTING_KEYS.CONFIG_VERSION, String(nextVersion));
-      await saveSetting(MAP_SETTING_KEYS.FALLBACK_PROVIDERS, '');
-      await saveSetting(
-        MAP_SETTING_KEYS.FALLBACK_ENABLED,
-        String(input.fallback?.enabled ?? current.fallback.enabled),
-      );
-      if (input.fallback?.byCapability) {
-        await saveSetting(
-          MAP_SETTING_KEYS.FALLBACK_BY_CAPABILITY,
-          JSON.stringify(input.fallback.byCapability),
-        );
-      }
 
       const olaEnabled = primaryProvider === 'ola';
       const googleEnabled = primaryProvider === 'google';

@@ -24,6 +24,7 @@ import {
   buildMapplsProviderConfig,
   resolveMapCredential,
 } from '../../../integrations/mappls/mappls-credentials.util.js';
+import { isTimeoutError, ProviderHttpError } from '../../../integrations/provider-http-error.js';
 import type { MapCapability, MapResultMeta } from '../types/map-capabilities.types.js';
 import type { MapProviderName } from '@modules/admin/system-settings/map/types/map-settings.types.js';
 import {
@@ -157,36 +158,23 @@ export class MapProviderService {
     return provider?.isConfigured() ? provider : null;
   }
 
-  private async providersForCapability(
-    capability: MapCapability,
+  private async providerForCapability(
     pinnedProvider?: MapProviderName,
-  ): Promise<{ primary: MapProvider; fallbacks: MapProvider[]; policy: CachedMapSettings }> {
+  ): Promise<{ provider: MapProvider; policy: CachedMapSettings }> {
     const policy = await this.resolvePolicy();
-    const primary = pinnedProvider
+    const provider = pinnedProvider
       ? this.buildProvider(pinnedProvider, policy)
       : ((await this.resolveProviderChain())[0] ?? null);
-    if (!primary) {
+    if (!provider) {
       throw new RoutingProviderUnavailableError();
     }
-
-    const fallbacks: MapProvider[] = [];
-    if (policy.fallbackEnabled) {
-      const chain = policy.fallbackByCapability[capability] ?? [];
-      for (const name of chain) {
-        if (!policy.enabledProviders.includes(name)) continue;
-        const fb = this.buildProvider(name, policy);
-        if (fb) fallbacks.push(fb);
-      }
-    }
-
-    return { primary, fallbacks, policy };
+    return { provider, policy };
   }
 
   private buildMeta(
     provider: MapProvider,
     policy: CachedMapSettings,
     capability: MapCapability,
-    usedFallback: boolean,
   ): MapResultMeta {
     const attr = provider.attribution();
     const generatedAt = new Date();
@@ -197,47 +185,68 @@ export class MapProviderService {
       capability,
       generatedAt: generatedAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
-      usedFallback,
       attribution: attr,
       provenance: `${provider.providerName}_${capability}`,
     };
   }
 
+  /// Turn a provider failure into the narrowest error that describes it.
+  ///
+  /// Everything used to collapse into `RoutingProviderUnavailableError` (503),
+  /// so a revoked key, an exhausted quota and a real outage were the same event
+  /// to anyone reading logs or dashboards — and `MapProviderAuthError` /
+  /// `MapProviderQuotaError` / `MapProviderTimeoutError` were declared but never
+  /// thrown. The distinction decides the response: a quota failure is 429 and
+  /// worth retrying later, an auth failure is 502 and needs an operator, and only
+  /// an unclassifiable failure is a 503.
   private classifyProviderError(err: unknown): never {
     if (err instanceof MapProviderAuthError || err instanceof MapProviderQuotaError) throw err;
     if (err instanceof MapProviderTimeoutError) throw err;
     if (err instanceof RoutingProviderUnavailableError) throw err;
+
+    if (isTimeoutError(err)) {
+      throw new MapProviderTimeoutError();
+    }
+
+    if (err instanceof ProviderHttpError) {
+      if (err.isAuthFailure) {
+        throw new MapProviderAuthError(
+          `${err.provider} rejected the configured credential (${err.status}). ` +
+            'Check the key in Admin → Settings → Maps.',
+        );
+      }
+      if (err.isQuotaFailure) {
+        throw new MapProviderQuotaError(`${err.provider} quota or rate limit exceeded (429).`);
+      }
+    }
+
     throw new RoutingProviderUnavailableError();
   }
 
-  private async withFallback<T extends { providerName: string }>(
+  /// Run one capability call against the single active provider.
+  ///
+  /// This was `withFallback`, iterating `[primary, ...fallbacks]`. The fallback
+  /// list was always empty — see `MapPolicySettings` — so the loop only ever ran
+  /// once, while reading like failover the platform did not have. A provider
+  /// failure is now classified and raised immediately rather than being swallowed
+  /// into a retry against nothing.
+  private async withProvider<T extends { providerName: string }>(
     capability: MapCapability,
     pinnedProvider: MapProviderName | undefined,
     invoke: (provider: MapProvider) => Promise<T>,
   ): Promise<T> {
-    const { primary, fallbacks, policy } = await this.providersForCapability(
-      capability,
-      pinnedProvider,
-    );
-    const candidates = [primary, ...fallbacks];
+    const { provider, policy } = await this.providerForCapability(pinnedProvider);
 
-    let lastErr: unknown;
-    for (let i = 0; i < candidates.length; i++) {
-      const provider = candidates[i]!;
-      try {
-        const result = await invoke(provider);
-        const meta = this.buildMeta(provider, policy, capability, i > 0);
-        return attachMeta(result, meta);
-      } catch (err) {
-        lastErr = err;
-        logger.warn(
-          { provider: provider.providerName, capability, err },
-          '[MapProviderService] provider call failed',
-        );
-      }
+    try {
+      const result = await invoke(provider);
+      return attachMeta(result, this.buildMeta(provider, policy, capability));
+    } catch (err) {
+      logger.warn(
+        { provider: provider.providerName, capability, err },
+        '[MapProviderService] provider call failed',
+      );
+      this.classifyProviderError(err);
     }
-
-    this.classifyProviderError(lastErr);
   }
 
   async getDirections(
@@ -245,7 +254,7 @@ export class MapProviderService {
     destination: Coordinate,
     pinnedProvider?: MapProviderName,
   ): Promise<RoutingResult> {
-    return this.withFallback('route', pinnedProvider, (provider) =>
+    return this.withProvider('route', pinnedProvider, (provider) =>
       provider.getDirections(origin, destination),
     );
   }
@@ -265,7 +274,7 @@ export class MapProviderService {
     // (`RideRequestService`) accepts only `status === 'ok'`, so it was never used
     // for a driver ETA, and on the public route-matrix endpoint it served
     // fabricated distances under a 200.
-    return this.withFallback('route_matrix', pinnedProvider, (provider) =>
+    return this.withProvider('route_matrix', pinnedProvider, (provider) =>
       provider.getDistanceMatrix(origins, destinations),
     );
   }
@@ -276,7 +285,7 @@ export class MapProviderService {
     pinnedProvider?: MapProviderName,
   ): Promise<AutocompleteResult> {
     try {
-      return await this.withFallback('autocomplete', pinnedProvider, (provider) =>
+      return await this.withProvider('autocomplete', pinnedProvider, (provider) =>
         provider.autocomplete(input, location),
       );
     } catch {
@@ -288,7 +297,7 @@ export class MapProviderService {
     coordinate: Coordinate,
     pinnedProvider?: MapProviderName,
   ): Promise<ReverseGeocodeResult> {
-    return this.withFallback('reverse_geocode', pinnedProvider, (provider) =>
+    return this.withProvider('reverse_geocode', pinnedProvider, (provider) =>
       provider.reverseGeocode(coordinate),
     );
   }
@@ -297,7 +306,7 @@ export class MapProviderService {
     address: string,
     pinnedProvider?: MapProviderName,
   ): Promise<ForwardGeocodeResult> {
-    return this.withFallback('geocode', pinnedProvider, async (provider) => {
+    return this.withProvider('geocode', pinnedProvider, async (provider) => {
       if (!provider.forwardGeocode) {
         throw new RoutingProviderUnavailableError('Forward geocoding not supported by provider');
       }
@@ -315,6 +324,6 @@ export class MapProviderService {
       throw new RoutingProviderUnavailableError('Place details not supported');
     }
     const result = await provider.getPlaceDetails(placeId);
-    return attachMeta(result, this.buildMeta(provider, policy, 'place_details', false));
+    return attachMeta(result, this.buildMeta(provider, policy, 'place_details'));
   }
 }

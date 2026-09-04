@@ -4,9 +4,6 @@ export const MASKED_SECRET_VALUE = '********';
 
 export const MAP_SETTING_KEYS = {
   PRIMARY_PROVIDER: 'map.primary_provider',
-  FALLBACK_PROVIDERS: 'map.fallback_providers',
-  FALLBACK_ENABLED: 'map.fallback.enabled',
-  FALLBACK_BY_CAPABILITY: 'map.fallback.by_capability',
   CONFIG_VERSION: 'map.config_version',
   OLA_ENABLED: 'map.ola.enabled',
   OLA_API_KEY: 'map.ola.api_key',

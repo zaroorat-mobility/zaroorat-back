@@ -12,11 +12,6 @@ export interface MapProviderConfigView {
   lastHealthAt?: string | undefined;
 }
 
-export interface MapFallbackPolicyView {
-  enabled: boolean;
-  byCapability: Partial<Record<MapCapability, MapProviderName[]>>;
-}
-
 export interface MapSettingsView {
   primaryProvider: string;
   providers: {
@@ -24,19 +19,12 @@ export interface MapSettingsView {
     google: MapProviderConfigView;
     mappls: MapProviderConfigView;
   };
-  fallback: MapFallbackPolicyView;
   version: number;
 }
 
 export interface UpdateMapSettingsBody {
   primaryProvider: MapProviderName;
   expectedVersion?: number | undefined;
-  fallback?:
-    | {
-        enabled?: boolean | undefined;
-        byCapability?: Partial<Record<MapCapability, MapProviderName[]>> | undefined;
-      }
-    | undefined;
   providers?:
     | {
         ola?:
