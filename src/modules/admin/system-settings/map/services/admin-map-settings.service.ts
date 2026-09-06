@@ -58,17 +58,14 @@ export class AdminMapSettingsService {
     const mapplsRestKey = resolveMapCredential(
       settings.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value,
       process.env.MAPPLS_REST_API_KEY,
-      process.env.EXPO_PUBLIC_MAPPLS_REST_KEY,
     );
     const mapplsId = resolveMapCredential(
       settings.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value,
       process.env.MAPPLS_CLIENT_ID,
-      process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID,
     );
     const mapplsSecret = resolveMapCredential(
       settings.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value,
       process.env.MAPPLS_CLIENT_SECRET,
-      process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET,
     );
     const mapplsConfigured = Boolean(
       mapplsRestKey.trim() || (mapplsId.trim() && mapplsSecret.trim()) || mapplsId.trim(),
@@ -124,7 +121,7 @@ export class AdminMapSettingsService {
     ///
     /// This used to fall through to the backend REST key when no SDK key was
     /// configured — `map.ola.api_key`, `map.google.api_key`, the Mappls REST key.
-    /// That key reached the admin bundle as `providers[name].apiKey`, and for
+    /// That key reached the admin bundle as the provider's browser key, and for
     /// Mappls it was embedded in the raster tile URL path, so it also travelled
     /// through every proxy and CDN log between the browser and Mappls. A server
     /// credential with full account quota and no referrer restriction is not a
@@ -163,7 +160,7 @@ export class AdminMapSettingsService {
       const config: {
         enabled: boolean;
         baseUrl: string;
-        apiKey?: string;
+        clientSdkKey?: string;
         tileUrl?: string;
       } = { enabled, baseUrl };
 
@@ -177,7 +174,7 @@ export class AdminMapSettingsService {
         return config;
       }
 
-      config.apiKey = tileKey;
+      config.clientSdkKey = tileKey;
       if (name === 'ola') {
         config.baseUrl = providerBase.replace(/\/+$/, '');
         config.tileUrl = `${config.baseUrl}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;

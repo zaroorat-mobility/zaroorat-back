@@ -23,7 +23,6 @@ async function resolveMapplsConfig(
       ? input.restApiKey
       : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)) ??
         process.env.MAPPLS_REST_API_KEY ??
-        process.env.EXPO_PUBLIC_MAPPLS_REST_KEY ??
         '');
 
   const clientId =
@@ -31,7 +30,6 @@ async function resolveMapplsConfig(
       ? input.clientId
       : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)) ??
         process.env.MAPPLS_CLIENT_ID ??
-        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID ??
         '');
 
   const clientSecret =
@@ -39,7 +37,6 @@ async function resolveMapplsConfig(
       ? input.clientSecret
       : ((await settingService.getSettingValue(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)) ??
         process.env.MAPPLS_CLIENT_SECRET ??
-        process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET ??
         '');
 
   const baseUrl = input.baseUrl ?? process.env.MAPPLS_BASE_URL;

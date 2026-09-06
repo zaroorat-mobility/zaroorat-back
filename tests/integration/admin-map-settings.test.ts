@@ -225,13 +225,19 @@ describe('admin map provider configuration (integration)', () => {
     const body = res.json().data;
     assert.equal(body.primaryProvider, 'ola');
     assert.equal(body.providers.ola.enabled, true);
-    assert.equal(body.providers.ola.apiKey, 'test_ola_client_sdk_key');
+    assert.equal(body.providers.ola.clientSdkKey, 'test_ola_client_sdk_key');
+    // The old field name must not linger alongside the new one.
+    assert.equal(
+      (body.providers.ola as Record<string, unknown>).apiKey,
+      undefined,
+      'stale apiKey field still present on client-config',
+    );
     assert.ok(body.providers.ola.tileUrl?.includes('/tiles/v1/styles/default-light-standard/'));
     // The whole point of the split: the server key must not reach the browser,
     // in the key field or anywhere in the payload.
     assert.ok(!JSON.stringify(body).includes('test_ola_server_key'));
     assert.equal(body.providers.google.enabled, false);
-    assert.equal(body.providers.google.apiKey, undefined);
+    assert.equal(body.providers.google.clientSdkKey, undefined);
     assert.equal(body.providers.mappls.enabled, false);
   });
 
@@ -263,7 +269,7 @@ describe('admin map provider configuration (integration)', () => {
     // full-quota backend credential to the admin bundle. No SDK key now means no
     // tiles — a blank map is the correct outcome, not a leaked key.
     assert.equal(body.providers.google.enabled, true);
-    assert.equal(body.providers.google.apiKey, undefined);
+    assert.equal(body.providers.google.clientSdkKey, undefined);
     assert.equal(body.providers.google.tileUrl, undefined);
     assert.ok(!JSON.stringify(body).includes('test_google_server_only_key'));
   });
@@ -297,7 +303,7 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json().data;
     assert.equal(body.primaryProvider, 'mappls');
-    assert.equal(body.providers.mappls.apiKey, 'test_mappls_sdk_key');
+    assert.equal(body.providers.mappls.clientSdkKey, 'test_mappls_sdk_key');
     assert.ok(body.providers.mappls.tileUrl?.includes('test_mappls_sdk_key'));
     // Mappls puts the key in the URL path, so a leak here also reaches every
     // proxy and CDN log between the browser and Mappls.
@@ -305,7 +311,7 @@ describe('admin map provider configuration (integration)', () => {
     assert.ok(!payload.includes('test_mappls_rest_tile_key'));
     assert.ok(!payload.includes('test_mappls_secret'));
     assert.equal(body.providers.ola.enabled, false);
-    assert.equal(body.providers.ola.apiKey, undefined);
+    assert.equal(body.providers.ola.clientSdkKey, undefined);
   });
   /// The public config is what the rider and driver apps will consume, so the
   /// no-server-credential rule has to hold there too -- not just on the admin
@@ -382,15 +388,59 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json().data;
 
-    // Google is the provider under test because `resetState` does not clear the
-    // map settings category, so a provider another test in this file gave an SDK
-    // key would still have one here. Nothing configures a Google SDK key.
-    //
     // No SDK key means no browser tile credential and no tile url -- the
     // provider renders nothing rather than borrowing the server key.
     assert.equal(body.providers.google.enabled, true);
     assert.equal(body.providers.google.clientSdkKey, undefined);
     assert.equal(body.providers.google.tileUrl, undefined);
     assert.ok(!JSON.stringify(body).includes('public_cfg_google_server_key'));
+  });
+
+  /// Guards the `system_settings` entry in resetState's TRUNCATE list. Every
+  /// test above this one saves a provider configuration; if any of it survived,
+  /// the assertions here would read another test's credentials. A leak makes
+  /// "this provider is unconfigured" untestable, which is exactly the case the
+  /// browser-credential rules need to assert.
+  it('starts each test with no provider configuration leaked from earlier tests', async () => {
+    const adminHeaders = await loginAdmin();
+
+    const settings = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+    });
+    assert.equal(settings.statusCode, 200, settings.payload);
+    const view = settings.json().data;
+    // The seeded baseline, not whatever the test above this one saved. Earlier
+    // tests in this file switch the primary to google and to mappls and give
+    // both an SDK key, so any of these reading back as that provider's state
+    // means the reset is not restoring the baseline.
+    assert.equal(view.primaryProvider, 'ola', 'primary provider leaked between tests');
+    assert.equal(view.providers.ola.configured, true, 'seeded ola credential missing');
+    assert.equal(
+      view.providers.google.configured,
+      false,
+      'google credentials leaked between tests',
+    );
+    assert.equal(
+      view.providers.mappls.configured,
+      false,
+      'mappls credentials leaked between tests',
+    );
+
+    const clientConfig = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/maps/client-config',
+      headers: adminHeaders,
+    });
+    assert.equal(clientConfig.statusCode, 200, clientConfig.payload);
+    const cfg = clientConfig.json().data;
+    for (const provider of ['ola', 'google', 'mappls'] as const) {
+      assert.equal(
+        cfg.providers[provider].clientSdkKey,
+        undefined,
+        `${provider} client SDK key leaked between tests`,
+      );
+    }
   });
 });

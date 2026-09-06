@@ -130,8 +130,12 @@ export interface IntegrationsStatusView {
 export interface MapClientConfigProviderView {
   enabled: boolean;
   baseUrl: string;
-  /** Client-side tile key for the active provider (browser tile requests require this). */
-  apiKey?: string;
+  /**
+   * Browser-publishable client SDK key for the active provider. Named to match
+   * the public `/api/v1/maps/config` field: the same credential, one name. It is
+   * never a server REST key -- those stay server-side.
+   */
+  clientSdkKey?: string;
   /** Optional raster tile template (Leaflet `{z}/{x}/{y}` placeholders). */
   tileUrl?: string;
 }
