@@ -13,6 +13,7 @@ import type { OtpGenerator } from '../../../src/modules/auth/services/otp/otp.ge
 import { seedRoles } from '../../../prisma/seed/shared/roles.js';
 import { seedVehicleTypes } from '../../../prisma/seed/shared/vehicle-types.js';
 import { seedNotificationTemplates } from '../../../prisma/seed/shared/notification-templates.js';
+import { encryptSecret } from '../../../src/shared/crypto/encryption.util.js';
 import { registerEventConsumers } from '../../../src/bootstrap/events.bootstrap.js';
 import type { Unsubscribe } from '../../../src/core/events/index.js';
 import type { OutboxRelay } from '../../../src/core/events/OutboxRelay.js';
@@ -106,7 +107,41 @@ export async function resetState(): Promise<void> {
   await seedRoles(db().client);
   await seedVehicleTypes(db().client);
   await seedNotificationTemplates(db().client);
+  await seedMapProvider();
   await redis.flushdb();
+}
+
+/// Map provider configuration is reference data for the whole suite, not just
+/// the map tests.
+///
+/// `resetState` did not touch `system_settings`, so whatever provider the
+/// `admin-map-*` suites configured stayed configured for every suite that ran
+/// after them. Seventeen suites -- dispatch, earnings, receipts, reconciliation,
+/// zone fare parity -- were green only because of that leak: none of them
+/// configure a provider, and without one `buildProvider` returns null and every
+/// routing call is a 503. Clearing the category without replacing it turned all
+/// of them red.
+///
+/// So the category is reset to a known provider rather than to nothing. Tests
+/// that need a different provider overwrite it, and tests that need the
+/// unconfigured case use a provider this does not configure. Routing itself is
+/// still offline under `APP_ENV=test` (see `offline-route.ts`); this only gives
+/// `buildProvider` a credential to construct a provider from.
+async function seedMapProvider(): Promise<void> {
+  const rows = [
+    { key: 'map.primary_provider', value: 'ola', isSecret: false },
+    { key: 'map.ola.enabled', value: 'true', isSecret: false },
+    { key: 'map.google.enabled', value: 'false', isSecret: false },
+    { key: 'map.mappls.enabled', value: 'false', isSecret: false },
+    { key: 'map.config_version', value: '1', isSecret: false },
+    { key: 'map.ola.api_key', value: encryptSecret('test_ola_server_key'), isSecret: true },
+  ];
+
+  await db().client.systemSetting.deleteMany({ where: { category: 'maps' } });
+  await db().client.systemSetting.createMany({
+    data: rows.map((row) => ({ ...row, category: 'maps' })),
+    skipDuplicates: true,
+  });
 }
 
 export async function bootApp(): Promise<FastifyInstance> {
