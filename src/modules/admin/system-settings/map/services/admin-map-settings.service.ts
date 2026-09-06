@@ -11,11 +11,7 @@ import {
   MAP_SETTING_KEYS,
   MAP_SETTINGS_CATEGORY,
 } from '../constants/map-settings.constants.js';
-import {
-  buildMapplsProviderConfig,
-  resolveMapCredential,
-  resolveMapplsTileLicenseKey,
-} from '../../../../../integrations/mappls/mappls-credentials.util.js';
+import { resolveMapCredential } from '../../../../../integrations/mappls/mappls-credentials.util.js';
 import { maxSettingVersion } from '../../integrations/utils/integration-settings.util.js';
 import { providerCapabilities } from '@modules/location/business-services/map-policy-resolver.js';
 import type {
@@ -225,25 +221,6 @@ export class AdminMapSettingsService {
 
     const olaBase = settings.providers.ola.baseUrl ?? DEFAULT_BASE_URLS.OLA;
 
-    const mapplsTileFromSdk = clientSdk.mappls;
-    const mapplsTileFromServer = resolveMapplsTileLicenseKey(
-      buildMapplsProviderConfig({
-        restApiKey: resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value,
-          process.env.MAPPLS_REST_API_KEY,
-        ),
-        clientId: resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value,
-          process.env.MAPPLS_CLIENT_ID,
-        ),
-        clientSecret: resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value,
-          process.env.MAPPLS_CLIENT_SECRET,
-        ),
-      }) ?? { restApiKey: '' },
-    );
-    const mapplsTileKey = mapplsTileFromSdk || mapplsTileFromServer;
-
     const buildProvider = (name: MapProviderName) => {
       const enabled = settings.providers[name].enabled;
       const sdkKey = clientSdk[name];
@@ -254,8 +231,16 @@ export class AdminMapSettingsService {
         out.clientSdkKey = sdkKey;
         if (name === 'ola') {
           out.tileUrl = `${olaBase.replace(/\/+$/, '')}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;
-        } else if (name === 'mappls' && mapplsTileKey) {
-          out.tileUrl = buildMapplsTileUrl(mapplsTileKey);
+        } else if (name === 'mappls') {
+          /// The Mappls raster licence key is the client SDK key and nothing
+          /// else. This used to fall back to the server REST key, decrypting it
+          /// on every call to build a tile url that embeds the key in the path
+          /// -- so it would have travelled through every proxy and CDN log
+          /// between the browser and Mappls. The surrounding guard already
+          /// required `sdkKey`, so that fallback could never actually be
+          /// reached; it is removed rather than left as a trap for the next
+          /// edit of the guard.
+          out.tileUrl = buildMapplsTileUrl(sdkKey);
           out.baseUrl = DEFAULT_BASE_URLS.MAPPLS_TILES;
         }
       }

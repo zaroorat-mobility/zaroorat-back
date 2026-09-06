@@ -307,4 +307,90 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(body.providers.ola.enabled, false);
     assert.equal(body.providers.ola.apiKey, undefined);
   });
+  /// The public config is what the rider and driver apps will consume, so the
+  /// no-server-credential rule has to hold there too -- not just on the admin
+  /// client-config endpoint tested above. `getPublicMapConfig` used to compute a
+  /// Mappls tile key that fell back to the REST credential; that fallback is
+  /// gone, and this test is what keeps it gone.
+  it('never exposes the Mappls REST credential through the public maps config', async () => {
+    const adminHeaders = await loginAdmin();
+
+    const saved = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+      payload: {
+        primaryProvider: 'mappls',
+        providers: {
+          mappls: {
+            restApiKey: 'public_cfg_rest_key',
+            clientId: 'public_cfg_client_id',
+            clientSecret: 'public_cfg_client_secret',
+            clientSdkKey: 'public_cfg_sdk_key',
+          },
+        },
+      },
+    });
+    assert.equal(saved.statusCode, 200, saved.payload);
+
+    // Read it the way a rider client would: an ordinary authenticated user.
+    const customerHeaders = await loginRegularCustomer();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/maps/config',
+      headers: customerHeaders,
+    });
+
+    assert.equal(res.statusCode, 200, res.payload);
+    const body = res.json().data;
+    assert.equal(body.primaryProvider, 'mappls');
+
+    // The publishable key is meant to be here, embedded in the raster path.
+    assert.equal(body.providers.mappls.clientSdkKey, 'public_cfg_sdk_key');
+    assert.ok(body.providers.mappls.tileUrl?.includes('public_cfg_sdk_key'));
+
+    // Nothing server-side may appear anywhere in the payload.
+    const payload = JSON.stringify(body);
+    assert.ok(!payload.includes('public_cfg_rest_key'), 'REST key leaked to public config');
+    assert.ok(
+      !payload.includes('public_cfg_client_secret'),
+      'client secret leaked to public config',
+    );
+  });
+
+  it('withholds the public tile credential when only a server key is configured (google)', async () => {
+    const adminHeaders = await loginAdmin();
+
+    const saved = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/maps',
+      headers: adminHeaders,
+      payload: {
+        primaryProvider: 'google',
+        providers: { google: { apiKey: 'public_cfg_google_server_key' } },
+      },
+    });
+    assert.equal(saved.statusCode, 200, saved.payload);
+
+    const customerHeaders = await loginRegularCustomer();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/maps/config',
+      headers: customerHeaders,
+    });
+
+    assert.equal(res.statusCode, 200, res.payload);
+    const body = res.json().data;
+
+    // Google is the provider under test because `resetState` does not clear the
+    // map settings category, so a provider another test in this file gave an SDK
+    // key would still have one here. Nothing configures a Google SDK key.
+    //
+    // No SDK key means no browser tile credential and no tile url -- the
+    // provider renders nothing rather than borrowing the server key.
+    assert.equal(body.providers.google.enabled, true);
+    assert.equal(body.providers.google.clientSdkKey, undefined);
+    assert.equal(body.providers.google.tileUrl, undefined);
+    assert.ok(!JSON.stringify(body).includes('public_cfg_google_server_key'));
+  });
 });
