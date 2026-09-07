@@ -1,4 +1,5 @@
 import { logger } from '@shared/logger/index.js';
+import { ProviderHttpError, retryIdempotent } from '../provider-http-error.js';
 
 export interface GoogleMapsConfig {
   apiKey: string;
@@ -24,17 +25,21 @@ export class GoogleMapsClient {
     }
 
     try {
-      const response = await fetch(url.toString(), {
-        method: 'GET',
-        signal: AbortSignal.timeout(this.config.timeoutMs ?? 5000),
+      // Retried because every call this client makes is a GET read. A timeout or
+      // 5xx used to fail a fare quote outright on the first dropped packet.
+      return await retryIdempotent(async () => {
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          signal: AbortSignal.timeout(this.config.timeoutMs ?? 5000),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => response.statusText);
+          throw new ProviderHttpError('Google Maps', response.status, text.slice(0, 200));
+        }
+
+        return (await response.json()) as T;
       });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => response.statusText);
-        throw new Error(`Google Maps API error (${response.status}): ${text}`);
-      }
-
-      return (await response.json()) as T;
     } catch (error) {
       logger.error({ error, endpoint }, '[GoogleMaps] API request failed');
       throw error;

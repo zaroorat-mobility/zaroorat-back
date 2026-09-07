@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { UserService } from '../../../src/modules/users/services/user.service.js';
+import { UniqueConstraintError } from '../../../src/core/database/errors/DatabaseError.js';
 import type { PublishInput } from '../../../src/core/events/types.js';
 import type { TransactionClient } from '../../../src/core/database/TransactionManager.js';
 
@@ -21,7 +22,13 @@ const USER_ROW = {
   deletedAt: null,
 };
 
-function makeService(opts: { profile?: Record<string, unknown> | null; user?: unknown } = {}) {
+function makeService(
+  opts: {
+    profile?: Record<string, unknown> | null;
+    user?: unknown;
+    emailTaken?: boolean;
+  } = {},
+) {
   const seen = {
     executeCalls: 0,
     updateTx: undefined as unknown,
@@ -39,6 +46,11 @@ function makeService(opts: { profile?: Record<string, unknown> | null; user?: un
   };
   const userRepository = {
     findById: async () => (opts.user === undefined ? USER_ROW : opts.user),
+    updateEmail: async (_id: string, email: string | null) => {
+      seen.order.push('updateEmail');
+      if (opts.emailTaken) throw new UniqueConstraintError('users_email_key');
+      return { ...USER_ROW, email };
+    },
   };
   const userProfileRepository = {
     findByUserId: async () => opts.profile ?? null,
@@ -117,6 +129,28 @@ describe('UserService.updateProfile — unit of work (unit)', () => {
     const { service, seen } = makeService();
     await service.updateProfile(USER_ID, { lastName: null }, null);
     assert.deepEqual(seen.published[0]!.data.changedFields, ['lastName']);
+  });
+
+  /// `User.email` is unique. A duplicate used to escape as a raw
+  /// UniqueConstraintError, which no route handler could translate, so the
+  /// client saw a 500 instead of a 409 naming the field.
+  it('reports a duplicate email as EMAIL_IN_USE, not a database fault', async () => {
+    const { service } = makeService({ emailTaken: true });
+    await assert.rejects(
+      service.updateProfile(USER_ID, { email: 'taken@example.com' }, 'req-e'),
+      (err: Error & { code?: string; details?: { field: string }[] }) => {
+        assert.equal(err.code, 'EMAIL_IN_USE');
+        assert.equal(err.details?.[0]?.field, 'email');
+        return true;
+      },
+    );
+  });
+
+  it('writes a free email through to the account row', async () => {
+    const { service, seen } = makeService();
+    await service.updateProfile(USER_ID, { email: 'free@example.com' }, 'req-f');
+    assert.ok(seen.order.includes('updateEmail'));
+    assert.deepEqual(seen.published[0]!.data.changedFields, ['email']);
   });
 
   it('treats an empty patch as a no-op: no transaction, no event', async () => {

@@ -120,13 +120,53 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     assert.equal(masked, '********');
     assert.equal(maskSecret(null), '');
 
-    // Corrupted ciphertext handling (must NOT crash application)
+    // Corrupted ciphertext raises rather than returning ''. The empty string was
+    // indistinguishable from "no credential stored", so a rotated ENCRYPTION_KEY
+    // presented as every provider being unconfigured, and routing returned 503
+    // with nothing anywhere naming the cause. Not crashing the application is
+    // still required — SystemSettingService contains this per row (below).
     const corrupted = 'enc:invalidiv:invalidtag:invalidcipher';
-    const decryptedCorrupted = decryptSecret(corrupted);
-    assert.equal(decryptedCorrupted, ''); // Returns empty string on corruption safely
+    assert.throws(() => decryptSecret(corrupted), { name: 'SecretDecryptionError' });
+
+    // Prefixed `enc:` but malformed is also a failure, not a passthrough:
+    // returning it verbatim would hand the caller a ciphertext to use as a key.
+    assert.throws(() => decryptSecret('enc:only:three'), { name: 'SecretDecryptionError' });
 
     // Plaintext fallback check (legacy unencrypted setting)
     assert.equal(decryptSecret('plaintext_key_123'), 'plaintext_key_123');
+    assert.equal(decryptSecret(''), '');
+    assert.equal(decryptSecret(null), '');
+  });
+
+  it('2.2 keeps a settings category readable when one stored secret will not decrypt', async () => {
+    const systemSettingService = container.resolve<SystemSettingService>('systemSettingService');
+
+    // A row that decrypts, and a row that cannot — the shape left behind by a
+    // key rotation that only some values were re-encrypted under.
+    await systemSettingService.setSetting({
+      key: 'map.ola.api_key',
+      value: 'readable_key_value',
+      category: 'maps',
+      isSecret: true,
+    });
+    const undecryptable = 'enc:invalidiv:invalidtag:invalidcipher';
+    await db().client.systemSetting.upsert({
+      where: { key: 'map.google.api_key' },
+      update: { value: undecryptable, isSecret: true, category: 'maps' },
+      create: {
+        key: 'map.google.api_key',
+        value: undecryptable,
+        isSecret: true,
+        category: 'maps',
+      },
+    });
+
+    const settings = await systemSettingService.getCategorySettings('maps');
+
+    // The bad row does not take the category down with it, and it reads as null
+    // rather than as a usable empty credential.
+    assert.equal(settings.get('map.ola.api_key')?.value, 'readable_key_value');
+    assert.equal(settings.get('map.google.api_key')?.value, null);
   });
 
   // ─── 3. SECRET SECURITY & AUDIT LOG REDACTION ─────────────────────────────
@@ -159,7 +199,12 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     assert.equal(getRes.statusCode, 200);
     const bodyStr = JSON.stringify(getRes.json());
     assert.equal(bodyStr.includes(realSecretKey), false);
-    assert.ok(getRes.json().data.providers.ola.apiKey === '********');
+    // The read model omits the credential entirely rather than returning a masked
+    // placeholder — `configured` is what the admin UI needs, and a field that is
+    // never populated cannot leak. This asserted `apiKey === '********'` against an
+    // older response shape that did carry the field.
+    assert.equal(getRes.json().data.providers.ola.apiKey, undefined);
+    assert.equal(getRes.json().data.providers.ola.configured, true);
 
     // 2. Verify Database Audit Log redacts secret value as '[REDACTED]'
     const auditLogs = await db().client.adminActivityLog.findMany({
@@ -170,8 +215,12 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     assert.ok(auditLogs.length > 0);
     for (const log of auditLogs) {
       for (const fc of log.fieldChanges) {
-        assert.equal(fc.oldValue?.includes(realSecretKey), false);
-        assert.equal(fc.newValue?.includes(realSecretKey), false);
+        // `assert.equal(fc.oldValue?.includes(...), false)` failed on a null
+        // oldValue — the optional chain yields `undefined`, which is not `false`.
+        // A field written for the first time has no previous value, so that is the
+        // normal case, not a leak. What matters is that the secret is absent.
+        assert.ok(!fc.oldValue?.includes(realSecretKey));
+        assert.ok(!fc.newValue?.includes(realSecretKey));
         if (fc.fieldName.includes('api_key')) {
           assert.equal(fc.newValue, '[REDACTED]');
         }

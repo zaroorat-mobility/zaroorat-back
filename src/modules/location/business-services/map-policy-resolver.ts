@@ -19,23 +19,6 @@ export interface CachedMapSettings extends MapPolicySettings {
   clientSdkKeys?: Record<string, string>;
 }
 
-function parseBoolean(value: string | null | undefined, fallback = false): boolean {
-  if (value == null || value.trim() === '') return fallback;
-  return value.trim().toLowerCase() === 'true';
-}
-
-function parseFallbackByCapability(
-  raw: string | null | undefined,
-): Partial<Record<MapCapability, MapProviderName[]>> {
-  if (!raw?.trim()) return {};
-  try {
-    const parsed = JSON.parse(raw) as Partial<Record<MapCapability, MapProviderName[]>>;
-    return parsed ?? {};
-  } catch {
-    return {};
-  }
-}
-
 export function buildMapSettingsFromEnv(): CachedMapSettings {
   const primary = (process.env.MAP_PROVIDER ?? DEFAULT_MAP_PROVIDERS.PRIMARY)
     .trim()
@@ -84,10 +67,6 @@ export async function resolveMapPolicyFromSettings(
   return {
     primaryProvider,
     enabledProviders,
-    fallbackEnabled: parseBoolean(settingsMap.get(MAP_SETTING_KEYS.FALLBACK_ENABLED)?.value, false),
-    fallbackByCapability: parseFallbackByCapability(
-      settingsMap.get(MAP_SETTING_KEYS.FALLBACK_BY_CAPABILITY)?.value,
-    ),
     configVersion,
     keys: {
       olaKey: resolveMapCredential(

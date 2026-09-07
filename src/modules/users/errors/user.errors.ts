@@ -42,6 +42,11 @@ export class PhoneInUseError extends UserError {
     super('PHONE_IN_USE', message, [{ field: 'newPhoneNumber', code: 'NOT_ALLOWED' }]);
   }
 }
+export class EmailInUseError extends UserError {
+  constructor(message = 'That email is already registered to another account') {
+    super('EMAIL_IN_USE', message, [{ field: 'email', code: 'NOT_ALLOWED' }]);
+  }
+}
 export class LimitExceededError extends UserError {
   constructor(field: string, limit: number) {
     super('LIMIT_EXCEEDED', 'This collection is full; remove an item before adding another', [

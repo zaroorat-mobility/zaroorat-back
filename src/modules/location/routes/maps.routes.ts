@@ -16,7 +16,11 @@ export async function mapsRoutes(fastify: FastifyInstance): Promise<void> {
     (req, reply) => controller.autocomplete(req, reply),
   );
 
-  fastify.get('/places/:provider/:placeId', (req, reply) => controller.placeDetails(req, reply));
+  fastify.get(
+    '/places/:provider/:placeId',
+    { preHandler: fastify.rateLimit(rateLimits.mapsSearch) },
+    (req, reply) => controller.placeDetails(req, reply),
+  );
 
   fastify.post('/geocode', { preHandler: fastify.rateLimit(rateLimits.mapsSearch) }, (req, reply) =>
     controller.geocode(req, reply),

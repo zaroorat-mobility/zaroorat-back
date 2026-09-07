@@ -1,4 +1,5 @@
 import { logger } from '@shared/logger/index.js';
+import { ProviderHttpError, retryIdempotent } from '../provider-http-error.js';
 
 export interface MapplsConfig {
   /** Static REST / license key from auth.mappls.com/console → Credentials. */
@@ -87,8 +88,10 @@ export class MapplsClient {
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(
-        `Failed to generate Mappls token: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`,
+      throw new ProviderHttpError(
+        'Mappls OAuth',
+        response.status,
+        `${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`,
       );
     }
 
@@ -115,7 +118,14 @@ export class MapplsClient {
     return `${MapplsClient.LEGACY_ROUTING_BASE_URL}/${encodeURIComponent(licenseKey)}/${cleanEndpoint}`;
   }
 
+  /// GET only, so retried. Note the OAuth token fetch below is deliberately not
+  /// retried here: a failure there is almost always a credential problem, and
+  /// `getOAuthToken` is called again on the next request anyway.
   private async fetchJson<T>(url: string, headers?: Record<string, string>): Promise<T> {
+    return retryIdempotent(() => this.fetchJsonOnce<T>(url, headers));
+  }
+
+  private async fetchJsonOnce<T>(url: string, headers?: Record<string, string>): Promise<T> {
     const response = await fetch(url, {
       method: 'GET',
       ...(headers ? { headers } : {}),
@@ -124,8 +134,10 @@ export class MapplsClient {
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(
-        `Mappls API error (${response.status}): ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`,
+      throw new ProviderHttpError(
+        'Mappls',
+        response.status,
+        `${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`,
       );
     }
 
@@ -133,6 +145,7 @@ export class MapplsClient {
   }
 
   private isAuthFailure(error: unknown): boolean {
+    if (error instanceof ProviderHttpError) return error.isAuthFailure;
     const message = error instanceof Error ? error.message : String(error);
     return (
       message.includes('(401)') ||

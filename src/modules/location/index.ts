@@ -67,6 +67,12 @@ export function registerLocationModule(container: AwilixContainer): void {
     }).singleton(),
 
     // Unified map provider service — exactly one active provider (no fallback chain)
+    //
+    // The parameters must stay positional and named exactly as registered:
+    // the container runs in `InjectionMode.CLASSIC`, which injects by reading the
+    // factory's parameter names. A destructured `({ a, b }) => ...` parameter is
+    // named `{ a, b }`, matches no registration, and silently yields `undefined`
+    // for every dependency.
     mapProviderService: asFunction(
       function mapProviderServiceFactory(
         olaMapsProvider,

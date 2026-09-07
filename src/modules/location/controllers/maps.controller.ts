@@ -80,9 +80,13 @@ export class MapsController {
   }
 
   async routeMatrix(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const body = routeMatrixBodySchema.parse(req.body);
-    const data = await this.mapProviderService.getDistanceMatrix(body.origins, body.destinations);
-    reply.send({ data });
+    try {
+      const body = routeMatrixBodySchema.parse(req.body);
+      const data = await this.mapProviderService.getDistanceMatrix(body.origins, body.destinations);
+      reply.send({ data });
+    } catch (err) {
+      this.handleMapError(req, reply, err);
+    }
   }
 
   private handleMapError(req: FastifyRequest, reply: FastifyReply, err: unknown): void {

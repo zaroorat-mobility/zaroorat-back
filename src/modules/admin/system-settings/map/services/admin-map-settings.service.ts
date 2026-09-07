@@ -11,11 +11,7 @@ import {
   MAP_SETTING_KEYS,
   MAP_SETTINGS_CATEGORY,
 } from '../constants/map-settings.constants.js';
-import {
-  buildMapplsProviderConfig,
-  resolveMapCredential,
-  resolveMapplsTileLicenseKey,
-} from '../../../../../integrations/mappls/mappls-credentials.util.js';
+import { resolveMapCredential } from '../../../../../integrations/mappls/mappls-credentials.util.js';
 import { maxSettingVersion } from '../../integrations/utils/integration-settings.util.js';
 import { providerCapabilities } from '@modules/location/business-services/map-policy-resolver.js';
 import type {
@@ -27,11 +23,6 @@ import type {
   UpdateMapSettingsBody,
 } from '../types/map-settings.types.js';
 import type { MapClientConfigView } from '../../integrations/types/integration-settings.types.js';
-
-function parseBoolean(value: string | null | undefined, fallback = false): boolean {
-  if (value == null || value.trim() === '') return fallback;
-  return value.trim().toLowerCase() === 'true';
-}
 
 export class AdminMapSettingsService {
   constructor(
@@ -67,17 +58,14 @@ export class AdminMapSettingsService {
     const mapplsRestKey = resolveMapCredential(
       settings.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value,
       process.env.MAPPLS_REST_API_KEY,
-      process.env.EXPO_PUBLIC_MAPPLS_REST_KEY,
     );
     const mapplsId = resolveMapCredential(
       settings.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value,
       process.env.MAPPLS_CLIENT_ID,
-      process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID,
     );
     const mapplsSecret = resolveMapCredential(
       settings.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value,
       process.env.MAPPLS_CLIENT_SECRET,
-      process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET,
     );
     const mapplsConfigured = Boolean(
       mapplsRestKey.trim() || (mapplsId.trim() && mapplsSecret.trim()) || mapplsId.trim(),
@@ -87,25 +75,9 @@ export class AdminMapSettingsService {
     const googleEnabled = primaryProvider === 'google';
     const mapplsEnabled = primaryProvider === 'mappls';
 
-    let fallbackByCapability: MapSettingsView['fallback']['byCapability'] = {};
-    const fallbackRaw = settings.get(MAP_SETTING_KEYS.FALLBACK_BY_CAPABILITY)?.value;
-    if (fallbackRaw?.trim()) {
-      try {
-        fallbackByCapability = JSON.parse(
-          fallbackRaw,
-        ) as MapSettingsView['fallback']['byCapability'];
-      } catch {
-        fallbackByCapability = {};
-      }
-    }
-
     return {
       primaryProvider,
       version: configVersion,
-      fallback: {
-        enabled: parseBoolean(settings.get(MAP_SETTING_KEYS.FALLBACK_ENABLED)?.value, false),
-        byCapability: fallbackByCapability,
-      },
       providers: {
         ola: {
           enabled: olaEnabled,
@@ -144,8 +116,18 @@ export class AdminMapSettingsService {
     const settingsMap = await this.systemSettingService.getCategorySettings(MAP_SETTINGS_CATEGORY);
     const primary = settings.primaryProvider as MapProviderName;
 
-    const resolveTileKey = (name: MapProviderName): string => {
-      const clientSdk = resolveMapCredential(
+    /// The browser-facing tile key: the platform-restricted client SDK key, and
+    /// nothing else.
+    ///
+    /// This used to fall through to the backend REST key when no SDK key was
+    /// configured — `map.ola.api_key`, `map.google.api_key`, the Mappls REST key.
+    /// That key reached the admin bundle as the provider's browser key, and for
+    /// Mappls it was embedded in the raster tile URL path, so it also travelled
+    /// through every proxy and CDN log between the browser and Mappls. A server
+    /// credential with full account quota and no referrer restriction is not a
+    /// tile key; an unconfigured SDK key now yields no tiles instead.
+    const resolveTileKey = (name: MapProviderName): string =>
+      resolveMapCredential(
         settingsMap.get(
           name === 'ola'
             ? MAP_SETTING_KEYS.OLA_CLIENT_SDK_KEY
@@ -159,43 +141,6 @@ export class AdminMapSettingsService {
             ? process.env.GOOGLE_MAPS_CLIENT_SDK_KEY
             : process.env.MAPPLS_CLIENT_SDK_KEY,
       );
-      if (clientSdk) return clientSdk;
-
-      if (name === 'ola') {
-        return resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.OLA_API_KEY)?.value,
-          process.env.OLA_MAPS_API_KEY,
-          process.env.MAPS_API_KEY,
-        );
-      }
-      if (name === 'google') {
-        return resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.GOOGLE_API_KEY)?.value,
-          process.env.GOOGLE_MAPS_API_KEY,
-        );
-      }
-      return (
-        resolveMapplsTileLicenseKey(
-          buildMapplsProviderConfig({
-            restApiKey: resolveMapCredential(
-              settingsMap.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value,
-              process.env.MAPPLS_REST_API_KEY,
-              process.env.EXPO_PUBLIC_MAPPLS_REST_KEY,
-            ),
-            clientId: resolveMapCredential(
-              settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value,
-              process.env.MAPPLS_CLIENT_ID,
-              process.env.EXPO_PUBLIC_MAPPLS_CLIENT_ID,
-            ),
-            clientSecret: resolveMapCredential(
-              settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value,
-              process.env.MAPPLS_CLIENT_SECRET,
-              process.env.EXPO_PUBLIC_MAPPLS_CLIENT_SECRET,
-            ),
-          }) ?? { restApiKey: '' },
-        ) ?? ''
-      );
-    };
 
     const buildProvider = (name: MapProviderName) => {
       const isPrimary = name === primary;
@@ -215,7 +160,7 @@ export class AdminMapSettingsService {
       const config: {
         enabled: boolean;
         baseUrl: string;
-        apiKey?: string;
+        clientSdkKey?: string;
         tileUrl?: string;
       } = { enabled, baseUrl };
 
@@ -229,7 +174,7 @@ export class AdminMapSettingsService {
         return config;
       }
 
-      config.apiKey = tileKey;
+      config.clientSdkKey = tileKey;
       if (name === 'ola') {
         config.baseUrl = providerBase.replace(/\/+$/, '');
         config.tileUrl = `${config.baseUrl}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;
@@ -273,25 +218,6 @@ export class AdminMapSettingsService {
 
     const olaBase = settings.providers.ola.baseUrl ?? DEFAULT_BASE_URLS.OLA;
 
-    const mapplsTileFromSdk = clientSdk.mappls;
-    const mapplsTileFromServer = resolveMapplsTileLicenseKey(
-      buildMapplsProviderConfig({
-        restApiKey: resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.MAPPLS_REST_API_KEY)?.value,
-          process.env.MAPPLS_REST_API_KEY,
-        ),
-        clientId: resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_ID)?.value,
-          process.env.MAPPLS_CLIENT_ID,
-        ),
-        clientSecret: resolveMapCredential(
-          settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SECRET)?.value,
-          process.env.MAPPLS_CLIENT_SECRET,
-        ),
-      }) ?? { restApiKey: '' },
-    );
-    const mapplsTileKey = mapplsTileFromSdk || mapplsTileFromServer;
-
     const buildProvider = (name: MapProviderName) => {
       const enabled = settings.providers[name].enabled;
       const sdkKey = clientSdk[name];
@@ -302,8 +228,16 @@ export class AdminMapSettingsService {
         out.clientSdkKey = sdkKey;
         if (name === 'ola') {
           out.tileUrl = `${olaBase.replace(/\/+$/, '')}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;
-        } else if (name === 'mappls' && mapplsTileKey) {
-          out.tileUrl = buildMapplsTileUrl(mapplsTileKey);
+        } else if (name === 'mappls') {
+          /// The Mappls raster licence key is the client SDK key and nothing
+          /// else. This used to fall back to the server REST key, decrypting it
+          /// on every call to build a tile url that embeds the key in the path
+          /// -- so it would have travelled through every proxy and CDN log
+          /// between the browser and Mappls. The surrounding guard already
+          /// required `sdkKey`, so that fallback could never actually be
+          /// reached; it is removed rather than left as a trap for the next
+          /// edit of the guard.
+          out.tileUrl = buildMapplsTileUrl(sdkKey);
           out.baseUrl = DEFAULT_BASE_URLS.MAPPLS_TILES;
         }
       }
@@ -414,17 +348,6 @@ export class AdminMapSettingsService {
 
       await saveSetting(MAP_SETTING_KEYS.PRIMARY_PROVIDER, primaryProvider);
       await saveSetting(MAP_SETTING_KEYS.CONFIG_VERSION, String(nextVersion));
-      await saveSetting(MAP_SETTING_KEYS.FALLBACK_PROVIDERS, '');
-      await saveSetting(
-        MAP_SETTING_KEYS.FALLBACK_ENABLED,
-        String(input.fallback?.enabled ?? current.fallback.enabled),
-      );
-      if (input.fallback?.byCapability) {
-        await saveSetting(
-          MAP_SETTING_KEYS.FALLBACK_BY_CAPABILITY,
-          JSON.stringify(input.fallback.byCapability),
-        );
-      }
 
       const olaEnabled = primaryProvider === 'ola';
       const googleEnabled = primaryProvider === 'google';

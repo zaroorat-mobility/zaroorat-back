@@ -141,12 +141,10 @@ export class AdminSmsSettingsService {
     } else if (!authKey || authKey.startsWith('invalid_') || authKey.startsWith('fail_')) {
       ok = false;
       message = 'MSG91 auth key is missing or invalid';
-    } else if (
-      isTestEnv ||
-      authKey.startsWith('test_') ||
-      authKey.startsWith('mock_') ||
-      authKey.startsWith('demo_')
-    ) {
+      // Only the environment may short-circuit a connection check. Keying it on
+      // the shape of the credential meant a production MSG91 key beginning `test_`
+      // was reported reachable without any request ever leaving the process.
+    } else if (isTestEnv) {
       ok = true;
       message = 'MSG91 connection check succeeded (test mode)';
     } else {

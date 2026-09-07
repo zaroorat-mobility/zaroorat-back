@@ -56,25 +56,27 @@ export interface MapResultMeta {
   generatedAt: string;
   /** ISO timestamp after which clients should refresh this result. */
   expiresAt?: string;
-  /** Whether this result came from a fallback provider rather than the pinned primary. */
-  usedFallback: boolean;
   attribution: MapProviderAttribution;
   provenance: string;
 }
 
+/// Exactly one provider serves every capability.
+///
+/// There used to be `fallbackEnabled` and `fallbackByCapability` here, driving a
+/// candidate chain in `MapProviderService`. It could never run: the admin
+/// validator refused to enable any provider other than the primary, and
+/// `resolveMapPolicyFromSettings` returned `enabledProviders: [primary]`, so the
+/// chain filtered to empty on every path. It read as outage protection that did
+/// not exist. If real failover is wanted later, it needs a policy that can
+/// enable a second provider — not this.
 export interface MapPolicySettings {
   primaryProvider: MapProviderName;
   enabledProviders: MapProviderName[];
-  fallbackEnabled: boolean;
-  /** Ordered fallback providers per capability; empty means no fallback for that capability. */
-  fallbackByCapability: Partial<Record<MapCapability, MapProviderName[]>>;
   configVersion: number;
 }
 
 export const DEFAULT_MAP_POLICY: MapPolicySettings = {
   primaryProvider: 'ola',
   enabledProviders: ['ola'],
-  fallbackEnabled: false,
-  fallbackByCapability: {},
   configVersion: 0,
 };

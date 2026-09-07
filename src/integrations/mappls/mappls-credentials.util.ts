@@ -38,12 +38,3 @@ export function buildMapplsProviderConfig(input: {
 
   return null;
 }
-
-/** License key embedded in Mappls raster tile URLs. */
-export function resolveMapplsTileLicenseKey(input: {
-  restApiKey?: string;
-  clientId?: string;
-  clientSecret?: string;
-}): string {
-  return buildMapplsProviderConfig(input)?.restApiKey?.trim() ?? '';
-}

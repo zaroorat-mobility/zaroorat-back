@@ -49,12 +49,10 @@ export class SmtpEmailProvider implements EmailProvider {
       Boolean(process.env.VITEST) ||
       Boolean(process.env.JEST_WORKER_ID);
 
-    if (
-      isTestEnv ||
-      this.config.host.startsWith('test_') ||
-      this.config.host.startsWith('mock_') ||
-      this.config.host === 'localhost'
-    ) {
+    // Only the environment may short-circuit a connection check. Keying it on the
+    // shape of the host meant a production relay named `test_...` — or any real
+    // relay reached over localhost — was reported reachable without a connection.
+    if (isTestEnv) {
       return {
         ok: true,
         message: 'SMTP connection check succeeded (test mode)',
