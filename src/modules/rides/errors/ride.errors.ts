@@ -30,12 +30,6 @@ export class ActiveRideExistsError extends RideError {
     this.name = 'ActiveRideExistsError';
   }
 }
-export class OtpVerificationError extends RideError {
-  constructor(message = 'Invalid or expired ride start OTP') {
-    super(message, 'OTP_VERIFICATION_FAILED', 400);
-    this.name = 'OtpVerificationError';
-  }
-}
 /// A wrong Ride PIN — and, deliberately, also a rider who has no PIN set at all.
 ///
 /// The two must be one answer with one message and one status. Splitting them

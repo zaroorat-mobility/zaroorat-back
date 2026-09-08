@@ -10,9 +10,6 @@
 /// Everything in this file now is a real constant with no counterpart in the
 /// schema. Import the generated types for statuses.
 
-export const RIDE_OTP_TTL_MINUTES = 15;
-export const RIDE_OTP_MAX_ATTEMPTS = 5;
-export const RIDE_OTP_LENGTH = 6;
 /// Only needs to outlive a plausible client retry window, not the request
 /// itself — matches RequestExpiryJob's default 5-minute window.
 export const RIDE_REQUEST_IDEMPOTENCY_TTL_SECONDS = Number(

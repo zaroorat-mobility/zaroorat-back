@@ -3,6 +3,5 @@ export * from './ride-dispatch.repository.js';
 export * from './ride.repository.js';
 export * from './ride-fare.repository.js';
 export * from './ride-cancellation.repository.js';
-export * from './ride-otp.repository.js';
 export * from './ride-status-event.repository.js';
 export * from './ride-receipt.repository.js';
