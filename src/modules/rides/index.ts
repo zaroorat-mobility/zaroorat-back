@@ -6,18 +6,18 @@ import {
   RideRepository,
   RideFareRepository,
   RideCancellationRepository,
-  RideOtpRepository,
   RideStatusEventRepository,
   RideReceiptRepository,
 } from './repositories/index.js';
 import {
   RideRequestService,
-  RideOtpService,
   CancellationService,
   DispatchService,
   LifecycleService,
   ReceiptService,
   RideService,
+  RidePinThrottle,
+  RidePinVerificationService,
 } from './services/index.js';
 import {
   RideRequestController,
@@ -44,7 +44,6 @@ export * from './events/index.js';
 export * from './errors/index.js';
 export * from './constants/index.js';
 export * from './types/index.js';
-export * from './utils/index.js';
 export function registerRidesModule(container: AwilixContainer): void {
   container.register({
     rideMetrics: asClass(RideMetrics).singleton(),
@@ -53,12 +52,12 @@ export function registerRidesModule(container: AwilixContainer): void {
     rideRepository: asClass(RideRepository).singleton(),
     rideFareRepository: asClass(RideFareRepository).singleton(),
     rideCancellationRepository: asClass(RideCancellationRepository).singleton(),
-    rideOtpRepository: asClass(RideOtpRepository).singleton(),
     rideStatusEventRepository: asClass(RideStatusEventRepository).singleton(),
     rideReceiptRepository: asClass(RideReceiptRepository).singleton(),
     rideRequestService: asClass(RideRequestService).singleton(),
 
-    rideOtpService: asClass(RideOtpService).singleton(),
+    ridePinThrottle: asClass(RidePinThrottle).singleton(),
+    ridePinVerificationService: asClass(RidePinVerificationService).singleton(),
     cancellationService: asClass(CancellationService).singleton(),
     dispatchService: asClass(DispatchService).singleton(),
     lifecycleService: asClass(LifecycleService).singleton(),
@@ -69,7 +68,6 @@ export function registerRidesModule(container: AwilixContainer): void {
         request: c.resolve('rideRequestService'),
         lifecycle: c.resolve('lifecycleService'),
         pricing: c.resolve('pricingService'),
-        otp: c.resolve('rideOtpService'),
         cancellation: c.resolve('cancellationService'),
         dispatch: c.resolve('dispatchService'),
         receipt: c.resolve('receiptService'),
@@ -93,7 +91,6 @@ export function registerRidesModule(container: AwilixContainer): void {
     requestRepo: aliasTo('rideRequestRepository'),
     statusEventRepo: aliasTo('rideStatusEventRepository'),
     fareRepo: aliasTo('rideFareRepository'),
-    otpRepo: aliasTo('rideOtpRepository'),
     dispatchRepo: aliasTo('rideDispatchRepository'),
     cancellationRepo: aliasTo('rideCancellationRepository'),
     receiptRepo: aliasTo('rideReceiptRepository'),

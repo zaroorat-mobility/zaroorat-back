@@ -10,6 +10,10 @@ export const USER_EVENT_CATALOG = {
   'user.profile.updated': { classification: 'domain', aggregateType: 'user' },
   'user.phone.change_requested': { classification: 'observability', aggregateType: 'user' },
   'user.phone.changed': { classification: 'audit', aggregateType: 'user' },
+  // Audit, like a phone change and unlike a profile edit: this is a credential
+  // changing hands. The payload carries the version and the method, never the
+  // PIN and never the verifier.
+  'user.ride_pin.changed': { classification: 'audit', aggregateType: 'user' },
   'user.account.deactivated': { classification: 'audit', aggregateType: 'user' },
   'user.account.deletion_requested': { classification: 'audit', aggregateType: 'user' },
   'user.account.restored': { classification: 'audit', aggregateType: 'user' },

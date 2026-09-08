@@ -12,7 +12,7 @@ import {
   resetState,
   type LoggedInUser,
 } from './helpers/harness.js';
-import { grantRole, makeDispatchOffer } from './helpers/fixtures.js';
+import { grantRole, makeDispatchOffer, RIDE_PIN } from './helpers/fixtures.js';
 import {
   accountBalance,
   completeRide as flowCompleteRide,
@@ -731,7 +731,6 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       });
       assert.equal(accepted.statusCode, 200, accepted.payload);
       const rideId = accepted.json().data.ride.id;
-      const otpCode = accepted.json().data.plaintextOtp;
 
       await app.inject({
         method: 'POST',
@@ -743,7 +742,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
         method: 'POST',
         url: `/api/v1/rides/${rideId}/start`,
         headers: world.driver.authHeader,
-        payload: { otpCode },
+        payload: { pin: RIDE_PIN },
       });
 
       const completed = await app.inject({

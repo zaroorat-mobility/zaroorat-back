@@ -10,6 +10,7 @@ import { RideDispatchRepository } from '../../repositories/ride-dispatch.reposit
 import { PricingService, SurgeService } from '@modules/pricing';
 import { PromotionService } from '@modules/promotions';
 import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
+import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
 import { toVehicleTypeView } from '@modules/vehicles/controllers/vehicle-type.controller.js';
 import {
@@ -18,6 +19,7 @@ import {
   RideCustomerMismatchError,
   RideRequestNotCancellableError,
   IncompleteProfileError,
+  RidePinNotConfiguredError,
   PromotionsUnavailableError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
@@ -78,6 +80,7 @@ export class RideRequestService {
     private readonly promotionService: PromotionService,
     private readonly vehicleTypeService: VehicleTypeService,
     private readonly userProfileRepository: UserProfileRepository,
+    private readonly userRepository: UserRepository,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
@@ -310,6 +313,15 @@ export class RideRequestService {
     const profile = await this.userProfileRepository.findByUserId(input.customerId);
     if (!profile?.firstName || !profile.lastName) {
       throw new IncompleteProfileError();
+    }
+    // The other half of onboarding, and it belongs here rather than at
+    // `/start` for the same reason the name check does: a rider who cannot
+    // satisfy the ride-start credential must find that out while holding their
+    // phone, not with a driver already waiting at the kerb where the only
+    // outcomes are a cancellation and two wasted trips.
+    const ridePin = await this.userRepository.findRidePin(input.customerId);
+    if (!ridePin?.ridePinVerifier) {
+      throw new RidePinNotConfiguredError();
     }
     // BD-2. Blocks a *new* ride, never settling an existing one — refusing
     // someone permission to pay what they owe would be self-defeating, so

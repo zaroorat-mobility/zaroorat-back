@@ -5,6 +5,7 @@ import { PhoneChangeService } from '../services/phone/phone-change.service';
 import { EmergencyContactService } from '../services/emergency-contact/emergency-contact.service';
 import { SavedPlaceService } from '../services/saved-place/saved-place.service';
 import { AccountService } from '../services/account/account.service';
+import { RidePinService } from '../services/ride-pin/ride-pin.service';
 import { UserController } from '../controllers/user.controller';
 import {
   accountResponse,
@@ -24,6 +25,9 @@ import {
   placeListResponse,
   placeResponse,
   profileResponse,
+  resetRidePinVerifyBodySchema,
+  ridePinStatusResponse,
+  setRidePinBodySchema,
   updateContactBodySchema,
   updatePlaceBodySchema,
   updateProfileBodySchema,
@@ -38,6 +42,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     container.resolve<EmergencyContactService>('emergencyContactService'),
     container.resolve<SavedPlaceService>('savedPlaceService'),
     container.resolve<AccountService>('accountService'),
+    container.resolve<RidePinService>('ridePinService'),
   );
   const untamperedDevice = [app.authorize({ requireUntamperedDevice: true })];
   app.get(
@@ -114,6 +119,74 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     controller.verifyPhoneChange,
+  );
+  app.get(
+    '/me/ride-pin',
+    {
+      schema: {
+        tags: ['Users'],
+        summary: 'Ride PIN status',
+        description:
+          'Whether a Ride PIN is configured, and when it last changed. Never returns the PIN ' +
+          'itself — it is stored as a one-way verifier, so a forgotten PIN is reset, not ' +
+          'recovered.',
+        security: [{ bearerAuth: [] }],
+        response: { 200: ridePinStatusResponse, ...commonErrors, 404: err },
+      },
+    },
+    controller.getRidePinStatus,
+  );
+  app.put(
+    '/me/ride-pin',
+    {
+      preHandler: untamperedDevice,
+      schema: {
+        tags: ['Users'],
+        summary: 'Set or change the Ride PIN',
+        description:
+          'The standing 4-digit PIN the rider gives their driver to start a trip. ' +
+          '`currentPin` is required once a PIN exists and must be omitted on the first set. ' +
+          'Predictable PINs (repeated digits, runs) are refused with 400 RIDE_PIN_WEAK. ' +
+          'Rate limited per account.',
+        security: [{ bearerAuth: [] }],
+        body: setRidePinBodySchema,
+        response: { 200: ridePinStatusResponse, ...itemErrors, 429: err },
+      },
+    },
+    controller.setRidePin,
+  );
+  app.post(
+    '/me/ride-pin/reset',
+    {
+      preHandler: untamperedDevice,
+      schema: {
+        tags: ['Users'],
+        summary: 'Request a Ride PIN reset',
+        description:
+          'For a forgotten PIN. Sends an OTP to the number already on the account — never ' +
+          'to one supplied in the request. Rate limited per account.',
+        security: [{ bearerAuth: [] }],
+        response: { 202: phoneChangeChallengeResponse, ...commonErrors, 404: err, 429: err },
+      },
+    },
+    controller.requestRidePinReset,
+  );
+  app.post(
+    '/me/ride-pin/reset/verify',
+    {
+      preHandler: untamperedDevice,
+      schema: {
+        tags: ['Users'],
+        summary: 'Verify a Ride PIN reset',
+        description:
+          'Confirms the OTP and sets the replacement PIN in one call. The old PIN is never ' +
+          'required and never returned.',
+        security: [{ bearerAuth: [] }],
+        body: resetRidePinVerifyBodySchema,
+        response: { 200: ridePinStatusResponse, ...itemErrors, 410: err, 429: err },
+      },
+    },
+    controller.verifyRidePinReset,
   );
   app.get(
     '/me/emergency-contacts',

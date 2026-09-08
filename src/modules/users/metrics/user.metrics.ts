@@ -14,6 +14,18 @@ export class UserMetrics {
   phoneRateLimited(fields?: UserMetricFields): void {
     this.emit('phone.rate_limited', fields);
   }
+  /// `method` is set | change | reset. Never carries a PIN, a verifier, or a
+  /// user id — `emit` passes fields straight into the counter labels, and an id
+  /// there is unbounded cardinality.
+  ridePinChanged(fields?: UserMetricFields): void {
+    this.emit('ride_pin.changed', fields);
+  }
+  ridePinRejected(fields?: UserMetricFields): void {
+    this.emit('ride_pin.rejected', fields);
+  }
+  ridePinRateLimited(fields?: UserMetricFields): void {
+    this.emit('ride_pin.rate_limited', fields);
+  }
   accountsErased(fields?: UserMetricFields): void {
     this.emit('accounts.erased', fields);
   }

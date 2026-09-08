@@ -153,18 +153,6 @@ function makeWorld() {
     },
   };
 
-  const sentOtpSms: { to: string; body: string }[] = [];
-  const userRepository = {
-    async findById(userId: string) {
-      return { id: userId, phoneNumber: `+91${userId}` };
-    },
-  };
-  const notificationService = {
-    async sendSms(to: string, body: string) {
-      sentOtpSms.push({ to, body });
-      return {};
-    },
-  };
   // Every test in this file pairs driver 'd1' with vehicle 'v1', 'd2' with
   // 'v2', and every request's vehicleTypeId is 'v1' — mirror that so the
   // accept-time vehicle-eligibility check passes for the scenarios these
@@ -219,10 +207,17 @@ function makeWorld() {
       },
     } as never,
     dispatchRepo as never,
+    // Ride PIN verification and its throttle. These cases exercise acceptance
+    // concurrency, which never reaches either — but the constructor does.
     {
-      async generateStartOtp() {
-        return { plaintextOtp: '123456' };
+      async verify() {
+        return { version: 1 };
       },
+    } as never,
+    {
+      async assertAllowed() {},
+      async recordFailure() {},
+      async clear() {},
     } as never,
     // PricingRuleRepository's real contract. Returning null for both the city
     // and the 'GLOBAL' lookup makes `rateCardForTypeId` fall back to the
@@ -273,8 +268,6 @@ function makeWorld() {
     } as never,
     driverStatusRepository as never,
     driverRepository as never,
-    userRepository as never,
-    notificationService as never,
     vehicleRepository as never,
     vehicleAssignmentRepository as never,
     vehicleEligibilityService,
@@ -324,7 +317,6 @@ function makeWorld() {
     resolvedOffers,
     driverStatuses,
     activeRideByDriver,
-    sentOtpSms,
     completionCounters,
     tripMeter,
   };
@@ -418,7 +410,7 @@ describe('Ride lifecycle concurrency', () => {
     });
     world.offer('req_1', 'd1');
 
-    const { plaintextOtp } = await world.service.acceptRideRequest({
+    const accepted = await world.service.acceptRideRequest({
       requestId: 'req_1',
       driverId: 'd1',
       vehicleId: 'v1',
@@ -426,15 +418,21 @@ describe('Ride lifecycle concurrency', () => {
 
     assert.deepEqual(world.resolvedOffers, ['req_1:d1']);
     assert.deepEqual(world.driverStatuses, [{ driverId: 'd1', status: 'ON_TRIP' }]);
-    assert.equal(
-      world.sentOtpSms.length,
-      1,
-      'the customer, not the driver, receives the start OTP',
-    );
-    assert.equal(world.sentOtpSms[0]!.to, '+91cust_1');
+
+    // Acceptance mints no credential and sends no message. That is now
+    // structural rather than asserted: `LifecycleService` no longer takes a
+    // `NotificationService` or a `RideOtpService` at all, so there is nothing
+    // left that *could* send one. It used to do both, and the SMS was the only
+    // channel the rider had — best-effort, errors swallowed, no resend.
+    //
+    // The response is `{ ride }` and nothing else. The assertion this replaces
+    // read a code off the accept response and checked the SMS matched it — it
+    // only type-checked because the driver was being handed the code, so the
+    // leak was the test.
+    assert.deepEqual(Object.keys(accepted), ['ride']);
     assert.ok(
-      world.sentOtpSms[0]!.body.includes(plaintextOtp),
-      'the delivered message carries the same code the driver must be given',
+      !/otp|pin/i.test(JSON.stringify(accepted)),
+      'the accept response carries no credential material',
     );
   });
 

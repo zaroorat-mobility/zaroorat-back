@@ -10,6 +10,7 @@ import {
   makeAssignedVehicle,
   makeDriver,
   makeVehicleType,
+  setRidePin,
 } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import { rideConfig } from '../../src/config/ride/ride.config.js';
@@ -103,6 +104,7 @@ describe('ride dispatch, offers and assignment (integration)', () => {
       payload: { firstName: 'Cat', lastName: 'Customer' },
     });
     assert.equal(named.statusCode, 200, named.payload);
+    await setRidePin(user.userId);
     return user;
   }
 
@@ -1259,8 +1261,9 @@ describe('ride dispatch, offers and assignment (integration)', () => {
     it('offers the request back to the driver who booked it, then refuses the accept', async () => {
       const vehicleTypeId = await makeVehicleType({ code: `SELF_${randomUUID().slice(0, 6)}` });
       const driver = await onlineDriver('+919876730101', vehicleTypeId);
-      // Booking needs a profile name, same as any rider's would.
+      // Booking needs a profile name and a Ride PIN, same as any rider's would.
       await completeProfile(driver.userId, 'Dee', 'Driver');
+      await setRidePin(driver.userId);
 
       // The same token books the ride. This is the step no role gate can catch.
       const { requestId, offers } = await requestRide(driver, vehicleTypeId);
@@ -1284,6 +1287,7 @@ describe('ride dispatch, offers and assignment (integration)', () => {
       const booking = await onlineDriver('+919876730102', vehicleTypeId);
       const other = await onlineDriver('+919876730103', vehicleTypeId);
       await completeProfile(booking.userId, 'Dee', 'Driver');
+      await setRidePin(booking.userId);
 
       const { requestId, offers } = await requestRide(booking, vehicleTypeId);
       assert.equal((await accept(booking, requestId)).statusCode, 403);

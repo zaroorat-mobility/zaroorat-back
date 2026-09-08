@@ -9,3 +9,4 @@ export * from './vehicle/index.js';
 export * from './realtime/index.js';
 export * from './pricing/index.js';
 export * from './referral/index.js';
+export * from './ride-pin/index.js';

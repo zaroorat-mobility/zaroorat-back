@@ -1,5 +1,10 @@
 export const PHONE_CHANGE_PURPOSE = 'PHONE_CHANGE' as const;
 export const RATE_LIMIT_SCOPE = 'user:phone_change';
+export const RIDE_PIN_RESET_PURPOSE = 'RIDE_PIN_RESET' as const;
+/// Scoped separately from the phone-change limiter: a rider legitimately
+/// changing their number should not be locked out of setting a PIN, and a run of
+/// wrong `currentPin` guesses should not spend their phone-change budget.
+export const RIDE_PIN_RATE_LIMIT_SCOPE = 'user:ride_pin';
 export const REVOKE_REASON = 'phone_changed';
 export const IDEMPOTENCY_TTL_SECONDS = 86400;
 export const IMMUTABLE_PROFILE_FIELDS = Object.freeze([

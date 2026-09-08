@@ -142,6 +142,42 @@ export const updateProfileBodySchema = {
     },
   },
 } as const;
+export interface RidePinStatusView {
+  configured: boolean;
+  updatedAt: Date | null;
+  version: number;
+}
+/// Status, never the value. The verifier is a one-way scrypt digest, so the PIN
+/// genuinely cannot be returned even by a caller entitled to it — the rider
+/// knows it because they chose it, and resets it if they forget. Same contract
+/// as every password in this system.
+export const ridePinStatusResponse = {
+  type: 'object',
+  properties: {
+    configured: { type: 'boolean', description: 'Whether a Ride PIN is set' },
+    updatedAt: { type: ['string', 'null'], format: 'date-time' },
+    version: { type: 'integer', description: 'Increments on every set/change/reset' },
+  },
+  required: ['configured', 'updatedAt', 'version'],
+} as const;
+export const setRidePinBodySchema = {
+  type: 'object',
+  properties: {
+    currentPin: {
+      type: 'string',
+      description: 'Existing 4-digit PIN. Required only if one is already set.',
+    },
+    newPin: { type: 'string', description: 'New 4-digit PIN, digits only, required' },
+  },
+} as const;
+export const resetRidePinVerifyBodySchema = {
+  type: 'object',
+  properties: {
+    challengeId: { type: 'string', description: 'Challenge id from /me/ride-pin/reset, required' },
+    code: { type: 'string', description: '6-digit OTP code, required' },
+    newPin: { type: 'string', description: 'New 4-digit PIN, digits only, required' },
+  },
+} as const;
 export const phoneChangeBodySchema = {
   type: 'object',
   properties: {

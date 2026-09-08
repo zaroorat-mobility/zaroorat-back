@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { latitudeSchema, longitudeSchema } from '@modules/location';
-import { RIDE_OTP_LENGTH } from '../constants/ride.constants.js';
+import { ridePinConfig } from '@config';
 /// Drop coordinates are required, not optional.
 ///
 /// They were optional here while every path behind them insisted on having
@@ -44,8 +44,16 @@ export const acceptRideRequestSchema = z.object({
   vehicleId: z.string().uuid(),
 });
 export type AcceptRideRequestBody = z.infer<typeof acceptRideRequestSchema>;
+/// The rider's standing Ride PIN, recited to the driver at the pickup point.
+///
+/// A string of digits, never a number: `Number('0827')` is 827, and a PIN that
+/// silently loses its leading zero is a rider who cannot start a ride. Digits
+/// are enforced here as well as length — the OTP field this replaces checked
+/// only length, so `"abcdef"` passed validation and reached the verifier.
 export const startRideSchema = z.object({
-  otpCode: z.string().length(RIDE_OTP_LENGTH, { message: `OTP must be ${RIDE_OTP_LENGTH} digits` }),
+  pin: z.string().regex(new RegExp(`^[0-9]{${ridePinConfig.length}}$`), {
+    message: `PIN must be ${ridePinConfig.length} digits`,
+  }),
 });
 export type StartRideBody = z.infer<typeof startRideSchema>;
 export const completeRideSchema = z.object({

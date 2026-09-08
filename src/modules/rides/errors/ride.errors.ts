@@ -1,11 +1,17 @@
 export class RideError extends Error {
   readonly code: string;
   readonly statusCode: number;
-  constructor(message: string, code = 'RIDE_ERROR', statusCode = 400) {
+  /// Machine-readable extras for the client, forwarded verbatim by
+  /// `handleRideError`. `errorEnvelope` and `isCodedError` have always carried
+  /// this; ride errors simply had nothing to put in it until a throttled
+  /// response needed to say *when* to try again.
+  readonly details?: unknown;
+  constructor(message: string, code = 'RIDE_ERROR', statusCode = 400, details?: unknown) {
     super(message);
     this.name = 'RideError';
     this.code = code;
     this.statusCode = statusCode;
+    if (details !== undefined) this.details = details;
   }
 }
 export class InvalidRideStateTransitionError extends RideError {
@@ -24,10 +30,53 @@ export class ActiveRideExistsError extends RideError {
     this.name = 'ActiveRideExistsError';
   }
 }
-export class OtpVerificationError extends RideError {
-  constructor(message = 'Invalid or expired ride start OTP') {
-    super(message, 'OTP_VERIFICATION_FAILED', 400);
-    this.name = 'OtpVerificationError';
+/// A wrong Ride PIN — and, deliberately, also a rider who has no PIN set at all.
+///
+/// The two must be one answer with one message and one status. Splitting them
+/// would turn the start endpoint into an oracle: a driver could work out which
+/// riders have no PIN configured and target exactly those accounts. The equal
+/// timing that backs this up comes from `verifyRidePin`, which does the same
+/// scrypt work against a dummy verifier when none is stored.
+export class RidePinInvalidError extends RideError {
+  constructor(message = 'The PIN entered is not correct') {
+    super(message, 'RIDE_PIN_INVALID', 400);
+    this.name = 'RidePinInvalidError';
+  }
+}
+/// Some attempt budget is spent — the ride's, the rider's, or the driver's.
+/// Which one is deliberately not said: naming it would tell an attacker which
+/// dimension to switch.
+export class RidePinLockedError extends RideError {
+  constructor(retryAfterSeconds: number) {
+    super(
+      `Too many incorrect attempts. Try again in ${Math.max(1, Math.ceil(retryAfterSeconds / 60))} minute(s)`,
+      'RIDE_PIN_LOCKED',
+      429,
+      { retryAfterSec: retryAfterSeconds },
+    );
+    this.name = 'RidePinLockedError';
+  }
+}
+export class RidePinThrottledError extends RideError {
+  constructor(retryAfterSeconds: number) {
+    super('Please wait a moment before trying again', 'RIDE_PIN_THROTTLED', 429, {
+      retryAfterSec: retryAfterSeconds,
+    });
+    this.name = 'RidePinThrottledError';
+  }
+}
+/// The throttle store is unreachable, so no attempt budget can be consulted.
+///
+/// Fails closed, matching every other security store in this codebase — the auth
+/// plugin refuses a request it cannot check revocation, permissions, device
+/// state or driver operability for. Failing open here would drop brute-force
+/// protection at exactly the moment monitoring is already degraded, and a Redis
+/// outage is in any case a platform-wide one: dispatch locks, the trip meter and
+/// idempotency all stop with it, so rides are not starting cleanly regardless.
+export class RidePinUnavailableError extends RideError {
+  constructor(message = 'Ride start is temporarily unavailable') {
+    super(message, 'SERVICE_UNAVAILABLE', 503);
+    this.name = 'RidePinUnavailableError';
   }
 }
 export class RideNotFoundError extends RideError {
@@ -116,6 +165,20 @@ export class IncompleteProfileError extends RideError {
   constructor() {
     super('Add your name to your profile before booking a ride', 'INCOMPLETE_PROFILE', 422);
     this.name = 'IncompleteProfileError';
+  }
+}
+/// Refused at booking, never at the kerb.
+///
+/// A rider with no Ride PIN cannot prove who they are to their driver, so the
+/// ride could never legally start. Discovering that at the pickup point — driver
+/// and passenger already face to face, meter waiting — has no good outcome; the
+/// same fact at booking time costs ten seconds in an app the rider is already
+/// holding. Deliberately the same shape as `IncompleteProfileError`, in the same
+/// guard block, for the same reason.
+export class RidePinNotConfiguredError extends RideError {
+  constructor() {
+    super('Set your Ride PIN before booking a ride', 'RIDE_PIN_NOT_CONFIGURED', 422);
+    this.name = 'RidePinNotConfiguredError';
   }
 }
 /// Accepting a request used to consult nothing but the request row: any online

@@ -13,6 +13,8 @@ import {
   makeDriver,
   makeVehicleType,
   markDriverOnline,
+  setRidePin,
+  RIDE_PIN,
 } from './fixtures.js';
 import { Decimal } from '../../../src/modules/payments/types/index.js';
 
@@ -37,9 +39,10 @@ export interface FareRow {
 /// A rider, a verified online driver with an assigned vehicle, and a vehicle
 /// type — everything `POST /rides/requests` through `/complete` needs.
 ///
-/// Four separate gates make a ride refuse to book or accept, and each one hid
+/// Five separate gates make a ride refuse to book or accept, and each one hid
 /// the next when this was first written: a rider with no profile name is 422
-/// INCOMPLETE_PROFILE, acceptance without a dispatch offer is 404
+/// INCOMPLETE_PROFILE, a rider with no Ride PIN is 422
+/// RIDE_PIN_NOT_CONFIGURED, acceptance without a dispatch offer is 404
 /// RIDE_OFFER_NOT_FOUND, an offline driver is 409 DRIVER_NOT_AVAILABLE, and a
 /// driver with no active assignment is 409 VEHICLE_MISMATCH.
 export async function rideWorld(
@@ -48,6 +51,10 @@ export async function rideWorld(
 ): Promise<RideWorld> {
   const initialCustomer = await loginAs(app, phones.customer);
   await completeProfile(initialCustomer.userId);
+  // Fifth gate: booking now refuses a rider with no Ride PIN (422
+  // RIDE_PIN_NOT_CONFIGURED), because that rider could never start the ride they
+  // are about to book.
+  await setRidePin(initialCustomer.userId);
   const initialDriver = await loginAs(app, phones.driver);
   await grantRole(initialDriver.userId, 'driver');
   const driverId = await makeDriver(initialDriver.userId, { verified: true });
@@ -103,7 +110,6 @@ export async function completeRide(
   assert.equal(accepted.statusCode, 200, accepted.payload);
 
   const rideId = accepted.json().data.ride.id;
-  const otpCode = accepted.json().data.plaintextOtp;
 
   const arrived = await app.inject({
     method: 'POST',
@@ -117,7 +123,7 @@ export async function completeRide(
     method: 'POST',
     url: `/api/v1/rides/${rideId}/start`,
     headers: world.driver.authHeader,
-    payload: { otpCode },
+    payload: { pin: RIDE_PIN },
   });
   assert.equal(started.statusCode, 200, started.payload);
 

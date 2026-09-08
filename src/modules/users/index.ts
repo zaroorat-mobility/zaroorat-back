@@ -6,6 +6,7 @@ import { PhoneChangeService } from './services/phone/phone-change.service';
 import { EmergencyContactService } from './services/emergency-contact/emergency-contact.service';
 import { SavedPlaceService } from './services/saved-place/saved-place.service';
 import { AccountService } from './services/account/account.service';
+import { RidePinService } from './services/ride-pin/ride-pin.service';
 import { AccountErasureJob } from './jobs';
 import { UserMetrics } from './metrics';
 export * from './controllers';
@@ -31,6 +32,7 @@ export function registerUserService(container: AwilixContainer): void {
     emergencyContactService: asClass(EmergencyContactService).singleton(),
     savedPlaceService: asClass(SavedPlaceService).singleton(),
     accountService: asClass(AccountService).singleton(),
+    ridePinService: asClass(RidePinService).singleton(),
     accountErasureJob: asClass(AccountErasureJob).singleton(),
   });
   registerFileReference('PROFILE_IMAGE', {

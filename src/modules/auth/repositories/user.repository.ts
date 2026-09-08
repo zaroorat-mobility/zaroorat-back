@@ -54,6 +54,33 @@ export class UserRepository extends BaseRepository {
   async updateEmail(id: string, email: string | null, tx?: TransactionClient): Promise<User> {
     return (tx ?? this.client).user.update({ where: { id }, data: { email } });
   }
+  /// Everything the Ride PIN flows need, and nothing else. A narrow `select`
+  /// rather than a whole `User`, so a verifier cannot ride along into a caller
+  /// that was only after the account.
+  async findRidePin(
+    id: string,
+    tx?: TransactionClient,
+  ): Promise<{ ridePinVerifier: string | null; ridePinVersion: number } | null> {
+    return (tx ?? this.client).user.findUnique({
+      where: { id },
+      select: { ridePinVerifier: true, ridePinVersion: true },
+    });
+  }
+  /// Returns the new version. `increment` rather than a read-then-write, so two
+  /// concurrent changes cannot land on the same version number — the audit trail
+  /// is only useful if a version identifies exactly one PIN generation.
+  async setRidePin(id: string, verifier: string, tx?: TransactionClient): Promise<number> {
+    const updated = await (tx ?? this.client).user.update({
+      where: { id },
+      data: {
+        ridePinVerifier: verifier,
+        ridePinUpdatedAt: new Date(),
+        ridePinVersion: { increment: 1 },
+      },
+      select: { ridePinVersion: true },
+    });
+    return updated.ridePinVersion;
+  }
   async softDelete(id: string, at: Date = new Date()): Promise<void> {
     await this.client.user.update({ where: { id }, data: { deletedAt: at } });
   }
@@ -64,6 +91,14 @@ export class UserRepository extends BaseRepository {
         phoneNumber: `erased:${id}`,
         email: null,
         passwordHash: null,
+        // A Ride PIN is a credential the rider very likely reuses elsewhere, and
+        // it outlives the ride it was for. Erasure that left the verifier behind
+        // would keep an offline-attackable secret about a person who asked to be
+        // forgotten. `ridePinVersion` is left alone: it is a counter, carries
+        // nothing about the rider, and zeroing it would make a re-registered
+        // account's audit trail collide with the erased one's.
+        ridePinVerifier: null,
+        ridePinUpdatedAt: null,
         isPhoneVerified: false,
         isEmailVerified: false,
         deletedAt: at,

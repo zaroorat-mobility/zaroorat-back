@@ -4,3 +4,4 @@ export * from './profile';
 export * from './emergency-contact';
 export * from './saved-place';
 export * from './account';
+export * from './ride-pin';

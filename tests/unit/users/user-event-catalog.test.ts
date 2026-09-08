@@ -22,6 +22,9 @@ describe('USER event catalog (unit)', () => {
       'user.account.erased',
       'user.account.restored',
       'user.phone.changed',
+      // A Ride PIN is a credential, so a change to it audits like a phone change
+      // rather than like a profile edit.
+      'user.ride_pin.changed',
     ]);
   });
 

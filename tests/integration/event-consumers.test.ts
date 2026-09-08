@@ -11,7 +11,13 @@ import {
   loginAs,
   resetState,
 } from './helpers/harness.js';
-import { grantRole, makeAssignedVehicle, makeDriver, makeVehicleType } from './helpers/fixtures.js';
+import {
+  grantRole,
+  makeAssignedVehicle,
+  makeDriver,
+  makeVehicleType,
+  setRidePin,
+} from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import type { EventBus, Unsubscribe } from '../../src/core/events/index.js';
 import type { EventPublisher } from '../../src/core/events/index.js';
@@ -69,6 +75,7 @@ describe('event consumer registration and delivery (integration)', () => {
         headers: customer.authHeader,
         payload: { firstName: 'Cat', lastName: 'Customer' },
       });
+      await setRidePin(customer.userId);
 
       const before = await db().client.outboxEvent.count({ where: { status: 'PENDING' } });
       assert.ok(before > 0, 'events are sitting on the outbox');
@@ -122,6 +129,7 @@ describe('event consumer registration and delivery (integration)', () => {
         headers: customer.authHeader,
         payload: { firstName: 'Cat', lastName: 'Customer' },
       });
+      await setRidePin(customer.userId);
       const created = await app.inject({
         method: 'POST',
         url: '/api/v1/rides/requests',

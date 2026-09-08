@@ -3,4 +3,5 @@ enum OtpPurpose {
   REGISTER
 
   PHONE_CHANGE
+  RIDE_PIN_RESET
 }
