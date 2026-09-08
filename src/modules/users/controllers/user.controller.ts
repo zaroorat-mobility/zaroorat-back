@@ -9,6 +9,7 @@ import type { PhoneChangeService } from '../services/phone/phone-change.service'
 import type { EmergencyContactService } from '../services/emergency-contact/emergency-contact.service';
 import type { SavedPlaceService } from '../services/saved-place/saved-place.service';
 import type { AccountService } from '../services/account/account.service';
+import type { RidePinService } from '../services/ride-pin/ride-pin.service';
 import { UserError } from '../errors';
 import { replyFromUserError, replyUserError } from '../schemas';
 import { ProfileController } from './profile.controller';
@@ -16,24 +17,28 @@ import { PhoneChangeController } from './phone-change.controller';
 import { EmergencyContactController } from './emergency-contact.controller';
 import { SavedPlaceController } from './saved-place.controller';
 import { AccountController } from './account.controller';
+import { RidePinController } from './ride-pin.controller';
 export class UserController {
   private readonly profileController: ProfileController;
   private readonly phoneChangeController: PhoneChangeController;
   private readonly emergencyContactController: EmergencyContactController;
   private readonly savedPlaceController: SavedPlaceController;
   private readonly accountController: AccountController;
+  private readonly ridePinController: RidePinController;
   constructor(
     userService: UserService,
     phoneChangeService: PhoneChangeService,
     emergencyContactService: EmergencyContactService,
     savedPlaceService: SavedPlaceService,
     accountService: AccountService,
+    ridePinService: RidePinService,
   ) {
     this.profileController = new ProfileController(userService);
     this.phoneChangeController = new PhoneChangeController(phoneChangeService);
     this.emergencyContactController = new EmergencyContactController(emergencyContactService);
     this.savedPlaceController = new SavedPlaceController(savedPlaceService);
     this.accountController = new AccountController(accountService);
+    this.ridePinController = new RidePinController(ridePinService);
   }
   getMe = (req: FastifyRequest, reply: FastifyReply) =>
     this.wrap(req, reply, () => this.profileController.getMe(req, reply));
@@ -43,6 +48,14 @@ export class UserController {
     this.wrap(req, reply, () => this.phoneChangeController.requestPhoneChange(req, reply));
   verifyPhoneChange = (req: FastifyRequest, reply: FastifyReply) =>
     this.wrap(req, reply, () => this.phoneChangeController.verifyPhoneChange(req, reply));
+  getRidePinStatus = (req: FastifyRequest, reply: FastifyReply) =>
+    this.wrap(req, reply, () => this.ridePinController.getStatus(req, reply));
+  setRidePin = (req: FastifyRequest, reply: FastifyReply) =>
+    this.wrap(req, reply, () => this.ridePinController.setPin(req, reply));
+  requestRidePinReset = (req: FastifyRequest, reply: FastifyReply) =>
+    this.wrap(req, reply, () => this.ridePinController.requestReset(req, reply));
+  verifyRidePinReset = (req: FastifyRequest, reply: FastifyReply) =>
+    this.wrap(req, reply, () => this.ridePinController.verifyReset(req, reply));
   listContacts = (req: FastifyRequest, reply: FastifyReply) =>
     this.wrap(req, reply, () => this.emergencyContactController.listContacts(req, reply));
   addContact = (req: FastifyRequest, reply: FastifyReply) =>

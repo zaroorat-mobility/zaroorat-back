@@ -59,6 +59,31 @@ export class LabelConflictError extends UserError {
     super('CONFLICT', message, [{ field: 'label', code: 'NOT_ALLOWED' }]);
   }
 }
+/// A wrong `currentPin` on the change path.
+///
+/// Says nothing about whether a PIN is configured at all, deliberately: the two
+/// answers together would let anyone holding a stolen session establish whether
+/// the account has a PIN before guessing at it.
+export class RidePinInvalidError extends UserError {
+  constructor(message = 'The current PIN entered is not correct') {
+    super('RIDE_PIN_INVALID', message, [{ field: 'currentPin', code: 'NOT_ALLOWED' }]);
+  }
+}
+/// A PIN on the blocklist. Distinct from `VALIDATION`, which covers shape —
+/// `12ab` is malformed, `1234` is well-formed and refused on its merits, and a
+/// rider needs to be told which.
+export class RidePinWeakError extends UserError {
+  constructor(message = 'Choose a less predictable PIN — avoid repeated digits and runs') {
+    super('RIDE_PIN_WEAK', message, [{ field: 'newPin', code: 'NOT_ALLOWED' }]);
+  }
+}
+/// The change path requires the current PIN; the first-set path must not. Raised
+/// when a caller who already has a PIN omits it.
+export class RidePinAlreadySetError extends UserError {
+  constructor(message = 'A Ride PIN is already set; provide the current one to change it') {
+    super('RIDE_PIN_ALREADY_SET', message, [{ field: 'currentPin', code: 'REQUIRED' }]);
+  }
+}
 export class AccountNotDeactivatedError extends UserError {
   constructor(message = 'This account is not deactivated, so there is nothing to restore') {
     super('CONFLICT', message, [{ field: 'status', code: 'NOT_ALLOWED' }]);

@@ -13,7 +13,13 @@ import {
   type ListeningApp,
   type LoggedInUser,
 } from './helpers/harness.js';
-import { grantRole, makeAssignedVehicle, makeDriver, makeVehicleType } from './helpers/fixtures.js';
+import {
+  grantRole,
+  makeAssignedVehicle,
+  makeDriver,
+  makeVehicleType,
+  setRidePin,
+} from './helpers/fixtures.js';
 import { realtimeConfig } from '../../src/config/realtime/realtime.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import { container } from '../../src/core/di.js';
@@ -157,6 +163,7 @@ describe('realtime socket gateway (integration)', () => {
       headers: user.authHeader,
       payload: { firstName: 'Cat', lastName: 'Customer' },
     });
+    await setRidePin(user.userId);
     return user;
   }
 

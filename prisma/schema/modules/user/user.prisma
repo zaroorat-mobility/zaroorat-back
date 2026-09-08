@@ -7,9 +7,26 @@ model User {
   isPhoneVerified Boolean    @default(false) @map("is_phone_verified")
   isEmailVerified Boolean    @default(false) @map("is_email_verified")
   lastLoginAt     DateTime?  @map("last_login_at")
-  createdAt       DateTime   @default(now()) @map("created_at")
-  updatedAt       DateTime   @updatedAt @map("updated_at")
-  deletedAt       DateTime?  @map("deleted_at")
+
+  /// The rider's standing 4-digit Ride PIN, which a driver must be told before a
+  /// ride can start. A scrypt verifier over a peppered PIN, never the PIN — see
+  /// `hashRidePin`. Here rather than on `UserProfile` because this is a
+  /// credential and belongs beside `passwordHash`: `user_profiles` is serialised
+  /// wholesale into `GET /users/me`, and a verifier there is one careless
+  /// `select` away from a response body.
+  ///
+  /// Null means "not configured yet", which `RideRequestService` refuses to book
+  /// against. Deliberately not unique and deliberately unindexed: two riders
+  /// sharing a PIN is expected, and verification always reads by `users.id`.
+  ridePinVerifier  String?   @map("ride_pin_verifier")
+  ridePinUpdatedAt DateTime? @map("ride_pin_updated_at")
+  /// Bumped on every set/change/reset. Recorded in the audit trail so a ride
+  /// start can be tied to the PIN generation it verified against, without the
+  /// PIN itself ever being written down.
+  ridePinVersion   Int       @default(0) @map("ride_pin_version") @db.SmallInt
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  deletedAt        DateTime? @map("deleted_at")
 
   profile                       UserProfile?
   devices                       UserDevice[]

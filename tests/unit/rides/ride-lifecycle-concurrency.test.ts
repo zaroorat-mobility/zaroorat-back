@@ -224,6 +224,18 @@ function makeWorld() {
         return { plaintextOtp: '123456' };
       },
     } as never,
+    // Ride PIN verification and its throttle. These cases exercise acceptance
+    // concurrency, which never reaches either — but the constructor does.
+    {
+      async verify() {
+        return { version: 1 };
+      },
+    } as never,
+    {
+      async assertAllowed() {},
+      async recordFailure() {},
+      async clear() {},
+    } as never,
     // PricingRuleRepository's real contract. Returning null for both the city
     // and the 'GLOBAL' lookup makes `rateCardForTypeId` fall back to the
     // default config rate card — the same deterministic pricing this suite
@@ -418,7 +430,7 @@ describe('Ride lifecycle concurrency', () => {
     });
     world.offer('req_1', 'd1');
 
-    const { plaintextOtp } = await world.service.acceptRideRequest({
+    const accepted = await world.service.acceptRideRequest({
       requestId: 'req_1',
       driverId: 'd1',
       vehicleId: 'v1',
@@ -432,9 +444,18 @@ describe('Ride lifecycle concurrency', () => {
       'the customer, not the driver, receives the start OTP',
     );
     assert.equal(world.sentOtpSms[0]!.to, '+91cust_1');
+
+    // The assertion this replaces read the code off the accept *response* and
+    // checked the SMS matched it. That only type-checked because the driver was
+    // being handed the code — it was the leak, written down as a test. The
+    // response is now `{ ride }` and nothing else, so the check is the opposite
+    // one: no credential material may appear anywhere in it.
+    const rendered = JSON.stringify(accepted);
+    assert.deepEqual(Object.keys(accepted), ['ride']);
+    assert.ok(!/otp|pin/i.test(rendered), 'the accept response carries no credential material');
     assert.ok(
-      world.sentOtpSms[0]!.body.includes(plaintextOtp),
-      'the delivered message carries the same code the driver must be given',
+      !world.sentOtpSms.some((sms) => rendered.includes(sms.body.replace(/\D/g, ''))),
+      'and none of the digits the customer was sent appear in it either',
     );
   });
 

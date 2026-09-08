@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import {
   completeProfile,
+  setRidePin,
   createPricingRuleDirect,
   ensureCity,
   ensureCityWithBoundary,
@@ -404,8 +405,10 @@ describe('zone fare parity: quote === booked === billed (integration)', () => {
       });
 
       const customer = await loginAs(app, '+919876710055');
-      // `createRequest` refuses with 422 INCOMPLETE_PROFILE without a name.
+      // `createRequest` refuses with 422 INCOMPLETE_PROFILE without a name,
+      // and 422 RIDE_PIN_NOT_CONFIGURED without a Ride PIN.
       await completeProfile(customer.userId);
+      await setRidePin(customer.userId);
 
       const response = await app.inject({
         method: 'POST',
@@ -444,6 +447,7 @@ describe('zone fare parity: quote === booked === billed (integration)', () => {
       await createPricingRuleDirect({ vehicleTypeId, cityCode: 'SGR', baseFare: 50 });
       const customer = await loginAs(app, '+919876710077');
       await completeProfile(customer.userId);
+      await setRidePin(customer.userId);
 
       const client = db().client as unknown as { $queryRaw: (...args: unknown[]) => unknown };
       const original = client.$queryRaw.bind(client);

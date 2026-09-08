@@ -18,6 +18,8 @@ import {
   LifecycleService,
   ReceiptService,
   RideService,
+  RidePinThrottle,
+  RidePinVerificationService,
 } from './services/index.js';
 import {
   RideRequestController,
@@ -59,6 +61,10 @@ export function registerRidesModule(container: AwilixContainer): void {
     rideRequestService: asClass(RideRequestService).singleton(),
 
     rideOtpService: asClass(RideOtpService).singleton(),
+    // Registered but not yet reached: `startRide` still verifies the per-ride
+    // OTP. Phase 4 of the Ride PIN migration is what points it here.
+    ridePinThrottle: asClass(RidePinThrottle).singleton(),
+    ridePinVerificationService: asClass(RidePinVerificationService).singleton(),
     cancellationService: asClass(CancellationService).singleton(),
     dispatchService: asClass(DispatchService).singleton(),
     lifecycleService: asClass(LifecycleService).singleton(),

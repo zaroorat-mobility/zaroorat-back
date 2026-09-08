@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import { driverConfig } from '../../../src/config/driver/driver.config.js';
 import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config.js';
+import { hashRidePin } from '../../../src/modules/auth/utils/ride-pin.js';
 import { db } from './harness.js';
+
+/// The Ride PIN every test rider gets. Not on the weak-PIN blocklist, and
+/// deliberately not a round number — a test that passes with `1234` would be
+/// passing against a value the application refuses.
+export const RIDE_PIN = '4827';
 
 export async function grantRole(userId: string, slug: string): Promise<void> {
   const role = await db().client.role.findUniqueOrThrow({ where: { slug } });
@@ -301,6 +307,21 @@ export async function completeProfile(
     where: { userId },
     create: { userId, firstName, lastName },
     update: { firstName, lastName },
+  });
+}
+
+/// Gives a rider the standing Ride PIN that `POST /rides/requests` now requires
+/// and `POST /rides/:id/start` verifies. Writes the verifier the way the
+/// application does, so tests exercise the real scrypt path rather than a
+/// value only the test knows how to produce.
+export async function setRidePin(userId: string, pin = RIDE_PIN): Promise<void> {
+  await db().client.user.update({
+    where: { id: userId },
+    data: {
+      ridePinVerifier: hashRidePin(pin),
+      ridePinUpdatedAt: new Date(),
+      ridePinVersion: { increment: 1 },
+    },
   });
 }
 

@@ -15,6 +15,7 @@ import {
   makeVehicle,
   makeVehicleType,
   completeProfile,
+  setRidePin,
 } from './helpers/fixtures.js';
 
 const CUSTOMER_A = '+919876601001';
@@ -160,9 +161,11 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
     it('creates the request as the AUTHENTICATED customer, never body.customerId', async () => {
       const customer = await loginAs(app, CUSTOMER_A);
       const victim = await loginAs(app, CUSTOMER_B);
-      // Booking refuses a rider with no profile name; without this the request
-      // is 422 and the identity assertion below never runs.
+      // Booking refuses a rider with no profile name and one with no Ride PIN;
+      // without both the request is 422 and the identity assertion below never
+      // runs.
       await completeProfile(customer.userId);
+      await setRidePin(customer.userId);
       const vehicleTypeId = await makeVehicleType();
 
       const response = await post('/api/v1/rides/requests', customer, {

@@ -11,6 +11,9 @@ export const USER_ERROR_STATUS: Record<string, number> = {
   CONFLICT: 409,
   LIMIT_EXCEEDED: 409,
   ACCOUNT_HAS_OBLIGATIONS: 409,
+  RIDE_PIN_INVALID: 400,
+  RIDE_PIN_WEAK: 400,
+  RIDE_PIN_ALREADY_SET: 409,
 };
 export function userErrorStatus(code: string): number {
   return USER_ERROR_STATUS[code] ?? 500;

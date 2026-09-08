@@ -7,6 +7,8 @@ import { RideRequestRepository } from '../../repositories/ride-request.repositor
 import { RideStatusEventRepository } from '../../repositories/ride-status-event.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { RideOtpService } from '../otp/ride-otp.service.js';
+import { RidePinVerificationService } from '../pin/ride-pin-verification.service.js';
+import { RidePinThrottle } from '../pin/ride-pin-throttle.service.js';
 import { PricingService } from '@modules/pricing';
 import { PromotionService } from '@modules/promotions';
 import { CancellationService } from '../cancellation/cancellation.service.js';
@@ -33,6 +35,7 @@ import {
   RideOfferNotFoundError,
   RideOfferNotActionableError,
   SelfRideNotAllowedError,
+  RidePinInvalidError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import {
@@ -84,7 +87,15 @@ export class LifecycleService {
     private readonly requestRepo: RideRequestRepository,
     private readonly statusEventRepo: RideStatusEventRepository,
     private readonly dispatchRepo: RideDispatchRepository,
+    // Still injected, and still minting an OTP at acceptance, even though
+    // nothing verifies one any more. That is deliberate for the length of this
+    // migration: a ride accepted while the PIN path is live but rolled back
+    // afterwards would have no `ride_otps` row to fall back on and could never
+    // be started. One spare insert per ride buys a clean revert. Phase 5 removes
+    // it, once the PIN path has held in production.
     private readonly rideOtpService: RideOtpService,
+    private readonly ridePinVerificationService: RidePinVerificationService,
+    private readonly ridePinThrottle: RidePinThrottle,
     private readonly pricingService: PricingService,
     private readonly promotionService: PromotionService,
     private readonly fareRepo: RideFareRepository,
@@ -305,14 +316,25 @@ export class LifecycleService {
     return Math.max(0, Math.round(elapsedMs / 60_000));
   }
 
+  /// Returns the ride and nothing else — no `plaintextOtp`, and that is the
+  /// entire point of the signature.
+  ///
+  /// It used to return one, and `RideStateController.accept` sent the whole
+  /// object — so `POST /rides/accept` handed the driver the code the passenger
+  /// was supposed to read out to them. The control existed to prove a rider was
+  /// present and consenting, and the response to the driver's own request voided
+  /// it: a driver could start, complete and bill a ride with nobody in the car.
+  /// Two integration tests depended on the leak.
+  ///
+  /// The credential is now the rider's standing Ride PIN, which the server never
+  /// holds in plaintext to leak. The OTP is still minted below for rollback
+  /// safety, but it stops here: nothing returns it, and nothing but the
+  /// customer's SMS ever sees it.
   async acceptRideRequest(data: {
     requestId: string;
     driverId: string;
     vehicleId: string;
-  }): Promise<{
-    ride: Ride;
-    plaintextOtp: string;
-  }> {
+  }): Promise<{ ride: Ride }> {
     const result = await this.txManager.execute(async (tx) => {
       const request = await this.requestRepo.lockForUpdate(data.requestId, tx);
       if (!request) throw new RideNotFoundError(data.requestId);
@@ -391,7 +413,10 @@ export class LifecycleService {
       result.ride.id,
       result.plaintextOtp,
     );
-    return result;
+    // Destructured deliberately rather than returning `result`: the plaintext
+    // must not survive past this line, and a spread would carry it out again the
+    // moment somebody widened the return type.
+    return { ride: result.ride };
   }
   /// The driver is the one who types the OTP; the customer is the one who
   /// must actually receive it to read aloud. Delivered after commit — a slow
@@ -484,38 +509,92 @@ export class LifecycleService {
       return { ...ride, status: 'DRIVER_ARRIVED' as RideStatus, arrivedAt };
     });
   }
-  async startRide(rideId: string, driverId: string, otpCode: string): Promise<Ride> {
-    const started = await this.txManager.execute(async (tx) => {
-      const ride = await this.lockAndValidate(
-        rideId,
-        { kind: 'driver', driverId },
-        'IN_PROGRESS',
-        tx,
-      );
-      await this.rideOtpService.verifyStartOtp(rideId, otpCode, tx);
-      const startedAt = new Date();
-      if (
-        !(await this.rideRepo.updateStatusIf(rideId, ride.status, 'IN_PROGRESS', { startedAt }, tx))
-      ) {
-        throw new InvalidRideStateTransitionError(ride.status, 'IN_PROGRESS');
-      }
-      await this.statusEventRepo.record(
-        {
+  /// The rider proves who they are with their standing Ride PIN, which the
+  /// driver types in. Replaces the per-ride OTP, and fixes two things about it
+  /// that the OTP could not be made to do.
+  ///
+  /// ## The attempt counter lives outside the transaction
+  ///
+  /// `verifyStartOtp` counted attempts with a conditional UPDATE on `tx` and
+  /// then threw — so the exception signalling a wrong code rolled back the row
+  /// recording it, and the five-attempt cap never engaged in production. The
+  /// throttle here is checked before the transaction opens and written after it
+  /// has already rolled back. Nothing that must survive a rollback may be
+  /// written by the thing being rolled back.
+  ///
+  /// ## The credential is the customer's, not the ride's
+  ///
+  /// The verifier is resolved from the locked ride's `customerId`, so the
+  /// question is "is this the PIN of the rider who booked this ride" and never
+  /// "is this a valid PIN". Nothing the driver's client sends chooses the
+  /// account.
+  ///
+  /// The pre-read below is for throttle scoping and to keep an unassigned caller
+  /// from spending the real driver's cooldown; it is not the authorization.
+  /// `lockAndValidate` inside the transaction remains the only check that
+  /// decides anything, under the row lock, exactly as before.
+  async startRide(rideId: string, driverId: string, pin: string): Promise<Ride> {
+    const scoping = await this.rideRepo.findById(rideId);
+    if (!scoping) throw new RideNotFoundError(rideId);
+    // Before the throttle, so somebody who is not the assigned driver cannot
+    // hold the real one in a permanent cooldown by spamming this endpoint.
+    if (scoping.driverId !== driverId) throw new RideDriverMismatchError(rideId);
+    const attempt = { rideId, driverId, customerId: scoping.customerId };
+    await this.ridePinThrottle.assertAllowed(attempt);
+
+    let started: Ride;
+    try {
+      started = await this.txManager.execute(async (tx) => {
+        const ride = await this.lockAndValidate(
           rideId,
-          fromStatus: ride.status,
-          toStatus: 'IN_PROGRESS',
-          actorType: 'DRIVER',
-          actorId: driverId,
-        },
-        tx,
-      );
-      this.rideMetrics.rideStarted({ rideId });
-      await this.eventPublisher.publish(
-        rideEvent(RIDE_EVENT_CATALOG.STARTED, ride.customerId, { rideId, driverId }),
-        tx,
-      );
-      return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt };
-    });
+          { kind: 'driver', driverId },
+          'IN_PROGRESS',
+          tx,
+        );
+        await this.ridePinVerificationService.verify(ride.customerId, pin, tx);
+        const startedAt = new Date();
+        if (
+          !(await this.rideRepo.updateStatusIf(
+            rideId,
+            ride.status,
+            'IN_PROGRESS',
+            { startedAt },
+            tx,
+          ))
+        ) {
+          throw new InvalidRideStateTransitionError(ride.status, 'IN_PROGRESS');
+        }
+        await this.statusEventRepo.record(
+          {
+            rideId,
+            fromStatus: ride.status,
+            toStatus: 'IN_PROGRESS',
+            actorType: 'DRIVER',
+            actorId: driverId,
+          },
+          tx,
+        );
+        this.rideMetrics.rideStarted({ rideId });
+        await this.eventPublisher.publish(
+          rideEvent(RIDE_EVENT_CATALOG.STARTED, ride.customerId, { rideId, driverId }),
+          tx,
+        );
+        return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt };
+      });
+    } catch (err) {
+      // Only a wrong PIN spends a budget. A refused state transition or a driver
+      // mismatch is not a credential guess, and counting it would let anyone
+      // able to provoke one exhaust the real driver's attempts for them.
+      //
+      // This runs after `execute` has already rolled back, which is the whole
+      // point: the record is written by something the rollback cannot reach.
+      if (err instanceof RidePinInvalidError) await this.ridePinThrottle.recordFailure(attempt);
+      throw err;
+    }
+    // Forgives this ride's failed attempts now that the right PIN has been
+    // given. The customer and driver budgets deliberately survive — see
+    // `RidePinThrottle.clear`.
+    await this.ridePinThrottle.clear(rideId);
     // Outside the transaction: Redis does not roll back with it, and a counter
     // zeroed for a start that never committed would only ever discard distance
     // from before the trip. Anything accumulated from here to `completeRide` is

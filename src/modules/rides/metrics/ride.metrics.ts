@@ -32,6 +32,19 @@ export class RideMetrics {
   otpFailure(fields?: RideMetricFields): void {
     this.emit('otp_failure_total', fields);
   }
+  /// Ride PIN outcomes. Labels stay low-cardinality on purpose — `reason` and
+  /// `scope` only. Never a PIN, never a verifier, and never a ride, driver or
+  /// customer id: `emit` forwards `fields` straight into the counter labels, so
+  /// an id here would mint one time series per entity.
+  ridePinVerified(fields?: RideMetricFields): void {
+    this.emit('pin_verified_total', fields);
+  }
+  ridePinFailed(fields?: RideMetricFields): void {
+    this.emit('pin_failure_total', fields);
+  }
+  ridePinLocked(fields?: RideMetricFields): void {
+    this.emit('pin_locked_total', fields);
+  }
   private emit(event: string, fields?: RideMetricFields): void {
     incrementCounter(`ride_${event}`, fields);
     logger.info({ metric: `ride.${event}`, ...fields }, `[metric] ride.${event}`);

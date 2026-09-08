@@ -4,7 +4,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
-import { grantRole, makeDriver, makeVehicleType } from './helpers/fixtures.js';
+import { grantRole, makeDriver, makeVehicleType, setRidePin } from './helpers/fixtures.js';
 import { seedVehicleTypes } from '../../prisma/seed/shared/vehicle-types.js';
 
 const CUSTOMER = '+919876710001';
@@ -240,6 +240,7 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
         headers: customer.authHeader,
         payload: { firstName: 'Cat', lastName: 'Customer' },
       });
+      await setRidePin(customer.userId);
 
       const option = (await post('/api/v1/rides/quote', customer, { ...PICKUP, ...DROP })).json()
         .data.options[0] as { vehicleTypeId: string };
@@ -261,6 +262,7 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
         headers: customer.authHeader,
         payload: { firstName: 'Cat', lastName: 'Customer' },
       });
+      await setRidePin(customer.userId);
       const retiredId = await makeVehicleType({ isActive: false, code: 'RETIRED' });
 
       const response = await post('/api/v1/rides/requests', customer, {

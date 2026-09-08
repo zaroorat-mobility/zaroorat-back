@@ -1,6 +1,7 @@
 import { z } from 'zod';
 export { IMMUTABLE_PROFILE_FIELDS } from '../constants';
 export { parseDateOnly } from '../utils';
+import { ridePinConfig } from '@config';
 import { userConfig } from '../config';
 import { E164_PATTERN, IMMUTABLE_PROFILE_FIELDS, NAME_PATTERN } from '../constants';
 import type { ErrorDetail } from '../errors';
@@ -40,6 +41,24 @@ export const phoneChangeSchema = z.strictObject({
 export const phoneVerifySchema = z.strictObject({
   challengeId: z.string().min(1),
   code: z.string().regex(/^\d{6}$/, 'INVALID_FORMAT'),
+});
+/// A Ride PIN is a *string* of digits, at every layer. `z.number()` would accept
+/// 827 for "0827" and hand back a value that hashes differently from the one the
+/// rider typed — a rider locked out of every future ride, for a leading zero.
+const ridePinField = z
+  .string()
+  .regex(new RegExp(`^[0-9]{${ridePinConfig.length}}$`), 'INVALID_FORMAT');
+export const setRidePinSchema = z.strictObject({
+  // Absent on the first set, required once one exists. Which of those applies is
+  // decided by the stored verifier, not by the body, so the caller cannot skip
+  // the check by omitting the field.
+  currentPin: ridePinField.optional(),
+  newPin: ridePinField,
+});
+export const resetRidePinVerifySchema = z.strictObject({
+  challengeId: z.string().min(1),
+  code: z.string().regex(/^\d{6}$/, 'INVALID_FORMAT'),
+  newPin: ridePinField,
 });
 export const createContactSchema = z.strictObject({
   contactName: z.string().trim().min(1).max(64),

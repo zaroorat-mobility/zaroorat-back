@@ -4,7 +4,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
-import { makeVehicleType } from './helpers/fixtures.js';
+import { makeVehicleType, setRidePin } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import { rideConfig } from '../../src/config/ride/ride.config.js';
 import type { RequestExpiryJob } from '../../src/modules/rides/jobs/request-expiry.job.js';
@@ -46,6 +46,7 @@ describe('a ride request that finds no driver (H-3)', () => {
       headers: rider.authHeader,
       payload: { firstName: 'Cat', lastName: 'Customer' },
     });
+    await setRidePin(rider.userId);
     const created = await app.inject({
       method: 'POST',
       url: '/api/v1/rides/requests',

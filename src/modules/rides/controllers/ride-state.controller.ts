@@ -80,7 +80,7 @@ export class RideStateController {
       id: string;
     };
     const body = startRideSchema.parse(req.body);
-    const ride = await this.rideService.lifecycle.startRide(id, driverId, body.otpCode);
+    const ride = await this.rideService.lifecycle.startRide(id, driverId, body.pin);
     reply.send({ data: ride });
   }
   async complete(req: FastifyRequest, reply: FastifyReply): Promise<void> {
