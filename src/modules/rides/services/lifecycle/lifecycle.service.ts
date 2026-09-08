@@ -6,7 +6,6 @@ import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideRequestRepository } from '../../repositories/ride-request.repository.js';
 import { RideStatusEventRepository } from '../../repositories/ride-status-event.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
-import { RideOtpService } from '../otp/ride-otp.service.js';
 import { RidePinVerificationService } from '../pin/ride-pin-verification.service.js';
 import { RidePinThrottle } from '../pin/ride-pin-throttle.service.js';
 import { PricingService } from '@modules/pricing';
@@ -15,8 +14,6 @@ import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
-import { UserRepository } from '@modules/auth/repositories/user.repository.js';
-import { NotificationService } from '@modules/notifications';
 import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
 import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
 import { VehicleAssignmentRepository } from '@modules/vehicles/repositories/vehicle-assignment.repository.js';
@@ -87,13 +84,6 @@ export class LifecycleService {
     private readonly requestRepo: RideRequestRepository,
     private readonly statusEventRepo: RideStatusEventRepository,
     private readonly dispatchRepo: RideDispatchRepository,
-    // Still injected, and still minting an OTP at acceptance, even though
-    // nothing verifies one any more. That is deliberate for the length of this
-    // migration: a ride accepted while the PIN path is live but rolled back
-    // afterwards would have no `ride_otps` row to fall back on and could never
-    // be started. One spare insert per ride buys a clean revert. Phase 5 removes
-    // it, once the PIN path has held in production.
-    private readonly rideOtpService: RideOtpService,
     private readonly ridePinVerificationService: RidePinVerificationService,
     private readonly ridePinThrottle: RidePinThrottle,
     private readonly pricingService: PricingService,
@@ -103,8 +93,6 @@ export class LifecycleService {
     private readonly ledgerService: LedgerService,
     private readonly driverStatusRepository: DriverStatusRepository,
     private readonly driverRepository: DriverRepository,
-    private readonly userRepository: UserRepository,
-    private readonly notificationService: NotificationService,
     private readonly vehicleRepository: VehicleRepository,
     private readonly vehicleAssignmentRepository: VehicleAssignmentRepository,
     private readonly vehicleEligibilityService: VehicleEligibilityService,
@@ -327,9 +315,9 @@ export class LifecycleService {
   /// Two integration tests depended on the leak.
   ///
   /// The credential is now the rider's standing Ride PIN, which the server never
-  /// holds in plaintext to leak. The OTP is still minted below for rollback
-  /// safety, but it stops here: nothing returns it, and nothing but the
-  /// customer's SMS ever sees it.
+  /// holds in plaintext and so cannot leak. Acceptance mints no credential at
+  /// all and sends no SMS: the rider already knows their PIN, so there is
+  /// nothing to deliver and nothing to fail to deliver.
   async acceptRideRequest(data: {
     requestId: string;
     driverId: string;
@@ -386,7 +374,6 @@ export class LifecycleService {
         },
         tx,
       );
-      const { plaintextOtp } = await this.rideOtpService.generateStartOtp(ride.id, tx);
       await this.dispatchRepo.resolveOffers(request.id, data.driverId, tx);
       await this.driverStatusRepository.updateStatus(data.driverId, 'ON_TRIP', {}, tx);
       await this.statusEventRepo.record(
@@ -406,38 +393,9 @@ export class LifecycleService {
         }),
         tx,
       );
-      return { ride, plaintextOtp };
+      return { ride };
     });
-    await this.deliverStartOtpToCustomer(
-      result.ride.customerId,
-      result.ride.id,
-      result.plaintextOtp,
-    );
-    // Destructured deliberately rather than returning `result`: the plaintext
-    // must not survive past this line, and a spread would carry it out again the
-    // moment somebody widened the return type.
-    return { ride: result.ride };
-  }
-  /// The driver is the one who types the OTP; the customer is the one who
-  /// must actually receive it to read aloud. Delivered after commit — a slow
-  /// or failed SMS send must never roll back an already-successful accept,
-  /// and this is the only channel that currently exists (see the platform
-  /// audit's P0 finding: no push/socket delivery exists yet).
-  private async deliverStartOtpToCustomer(
-    customerId: string,
-    rideId: string,
-    plaintextOtp: string,
-  ): Promise<void> {
-    try {
-      const customer = await this.userRepository.findById(customerId);
-      if (!customer) return;
-      await this.notificationService.sendSms(
-        customer.phoneNumber,
-        `Zaroorat: Share this code with your driver to start the trip: ${plaintextOtp}. Do not share it before your driver has arrived.`,
-      );
-    } catch (err) {
-      logger.warn({ err, rideId }, '[rides] failed to deliver start OTP to customer');
-    }
+    return result;
   }
   /// `DRIVER_ARRIVING` was in the `RideStatus` enum and in the transition table
   /// from the start, but nothing could ever reach it: a ride went straight from
