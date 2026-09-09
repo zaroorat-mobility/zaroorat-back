@@ -1,0 +1,16 @@
+enum AppClient {
+  DRIVER
+  RIDER
+  ADMIN
+}
+
+enum AppColorScheme {
+  LIGHT
+  DARK
+}
+
+enum FontSource {
+  BUNDLED
+  GOOGLE
+  REMOTE
+}

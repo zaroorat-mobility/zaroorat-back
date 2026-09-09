@@ -133,6 +133,7 @@ import {
   AdminEmailSettingsService,
   AdminIntegrationSettingsController,
 } from './system-settings/index.js';
+import { appConfigAdminRoutes } from '@modules/app-config';
 
 export function registerAdminModule(container: AwilixContainer): void {
   container.register({
@@ -227,6 +228,7 @@ export function registerAdminModule(container: AwilixContainer): void {
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   await app.register(systemSettingsRoutes);
+  await app.register(appConfigAdminRoutes, { prefix: '/app-config' });
   await app.register(pricingManagementRoutes);
   await app.register(promotionsManagementRoutes);
   await app.register(referralManagementRoutes);
