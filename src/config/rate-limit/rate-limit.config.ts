@@ -67,5 +67,11 @@ export const rateLimits = Object.freeze({
     windowSeconds: Number(process.env.RL_MAPS_ROUTE_WINDOW ?? 3600),
     keyBy: 'user',
   }),
+  appConfig: Object.freeze<RateLimitOptions>({
+    scope: 'rl:app-config',
+    limit: Number(process.env.RL_APP_CONFIG_LIMIT ?? 120),
+    windowSeconds: Number(process.env.RL_APP_CONFIG_WINDOW ?? 3600),
+    keyBy: 'ip',
+  }),
 });
 export type RateLimits = typeof rateLimits;

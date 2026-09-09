@@ -18,6 +18,7 @@ import { registerLocationModule } from '@modules/location';
 import { registerAdminModule } from '@modules/admin';
 import { registerMatchingModule } from '@modules/matching';
 import { registerRatingModule } from '@modules/rating';
+import { registerAppConfigModule } from '@modules/app-config';
 import { registerRidesModule } from '@modules/rides';
 import { registerDriversModule } from '@modules/drivers';
 import { registerVehiclesModule } from '@modules/vehicles';
@@ -47,6 +48,7 @@ registerLocationModule(container);
 registerRealtimeModule(container);
 registerMatchingModule(container);
 registerRatingModule(container);
+registerAppConfigModule(container);
 registerRidesModule(container);
 container.register({
   db: aliasTo('databaseService'),
