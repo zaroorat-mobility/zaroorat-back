@@ -52,8 +52,6 @@ const COLOR_SCHEME_MAP: Record<ColorSchemeSlug, AppColorScheme> = {
   dark: 'DARK',
 };
 
-const EMPTY_THEME = { tokens: {}, components: {} };
-
 export function toAppClient(app: AppClientSlug): AppClient {
   return APP_CLIENT_MAP[app];
 }
@@ -115,8 +113,12 @@ export class AppConfigService {
       app,
       locale,
       theme: {
-        light: light ? { tokens: light.tokens, components: light.components } : { ...EMPTY_THEME },
-        dark: dark ? { tokens: dark.tokens, components: dark.components } : { ...EMPTY_THEME },
+        light: light
+          ? { tokens: light.tokens, components: light.components }
+          : { tokens: DEFAULT_THEME_TOKENS_LIGHT, components: DEFAULT_THEME_COMPONENTS },
+        dark: dark
+          ? { tokens: dark.tokens, components: dark.components }
+          : { tokens: DEFAULT_THEME_TOKENS_DARK, components: DEFAULT_THEME_COMPONENTS },
       },
       fonts: fonts.map((f) => ({
         family: f.family,
