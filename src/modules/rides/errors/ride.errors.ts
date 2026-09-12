@@ -235,6 +235,44 @@ export class SelfRideNotAllowedError extends RideError {
 ///
 /// Delete this the day a redemption path exists; the field and the column are
 /// already in place for it.
+/// 004-driver-subscription-wallet. spec.md FR-000 — a driver with no payment
+/// model selected is ineligible for any ride under either model.
+export class PaymentModelNotSelectedError extends RideError {
+  constructor() {
+    super(
+      'Select a payment model (SUBSCRIPTION or COMMISSION) before accepting rides',
+      'PAYMENT_MODEL_NOT_SELECTED',
+      409,
+    );
+    this.name = 'PaymentModelNotSelectedError';
+  }
+}
+/// spec.md FR-004 — a subscription-model driver with no active, unexpired
+/// subscription cannot be offered/accept a NEW ride. Never applied to a
+/// commission-model driver (FR-004/FR-007a).
+export class DriverSubscriptionRequiredError extends RideError {
+  constructor() {
+    super(
+      'An active subscription is required to accept new rides',
+      'DRIVER_SUBSCRIPTION_REQUIRED',
+      409,
+    );
+    this.name = 'DriverSubscriptionRequiredError';
+  }
+}
+/// spec.md FR-015/FR-016 — a commission-model driver whose wallet balance is
+/// below the ride's determined commission amount. Read-only check (FR-017a) —
+/// nothing is reserved/frozen either on success or on this rejection.
+export class InsufficientCommissionBalanceError extends RideError {
+  constructor() {
+    super(
+      'Insufficient Commission Wallet balance for this ride — recharge to accept it',
+      'INSUFFICIENT_COMMISSION_BALANCE',
+      409,
+    );
+    this.name = 'InsufficientCommissionBalanceError';
+  }
+}
 export class PromotionsUnavailableError extends RideError {
   constructor() {
     super(

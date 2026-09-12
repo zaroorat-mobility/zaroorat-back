@@ -8,6 +8,19 @@ export class PaymentError extends Error {
     this.statusCode = statusCode;
   }
 }
+/// 004-driver-subscription-wallet. spec.md FR-008a.
+export class InvalidRechargeAmountError extends PaymentError {
+  constructor(message = 'Recharge amount is outside the allowed range') {
+    super(message, 'INVALID_RECHARGE_AMOUNT', 422);
+    this.name = 'InvalidRechargeAmountError';
+  }
+}
+export class RechargeOptionNotFoundError extends PaymentError {
+  constructor(message = 'That recharge option is not available') {
+    super(message, 'RECHARGE_OPTION_NOT_FOUND', 404);
+    this.name = 'RechargeOptionNotFoundError';
+  }
+}
 export class InsufficientBalanceError extends PaymentError {
   constructor(message = 'Insufficient wallet balance for this operation') {
     super(message, 'INSUFFICIENT_BALANCE', 402);

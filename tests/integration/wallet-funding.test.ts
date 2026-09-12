@@ -57,21 +57,39 @@ describe('wallet funding integrity (integration)', () => {
     );
   }
 
-  function deliverWebhook(intentId: string, eventId = `evt_${randomUUID()}`) {
+  /// Real Razorpay webhook envelope — `event` at the top, the payment nested
+  /// under `payload.payment.entity`, `order_id` as the order reference.
+  /// `orderReference` may be either the intent's real `gatewayIntentId` or
+  /// (as most callers here pass) its own internal `PaymentIntent.id` —
+  /// `IntentService.findByGatewayReference` accepts either, falling back to
+  /// a UUID-pattern match against the intent's own id when it is not a
+  /// recognised gateway reference.
+  function deliverWebhook(orderReference: string, eventId = `evt_${randomUUID()}`) {
     const body = JSON.stringify({
-      id: eventId,
-      type: 'payment.succeeded',
-      created: Math.floor(Date.now() / 1000),
-      data: { object: { id: intentId } },
+      event: 'payment.captured',
+      created_at: Math.floor(Date.now() / 1000),
+      payload: {
+        payment: {
+          entity: {
+            id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
+            order_id: orderReference,
+            status: 'captured',
+          },
+        },
+      },
     });
     return app.inject({
       method: 'POST',
       url: WEBHOOK,
       headers: {
         'content-type': 'application/json',
-        'x-razorpay-signature': createHmac('sha256', paymentConfig.webhookSecret)
+        'x-razorpay-signature': createHmac(
+          'sha256',
+          paymentConfig.razorpayWebhookSecret ?? paymentConfig.webhookSecret,
+        )
           .update(body)
           .digest('hex'),
+        'x-razorpay-event-id': eventId,
       },
       payload: body,
     });
@@ -166,19 +184,30 @@ describe('wallet funding integrity (integration)', () => {
     const { intentId } = (await topup(rider, 400)).json().data;
 
     const body = JSON.stringify({
-      id: `evt_${randomUUID()}`,
-      type: 'payment.failed',
-      created: Math.floor(Date.now() / 1000),
-      data: { object: { id: intentId } },
+      event: 'payment.failed',
+      created_at: Math.floor(Date.now() / 1000),
+      payload: {
+        payment: {
+          entity: {
+            id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
+            order_id: intentId,
+            status: 'failed',
+          },
+        },
+      },
     });
     await app.inject({
       method: 'POST',
       url: WEBHOOK,
       headers: {
         'content-type': 'application/json',
-        'x-razorpay-signature': createHmac('sha256', paymentConfig.webhookSecret)
+        'x-razorpay-signature': createHmac(
+          'sha256',
+          paymentConfig.razorpayWebhookSecret ?? paymentConfig.webhookSecret,
+        )
           .update(body)
           .digest('hex'),
+        'x-razorpay-event-id': `evt_${randomUUID()}`,
       },
       payload: body,
     });

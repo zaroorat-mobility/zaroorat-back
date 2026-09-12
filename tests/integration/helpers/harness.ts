@@ -108,7 +108,21 @@ export async function resetState(): Promise<void> {
   await seedVehicleTypes(db().client);
   await seedNotificationTemplates(db().client);
   await seedMapProvider();
+  await clearPaymentSettings();
   await redis.flushdb();
+}
+
+/// The same leak `seedMapProvider`'s own comment documents, for the payment
+/// gateway integration settings this reset previously never touched at all:
+/// an admin-settings test that configures a provider (or routes a purpose to
+/// one) leaves that row in `system_settings` for every suite that runs after
+/// it, in the same file and beyond. Unlike maps, payment routing has a
+/// correct behavior for "nothing configured" — `PaymentGatewayResolverService
+/// .getActiveGateway` falls back to `paymentConfig.defaultGateway` (mock,
+/// under APP_ENV=test) — so this only needs to clear the category, never reseed a
+/// known-good provider the way maps does.
+async function clearPaymentSettings(): Promise<void> {
+  await db().client.systemSetting.deleteMany({ where: { category: 'integrations.payment' } });
 }
 
 /// Map provider configuration is reference data for the whole suite, not just

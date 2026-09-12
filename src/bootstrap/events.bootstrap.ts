@@ -8,6 +8,7 @@ import type {
   RideRealtimeConsumer,
 } from '@modules/rides';
 import type { RideCollectionConsumer } from '@modules/payments';
+import type { SubscriptionPaymentConsumer } from '@modules/subscriptions';
 import type {
   ReferralRideCompletedConsumer,
   ReferralDriverVerifiedConsumer,
@@ -23,6 +24,7 @@ const CONSUMER_KEYS = [
   'rideCollectionConsumer',
   'referralRideCompletedConsumer',
   'referralDriverVerifiedConsumer',
+  'subscriptionPaymentConsumer',
 ] as const;
 
 type Consumer =
@@ -33,7 +35,8 @@ type Consumer =
   | RideRealtimeConsumer
   | RideCollectionConsumer
   | ReferralRideCompletedConsumer
-  | ReferralDriverVerifiedConsumer;
+  | ReferralDriverVerifiedConsumer
+  | SubscriptionPaymentConsumer;
 
 /// Subscribing consumers to the in-process bus, and nothing else.
 ///

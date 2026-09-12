@@ -11,6 +11,10 @@ export interface CreateIntentInput {
   idempotencyKey: string;
   gateway?: string | null;
   gatewayIntentId?: string | null;
+  /// 004-driver-subscription-wallet. Defaults to the existing behavior
+  /// ('CUSTOMER_WALLET_TOPUP') when omitted — every pre-existing caller is
+  /// unaffected.
+  purpose?: string;
 }
 export class IntentRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -33,6 +37,7 @@ export class IntentRepository {
         status: 'PENDING',
         gateway: input.gateway ?? null,
         gatewayIntentId: input.gatewayIntentId ?? null,
+        purpose: input.purpose ?? 'CUSTOMER_WALLET_TOPUP',
       },
     });
   }

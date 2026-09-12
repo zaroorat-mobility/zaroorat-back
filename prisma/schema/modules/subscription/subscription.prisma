@@ -1,0 +1,44 @@
+/// 004-driver-subscription-wallet. "Commission Plan" is deliberately NOT modeled
+/// here — it is the existing PricingRule (prisma/schema/modules/pricing/pricing.prisma),
+/// already versioned (version/isActive/effectiveFrom/effectiveTo) and already
+/// pinned per ride via RideRequest.pricingRuleId. See decisions.md BD-6.
+model SubscriptionPlan {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  name          String
+  billingPeriod String   @map("billing_period") // 'DAILY' | 'WEEKLY' | 'MONTHLY'
+  price         Decimal  @db.Decimal(10, 2)
+  currency      String   @default("INR") @db.Char(3)
+  status        String   @default("ACTIVE") // 'ACTIVE' | 'INACTIVE'
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  subscriptions DriverSubscription[]
+
+  @@index([status])
+  @@map("subscription_plans")
+}
+
+model DriverSubscription {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  driverId        String    @map("driver_id") @db.Uuid
+  planId          String    @map("plan_id") @db.Uuid
+  /// BD-3: staged plan change, applied at next renewal — not this record.
+  pendingPlanId   String?   @map("pending_plan_id") @db.Uuid
+  status          String    @default("PENDING_PAYMENT") // PENDING_PAYMENT | ACTIVE | EXPIRED | CANCELLED
+  paymentStatus   String    @default("PENDING") @map("payment_status") // PENDING | PAID | FAILED
+  autoRenew       Boolean   @default(true) @map("auto_renew")
+  startDate       DateTime? @map("start_date")
+  expiryDate      DateTime? @map("expiry_date")
+  /// BD-3: takes effect at expiryDate, not immediately.
+  cancelRequested Boolean   @default(false) @map("cancel_requested")
+  paymentIntentId String?   @map("payment_intent_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  driver Driver           @relation(fields: [driverId], references: [id])
+  plan   SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  @@index([driverId, status])
+  @@index([status, expiryDate])
+  @@map("driver_subscriptions")
+}

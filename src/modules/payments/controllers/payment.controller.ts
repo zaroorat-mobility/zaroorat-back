@@ -5,6 +5,7 @@ import { PayoutController } from './payout.controller.js';
 import { RefundController } from './refund.controller.js';
 import { RidePaymentController } from './ride-payment.controller.js';
 import { WebhookController } from './webhook.controller.js';
+import { CommissionWalletController } from './commission-wallet.controller.js';
 export class PaymentController {
   constructor(
     public readonly paymentMethod: PaymentMethodController,
@@ -14,5 +15,6 @@ export class PaymentController {
     public readonly refund: RefundController,
     public readonly webhook: WebhookController,
     public readonly ridePayment: RidePaymentController,
+    public readonly commissionWallet: CommissionWalletController,
   ) {}
 }

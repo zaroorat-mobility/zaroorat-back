@@ -16,6 +16,7 @@ import { grantRole, makeDispatchOffer, RIDE_PIN } from './helpers/fixtures.js';
 import {
   accountBalance,
   completeRide as flowCompleteRide,
+  declineGateway as declineGatewayHelper,
   fundWallet,
   rideWorld,
   type FareRow,
@@ -26,13 +27,22 @@ import { container } from '../../src/core/di.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { SettlementService } from '../../src/modules/payments/services/settlement/settlement.service.js';
 import type { RideCollectionService } from '../../src/modules/payments/services/collection/collection.service.js';
-import type { PaymentGatewayProvider } from '../../src/modules/payments/services/gateway/gateway.provider.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 import { pricingConfig } from '../../src/config/pricing/pricing.config.js';
 
 const CUSTOMER = '+919876603001';
 const DRIVER = '+919876603002';
 const FINANCE = '+919876603003';
+
+/// 004-driver-subscription-wallet. What the driver is actually credited for a
+/// non-cash ride once they have a payment model: their fare-side earning
+/// *plus* the commission-sized component, redistributed rather than
+/// recognised again as PLATFORM_COMMISSION (LedgerService.recordTripPayment)
+/// — that commission was already collected through the model's own
+/// mechanism, so the driver, not the platform a second time, receives it.
+function earnedInFull(fare: { driverEarning: Decimal; platformCommission: Decimal }): Decimal {
+  return new Decimal(fare.driverEarning).add(new Decimal(fare.platformCommission));
+}
 
 describe('driver earnings pipeline (integration, real HTTP)', () => {
   let app: FastifyInstance;
@@ -84,16 +94,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
   /// Makes the gateway decline, so a ride can reach the receivable state.
   function declineGateway(): void {
-    const gateway = container.resolve<PaymentGatewayProvider>(
-      'paymentGatewayProvider',
-    ) as unknown as {
-      confirmIntent: (id: string) => Promise<{ gatewayIntentId: string; status: string }>;
-    };
-    const original = gateway.confirmIntent.bind(gateway);
-    gateway.confirmIntent = async (id: string) => ({ gatewayIntentId: id, status: 'FAILED' });
-    restoreGateway = () => {
-      gateway.confirmIntent = original;
-    };
+    restoreGateway = declineGatewayHelper();
   }
 
   function surroundingPeriod(): { periodStart: Date; periodEnd: Date } {
@@ -104,26 +105,37 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
   }
 
   describe('ride completion posts the double-entry group', () => {
-    it('credits the driver and the platform, debiting the customer', async () => {
+    // WALLET, deliberately: it is the one payment method where the platform
+    // actually holds the fare it is distributing. CASH, CARD and UPI all mean
+    // the customer paid the driver directly (see the "does NOT credit the
+    // driver for a cash ride" case below), so a WALLET ride is the case this
+    // test needs to exercise the customer-debit + driver/tax/fee-credit group.
+    it('credits the driver and the platform, debiting the wallet — never commission for a driver with a payment model', async () => {
       const w = await world();
-      const { rideId, fare } = await completeRide(w, { distanceKm: 12, durationMin: 25 });
+      await fundWallet(app, w.customer, 5000);
+      const { rideId, fare } = await completeRide(w, {
+        distanceKm: 12,
+        durationMin: 25,
+        paymentMethod: 'WALLET',
+      });
 
       const entries = await db().client.paymentLedgerEntry.findMany({
         where: { referenceType: 'RIDE', referenceId: rideId },
       });
-      // FR-006. Four destinations now, not two: the driver, the tax collected,
-      // the platform fee and the platform's commission. Tax and the fee used to
-      // have no leg of their own because commission was levied on the whole
-      // total and so silently absorbed them.
+      // FR-006, as narrowed by 004-driver-subscription-wallet. Three
+      // destinations, not four: the driver, the tax collected and the
+      // platform fee. No commission leg — this driver has a payment model
+      // (SUBSCRIPTION by default), so its commission is owned entirely by
+      // that model's own mechanism, never recognised again through customer
+      // payment collection.
       assert.equal(
         entries.length,
-        5,
-        'customer debit + driver, tax, platform-fee and commission credits',
+        4,
+        'customer debit + driver, tax and platform-fee credits, no commission credit',
       );
       assert.deepEqual(entries.map((e) => e.account).sort(), [
+        'CUSTOMER_WALLET',
         'DRIVER_PAYABLE',
-        'GATEWAY_CLEARING',
-        'PLATFORM_COMMISSION',
         'PLATFORM_FEE',
         'TAX_PAYABLE',
       ]);
@@ -139,12 +151,13 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
       assert.equal(
         (await accountBalance('DRIVER_PAYABLE', { accountRefId: w.driverId })).toFixed(2),
-        new Decimal(fare.driverEarning).toFixed(2),
-        'the platform now owes the driver exactly their earning',
+        earnedInFull(fare).toFixed(2),
+        'the platform now owes the driver their earning plus the commission-sized amount redistributed to them',
       );
       assert.equal(
         (await accountBalance('PLATFORM_COMMISSION', { rideId })).toFixed(2),
-        new Decimal(fare.platformCommission).toFixed(2),
+        '0.00',
+        'never recognised through customer payment collection for a driver with a payment model',
       );
       assert.equal(
         (await accountBalance('TAX_PAYABLE', { rideId })).toFixed(2),
@@ -159,17 +172,24 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
     it('bills a longer ride more, and the books follow the fare', async () => {
       const w = await world();
-      const short = await completeRide(w, { distanceKm: 2, durationMin: 8 });
-      const long = await completeRide(w, { distanceKm: 40, durationMin: 75 });
+      await fundWallet(app, w.customer, 10_000);
+      const short = await completeRide(w, {
+        distanceKm: 2,
+        durationMin: 8,
+        paymentMethod: 'WALLET',
+      });
+      const long = await completeRide(w, {
+        distanceKm: 40,
+        durationMin: 75,
+        paymentMethod: 'WALLET',
+      });
 
       assert.ok(
         new Decimal(long.fare.totalFare).gt(new Decimal(short.fare.totalFare)),
         'a 40 km ride must cost more than a 2 km ride',
       );
 
-      const expected = new Decimal(short.fare.driverEarning).add(
-        new Decimal(long.fare.driverEarning),
-      );
+      const expected = earnedInFull(short.fare).add(earnedInFull(long.fare));
       assert.equal(
         (await accountBalance('DRIVER_PAYABLE', { accountRefId: w.driverId })).toFixed(2),
         expected.toFixed(2),
@@ -187,10 +207,17 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       const entries = await db().client.paymentLedgerEntry.findMany({
         where: { referenceType: 'RIDE', referenceId: rideId },
       });
-      // FR-006. The driver's debit is matched by three credits now — commission,
-      // tax and the platform fee — because all three are money the driver is
-      // holding that is not theirs.
-      assert.equal(entries.length, 4, 'driver debit + commission, tax and fee credits');
+      // FR-006, as narrowed by 004-driver-subscription-wallet. The driver's
+      // debit is matched by tax and platform-fee credits — money they're
+      // holding that isn't theirs — but never a commission credit: this
+      // driver has a payment model (SUBSCRIPTION by default), so its
+      // commission is owned entirely by that model's own mechanism, never by
+      // this posting.
+      assert.equal(entries.length, 3, 'driver debit + tax and fee credits, no commission credit');
+      assert.ok(
+        !entries.some((e) => e.account === 'PLATFORM_COMMISSION'),
+        'never a commission credit for a driver with a payment model',
+      );
 
       const debits = entries
         .filter((e) => e.direction === 'DEBIT')
@@ -201,14 +228,16 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.equal(debits.toFixed(2), credits.toFixed(2), 'the cash group must balance');
 
       const payable = await accountBalance('DRIVER_PAYABLE', { accountRefId: w.driverId });
-      // What the driver owes is everything they collected that is not theirs.
-      // Charging only the commission left them holding the tax and the fee with
-      // nothing on the books saying so.
-      const owed = new Decimal(fare.totalFare).sub(new Decimal(fare.driverEarning));
+      // What the driver owes is the tax and the fee they collected that are
+      // not theirs — never the commission, which their payment model already
+      // owns through its own mechanism.
+      const owed = new Decimal(fare.totalFare)
+        .sub(new Decimal(fare.driverEarning))
+        .sub(new Decimal(fare.platformCommission));
       assert.equal(
         payable.toFixed(2),
         owed.neg().toFixed(2),
-        'the driver owes the whole platform share on a cash ride',
+        'the driver owes tax + platform fee on a cash ride, never commission',
       );
       assert.ok(payable.lt(0));
     });
@@ -230,8 +259,9 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
   describe('settlement is derived from completed rides', () => {
     it('sums the real fares instead of a hardcoded figure', async () => {
       const w = await world();
-      const a = await completeRide(w, { distanceKm: 6, durationMin: 15 });
-      const b = await completeRide(w, { distanceKm: 18, durationMin: 40 });
+      await fundWallet(app, w.customer, 10_000);
+      const a = await completeRide(w, { distanceKm: 6, durationMin: 15, paymentMethod: 'WALLET' });
+      const b = await completeRide(w, { distanceKm: 18, durationMin: 40, paymentMethod: 'WALLET' });
 
       const { periodStart, periodEnd } = surroundingPeriod();
       const settlement = await settlements().calculateSettlement({
@@ -241,13 +271,19 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       });
 
       const expectedGross = new Decimal(a.fare.totalFare).add(new Decimal(b.fare.totalFare));
-      const expectedCommission = new Decimal(a.fare.platformCommission).add(
-        new Decimal(b.fare.platformCommission),
-      );
-      const expectedNet = new Decimal(a.fare.driverEarning).add(new Decimal(b.fare.driverEarning));
+      const expectedNet = earnedInFull(a.fare).add(earnedInFull(b.fare));
 
       assert.equal(new Decimal(settlement.grossEarnings).toFixed(2), expectedGross.toFixed(2));
-      assert.equal(new Decimal(settlement.commission).toFixed(2), expectedCommission.toFixed(2));
+      // 004-driver-subscription-wallet. This driver has a payment model
+      // (SUBSCRIPTION by default) — its commission is owned entirely by that
+      // model's own mechanism, never by settlement, so settlement recognises
+      // none here regardless of how much fare-side commission these rides
+      // priced.
+      assert.equal(
+        new Decimal(settlement.commission).toFixed(2),
+        '0.00',
+        'settlement never nets commission for a driver with a payment model',
+      );
       assert.equal(
         new Decimal(settlement.netPayable).toFixed(2),
         expectedNet.toFixed(2),
@@ -269,7 +305,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.equal(new Decimal(settlement.netPayable).toFixed(2), '0.00');
     });
 
-    it('nets a cash ride to the commission the driver owes', async () => {
+    it('nets a cash ride to the tax + platform fee the driver owes — never commission', async () => {
       const w = await world();
       const cash = await completeRide(w, {
         distanceKm: 10,
@@ -285,15 +321,18 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       });
 
       assert.equal(new Decimal(settlement.grossEarnings).toFixed(2), '0.00', 'nothing collected');
-      // FR-006. The driver took the whole fare in cash, so what they owe back is
-      // everything that is not their earning — the commission plus the tax and
-      // the platform fee they are also holding. Netting only the commission left
-      // the tax and the fee in the driver's pocket, settlement after settlement.
-      const owed = new Decimal(cash.fare.totalFare).sub(new Decimal(cash.fare.driverEarning));
+      // FR-006, as narrowed by 004-driver-subscription-wallet. The driver
+      // took the whole fare in cash, so what they owe back is the tax and
+      // the platform fee they're also holding — never the commission, which
+      // this driver's payment model already owns through its own mechanism.
+      const owed = new Decimal(cash.fare.totalFare)
+        .sub(new Decimal(cash.fare.driverEarning))
+        .sub(new Decimal(cash.fare.platformCommission));
       assert.equal(new Decimal(settlement.netPayable).toFixed(2), owed.neg().toFixed(2));
-      assert.ok(
-        owed.gt(new Decimal(cash.fare.platformCommission)),
-        'the debt must exceed the commission alone whenever tax or a fee applies',
+      assert.equal(
+        new Decimal(settlement.commission).toFixed(2),
+        '0.00',
+        'settlement never nets commission for a driver with a payment model',
       );
     });
 
@@ -384,8 +423,13 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
     it('pays out exactly what the rides earned', async () => {
       const w = await world();
-      const ride = await completeRide(w, { distanceKm: 12, durationMin: 25 });
-      const earned = Number(new Decimal(ride.fare.driverEarning).toFixed(2));
+      await fundWallet(app, w.customer, 5000);
+      const ride = await completeRide(w, {
+        distanceKm: 12,
+        durationMin: 25,
+        paymentMethod: 'WALLET',
+      });
+      const earned = Number(earnedInFull(ride.fare).toFixed(2));
 
       const finance = await loginWithRole(FINANCE, 'finance');
       const result = await settleAndPay(w, finance, earned);
@@ -402,8 +446,13 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
     it('refuses a payout one paise over the earned amount', async () => {
       const w = await world();
-      const ride = await completeRide(w, { distanceKm: 12, durationMin: 25 });
-      const overspend = Number(new Decimal(ride.fare.driverEarning).add(0.01).toFixed(2));
+      await fundWallet(app, w.customer, 5000);
+      const ride = await completeRide(w, {
+        distanceKm: 12,
+        durationMin: 25,
+        paymentMethod: 'WALLET',
+      });
+      const overspend = Number(earnedInFull(ride.fare).add(0.01).toFixed(2));
 
       const finance = await loginWithRole(FINANCE, 'finance');
       const result = await settleAndPay(w, finance, overspend);
@@ -420,14 +469,19 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       const finance = await loginWithRole(FINANCE, 'finance');
       const result = await settleAndPay(w, finance, 1);
 
-      assert.ok(result.netPayable.lt(0), 'the driver owes commission');
+      assert.ok(result.netPayable.lt(0), 'the driver owes tax + platform fee on the cash ride');
       assert.equal(result.status, 422, result.body);
     });
 
     it('cannot double-spend the earned balance under concurrency', async () => {
       const w = await world();
-      const ride = await completeRide(w, { distanceKm: 20, durationMin: 45 });
-      const earned = Number(new Decimal(ride.fare.driverEarning).toFixed(2));
+      await fundWallet(app, w.customer, 5000);
+      const ride = await completeRide(w, {
+        distanceKm: 20,
+        durationMin: 45,
+        paymentMethod: 'WALLET',
+      });
+      const earned = Number(earnedInFull(ride.fare).toFixed(2));
 
       const { periodStart, periodEnd } = surroundingPeriod();
       const settlement = await settlements().calculateSettlement({
@@ -460,8 +514,13 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
 
     it('replays a repeated idempotency key without paying twice', async () => {
       const w = await world();
-      const ride = await completeRide(w, { distanceKm: 15, durationMin: 30 });
-      const half = Number(new Decimal(ride.fare.driverEarning).div(2).toFixed(2));
+      await fundWallet(app, w.customer, 5000);
+      const ride = await completeRide(w, {
+        distanceKm: 15,
+        durationMin: 30,
+        paymentMethod: 'WALLET',
+      });
+      const half = Number(earnedInFull(ride.fare).div(2).toFixed(2));
       const key = randomUUID();
 
       const finance = await loginWithRole(FINANCE, 'finance');
@@ -477,8 +536,14 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
   describe('an uncollected ride still earns the driver their fare (BD-1)', () => {
     it('includes the earning in full and parks the shortfall as a receivable', async () => {
       const w = await world();
-      declineGateway();
-      const { rideId, fare } = await completeRide(w, { distanceKm: 11, durationMin: 24 });
+      // WALLET, deliberately unfunded: CASH/CARD/UPI all mean the driver was
+      // paid directly and can never fail to collect, so an unfunded wallet is
+      // the only way left to produce a ride nobody paid the platform for.
+      const { rideId, fare } = await completeRide(w, {
+        distanceKm: 11,
+        durationMin: 24,
+        paymentMethod: 'WALLET',
+      });
       for (let i = 1; i < paymentConfig.collectionMaxAttempts; i++) {
         await collection().collect(rideId);
       }
@@ -497,8 +562,8 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       // success would be a defect, not an optimisation.
       assert.equal(
         new Decimal(settlement.netPayable).toFixed(2),
-        new Decimal(fare.driverEarning).toFixed(2),
-        'paid in full despite the collection failing',
+        earnedInFull(fare).toFixed(2),
+        'paid in full despite the collection failing -- including the commission-sized amount redistributed to this driver',
       );
       assert.equal(
         (await accountBalance('CUSTOMER_RECEIVABLE', { rideId })).toFixed(2),
@@ -549,7 +614,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       );
       assert.equal(
         (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
-        new Decimal(fare.driverEarning).toFixed(2),
+        earnedInFull(fare).toFixed(2),
         'and the driver is credited exactly once across both periods',
       );
       assert.ok(new Decimal(first.netPayable).gt(0));

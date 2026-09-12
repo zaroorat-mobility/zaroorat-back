@@ -67,6 +67,12 @@ model PaymentIntent {
   gateway         String?
   gatewayIntentId String?  @map("gateway_intent_id")
   idempotencyKey  String   @unique @map("idempotency_key")
+  /// 004-driver-subscription-wallet. What this intent is funding —
+  /// 'CUSTOMER_WALLET_TOPUP' (default, existing behavior preserved for every
+  /// historical row) | 'DRIVER_COMMISSION_RECHARGE' | 'DRIVER_SUBSCRIPTION_PAYMENT'.
+  /// IntentService.applyConfirmation dispatches its SUCCEEDED effect on this
+  /// field instead of unconditionally crediting the customer wallet.
+  purpose         String   @default("CUSTOMER_WALLET_TOPUP")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

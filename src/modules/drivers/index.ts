@@ -19,6 +19,7 @@ import {
   ShiftService,
   DriverService,
   DriverEligibilityService,
+  PaymentModelService,
 } from './services/index.js';
 import {
   DriverOnboardingController,
@@ -26,6 +27,8 @@ import {
   DriverStatusController,
   DriverLocationController,
   DriverWalletController,
+  DriverPaymentModelController,
+  DriverCommissionWalletController,
   DriverController,
 } from './controllers/index.js';
 import { HeartbeatTimeoutJob, DocExpirationJob } from './jobs/index.js';
@@ -60,6 +63,7 @@ export function registerDriversModule(container: AwilixContainer): void {
     eligibilityService: aliasTo('driverEligibilityService'),
     driverWalletViewService: asClass(DriverWalletViewService).singleton(),
     shiftService: asClass(ShiftService).singleton(),
+    paymentModelService: asClass(PaymentModelService).singleton(),
     driverService: asClass(DriverService)
       .singleton()
       .inject((c) => ({
@@ -75,6 +79,8 @@ export function registerDriversModule(container: AwilixContainer): void {
     driverStatusController: asClass(DriverStatusController).singleton(),
     driverLocationController: asClass(DriverLocationController).singleton(),
     driverWalletController: asClass(DriverWalletController).singleton(),
+    driverPaymentModelController: asClass(DriverPaymentModelController).singleton(),
+    driverCommissionWalletController: asClass(DriverCommissionWalletController).singleton(),
     driverController: asClass(DriverController)
       .singleton()
       .inject((c) => ({
@@ -83,6 +89,8 @@ export function registerDriversModule(container: AwilixContainer): void {
         status: c.resolve('driverStatusController'),
         location: c.resolve('driverLocationController'),
         wallet: c.resolve('driverWalletController'),
+        paymentModel: c.resolve('driverPaymentModelController'),
+        commissionWallet: c.resolve('driverCommissionWalletController'),
       })),
     heartbeatTimeoutJob: asClass(HeartbeatTimeoutJob).singleton(),
     driverRepo: aliasTo('driverRepository'),

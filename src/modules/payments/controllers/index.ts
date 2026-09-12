@@ -6,3 +6,4 @@ export * from './refund.controller.js';
 export * from './webhook.controller.js';
 export * from './payment.controller.js';
 export * from './ride-payment.controller.js';
+export * from './commission-wallet.controller.js';

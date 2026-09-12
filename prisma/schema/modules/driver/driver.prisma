@@ -1,33 +1,41 @@
 model Driver {
-  id                 String                   @id @default(uuid(7)) @db.Uuid
-  userId             String                   @unique @map("user_id") @db.Uuid
-  driverCode         String                   @unique @map("driver_code")
-  verificationStatus DriverVerificationStatus @default(PENDING) @map("verification_status")
-  currentVehicleId   String?                  @map("current_vehicle_id") @db.Uuid
-  rating             Decimal                  @default(5.0) @db.Decimal(3, 2)
-  totalRides         Int                      @default(0) @map("total_rides")
-  totalDistanceKm    Decimal                  @default(0) @map("total_distance_km") @db.Decimal(10, 2)
-  totalEarnings      Decimal                  @default(0) @map("total_earnings") @db.Decimal(12, 2)
-  isAvailable        Boolean                  @default(false) @map("is_available")
-  isSuspended        Boolean                  @default(false) @map("is_suspended")
-  approvedAt         DateTime?                @map("approved_at")
-  approvedBy         String?                  @map("approved_by") @db.Uuid
-  rejectionReason    String?                  @map("rejection_reason")
-  referralCodeId     String?                  @map("referral_code_id") @db.Uuid
-  lastRideAt         DateTime?                @map("last_ride_at")
-  acceptanceRate     Decimal?                 @map("acceptance_rate") @db.Decimal(5, 2)
-  completionRate     Decimal?                 @map("completion_rate") @db.Decimal(5, 2)
-  cancellationRate   Decimal?                 @map("cancellation_rate") @db.Decimal(5, 2)
-  createdAt          DateTime                 @default(now()) @map("created_at")
-  updatedAt          DateTime                 @updatedAt @map("updated_at")
-  deletedAt          DateTime?                @map("deleted_at")
+  id                  String                   @id @default(uuid(7)) @db.Uuid
+  userId              String                   @unique @map("user_id") @db.Uuid
+  driverCode          String                   @unique @map("driver_code")
+  verificationStatus  DriverVerificationStatus @default(PENDING) @map("verification_status")
+  currentVehicleId    String?                  @map("current_vehicle_id") @db.Uuid
+  rating              Decimal                  @default(5.0) @db.Decimal(3, 2)
+  totalRides          Int                      @default(0) @map("total_rides")
+  totalDistanceKm     Decimal                  @default(0) @map("total_distance_km") @db.Decimal(10, 2)
+  totalEarnings       Decimal                  @default(0) @map("total_earnings") @db.Decimal(12, 2)
+  isAvailable         Boolean                  @default(false) @map("is_available")
+  isSuspended         Boolean                  @default(false) @map("is_suspended")
+  approvedAt          DateTime?                @map("approved_at")
+  approvedBy          String?                  @map("approved_by") @db.Uuid
+  rejectionReason     String?                  @map("rejection_reason")
+  referralCodeId      String?                  @map("referral_code_id") @db.Uuid
+  lastRideAt          DateTime?                @map("last_ride_at")
+  acceptanceRate      Decimal?                 @map("acceptance_rate") @db.Decimal(5, 2)
+  completionRate      Decimal?                 @map("completion_rate") @db.Decimal(5, 2)
+  cancellationRate    Decimal?                 @map("cancellation_rate") @db.Decimal(5, 2)
+  /// 004-driver-subscription-wallet. 'SUBSCRIPTION' | 'COMMISSION' | null (not yet selected).
+  /// Read the same way verificationStatus/isSuspended already are, by every
+  /// ride-eligibility check — see spec.md FR-000.
+  paymentModel        String?                  @map("payment_model")
+  /// Staged switch target, applied by the subscription-expiry sweep per BD-5.
+  pendingPaymentModel String?                  @map("pending_payment_model")
+  createdAt           DateTime                 @default(now()) @map("created_at")
+  updatedAt           DateTime                 @updatedAt @map("updated_at")
+  deletedAt           DateTime?                @map("deleted_at")
 
-  user               User                   @relation(fields: [userId], references: [id])
-  referralCode       ReferralCode?          @relation("DriverReferralCode", fields: [referralCodeId], references: [id])
+  user               User                    @relation(fields: [userId], references: [id])
+  referralCode       ReferralCode?           @relation("DriverReferralCode", fields: [referralCodeId], references: [id])
   profile            DriverProfile?
   documents          DriverDocument[]
   bankAccounts       DriverBankAccount[]
   wallet             DriverWallet?
+  commissionWallet   DriverCommissionWallet?
+  subscriptions      DriverSubscription[]
   onlineStatus       DriverOnlineStatus?
   location           DriverLocation?
   shiftLogs          DriverShiftLog[]

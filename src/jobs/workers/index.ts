@@ -5,6 +5,7 @@ import type { ErasureResult } from '@modules/users';
 import type { AuthRetentionResult } from '@modules/auth';
 import type {
   ReconciliationReport,
+  PaymentIntentReconciliationReport,
   CollectionSweepReport,
   WriteOffReport,
 } from '@modules/payments';
@@ -18,6 +19,7 @@ export type MaintenanceResult =
   | ErasureResult
   | AuthRetentionResult
   | ReconciliationReport
+  | PaymentIntentReconciliationReport
   | CollectionSweepReport
   | WriteOffReport
   | PendingRewardSweepReport
@@ -39,10 +41,12 @@ export const MAINTENANCE_HANDLERS: Readonly<Record<MaintenanceJobName, string>> 
   [JOB_NAMES.DRIVER_HEARTBEAT_TIMEOUT]: 'heartbeatTimeoutJob',
   [JOB_NAMES.DRIVER_DOC_EXPIRATION]: 'docExpirationJob',
   [JOB_NAMES.PAYMENT_RECONCILIATION]: 'reconciliationJob',
+  [JOB_NAMES.PAYMENT_INTENT_RECONCILIATION]: 'paymentIntentReconciliationJob',
   [JOB_NAMES.PAYMENT_COLLECTION_SWEEP]: 'collectionSweepJob',
   [JOB_NAMES.PAYMENT_RECEIVABLE_WRITEOFF]: 'receivableWriteOffJob',
   [JOB_NAMES.DRIVER_SETTLEMENT]: 'settlementJob',
   [JOB_NAMES.REFERRAL_PENDING_REWARD_SWEEP]: 'referralPendingRewardSweepJob',
+  [JOB_NAMES.SUBSCRIPTION_EXPIRY]: 'subscriptionExpiryJob',
 });
 export async function runMaintenanceJob(
   name: string,

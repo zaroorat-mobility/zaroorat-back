@@ -20,11 +20,41 @@ export async function grantRole(userId: string, slug: string): Promise<void> {
   }
 }
 
+/// 004-driver-subscription-wallet. spec.md FR-000: a driver with no payment
+/// model is ineligible for any ride under either model. Every fixture driver
+/// meant to actually operate (`verified`) needs one or `/rides/accept` now
+/// correctly refuses them with 409 PAYMENT_MODEL_NOT_SELECTED — this default
+/// is what keeps the ~14 pre-existing suites that only need a driver able to
+/// accept a ride (and were never about payment-model behaviour themselves)
+/// working. `undefined` means "let this default apply"; pass `null`
+/// explicitly to get the old, model-less driver (e.g. to test FR-000 itself).
+///
+/// COMMISSION is the default direction because it costs one extra fixture
+/// write (fund the wallet) versus SUBSCRIPTION's two (plan + subscription
+/// row). Tests that are actually about payment-model behaviour pass
+/// `paymentModel` explicitly — see `makeActiveSubscription` for the
+/// SUBSCRIPTION side.
+const DEFAULT_COMMISSION_WALLET_BALANCE = 1_000_000;
+
 export async function makeDriver(
   userId: string,
-  options: { verified?: boolean; suspended?: boolean } = {},
+  options: {
+    verified?: boolean;
+    suspended?: boolean;
+    /// `undefined` (omitted) = safe default (COMMISSION + funded wallet, for
+    /// a verified driver). `null` = explicitly no model. `'COMMISSION'` /
+    /// `'SUBSCRIPTION'` = explicit choice, matching `Driver.paymentModel`.
+    paymentModel?: 'COMMISSION' | 'SUBSCRIPTION' | null;
+    /// COMMISSION only. Direct DB seed of the starting balance — mirrors
+    /// `makeSettlement`'s direct-write style for setup state that is not
+    /// itself under test; a dedicated recharge/webhook test still exercises
+    /// the real funding path (see `fundCommissionWallet`'s own doc comment).
+    commissionWalletBalance?: number;
+  } = {},
 ): Promise<string> {
   const verified = options.verified !== false;
+  const paymentModel =
+    options.paymentModel === undefined ? (verified ? 'COMMISSION' : null) : options.paymentModel;
 
   const driver = await db().client.driver.create({
     data: {
@@ -32,6 +62,7 @@ export async function makeDriver(
       driverCode: `DRV_${randomUUID().slice(0, 8).toUpperCase()}`,
       verificationStatus: verified ? 'VERIFIED' : 'PENDING',
       isSuspended: options.suspended ?? false,
+      ...(paymentModel ? { paymentModel } : {}),
     },
   });
 
@@ -48,7 +79,77 @@ export async function makeDriver(
     }
   }
 
+  if (paymentModel === 'COMMISSION') {
+    await fundCommissionWallet(
+      driver.id,
+      options.commissionWalletBalance ?? DEFAULT_COMMISSION_WALLET_BALANCE,
+    );
+  }
+
   return driver.id;
+}
+
+/// Direct DB seed of a Commission Wallet balance — for fixture setup where
+/// the recharge flow itself is not what's under test (parallels `fundWallet`
+/// in ride-flow.ts, which goes through the real topup+webhook path instead,
+/// for the one test that IS specifically about that path). Idempotent:
+/// creates the wallet if it doesn't exist yet, otherwise overwrites the
+/// balance — either way the driver ends up with exactly this balance.
+export async function fundCommissionWallet(driverId: string, balance: number): Promise<void> {
+  await db().client.driverCommissionWallet.upsert({
+    where: { driverId },
+    create: { driverId, balance, currency: 'INR' },
+    update: { balance },
+  });
+}
+
+/// A company-defined plan a SUBSCRIPTION-model driver can hold. Freestanding
+/// per call (random name) — `subscription_plans` has no FK back to anything
+/// `resetState()` truncates, so a fixed name would collide across the suite.
+export async function makeSubscriptionPlan(
+  options: { billingPeriod?: 'DAILY' | 'WEEKLY' | 'MONTHLY'; price?: number } = {},
+): Promise<string> {
+  const plan = await db().client.subscriptionPlan.create({
+    data: {
+      name: `Test Plan ${randomUUID().slice(0, 8)}`,
+      billingPeriod: options.billingPeriod ?? 'WEEKLY',
+      price: options.price ?? 500,
+      currency: 'INR',
+      status: 'ACTIVE',
+    },
+  });
+  return plan.id;
+}
+
+/// Puts a driver directly into the state spec.md FR-004 requires for new-ride
+/// eligibility: an ACTIVE, unexpired `DriverSubscription`, and
+/// `Driver.paymentModel = 'SUBSCRIPTION'` — mirroring what
+/// `SubscriptionPaymentConsumer` does on confirmed payment (BD-5), without
+/// re-running the whole purchase→webhook pipeline for tests that are not
+/// themselves about that pipeline.
+export async function makeActiveSubscription(
+  driverId: string,
+  options: { planId?: string; expiresInMs?: number } = {},
+): Promise<string> {
+  const planId = options.planId ?? (await makeSubscriptionPlan());
+  const startDate = new Date();
+  const expiryDate = new Date(startDate.getTime() + (options.expiresInMs ?? 7 * 24 * 60 * 60_000));
+
+  const subscription = await db().client.driverSubscription.create({
+    data: {
+      driverId,
+      planId,
+      status: 'ACTIVE',
+      paymentStatus: 'PAID',
+      startDate,
+      expiryDate,
+    },
+  });
+  await db().client.driver.update({
+    where: { id: driverId },
+    data: { paymentModel: 'SUBSCRIPTION', pendingPaymentModel: null },
+  });
+  return subscription.id;
 }
 
 export async function makeVehicleType(

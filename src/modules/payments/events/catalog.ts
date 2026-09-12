@@ -24,6 +24,15 @@ export const PAYMENT_EVENT_CATALOG = {
   /// BD-1c — the ageing write-off. Published for finance and audit; there is
   /// deliberately no rider notification.
   RECEIVABLE_WRITTEN_OFF: 'payment.receivable.written_off',
+  /// 004-driver-subscription-wallet.
+  DRIVER_SUBSCRIPTION_PAYMENT_COMPLETED: 'driver.subscription.payment.completed',
+  DRIVER_COMMISSION_WALLET_CREDITED: 'driver.commission_wallet.credited',
+  /// Full-amount deduction only (decisions.md BD-1, reversed) — never partial.
+  DRIVER_COMMISSION_WALLET_DEBITED: 'driver.commission_wallet.debited',
+  /// Insufficient wallet balance at ride completion (decisions.md BD-1). An
+  /// observability/investigation signal, not a financial transaction — no
+  /// wallet write or ledger entry accompanies it.
+  DRIVER_COMMISSION_WALLET_COLLECTION_FAILED: 'driver.commission_wallet.collection_failed',
 } as const;
 export function paymentEvent(
   name: (typeof PAYMENT_EVENT_CATALOG)[keyof typeof PAYMENT_EVENT_CATALOG],

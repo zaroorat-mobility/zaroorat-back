@@ -3,6 +3,8 @@ import { DriverDocumentsController } from './driver-documents.controller.js';
 import { DriverStatusController } from './driver-status.controller.js';
 import { DriverLocationController } from './driver-location.controller.js';
 import { DriverWalletController } from './driver-wallet.controller.js';
+import { DriverPaymentModelController } from './driver-payment-model.controller.js';
+import { DriverCommissionWalletController } from './driver-commission-wallet.controller.js';
 export class DriverController {
   constructor(
     public readonly onboarding: DriverOnboardingController,
@@ -10,5 +12,7 @@ export class DriverController {
     public readonly status: DriverStatusController,
     public readonly location: DriverLocationController,
     public readonly wallet: DriverWalletController,
+    public readonly paymentModel: DriverPaymentModelController,
+    public readonly commissionWallet: DriverCommissionWalletController,
   ) {}
 }
