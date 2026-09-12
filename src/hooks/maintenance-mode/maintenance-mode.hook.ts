@@ -11,6 +11,7 @@ const MAINTENANCE_EXEMPT_PREFIXES = [
   '/api/v1/health',
   '/api/v1/ready',
   '/api/v1/auth/admin',
+  '/api/v1/app-config',
   '/api/v1/admin/settings',
   '/api/v1/admin/monitoring',
   '/api/v1/admin/security',
