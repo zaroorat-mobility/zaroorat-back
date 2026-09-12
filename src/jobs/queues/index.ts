@@ -9,6 +9,7 @@ export const QUEUE_NAMES = Object.freeze({
   RIDES_MAINTENANCE: 'rides-maintenance',
   DRIVERS_MAINTENANCE: 'drivers-maintenance',
   PAYMENTS_MAINTENANCE: 'payments-maintenance',
+  SUBSCRIPTIONS_MAINTENANCE: 'subscriptions-maintenance',
   AUTH_OTP: 'auth-otp',
 } as const);
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -22,10 +23,12 @@ export const JOB_NAMES = Object.freeze({
   DRIVER_HEARTBEAT_TIMEOUT: 'driver-heartbeat-timeout',
   DRIVER_DOC_EXPIRATION: 'driver-doc-expiration',
   PAYMENT_RECONCILIATION: 'payment-reconciliation',
+  PAYMENT_INTENT_RECONCILIATION: 'payment-intent-reconciliation',
   PAYMENT_COLLECTION_SWEEP: 'payment-collection-sweep',
   PAYMENT_RECEIVABLE_WRITEOFF: 'payment-receivable-writeoff',
   DRIVER_SETTLEMENT: 'driver-settlement',
   REFERRAL_PENDING_REWARD_SWEEP: 'referral-pending-reward-sweep',
+  SUBSCRIPTION_EXPIRY: 'subscription-expiry',
   OTP_SEND: 'otp-send',
 } as const);
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];

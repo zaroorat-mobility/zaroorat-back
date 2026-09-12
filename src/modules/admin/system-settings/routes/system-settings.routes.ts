@@ -36,6 +36,9 @@ export async function systemSettingsRoutes(fastify: FastifyInstance): Promise<vo
   fastify.post('/settings/integrations/payment/test', canWrite, (req, reply) =>
     integrationController.testPayment(req, reply),
   );
+  fastify.get('/settings/integrations/payment/health', canRead, (req, reply) =>
+    integrationController.getPaymentProvidersHealth(req, reply),
+  );
 
   fastify.get('/settings/integrations/sms', canRead, (req, reply) =>
     integrationController.getSmsSettings(req, reply),

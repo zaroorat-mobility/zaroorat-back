@@ -117,7 +117,8 @@ export class RidePaymentController {
   }
 
   /// The rider's own outstanding balance (BD-2), or a driver's outstanding
-  /// commission (BD-3).
+  /// platform share on cash rides (BD-3) — never the Commission Wallet, which
+  /// cannot go negative.
   async getMyDebt(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const caller = requireCaller(req);
     const driver = await this.driverRepository.findByUserId(caller.userId);

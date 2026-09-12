@@ -19,6 +19,11 @@ export interface CreateRideInput {
   isScheduled?: boolean;
   mapProvider?: string | null;
   mapConfigVersion?: number | null;
+  /// 004-driver-subscription-wallet. Pinned at acceptance — spec.md FR-031.
+  driverPaymentModel?: 'SUBSCRIPTION' | 'COMMISSION' | null;
+  /// COMMISSION-model rides only, determined once at acceptance (spec.md
+  /// FR-013b). Null for SUBSCRIPTION-model rides.
+  commissionAmount?: Decimal | null;
 }
 export class RideRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -45,6 +50,7 @@ export class RideRepository {
         "payment_status", "pickup_location", "pickup_address",
         "drop_location", "drop_address", "accepted_at",
         "wait_time_min", "is_scheduled", "map_provider", "map_config_version",
+        "driver_payment_model", "commission_amount",
         "created_at", "updated_at"
       ) VALUES (
         ${id}::uuid, ${rideCode}, ${input.requestId}::uuid, ${input.customerId}::uuid,
@@ -61,6 +67,7 @@ export class RideRepository {
         ${input.dropAddress ?? null}, now(),
         0, ${input.isScheduled ?? false},
         ${input.mapProvider ?? null}, ${input.mapConfigVersion ?? null},
+        ${input.driverPaymentModel ?? null}, ${input.commissionAmount ?? null},
         now(), now()
       )
     `;

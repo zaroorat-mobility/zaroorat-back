@@ -71,29 +71,42 @@ model Ride {
 
   customerId String @map("customer_id") @db.Uuid
 
-  driverId          String                                @map("driver_id") @db.Uuid
-  vehicleId         String                                @map("vehicle_id") @db.Uuid
-  vehicleTypeId     String                                @map("vehicle_type_id") @db.Uuid
-  status            RideStatus                            @default(ACCEPTED)
-  paymentMethod     PaymentMethod                         @map("payment_method")
-  paymentStatus     PaymentStatus                         @default(PENDING) @map("payment_status")
-  pickupLocation    Unsupported("geography(Point,4326)")  @map("pickup_location")
-  pickupAddress     String?                               @map("pickup_address")
-  dropLocation      Unsupported("geography(Point,4326)")? @map("drop_location")
-  dropAddress       String?                               @map("drop_address")
-  acceptedAt        DateTime                              @default(now()) @map("accepted_at")
-  arrivedAt         DateTime?                             @map("arrived_at")
-  startedAt         DateTime?                             @map("started_at")
-  completedAt       DateTime?                             @map("completed_at")
-  cancelledAt       DateTime?                             @map("cancelled_at")
-  actualDistanceKm  Decimal?                              @map("actual_distance_km") @db.Decimal(8, 2)
-  actualDurationMin Int?                                  @map("actual_duration_min")
-  waitTimeMin       Int                                   @default(0) @map("wait_time_min")
-  isScheduled       Boolean                               @default(false) @map("is_scheduled")
-  mapProvider       String?                               @map("map_provider")
-  mapConfigVersion  Int?                                  @map("map_config_version")
-  createdAt         DateTime                              @default(now()) @map("created_at")
-  updatedAt         DateTime                              @updatedAt @map("updated_at")
+  driverId           String                                @map("driver_id") @db.Uuid
+  vehicleId          String                                @map("vehicle_id") @db.Uuid
+  vehicleTypeId      String                                @map("vehicle_type_id") @db.Uuid
+  status             RideStatus                            @default(ACCEPTED)
+  paymentMethod      PaymentMethod                         @map("payment_method")
+  paymentStatus      PaymentStatus                         @default(PENDING) @map("payment_status")
+  pickupLocation     Unsupported("geography(Point,4326)")  @map("pickup_location")
+  pickupAddress      String?                               @map("pickup_address")
+  dropLocation       Unsupported("geography(Point,4326)")? @map("drop_location")
+  dropAddress        String?                               @map("drop_address")
+  acceptedAt         DateTime                              @default(now()) @map("accepted_at")
+  arrivedAt          DateTime?                             @map("arrived_at")
+  startedAt          DateTime?                             @map("started_at")
+  completedAt        DateTime?                             @map("completed_at")
+  cancelledAt        DateTime?                             @map("cancelled_at")
+  actualDistanceKm   Decimal?                              @map("actual_distance_km") @db.Decimal(8, 2)
+  actualDurationMin  Int?                                  @map("actual_duration_min")
+  waitTimeMin        Int                                   @default(0) @map("wait_time_min")
+  isScheduled        Boolean                               @default(false) @map("is_scheduled")
+  mapProvider        String?                               @map("map_provider")
+  mapConfigVersion   Int?                                  @map("map_config_version")
+  /// 004-driver-subscription-wallet. 'SUBSCRIPTION' | 'COMMISSION' — snapshot of
+  /// Driver.paymentModel at the moment this ride was accepted, never updated
+  /// afterward. Ride completion consults ONLY this field, never the driver's
+  /// current (possibly since-changed) paymentModel — spec.md FR-031.
+  /// Nullable for migration safety (matches the RideRequest.pricingRuleId
+  /// precedent): every ride created by this feature's code always sets it;
+  /// NULL means "created before this column existed," and completion treats
+  /// that as a legacy ride with no dual-model handling, never as an error.
+  driverPaymentModel String?                               @map("driver_payment_model")
+  /// COMMISSION-model rides only; determined ONCE at acceptance from the
+  /// ride's pinned PricingRule and never recalculated (spec.md FR-013b/FR-020).
+  /// Null for SUBSCRIPTION-model rides.
+  commissionAmount   Decimal?                              @map("commission_amount") @db.Decimal(12, 2)
+  createdAt          DateTime                              @default(now()) @map("created_at")
+  updatedAt          DateTime                              @updatedAt @map("updated_at")
 
   request     RideRequest @relation(fields: [requestId], references: [id])
   customer    User        @relation("CustomerRides", fields: [customerId], references: [id])
@@ -101,35 +114,36 @@ model Ride {
   vehicle     Vehicle     @relation(fields: [vehicleId], references: [id])
   vehicleType VehicleType @relation(fields: [vehicleTypeId], references: [id])
 
-  stops                  RideStop[]
-  statusEvents           RideStatusEvent[]
-  fare                   RideFare?
-  fareLines              RideFareLine[]
-  cancellation           RideCancellation?
-  otps                   RideOtp[]
-  receipt                RideReceipt?
-  payments               RidePayment[]
-  billingInvoices        BillingInvoice[]
-  ratings                RideRating[]
-  promosApplied          RidePromoApplied[]
-  referralQualifications ReferralQualifyingRide[]
-  routePlan              RideRoutePlan?
-  waitEvents             RideWaitEvent[]
-  disputes               RideDispute[]
-  promoRedemptions       PromotionRedemption[]
-  paymentIntents         PaymentIntent[]
-  paymentTransactions    PaymentTransaction[]
-  refunds                Refund[]
-  chargebacks            Chargeback[]
-  paymentDisputes        PaymentDispute[]
-  payoutItems            PayoutItem[]
-  cashbackGrants         CashbackGrant[]
-  chatConversations      ChatConversation[]
-  supportTickets         SupportTicket[]
-  redeemedCoupons        Coupon[]
-  safetyIncidents        SafetyIncident[]
-  opsNotes               RideOpsNote[]
-  locationPoints         RideLocationPoint[]
+  stops                        RideStop[]
+  statusEvents                 RideStatusEvent[]
+  fare                         RideFare?
+  fareLines                    RideFareLine[]
+  cancellation                 RideCancellation?
+  otps                         RideOtp[]
+  receipt                      RideReceipt?
+  payments                     RidePayment[]
+  billingInvoices              BillingInvoice[]
+  ratings                      RideRating[]
+  promosApplied                RidePromoApplied[]
+  referralQualifications       ReferralQualifyingRide[]
+  routePlan                    RideRoutePlan?
+  waitEvents                   RideWaitEvent[]
+  disputes                     RideDispute[]
+  promoRedemptions             PromotionRedemption[]
+  paymentIntents               PaymentIntent[]
+  paymentTransactions          PaymentTransaction[]
+  refunds                      Refund[]
+  chargebacks                  Chargeback[]
+  paymentDisputes              PaymentDispute[]
+  payoutItems                  PayoutItem[]
+  cashbackGrants               CashbackGrant[]
+  commissionWalletTransactions DriverCommissionWalletTransaction[]
+  chatConversations            ChatConversation[]
+  supportTickets               SupportTicket[]
+  redeemedCoupons              Coupon[]
+  safetyIncidents              SafetyIncident[]
+  opsNotes                     RideOpsNote[]
+  locationPoints               RideLocationPoint[]
 
   @@index([customerId])
   @@index([driverId])

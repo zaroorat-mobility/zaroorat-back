@@ -63,6 +63,14 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
   },
   {
     queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
+    name: JOB_NAMES.PAYMENT_INTENT_RECONCILIATION,
+    // Every ten minutes: a stale PENDING/PROCESSING PaymentIntent is only
+    // reconciled once it has sat for STALE_AFTER_MS (15 minutes) anyway, so
+    // this does not need to run as often as the wallet-balance reconciliation.
+    pattern: process.env.PAYMENT_INTENT_RECONCILIATION_CRON ?? '*/10 * * * *',
+  },
+  {
+    queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
     name: JOB_NAMES.PAYMENT_COLLECTION_SWEEP,
     // Every five minutes. The completion consumer already collects the happy
     // path within seconds; this only picks up what it could not finish, and
@@ -91,6 +99,13 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     // stays unnoticed, and hourly is frequent enough for a condition that should
     // never occur at all.
     pattern: process.env.REFERRAL_PENDING_REWARD_SWEEP_CRON ?? '20 * * * *',
+  },
+  {
+    queue: QUEUE_NAMES.SUBSCRIPTIONS_MAINTENANCE,
+    name: JOB_NAMES.SUBSCRIPTION_EXPIRY,
+    // Every five minutes: expiry gates whether a subscription driver can
+    // accept new rides, so this shouldn't lag a paid period's end by much.
+    pattern: process.env.SUBSCRIPTION_EXPIRY_CRON ?? '*/5 * * * *',
   },
 ]);
 export async function registerJobSchedules(): Promise<void> {

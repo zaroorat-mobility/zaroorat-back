@@ -11,7 +11,6 @@ import { ReceiptService } from '@modules/rides/services/receipt/receipt.service.
 import { Decimal } from '../../types/index.js';
 import { RidePaymentRepository } from '../../repositories/ride-payment.repository.js';
 import { SettlementWalletRepository } from '../../repositories/settlement-wallet.repository.js';
-import { PaymentGatewayProvider } from '../gateway/gateway.provider.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import { InsufficientBalanceError } from '../../errors/payment.errors.js';
@@ -20,6 +19,14 @@ import { PaymentMetrics } from '../../metrics/payment.metrics.js';
 
 export type CollectionResult =
   'COLLECTED' | 'RETRYING' | 'RECEIVABLE' | 'ALREADY_SETTLED' | 'NOT_COLLECTABLE' | 'BUSY';
+
+/// The rider never pays the platform for a ride: CASH, CARD and UPI all mean
+/// the same thing here — money changed hands directly between rider and
+/// driver, outside the platform — and are collectible only by a driver's own
+/// acknowledgement (`confirmCash`) or, with that flag off, are already PAID
+/// the moment the ride completes (`LifecycleService.completeRide`). Only
+/// WALLET is a balance the platform actually holds and can debit itself.
+const DRIVER_COLLECTED_METHODS = new Set(['CASH', 'CARD', 'UPI']);
 
 /// Charges a completed ride, exactly once.
 ///
@@ -35,7 +42,6 @@ export class RideCollectionService {
     private readonly settlementWalletRepository: SettlementWalletRepository,
     private readonly receiptService: ReceiptService,
     private readonly ledgerService: LedgerService,
-    private readonly paymentGatewayProvider: PaymentGatewayProvider,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly redis: RedisService,
@@ -68,10 +74,11 @@ export class RideCollectionService {
     // Settling a standing receivable is transition 7b and goes through
     // `settleReceivable`, not through here.
     if (ride.paymentStatus !== 'PENDING') return 'ALREADY_SETTLED';
-    // A cash ride is settled in the completion transaction while BD-5's flag
-    // is off (transition 4c). With the flag on it waits on a driver, not on
-    // this service.
-    if (ride.paymentMethod === 'CASH') return 'NOT_COLLECTABLE';
+    // A driver-collected ride (cash, or the customer paying the driver
+    // directly by UPI/phone/GPay) is settled in the completion transaction
+    // while BD-5's flag is off (transition 4c). With the flag on it waits on
+    // a driver, not on this service.
+    if (DRIVER_COLLECTED_METHODS.has(ride.paymentMethod)) return 'NOT_COLLECTABLE';
 
     const fare = await this.rideFareRepository.findByRideId(rideId);
     if (!fare) return 'NOT_COLLECTABLE';
@@ -94,7 +101,8 @@ export class RideCollectionService {
     }
   }
 
-  /// Transitions 4a and 4b — a cash ride is acknowledged.
+  /// Transitions 4a and 4b — a driver-collected ride (cash, or UPI/phone/GPay
+  /// paid straight to the driver) is acknowledged.
   ///
   /// 4a is a driver saying so, 4b is the grace period expiring; they are the
   /// same transaction and differ only in what the ledger description records,
@@ -103,7 +111,9 @@ export class RideCollectionService {
   /// becomes a no-op.
   ///
   /// `expectedDriverId` is how the manual path proves the caller is the driver
-  /// on this ride. The automatic path passes none.
+  /// on this ride. The automatic path passes none. The method name and route
+  /// stay "cash" — CARD/UPI paid directly to the driver is acknowledged
+  /// through the exact same flow, not a separate one.
   async confirmCash(
     rideId: string,
     options: { expectedDriverId?: string; automatic?: boolean } = {},
@@ -117,7 +127,7 @@ export class RideCollectionService {
       const ride = await this.rideRepository.findById(rideId);
       // Conditions 2, 3 and 4.
       if (!ride) return 'NOT_COLLECTABLE';
-      if (ride.paymentMethod !== 'CASH') return 'NOT_COLLECTABLE';
+      if (!DRIVER_COLLECTED_METHODS.has(ride.paymentMethod)) return 'NOT_COLLECTABLE';
       if (ride.status !== 'COMPLETED') return 'NOT_COLLECTABLE';
       if (ride.paymentStatus !== 'PENDING') return 'ALREADY_SETTLED';
       if (options.expectedDriverId != null && ride.driverId !== options.expectedDriverId) {
@@ -139,17 +149,28 @@ export class RideCollectionService {
           {
             rideId,
             amount: fare.totalFare,
-            method: 'CASH',
+            method: ride.paymentMethod,
             status: 'SUCCEEDED',
             settledAt: new Date(),
           },
           tx,
         );
-        /// FR-006. The driver collected the whole fare in cash, so what they owe
-        /// back is everything that is not theirs: the commission, the tax and
-        /// the platform fee. Charging only the commission left the driver
-        /// holding the tax and the fee with no record that they did.
-        const owedByDriver = fare.totalFare.minus(fare.driverEarning);
+        /// FR-006. The driver collected the whole fare directly, so what they owe
+        /// back is everything that is not theirs: the tax and the platform
+        /// fee, always — and, for a ride with no payment model, the
+        /// commission too.
+        ///
+        /// 004-driver-subscription-wallet. A ride with a payment model owns
+        /// its own commission entirely through that model's mechanism (the
+        /// Commission Wallet deduction, or the subscription fee) — this cash
+        /// recovery must never also collect it.
+        const commissionOwnedElsewhere = ride.driverPaymentModel != null;
+        const owedByDriver = fare.totalFare
+          .minus(fare.driverEarning)
+          .minus(commissionOwnedElsewhere ? fare.platformCommission : new Decimal(0));
+        const creditFare = commissionOwnedElsewhere
+          ? { ...fare, platformCommission: new Decimal(0) }
+          : fare;
         if (!owedByDriver.isZero()) {
           // This is allowed to push the balance negative — that negative is the
           // debt, and the next settlement clears it.
@@ -159,7 +180,7 @@ export class RideCollectionService {
               amount: owedByDriver,
               referenceType: 'RIDE',
               referenceId: rideId,
-              description: `Platform share on cash ride ${rideId}, confirmed ${how}`,
+              description: `Platform share on ride ${rideId}, confirmed ${how}`,
             },
             tx,
           );
@@ -171,20 +192,23 @@ export class RideCollectionService {
                   accountRefId: ride.driverId,
                   referenceType: 'RIDE',
                   referenceId: rideId,
-                  description: `Platform share owed on cash ride ${rideId}, confirmed ${how}`,
+                  description: `Platform share owed on ride ${rideId}, confirmed ${how}`,
                 },
                 owedByDriver,
                 'DEBIT',
               ),
-              ...fareDestinationLegs(fare, ride.driverId, rideId, `, confirmed ${how}`).filter(
-                (leg) => leg.account !== 'DRIVER_PAYABLE',
-              ),
+              ...fareDestinationLegs(
+                creditFare,
+                ride.driverId,
+                rideId,
+                `, confirmed ${how}`,
+              ).filter((leg) => leg.account !== 'DRIVER_PAYABLE'),
             ],
             tx,
           );
         }
         await this.receiptService.generateReceipt(rideId, tx);
-        this.paymentMetrics.collectionSucceeded({ rideId, method: 'CASH' });
+        this.paymentMetrics.collectionSucceeded({ rideId, method: ride.paymentMethod });
         if (options.automatic === true) this.paymentMetrics.cashAutoResolved({ rideId });
         await this.eventPublisher.publish(
           paymentEvent(PAYMENT_EVENT_CATALOG.RIDE_COLLECTED, rideId, {
@@ -192,8 +216,8 @@ export class RideCollectionService {
             customerId: ride.customerId,
             driverId: ride.driverId,
             amount: fare.totalFare.toNumber(),
-            method: 'CASH',
-            commissionOwed: owedByDriver.toNumber(),
+            method: ride.paymentMethod,
+            platformShareOwed: owedByDriver.toNumber(),
             automatic: options.automatic === true,
           }),
           tx,
@@ -306,44 +330,39 @@ export class RideCollectionService {
     }
   }
 
-  /// Talks to the provider, **outside any transaction**.
+  /// The only "charge" the platform ever performs for a ride: a wallet debit
+  /// against a balance it already holds.
   ///
-  /// A gateway call inside a transaction holds a database connection open for
-  /// the length of a network round trip to a third party, and a timeout would
-  /// roll back work that the provider has already performed.
+  /// CASH, CARD and UPI never reach here — `attempt()` and `settleReceivable`
+  /// both route every `DRIVER_COLLECTED_METHODS` ride away before calling
+  /// this, because the platform never receives that money and so has nothing
+  /// to charge a provider for. There is no gateway call in this service at
+  /// all: the customer's ride fare is never a Razorpay/Stripe transaction.
+  /// `attemptIndex`/`rideId` are unused by the wallet path but
+  /// kept so both call sites share one signature.
   private async charge(
     method: string,
-    amount: Decimal,
-    rideId: string,
-    attemptIndex: number,
+    _amount: Decimal,
+    _rideId: string,
+    _attemptIndex: number,
   ): Promise<{ ok: true; reference: string | null } | { ok: false; reason: string }> {
-    // A wallet debit is our own database row; there is no provider to call.
     if (method === 'WALLET') return { ok: true, reference: null };
-    try {
-      const intent = await this.paymentGatewayProvider.createIntent({
-        amount,
-        currency: 'INR',
-        // Deterministic from the ride and which attempt this is, so a
-        // redelivered event replays the *same* charge at the provider rather
-        // than raising a second one, while a genuine later retry is allowed to
-        // be a new charge.
-        idempotencyKey: `ride-collect:${rideId}:${attemptIndex}`,
-        metadata: { rideId },
-      });
-      const confirmed = await this.paymentGatewayProvider.confirmIntent(intent.gatewayIntentId);
-      return confirmed.status === 'SUCCEEDED'
-        ? { ok: true, reference: intent.gatewayIntentId }
-        : { ok: false, reason: `gateway_${confirmed.status.toLowerCase()}` };
-    } catch (err) {
-      logger.warn({ err, rideId }, '[payments] gateway declined ride collection');
-      return { ok: false, reason: 'gateway_error' };
-    }
+    logger.error(
+      { method },
+      '[payments] RideCollectionService.charge called for a method it cannot charge',
+    );
+    return { ok: false, reason: 'not_collectable' };
   }
 
   /// Transitions 2 and 3 — one transaction, claim first.
   private async recordSuccess(
     rideId: string,
-    ride: { customerId: string; driverId: string; paymentMethod: string },
+    ride: {
+      customerId: string;
+      driverId: string;
+      paymentMethod: string;
+      driverPaymentModel: string | null;
+    },
     fare: RideFareSplit,
     reference: string | null,
   ): Promise<CollectionResult> {
@@ -383,6 +402,7 @@ export class RideCollectionService {
           driverId: ride.driverId,
           rideId,
           paymentMethod: ride.paymentMethod,
+          driverPaymentModel: ride.driverPaymentModel,
         },
         tx,
       );
@@ -415,7 +435,7 @@ export class RideCollectionService {
   /// debt event describing the same transition twice.
   private async recordFailure(
     rideId: string,
-    ride: { customerId: string; driverId: string },
+    ride: { customerId: string; driverId: string; driverPaymentModel: string | null },
     fare: RideFareSplit,
     failedSoFar: number,
     reason: string,
@@ -454,21 +474,41 @@ export class RideCollectionService {
   }
 
   /// BD-1 option C: an uncollected fare is an asset the customer still owes,
-  /// not a loss. The driver is paid and the commission recognised all the
-  /// same — the driver drove the trip, and whether the rider paid is the
-  /// platform's problem, not theirs. Bad debt is recognised only at write-off.
+  /// not a loss. The driver is still paid — the driver drove the trip, and
+  /// whether the rider paid is the platform's problem, not theirs. Bad debt
+  /// is recognised only at write-off.
+  ///
+  /// 004-driver-subscription-wallet. Commission is recognised here only for a
+  /// ride with no payment model (legacy); a COMMISSION/SUBSCRIPTION ride's
+  /// commission is already owned entirely by that model's own mechanism, so
+  /// an unpaid customer fare must not also create one here.
   private async postReceivable(
     rideId: string,
-    ride: { customerId: string; driverId: string },
+    ride: { customerId: string; driverId: string; driverPaymentModel: string | null },
     fare: RideFareSplit,
     tx: TransactionClient,
   ): Promise<void> {
     /// FR-006. The receivable debit is the whole fare, so the credit side has to
-    /// be the whole fare too — driver, tax, platform fee and commission. It used
-    /// to be only the driver and the commission, which balanced solely because
-    /// commission was levied on the total and so absorbed the other two.
+    /// be the whole fare too — driver, tax, platform fee and (for a legacy
+    /// ride) commission. It used to be only the driver and the commission,
+    /// which balanced solely because commission was levied on the total and
+    /// so absorbed the other two.
     /// `signedLeg` for the same reason as the funding leg in `recordTripPayment`:
     /// a fully discounted ride owes nothing, and a zero-amount entry is refused.
+    ///
+    /// 004-driver-subscription-wallet. Redistributed into the driver's own
+    /// leg here too, not discarded — the debit above is still the whole fare,
+    /// so the credit side must still sum to it (FR-006); the driver, whose
+    /// payment model already collected this ride's commission separately, is
+    /// who receives the difference.
+    const creditFare =
+      ride.driverPaymentModel != null
+        ? {
+            ...fare,
+            driverEarning: fare.driverEarning.add(fare.platformCommission),
+            platformCommission: new Decimal(0),
+          }
+        : fare;
     const legs = [
       ...signedLeg(
         {
@@ -481,7 +521,7 @@ export class RideCollectionService {
         fare.totalFare,
         'DEBIT',
       ),
-      ...fareDestinationLegs(fare, ride.driverId, rideId),
+      ...fareDestinationLegs(creditFare, ride.driverId, rideId),
     ];
     if (legs.length === 0) return;
     await this.ledgerService.postTransactionGroup(legs, tx);

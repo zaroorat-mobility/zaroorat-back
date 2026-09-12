@@ -1,5 +1,4 @@
-import { asClass, asFunction, aliasTo, AwilixContainer } from 'awilix';
-import { paymentConfig } from '@config';
+import { asClass, aliasTo, AwilixContainer } from 'awilix';
 import { PaymentMetrics } from './metrics/payment.metrics.js';
 import {
   PaymentMethodRepository,
@@ -14,12 +13,11 @@ import {
   WebhookRepository,
   IdempotencyRepository,
   RidePaymentRepository,
+  CommissionWalletRepository,
+  WalletRechargeOptionRepository,
 } from './repositories/index.js';
+import { PaymentGatewayResolverService } from './services/gateway/payment-gateway-resolver.service.js';
 import {
-  MockGatewayProvider,
-  RazorpayGatewayProvider,
-  StripeGatewayProvider,
-  PaymentGatewayProvider,
   LedgerService,
   WalletService,
   IntentService,
@@ -31,6 +29,7 @@ import {
   RideCollectionService,
   DebtService,
   WriteOffService,
+  CommissionWalletService,
 } from './services/index.js';
 import {
   PaymentMethodController,
@@ -41,10 +40,12 @@ import {
   WebhookController,
   PaymentController,
   RidePaymentController,
+  CommissionWalletController,
 } from './controllers/index.js';
 import {
   SettlementJob,
   ReconciliationJob,
+  PaymentIntentReconciliationJob,
   CollectionSweepJob,
   ReceivableWriteOffJob,
 } from './jobs/index.js';
@@ -78,24 +79,21 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     webhookRepository: asClass(WebhookRepository).singleton(),
     idempotencyRepository: asClass(IdempotencyRepository).singleton(),
     ridePaymentRepository: asClass(RidePaymentRepository).singleton(),
-    paymentGatewayProvider: asFunction((): PaymentGatewayProvider => {
-      const mode = paymentConfig.defaultGateway;
-      if (mode === 'razorpay') {
-        return new RazorpayGatewayProvider(
-          paymentConfig.razorpayKeyId,
-          paymentConfig.razorpayKeySecret,
-        );
-      }
-      if (mode === 'stripe') {
-        return new StripeGatewayProvider(paymentConfig.stripeSecretKey);
-      }
-      return new MockGatewayProvider();
-    }).singleton(),
+    commissionWalletRepository: asClass(CommissionWalletRepository).singleton(),
+    rechargeOptionRepository: asClass(WalletRechargeOptionRepository).singleton(),
+    // Resolves the one admin-active gateway (Razorpay/Stripe/Mock) or an
+    // existing PaymentIntent/PaymentTransaction's own stored `gateway` — the
+    // one seam every business service consults instead of instantiating a
+    // gateway client directly. Depends on `systemSettingService`, registered
+    // by the admin module (see `MapProviderService` for the same cross-module
+    // pattern already established for map providers).
+    gatewayResolver: asClass(PaymentGatewayResolverService).singleton(),
     ledgerService: asClass(LedgerService).singleton(),
     rideCollectionService: asClass(RideCollectionService).singleton(),
     debtService: asClass(DebtService).singleton(),
     writeOffService: asClass(WriteOffService).singleton(),
     walletService: asClass(WalletService).singleton(),
+    commissionWalletService: asClass(CommissionWalletService).singleton(),
     intentService: asClass(IntentService).singleton(),
     refundService: asClass(RefundService).singleton(),
     settlementService: asClass(SettlementService).singleton(),
@@ -119,6 +117,7 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     refundController: asClass(RefundController).singleton(),
     webhookController: asClass(WebhookController).singleton(),
     ridePaymentController: asClass(RidePaymentController).singleton(),
+    commissionWalletController: asClass(CommissionWalletController).singleton(),
     paymentController: asClass(PaymentController)
       .singleton()
       .inject((c) => ({
@@ -129,13 +128,14 @@ export function registerPaymentsModule(container: AwilixContainer): void {
         refund: c.resolve('refundController'),
         webhook: c.resolve('webhookController'),
         ridePayment: c.resolve('ridePaymentController'),
+        commissionWallet: c.resolve('commissionWalletController'),
       })),
     rideCollectionConsumer: asClass(RideCollectionConsumer).singleton(),
     settlementJob: asClass(SettlementJob).singleton(),
     collectionSweepJob: asClass(CollectionSweepJob).singleton(),
     receivableWriteOffJob: asClass(ReceivableWriteOffJob).singleton(),
     reconciliationJob: asClass(ReconciliationJob).singleton(),
-    gateway: aliasTo('paymentGatewayProvider'),
+    paymentIntentReconciliationJob: asClass(PaymentIntentReconciliationJob).singleton(),
     intentRepo: aliasTo('intentRepository'),
     ledgerRepo: aliasTo('ledgerRepository'),
     webhookRepo: aliasTo('webhookRepository'),

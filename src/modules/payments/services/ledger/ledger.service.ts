@@ -115,15 +115,47 @@ export class LedgerService {
       driverId: string;
       rideId: string;
       paymentMethod: string;
+      /// 004-driver-subscription-wallet. The payment model pinned on the ride
+      /// at acceptance (`Ride.driverPaymentModel`, FR-031). Whenever a model
+      /// is set, driver commission is owned entirely by that model's own
+      /// mechanism — the Commission Wallet deduction for COMMISSION, the
+      /// subscription fee for SUBSCRIPTION — and this posting must never
+      /// recognise it a second time: tax and the platform fee are still owed
+      /// here, commission never is. `null` is a ride written before the
+      /// column existed, which keeps the original, single, unsplit
+      /// commission-on-customer-payment behaviour.
+      driverPaymentModel?: string | null;
     },
     tx: TransactionClient,
   ): Promise<PaymentLedgerEntry[]> {
-    if (data.paymentMethod === 'CASH') {
-      /// The driver collected the whole fare in cash, so what they owe back is
-      /// everything that is not theirs: tax, the platform fee and the
-      /// commission. It used to be the commission alone, which understated the
-      /// debt by exactly the tax and the fee — amounts the driver was holding.
-      const owedByDriver = data.totalFare.minus(data.driverEarning);
+    const commissionOwnedElsewhere = data.driverPaymentModel != null;
+    /// Redistributed, not discarded: `fareDestinationLegs` must still sum to
+    /// `totalFare` (FR-006) whichever way the commission component is
+    /// routed, or the group no longer balances. The driver already paid this
+    /// ride's commission through their payment model's own mechanism, so the
+    /// portion of the customer's fare that would otherwise have gone to
+    /// PLATFORM_COMMISSION becomes additional driver earning instead — the
+    /// driver, not the platform, is the party left to receive money the
+    /// platform is not taking a second time.
+    const creditFare = commissionOwnedElsewhere
+      ? {
+          ...data,
+          driverEarning: data.driverEarning.add(data.platformCommission),
+          platformCommission: new Decimal(0),
+        }
+      : data;
+    if (data.paymentMethod !== 'WALLET') {
+      /// The customer never pays the platform for a ride fare — CASH, CARD and
+      /// UPI all mean the driver collected the whole fare directly (cash in
+      /// hand, or a UPI/phone/GPay transfer straight to the driver's own
+      /// account), so what the driver owes back is everything that is not
+      /// theirs: tax, the platform fee and — for a ride with no payment model
+      /// — the commission. It used to be the commission alone, which
+      /// understated the debt by exactly the tax and the fee — amounts the
+      /// driver was holding. `creditFare.driverEarning` already carries the
+      /// redistributed commission when it applies, so subtracting it here is
+      /// the same reduction as before, derived once.
+      const owedByDriver = data.totalFare.minus(creditFare.driverEarning);
       const legs = [
         ...signedLeg(
           {
@@ -131,24 +163,24 @@ export class LedgerService {
             accountRefId: data.driverId,
             referenceType: 'RIDE',
             referenceId: data.rideId,
-            description: `Platform share owed on cash ride ${data.rideId}`,
+            description: `Platform share owed on ride ${data.rideId}`,
           },
           owedByDriver,
           'DEBIT',
         ),
-        ...fareDestinationLegs(data, data.driverId, data.rideId, ' (cash)').filter(
-          (leg) => leg.account !== 'DRIVER_PAYABLE',
-        ),
+        ...fareDestinationLegs(
+          creditFare,
+          data.driverId,
+          data.rideId,
+          ' (driver-collected)',
+        ).filter((leg) => leg.account !== 'DRIVER_PAYABLE'),
       ];
       if (legs.length === 0) return [];
       return this.postTransactionGroup(legs, tx);
     }
-    // Where the fare actually came from. A card or UPI charge lands in the
-    // gateway's clearing account and never touches the rider's wallet balance;
-    // posting it to `CUSTOMER_WALLET` credited a wallet position for money
-    // that was never in the wallet, so the balance and the books disagreed by
-    // the fare of every card ride (FR-037).
-    const fundedFromWallet = data.paymentMethod === 'WALLET';
+    // WALLET is the only method left here — the one case where the fare
+    // actually lands in a platform-held account, the rider's own wallet
+    // balance, rather than going straight to the driver.
     /// `signedLeg` rather than a bare item because `totalFare` can now be zero.
     /// FR-008 moved the minimum-fare floor ahead of the discount, so a promotion
     /// that covers the whole fare leaves the customer paying nothing — while the
@@ -158,10 +190,8 @@ export class LedgerService {
     const items: LedgerItemInput[] = [
       ...signedLeg(
         {
-          account: fundedFromWallet ? 'CUSTOMER_WALLET' : 'GATEWAY_CLEARING',
-          // Only the wallet account is per-rider; `GATEWAY_CLEARING` is a single
-          // platform account, so tagging it with a user would fragment it.
-          ...(fundedFromWallet ? { accountRefId: data.customerUserId } : {}),
+          account: 'CUSTOMER_WALLET',
+          accountRefId: data.customerUserId,
           referenceType: 'RIDE',
           referenceId: data.rideId,
           description: `Fare payment for ride ${data.rideId}`,
@@ -169,7 +199,7 @@ export class LedgerService {
         data.totalFare,
         'DEBIT',
       ),
-      ...fareDestinationLegs(data, data.driverId, data.rideId),
+      ...fareDestinationLegs(creditFare, data.driverId, data.rideId),
     ];
     if (items.length === 0) return [];
     return this.postTransactionGroup(items, tx);

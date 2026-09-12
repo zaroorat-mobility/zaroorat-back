@@ -33,6 +33,9 @@ import {
   RideOfferNotActionableError,
   SelfRideNotAllowedError,
   RidePinInvalidError,
+  PaymentModelNotSelectedError,
+  DriverSubscriptionRequiredError,
+  InsufficientCommissionBalanceError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import {
@@ -44,6 +47,9 @@ import {
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import { RedisService } from '@core/cache/RedisService.js';
 import { LedgerService } from '@modules/payments/services/ledger/ledger.service.js';
+import { CommissionWalletService } from '@modules/payments/services/commission-wallet/commission-wallet.service.js';
+import { paymentEvent, PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
+import { DriverSubscriptionRepository } from '@modules/subscriptions/repositories/driver-subscription.repository.js';
 import type { Ride, RideRequest, RideStatus } from '../../types';
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   ACCEPTED: [
@@ -100,6 +106,8 @@ export class LifecycleService {
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
     private readonly redisService: RedisService,
+    private readonly commissionWalletService: CommissionWalletService,
+    private readonly driverSubscriptionRepository: DriverSubscriptionRepository,
   ) {}
   validateTransition(fromState: string, toState: string): void {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
@@ -352,6 +360,51 @@ export class LifecycleService {
         throw new DriverNotAvailableError('You must be online to accept a ride');
       }
       await this.assertVehicleEligible(data.vehicleId, data.driverId, request.vehicleTypeId, tx);
+      // 004-driver-subscription-wallet. spec.md FR-000/FR-004/FR-015–FR-017a,
+      // decisions.md BD-7 — a driver's payment model gates whether this
+      // request can be accepted at all, decided exactly once, right here.
+      // COMMISSION: the ride's commission is determined now, from the same
+      // quote-time inputs the request was priced on, and stored on the ride;
+      // it is never recalculated (BD-7) and nothing is deducted or reserved
+      // yet (FR-017a). SUBSCRIPTION: only an active, unexpired subscription is
+      // checked — the wallet is never consulted for a subscription driver.
+      if (!acceptingDriver.paymentModel) {
+        throw new PaymentModelNotSelectedError();
+      }
+      const driverPaymentModel = acceptingDriver.paymentModel as 'SUBSCRIPTION' | 'COMMISSION';
+      let commissionAmount: Decimal | null = null;
+      if (driverPaymentModel === 'SUBSCRIPTION') {
+        const activeSubscription = await this.driverSubscriptionRepository.findActive(
+          data.driverId,
+          tx,
+        );
+        if (
+          !activeSubscription ||
+          !activeSubscription.expiryDate ||
+          activeSubscription.expiryDate <= new Date()
+        ) {
+          throw new DriverSubscriptionRequiredError();
+        }
+      } else {
+        const estimatedDistanceKm =
+          request.estimatedDistanceKm != null ? Number(request.estimatedDistanceKm) : 0;
+        const estimatedDurationMin = request.estimatedDurationMin ?? 0;
+        const quoteFare = await this.pricingService.calculateFinalFare({
+          actualDistanceKm: estimatedDistanceKm,
+          actualDurationMin: estimatedDurationMin,
+          vehicleTypeId: request.vehicleTypeId,
+          pricingRuleId: request.pricingRuleId ?? null,
+        });
+        commissionAmount = new Decimal(quoteFare.platformCommission);
+        if (
+          !(await this.commissionWalletService.hasSufficientBalance(
+            data.driverId,
+            commissionAmount,
+          ))
+        ) {
+          throw new InsufficientCommissionBalanceError();
+        }
+      }
       if (!(await this.requestRepo.claimForMatch(data.requestId, tx))) {
         throw new RideRequestAlreadyMatchedError(data.requestId);
       }
@@ -371,6 +424,8 @@ export class LifecycleService {
           dropAddress: request.dropAddress,
           mapProvider: request.mapProvider,
           mapConfigVersion: request.mapConfigVersion,
+          driverPaymentModel,
+          commissionAmount,
         },
         tx,
       );
@@ -711,12 +766,18 @@ export class LifecycleService {
           '[rides] final fare capped at the quoted ceiling',
         );
       }
-      // BD-5. With the flag off this is byte-identical to before: a cash ride
-      // is PAID the moment it ends. With it on, cash waits for someone to say
-      // the money changed hands, so it completes PENDING like every other
-      // method and `RideCollectionService` resolves it.
-      const cashSettlesHere = ride.paymentMethod === 'CASH' && !cashConfirmationRequired();
-      const paymentStatus = cashSettlesHere ? 'PAID' : 'PENDING';
+      // BD-5, extended to the whole "the customer paid the driver directly"
+      // family. The customer's ride fare is never a platform transaction —
+      // CASH, CARD and UPI all mean the driver already has the money in hand,
+      // not the platform — so with the flag off this is byte-identical to
+      // before: the ride is PAID the moment it ends, for any of the three.
+      // With the flag on, all three wait for someone to say the money changed
+      // hands, so completion is PENDING like a wallet ride and
+      // `RideCollectionService` resolves it. WALLET is the only method that
+      // is actually a platform-held balance, so it never settles here.
+      const driverCollectedSettlesHere =
+        ride.paymentMethod !== 'WALLET' && !cashConfirmationRequired();
+      const paymentStatus = driverCollectedSettlesHere ? 'PAID' : 'PENDING';
       if (
         !(await this.rideRepo.updateStatusIf(
           rideId,
@@ -753,6 +814,83 @@ export class LifecycleService {
         tx,
       );
 
+      // 004-driver-subscription-wallet. spec.md FR-020–FR-024e, decisions.md
+      // BD-1 (reversed)/BD-7 — the ONLY commission-wallet deduction path.
+      // `ride.commissionAmount` is the value determined once at acceptance
+      // above; it is read here, never recalculated, and `itemizedFare` (the
+      // customer's final fare, computed above from measured distance/duration)
+      // has no bearing on it whatsoever. `deductInTx` is itself idempotent
+      // (FR-021), so a retried completion is a safe no-op.
+      if (ride.driverPaymentModel === 'COMMISSION' && ride.commissionAmount != null) {
+        const deduction = await this.commissionWalletService.deductInTx(
+          driverId,
+          rideId,
+          ride.commissionAmount,
+          tx,
+        );
+        if (deduction.outcome === 'DEDUCTED') {
+          if (deduction.amount.gt(0)) {
+            await this.ledgerService.postTransactionGroup(
+              [
+                {
+                  account: 'DRIVER_COMMISSION_WALLET',
+                  accountRefId: driverId,
+                  direction: 'DEBIT',
+                  amount: deduction.amount,
+                  referenceType: 'RIDE',
+                  referenceId: rideId,
+                  description: `Ride commission deducted for ride ${rideId}`,
+                },
+                {
+                  account: 'PLATFORM_COMMISSION',
+                  direction: 'CREDIT',
+                  amount: deduction.amount,
+                  referenceType: 'RIDE',
+                  referenceId: rideId,
+                  description: `Platform commission for ride ${rideId} (commission wallet)`,
+                },
+              ],
+              tx,
+            );
+          }
+          await this.eventPublisher.publish(
+            paymentEvent(PAYMENT_EVENT_CATALOG.DRIVER_COMMISSION_WALLET_DEBITED, driverId, {
+              driverId,
+              rideId,
+              amount: deduction.amount.toNumber(),
+            }),
+            tx,
+          );
+        } else if (deduction.outcome === 'INSUFFICIENT_BALANCE') {
+          // BD-1 (reversed): an exceptional invariant violation, not a normal
+          // outcome — never a partial deduction, never a shortfall/debt entry.
+          // The ride completes uncharged; nothing here blocks completion.
+          logger.error(
+            {
+              rideId,
+              driverId,
+              commissionAmount: deduction.commissionAmount.toNumber(),
+              actualBalance: deduction.actualBalance.toNumber(),
+            },
+            '[rides] commission wallet balance insufficient at completion — invariant violation',
+          );
+          await this.eventPublisher.publish(
+            paymentEvent(
+              PAYMENT_EVENT_CATALOG.DRIVER_COMMISSION_WALLET_COLLECTION_FAILED,
+              driverId,
+              {
+                driverId,
+                rideId,
+                commissionAmount: deduction.commissionAmount.toNumber(),
+                actualBalance: deduction.actualBalance.toNumber(),
+              },
+            ),
+            tx,
+          );
+        }
+        // ALREADY_PROCESSED: idempotent no-op — a retried completion.
+      }
+
       if (resolvedPromo && resolvedPromo.discountAmount > 0) {
         await this.promotionService.redeem({
           promo: resolvedPromo,
@@ -761,16 +899,17 @@ export class LifecycleService {
           client: tx,
         });
       }
-      // Cash only (transition 4c). A cash ride is paid the moment it ends —
-      // the driver is holding the money — so its commission group is
-      // recognised here, in the completion transaction, exactly as before.
+      // Driver-collected methods only (transition 4c, extended to CARD/UPI
+      // alongside CASH). The driver is holding the money the moment the ride
+      // ends, so the commission group is recognised here, in the completion
+      // transaction, exactly as it always was for cash.
       //
-      // Every other method now posts nothing at completion. The ledger used to
-      // record a wallet debit, driver earnings and platform commission for a
-      // ride nobody had paid for yet, asserting a payment that had not
-      // happened (FR-038). `RideCollectionService` posts that group when the
-      // money actually moves.
-      if (cashSettlesHere) {
+      // WALLET now posts nothing at completion. The ledger used to record a
+      // wallet debit, driver earnings and platform commission for a ride
+      // nobody had paid for yet, asserting a payment that had not happened
+      // (FR-038). `RideCollectionService` posts that group when the money
+      // actually moves.
+      if (driverCollectedSettlesHere) {
         await this.ledgerService.recordTripPayment(
           {
             totalFare: new Decimal(itemizedFare.totalFare),
@@ -785,6 +924,7 @@ export class LifecycleService {
             driverId: ride.driverId,
             rideId,
             paymentMethod: ride.paymentMethod,
+            driverPaymentModel: ride.driverPaymentModel,
           },
           tx,
         );

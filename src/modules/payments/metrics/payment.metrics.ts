@@ -65,6 +65,22 @@ export class PaymentMetrics {
   cashAutoResolved(fields?: PaymentMetricFields): void {
     this.emit('cash_auto_resolved_total', fields);
   }
+  /// A commission-model ride's full stored commission was deducted.
+  commissionDeducted(fields?: PaymentMetricFields): void {
+    this.emit('commission_deduction_total', fields);
+  }
+  /// decisions.md BD-1 (reversed) — the wallet balance could not cover
+  /// `ride.commissionAmount` at completion. NOT a normal outcome; a
+  /// persistently non-zero rate is the signal to investigate, per BD-1.
+  commissionDeductionInvariantViolation(fields?: PaymentMetricFields): void {
+    this.emit('commission_deduction_invariant_violation_total', fields);
+  }
+  commissionWalletRecharge(fields?: PaymentMetricFields): void {
+    this.emit('commission_wallet_recharge_total', fields);
+  }
+  subscriptionActivated(fields?: PaymentMetricFields): void {
+    this.emit('subscription_activated_total', fields);
+  }
   private emit(event: string, fields?: PaymentMetricFields): void {
     incrementCounter(`payment_${event}`, fields);
     logger.info({ metric: `payment.${event}`, ...fields }, `[metric] payment.${event}`);

@@ -7,6 +7,7 @@ import { bootApp, bootEventConsumers, db, drainOutbox, resetState } from './help
 import {
   accountBalance,
   completeRide,
+  declineGateway as declineGatewayHelper,
   fundWallet,
   rideWorld,
   type RideWorld,
@@ -15,7 +16,6 @@ import { container } from '../../src/core/di.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { RideCollectionService } from '../../src/modules/payments/services/collection/collection.service.js';
-import type { PaymentGatewayProvider } from '../../src/modules/payments/services/gateway/gateway.provider.js';
 import type { WriteOffService } from '../../src/modules/payments/services/writeoff/writeoff.service.js';
 import type { ReceivableWriteOffJob } from '../../src/modules/payments/jobs/receivable-writeoff.job.js';
 import type { DebtService } from '../../src/modules/payments/services/debt/debt.service.js';
@@ -58,16 +58,7 @@ describe('customer receivable (integration, real HTTP)', () => {
   }
 
   function declineGateway(): void {
-    const gateway = container.resolve<PaymentGatewayProvider>(
-      'paymentGatewayProvider',
-    ) as unknown as {
-      confirmIntent: (id: string) => Promise<{ gatewayIntentId: string; status: string }>;
-    };
-    const original = gateway.confirmIntent.bind(gateway);
-    gateway.confirmIntent = async (id: string) => ({ gatewayIntentId: id, status: 'FAILED' });
-    restoreGateway = () => {
-      gateway.confirmIntent = original;
-    };
+    restoreGateway = declineGatewayHelper();
   }
 
   /// A completed ride whose collection budget is spent: an open receivable.
@@ -106,9 +97,14 @@ describe('customer receivable (integration, real HTTP)', () => {
 
     const payableBefore = await accountBalance('DRIVER_PAYABLE', { rideId });
     const commissionBefore = await accountBalance('PLATFORM_COMMISSION', { rideId });
+    // 004-driver-subscription-wallet. This driver has a payment model
+    // (SUBSCRIPTION by default), so the commission-sized component of the
+    // fare was redistributed into the driver's own earning rather than
+    // recognised as PLATFORM_COMMISSION here (LedgerService.recordTripPayment)
+    // — the precondition reflects that, not the plain fare-side earning.
     assert.equal(
       payableBefore.toFixed(2),
-      new Decimal(fare.driverEarning).toFixed(2),
+      new Decimal(fare.driverEarning).add(new Decimal(fare.platformCommission)).toFixed(2),
       'precondition: earnings were recognised when the receivable was created',
     );
 

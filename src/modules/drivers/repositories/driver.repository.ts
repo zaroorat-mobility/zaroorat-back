@@ -176,4 +176,29 @@ export class DriverRepository {
   ): Promise<Driver> {
     return tx.driver.update({ where: { id }, data: { currentVehicleId: vehicleId } });
   }
+  /// 004-driver-subscription-wallet — spec.md FR-000a/decisions.md BD-5.
+  /// `paymentModel` is the driver's classification (`SUBSCRIPTION` |
+  /// `COMMISSION`); this module owns its mutation the same way it already
+  /// owns `verificationStatus`/`isSuspended`. `pendingPaymentModel` is
+  /// cleared in the same write whenever it's provided as `null` — the
+  /// staged-switch-applied case.
+  async updatePaymentModel(
+    id: string,
+    paymentModel: string,
+    tx?: TransactionClient,
+  ): Promise<Driver> {
+    const client = tx ?? this.db.client;
+    return client.driver.update({
+      where: { id },
+      data: { paymentModel, pendingPaymentModel: null },
+    });
+  }
+  async setPendingPaymentModel(
+    id: string,
+    pendingPaymentModel: string | null,
+    tx?: TransactionClient,
+  ): Promise<Driver> {
+    const client = tx ?? this.db.client;
+    return client.driver.update({ where: { id }, data: { pendingPaymentModel } });
+  }
 }

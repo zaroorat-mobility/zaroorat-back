@@ -49,12 +49,16 @@ export class DebtService {
     return { outstanding, limit, blocked: outstanding.gte(limit) };
   }
 
-  /// A driver's outstanding commission: the amount their wallet has gone
-  /// negative by, or zero.
+  /// A driver's outstanding platform share on cash rides — tax and the
+  /// platform fee always, plus commission too but only for a legacy,
+  /// no-payment-model ride (see `SettlementWalletRepository.debit`): the
+  /// amount their settlement wallet has gone negative by, or zero. Never the
+  /// Commission Wallet, which cannot go negative and is never what this
+  /// reports.
   ///
   /// Deliberately returns no limit and no blocked flag. BD-3 approved *no
-  /// driver blocking* — a driver's commission balance never gates their work,
-  /// and a `blocked` field here would be an invitation to start.
+  /// driver blocking* — this balance never gates their work, and a `blocked`
+  /// field here would be an invitation to start.
   async driverOutstanding(driverId: string, tx?: TransactionClient): Promise<Decimal> {
     const client = tx ?? this.db.client;
     const wallet = await client.driverWallet.findUnique({ where: { driverId } });

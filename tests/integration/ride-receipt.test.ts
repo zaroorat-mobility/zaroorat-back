@@ -3,13 +3,17 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, bootEventConsumers, db, drainOutbox, resetState } from './helpers/harness.js';
-import { completeRide, fundWallet, rideWorld } from './helpers/ride-flow.js';
+import {
+  completeRide,
+  declineGateway as declineGatewayHelper,
+  fundWallet,
+  rideWorld,
+} from './helpers/ride-flow.js';
 import type { LoggedInUser } from './helpers/harness.js';
 import { container } from '../../src/core/di.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { RideCollectionService } from '../../src/modules/payments/services/collection/collection.service.js';
-import type { PaymentGatewayProvider } from '../../src/modules/payments/services/gateway/gateway.provider.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 
 const CUSTOMER = '+919876607001';
@@ -40,16 +44,7 @@ describe('ride receipts (integration, real HTTP)', () => {
   const collection = () => container.resolve<RideCollectionService>('rideCollectionService');
 
   function declineGateway(): void {
-    const gateway = container.resolve<PaymentGatewayProvider>(
-      'paymentGatewayProvider',
-    ) as unknown as {
-      confirmIntent: (id: string) => Promise<{ gatewayIntentId: string; status: string }>;
-    };
-    const original = gateway.confirmIntent.bind(gateway);
-    gateway.confirmIntent = async (id: string) => ({ gatewayIntentId: id, status: 'FAILED' });
-    restoreGateway = () => {
-      gateway.confirmIntent = original;
-    };
+    restoreGateway = declineGatewayHelper();
   }
 
   function fetchReceipt(rideId: string, user: LoggedInUser) {
@@ -106,8 +101,14 @@ describe('ride receipts (integration, real HTTP)', () => {
 
   it('issues one for a ride the rider never paid for', async () => {
     const w = await world();
-    declineGateway();
-    const { rideId } = await completeRide(app, w, { distanceKm: 7, durationMin: 16 });
+    // WALLET, deliberately unfunded: CASH/CARD/UPI all mean the driver was
+    // paid directly and can never fail to collect, so an unfunded wallet is
+    // the only way left to produce a ride nobody paid the platform for.
+    const { rideId } = await completeRide(app, w, {
+      distanceKm: 7,
+      durationMin: 16,
+      paymentMethod: 'WALLET',
+    });
     await drainOutbox();
     for (let i = 1; i < paymentConfig.collectionMaxAttempts; i++) {
       await collection().collect(rideId);

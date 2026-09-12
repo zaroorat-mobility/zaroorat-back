@@ -9,7 +9,6 @@ import { container } from '../../src/core/di.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { RideCollectionService } from '../../src/modules/payments/services/collection/collection.service.js';
-import type { PaymentGatewayProvider } from '../../src/modules/payments/services/gateway/gateway.provider.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 
 const CUSTOMER = '+919876608001';
@@ -18,7 +17,6 @@ const DRIVER = '+919876608002';
 describe('rider debt threshold (integration, real HTTP)', () => {
   let app: FastifyInstance;
   let stopConsumers: Unsubscribe;
-  let restoreGateway: (() => void) | null = null;
 
   before(async () => {
     app = await bootApp();
@@ -30,8 +28,6 @@ describe('rider debt threshold (integration, real HTTP)', () => {
     await app.close();
   });
   afterEach(async () => {
-    restoreGateway?.();
-    restoreGateway = null;
     await db().client.$executeRawUnsafe('TRUNCATE "gateway_events" CASCADE');
     await resetState();
   });
@@ -39,25 +35,20 @@ describe('rider debt threshold (integration, real HTTP)', () => {
   const world = () => rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
   const collection = () => container.resolve<RideCollectionService>('rideCollectionService');
 
-  function declineGateway(): void {
-    const gateway = container.resolve<PaymentGatewayProvider>(
-      'paymentGatewayProvider',
-    ) as unknown as {
-      confirmIntent: (id: string) => Promise<{ gatewayIntentId: string; status: string }>;
-    };
-    const original = gateway.confirmIntent.bind(gateway);
-    gateway.confirmIntent = async (id: string) => ({ gatewayIntentId: id, status: 'FAILED' });
-    restoreGateway = () => {
-      gateway.confirmIntent = original;
-    };
-  }
-
   /// Leaves the rider owing exactly `amount` by driving a ride to a receivable
   /// and then rewriting its fare to the figure the test needs. The boundary is
   /// what matters here, and a real fare cannot be dialled to the paise.
+  ///
+  /// WALLET, deliberately unfunded: the customer's ride fare is never a
+  /// gateway transaction (CASH/CARD/UPI all mean the driver was paid
+  /// directly, so they can never fail to collect), so the only way to drive a
+  /// ride into a receivable here is a wallet debit that fails for real.
   async function oweExactly(w: RideWorld, amount: number): Promise<string> {
-    declineGateway();
-    const { rideId } = await completeRide(app, w, { distanceKm: 8, durationMin: 18 });
+    const { rideId } = await completeRide(app, w, {
+      distanceKm: 8,
+      durationMin: 18,
+      paymentMethod: 'WALLET',
+    });
     await drainOutbox();
     for (let i = 1; i < paymentConfig.collectionMaxAttempts; i++) {
       await collection().collect(rideId);
@@ -65,8 +56,6 @@ describe('rider debt threshold (integration, real HTTP)', () => {
     const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
     assert.equal(ride.paymentStatus, 'FAILED', 'precondition: the receivable is open');
     await db().client.rideFare.update({ where: { rideId }, data: { totalFare: amount } });
-    restoreGateway?.();
-    restoreGateway = null;
     return rideId;
   }
 

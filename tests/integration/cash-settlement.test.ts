@@ -4,7 +4,13 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, bootEventConsumers, db, drainOutbox, resetState } from './helpers/harness.js';
-import { accountBalance, completeRide, rideWorld, type RideWorld } from './helpers/ride-flow.js';
+import {
+  accountBalance,
+  completeRide,
+  fundWallet,
+  rideWorld,
+  type RideWorld,
+} from './helpers/ride-flow.js';
 import { container } from '../../src/core/di.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
@@ -14,13 +20,36 @@ import type { SettlementService } from '../../src/modules/payments/services/sett
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 
 const FLAG = 'PAYMENT_CASH_CONFIRMATION_REQUIRED';
-/// FR-006. What a cash driver owes back: everything they collected that is not
-/// their earning — the commission **plus** the tax and the platform fee they are
-/// also holding. These assertions used to read `platformCommission`, which was
-/// the same number only because commission was levied on the whole total and so
-/// absorbed the other two.
-function platformShareOf(fare: { totalFare: Decimal; driverEarning: Decimal }): Decimal {
-  return new Decimal(fare.totalFare).sub(new Decimal(fare.driverEarning));
+/// FR-006, as narrowed by 004-driver-subscription-wallet. What a cash driver
+/// owes back through *this* mechanism: the tax and the platform fee they are
+/// holding — never commission. Every driver `rideWorld()` creates now has a
+/// payment model (SUBSCRIPTION by default), and a ride with a payment model
+/// owns its commission entirely through that model's own mechanism (the
+/// Commission Wallet deduction, or the subscription fee) — cash confirmation
+/// and settlement must never also recover it. This helper used to be
+/// `totalFare - driverEarning` (the whole platform share, commission
+/// included); it no longer is, because commission is no longer this
+/// mechanism's to recover.
+function platformShareOf(fare: {
+  totalFare: Decimal;
+  driverEarning: Decimal;
+  platformCommission: Decimal;
+}): Decimal {
+  return new Decimal(fare.totalFare)
+    .sub(new Decimal(fare.driverEarning))
+    .sub(new Decimal(fare.platformCommission));
+}
+
+/// The counterpart to `platformShareOf` for a non-cash ride: what the driver
+/// is actually paid out for it. A driver with a payment model owns that
+/// ride's commission entirely through their own mechanism, so the
+/// commission-sized share of the fare is redistributed to the driver rather
+/// than recognised by the platform a second time (see
+/// `LedgerService.recordTripPayment` and
+/// `SettlementRepository.aggregateEarnings`'s `earned_on_collected`) — this
+/// must match what settlement actually pays out.
+function earnedInFull(fare: { driverEarning: Decimal; platformCommission: Decimal }): Decimal {
+  return new Decimal(fare.driverEarning).add(new Decimal(fare.platformCommission));
 }
 
 const CUSTOMER = '+919876606001';
@@ -78,7 +107,12 @@ describe('cash settlement with the flag OFF (integration)', () => {
     assert.equal(
       (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
       platformShareOf(fare).neg().toFixed(2),
-      'the driver owes the whole platform share, not the commission alone',
+      'the driver owes tax + platform fee, never commission — this driver has a payment model',
+    );
+    assert.equal(
+      (await accountBalance('PLATFORM_COMMISSION', { rideId })).toFixed(2),
+      '0.00',
+      'commission is never recognised through cash settlement for a driver with a payment model',
     );
   });
 
@@ -150,7 +184,7 @@ describe('cash settlement with the flag ON (integration)', () => {
 
   // T055 -- driver confirmation
 
-  it('books the commission against the driver when they confirm', async () => {
+  it('books tax + platform fee against the driver when they confirm — never commission', async () => {
     const w = await world();
     const { rideId, fare } = await cashRide(w);
     assert.equal(
@@ -170,7 +204,7 @@ describe('cash settlement with the flag ON (integration)', () => {
     assert.equal(
       wallet?.balance.toFixed(2),
       platformShareOf(fare).neg().toFixed(2),
-      'the driver now owes the platform share -- a negative balance is the debt',
+      'the driver now owes tax + platform fee -- a negative balance is the debt -- never commission',
     );
     const txns = await db().client.driverWalletTransaction.findMany({
       where: { driverId: w.driverId },
@@ -181,9 +215,14 @@ describe('cash settlement with the flag ON (integration)', () => {
       platformShareOf(fare).neg().toFixed(2),
       'recorded negative',
     );
+    // 004-driver-subscription-wallet. This driver has a payment model — its
+    // commission is owned entirely by that model's own mechanism (here,
+    // SUBSCRIPTION: the fee already paid, never a per-ride amount). Cash
+    // confirmation must never also recognise it.
     assert.equal(
       (await accountBalance('PLATFORM_COMMISSION', { rideId })).toFixed(2),
-      new Decimal(fare.platformCommission).toFixed(2),
+      '0.00',
+      'confirming cash must never recognise commission for a driver with a payment model',
     );
   });
 
@@ -249,17 +288,17 @@ describe('cash settlement with the flag ON (integration)', () => {
     assert.equal(
       await db().client.driverWalletTransaction.count({ where: { driverId: w.driverId } }),
       1,
-      'one commission debit',
+      'one debit',
     );
     assert.equal(
       (await accountBalance('PLATFORM_COMMISSION', { rideId })).toFixed(2),
-      new Decimal(fare.platformCommission).toFixed(2),
-      'commission recognised once',
+      '0.00',
+      'never recognised through cash confirmation for a driver with a payment model',
     );
     assert.equal(
       (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
       platformShareOf(fare).neg().toFixed(2),
-      'and the driver debited once',
+      'and the driver debited tax + platform fee once',
     );
   });
 
@@ -281,10 +320,19 @@ describe('cash settlement with the flag ON (integration)', () => {
     );
 
     // An auditor has to be able to tell a timeout from an acknowledgement.
+    // TAX_PAYABLE, not PLATFORM_COMMISSION: this driver has a payment model,
+    // so no PLATFORM_COMMISSION entry exists for this ride at all.
     const entry = await db().client.paymentLedgerEntry.findFirst({
-      where: { referenceId: rideId, account: 'PLATFORM_COMMISSION' },
+      where: { referenceId: rideId, account: 'TAX_PAYABLE' },
     });
     assert.match(String(entry?.description), /automatically after the grace period/);
+    assert.equal(
+      await db().client.paymentLedgerEntry.count({
+        where: { referenceId: rideId, account: 'PLATFORM_COMMISSION' },
+      }),
+      0,
+      'never recognised through cash confirmation for a driver with a payment model',
+    );
   });
 
   it('leaves a ride still inside its grace period alone', async () => {
@@ -298,18 +346,22 @@ describe('cash settlement with the flag ON (integration)', () => {
     assert.equal(ride.paymentStatus, 'PENDING');
   });
 
-  it('leaves a cancelled ride, an in-progress ride and a non-cash ride alone', async () => {
+  it('leaves a cancelled ride, an in-progress ride and a wallet ride alone', async () => {
     const w = await world();
+    await fundWallet(app, w.customer, 5000);
     // All three rides are booked first: flipping one to IN_PROGRESS before the
     // others exist would make the customer's next booking 409.
     const inProgress = await cashRide(w);
     const cancelled = await cashRide(w);
-    const card = await completeRide(app, w, {
+    // WALLET, not CARD: CARD means the customer paid the driver directly, so
+    // it is now part of this same confirmation sweep (see the card-ride test
+    // above) — WALLET is the one method genuinely outside its purview.
+    const wallet = await completeRide(app, w, {
       distanceKm: 7,
       durationMin: 15,
-      paymentMethod: 'CARD',
+      paymentMethod: 'WALLET',
     });
-    for (const rideId of [inProgress.rideId, cancelled.rideId, card.rideId]) {
+    for (const rideId of [inProgress.rideId, cancelled.rideId, wallet.rideId]) {
       await ageBeyondGrace(rideId);
     }
     await db().client.ride.update({
@@ -330,6 +382,33 @@ describe('cash settlement with the flag ON (integration)', () => {
         0,
       );
     }
+  });
+
+  it('resolves a card ride automatically once the grace period has passed, just like cash', async () => {
+    const w = await world();
+    const { rideId, fare } = await completeRide(app, w, {
+      distanceKm: 7,
+      durationMin: 15,
+      paymentMethod: 'CARD',
+    });
+    await drainOutbox();
+    const row = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+    assert.equal(
+      row.paymentStatus,
+      'PENDING',
+      'card now waits to be acknowledged, exactly like cash',
+    );
+    await ageBeyondGrace(rideId);
+
+    const report = await sweep().run();
+
+    assert.equal(report.cashResolved, 1, JSON.stringify(report));
+    const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+    assert.equal(ride.paymentStatus, 'PAID');
+    assert.equal(
+      (await walletOf(w.driverId))?.balance.toFixed(2),
+      platformShareOf(fare).neg().toFixed(2),
+    );
   });
 
   it('leaves an already-paid ride and one with a successful payment row alone', async () => {
@@ -354,7 +433,9 @@ describe('cash settlement with the flag ON (integration)', () => {
     );
   });
 
-  // T059 -- the commission carries forward and is recovered exactly once
+  // T059 -- the tax + platform fee debt carries forward and is recovered
+  // exactly once (never commission -- this driver's commission is the
+  // subscription fee they already paid, not a per-ride debt)
 
   it('carries a negative period into the next settlement and recovers it once', async () => {
     const w = await world();
@@ -366,8 +447,11 @@ describe('cash settlement with the flag ON (integration)', () => {
     const firstPeriod = { periodStart: new Date(Date.now() - day), periodEnd: new Date() };
     const first = await settlements().calculateSettlement({ driverId: w.driverId, ...firstPeriod });
 
-    // The commission is already out of the wallet, so it must not be netted a
-    // second time here -- the wallet is what carries the debt.
+    // Already recovered at confirmation, so it must not be netted a second
+    // time here -- the wallet is what carries the debt. Zero regardless: this
+    // driver's commission was never settlement's to recover in the first
+    // place (it has a payment model), so there is nothing for `commission`
+    // to net beyond the already-excluded tax + fee.
     assert.equal(new Decimal(first.commission).toFixed(2), '0.00', 'already recovered');
     assert.equal(new Decimal(first.netPayable).toFixed(2), '0.00');
     assert.equal(
@@ -376,11 +460,14 @@ describe('cash settlement with the flag ON (integration)', () => {
       'the debt still sits on the wallet',
     );
 
-    // A later period where the driver earns properly.
-    const card = await completeRide(app, w, {
+    // A later period where the driver earns properly — WALLET, deliberately:
+    // it is the one payment method the platform actually collects, so it is
+    // the only one settlement pays the driver anything extra for.
+    await fundWallet(app, w.customer, 5000);
+    const wallet = await completeRide(app, w, {
       distanceKm: 12,
       durationMin: 25,
-      paymentMethod: 'CARD',
+      paymentMethod: 'WALLET',
     });
     await drainOutbox();
 
@@ -391,15 +478,15 @@ describe('cash settlement with the flag ON (integration)', () => {
     });
     assert.equal(
       new Decimal(second.netPayable).toFixed(2),
-      new Decimal(card.fare.driverEarning).toFixed(2),
+      earnedInFull(wallet.fare).toFixed(2),
       'the period pays what the ride earned',
     );
 
     // Debt recovered equals debt carried: the wallet started the period at
-    // -commission and the payout brings it to earnings - commission.
+    // -owed (tax + fee) and the payout brings it to earnings - owed.
     assert.equal(
       (await walletOf(w.driverId))?.balance.toFixed(2),
-      new Decimal(card.fare.driverEarning).sub(owed).toFixed(2),
+      earnedInFull(wallet.fare).sub(owed).toFixed(2),
       'recovered exactly once',
     );
   });

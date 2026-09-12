@@ -1,0 +1,65 @@
+model AppTheme {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  appKey      AppClient      @map("app_key")
+  colorScheme AppColorScheme @map("color_scheme")
+  tokens      Json
+  components  Json
+  isActive    Boolean        @default(true) @map("is_active")
+  isDefault   Boolean        @default(true) @map("is_default")
+  version     Int            @default(1)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  @@unique([appKey, colorScheme])
+  @@index([appKey, isActive])
+  @@map("app_themes")
+}
+
+model AppFont {
+  id        String     @id @default(uuid(7)) @db.Uuid
+  appKey    AppClient  @map("app_key")
+  family    String
+  weight    String
+  style     String     @default("normal")
+  source    FontSource @default(BUNDLED)
+  url       String?
+  isActive  Boolean    @default(true) @map("is_active")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@index([appKey, isActive])
+  @@map("app_fonts")
+}
+
+model AppLocale {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  code        String   @unique
+  label       String
+  nativeLabel String   @map("native_label")
+  isRtl       Boolean  @default(false) @map("is_rtl")
+  isActive    Boolean  @default(true) @map("is_active")
+  isDefault   Boolean  @default(false) @map("is_default")
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  translations AppTranslation[]
+
+  @@map("app_locales")
+}
+
+model AppTranslation {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  localeCode String    @map("locale_code")
+  appKey     AppClient @map("app_key")
+  key        String
+  value      String
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  locale AppLocale @relation(fields: [localeCode], references: [code])
+
+  @@unique([localeCode, appKey, key])
+  @@index([localeCode, appKey])
+  @@map("app_translations")
+}

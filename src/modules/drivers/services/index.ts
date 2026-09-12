@@ -5,4 +5,5 @@ export * from './wallet/index.js';
 export * from './shift/index.js';
 export * from './eligibility/index.js';
 export * from './documents/index.js';
+export * from './payment-model/index.js';
 export * from './driver.service.js';

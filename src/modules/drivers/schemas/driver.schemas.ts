@@ -62,3 +62,9 @@ export const reviewVerificationSchema = z.object({
   rejectionReason: z.string().max(255).optional(),
 });
 export type ReviewVerificationBody = z.infer<typeof reviewVerificationSchema>;
+/// 004-driver-subscription-wallet. plan.md "Driver Payment Model Selection &
+/// Switching" — the only two models a driver may select between.
+export const selectPaymentModelSchema = z.object({
+  model: z.enum(['SUBSCRIPTION', 'COMMISSION']),
+});
+export type SelectPaymentModelBody = z.infer<typeof selectPaymentModelSchema>;

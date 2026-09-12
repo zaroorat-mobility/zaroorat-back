@@ -61,12 +61,16 @@ export class SettlementWalletRepository {
     return updated;
   }
 
-  /// Takes commission out of a driver's balance, and is allowed to leave it
-  /// negative.
+  /// Takes the platform's share of a cash ride out of a driver's balance, and
+  /// is allowed to leave it negative.
   ///
-  /// That negative is not an error state — it is the outstanding commission on
-  /// a cash ride, where the driver is holding 100% of a fare the platform has
-  /// a share of. It clears when the next settlement credits their earnings
+  /// That share is tax and the platform fee always, plus commission too but
+  /// only for a legacy, no-payment-model ride — a COMMISSION/SUBSCRIPTION
+  /// ride's commission is never collected through this mechanism (see
+  /// `RideCollectionService.confirmCash` / `LifecycleService`). The negative
+  /// balance this can leave is not an error state — it is what the driver
+  /// still owes for holding 100% of a cash fare the platform has a share of.
+  /// It clears when the next settlement credits their earnings
   /// (FR-020/FR-021), which is why there is no floor here to mirror the
   /// customer wallet's.
   async debit(

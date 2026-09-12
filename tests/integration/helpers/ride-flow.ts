@@ -8,6 +8,7 @@ import { db, drainOutbox, loginAs, type LoggedInUser } from './harness.js';
 import {
   completeProfile,
   grantRole,
+  makeActiveSubscription,
   makeAssignedVehicle,
   makeDispatchOffer,
   makeDriver,
@@ -17,6 +18,54 @@ import {
   RIDE_PIN,
 } from './fixtures.js';
 import { Decimal } from '../../../src/modules/payments/types/index.js';
+import { MockGatewayProvider } from '../../../src/modules/payments/services/gateway/mock.gateway.js';
+import type {
+  CreateGatewayIntentInput,
+  GatewayIntentResult,
+} from '../../../src/modules/payments/services/gateway/gateway.provider.js';
+
+/// Makes the gateway decline every confirmation until the returned restore
+/// function is called. Every gateway caller (`IntentService`, `PayoutService`)
+/// resolves a FRESH provider instance per call via
+/// `PaymentGatewayResolverService`, not a cached DI singleton, so patching
+/// one resolved instance would not affect the next call — this patches the
+/// prototype method instead, which every `MockGatewayProvider` instance
+/// shares regardless of when it was constructed.
+export function declineGateway(): () => void {
+  const original = MockGatewayProvider.prototype.confirmIntent;
+  MockGatewayProvider.prototype.confirmIntent = async function (
+    gatewayIntentId: string,
+  ): Promise<GatewayIntentResult> {
+    return { gatewayIntentId, status: 'FAILED' };
+  };
+  return () => {
+    MockGatewayProvider.prototype.confirmIntent = original;
+  };
+}
+
+/// Records every `createIntent` input the mock gateway receives, so a test
+/// can assert on whether — and with what — a gateway was actually called.
+/// Same prototype-patch reasoning as `declineGateway`: a fresh provider is
+/// resolved per call, so there is no cached instance to spy on directly.
+export function captureGatewayIntentInputs(): {
+  calls: CreateGatewayIntentInput[];
+  restore: () => void;
+} {
+  const calls: CreateGatewayIntentInput[] = [];
+  const original = MockGatewayProvider.prototype.createIntent;
+  MockGatewayProvider.prototype.createIntent = async function (
+    input: CreateGatewayIntentInput,
+  ): Promise<GatewayIntentResult> {
+    calls.push(input);
+    return original.call(this, input);
+  };
+  return {
+    calls,
+    restore: () => {
+      MockGatewayProvider.prototype.createIntent = original;
+    },
+  };
+}
 
 export interface RideWorld {
   customer: LoggedInUser;
@@ -48,6 +97,21 @@ export interface FareRow {
 export async function rideWorld(
   app: FastifyInstance,
   phones: { customer: string; driver: string },
+  options: {
+    /// 004-driver-subscription-wallet. Omit entirely for the safe default —
+    /// SUBSCRIPTION, with an active subscription already in place — since
+    /// this helper is shared by every ride-lifecycle/payments/settlement
+    /// suite in the integration tree and SUBSCRIPTION is the one model with
+    /// *zero* Commission Wallet or ledger activity of its own (FR-006b/
+    /// FR-024c), so it cannot interact with any of those suites' existing,
+    /// financially-exact assertions. Pass `paymentModel` explicitly only for
+    /// a test that is actually about payment-model/commission-wallet
+    /// behaviour — those tests fund/inspect the wallet themselves.
+    driver?: {
+      paymentModel?: 'COMMISSION' | 'SUBSCRIPTION' | null;
+      commissionWalletBalance?: number;
+    };
+  } = {},
 ): Promise<RideWorld> {
   const initialCustomer = await loginAs(app, phones.customer);
   await completeProfile(initialCustomer.userId);
@@ -57,7 +121,14 @@ export async function rideWorld(
   await setRidePin(initialCustomer.userId);
   const initialDriver = await loginAs(app, phones.driver);
   await grantRole(initialDriver.userId, 'driver');
-  const driverId = await makeDriver(initialDriver.userId, { verified: true });
+  const explicitPaymentModel = options.driver?.paymentModel !== undefined;
+  const driverId = await makeDriver(initialDriver.userId, {
+    verified: true,
+    ...(explicitPaymentModel ? options.driver : { paymentModel: 'SUBSCRIPTION' }),
+  });
+  if (!explicitPaymentModel) {
+    await makeActiveSubscription(driverId);
+  }
   const vehicleTypeId = await makeVehicleType();
   const { vehicleId } = await makeAssignedVehicle(driverId, { vehicleTypeId, verified: true });
   await markDriverOnline(driverId);
@@ -73,13 +144,14 @@ export async function rideWorld(
   return { customer, driver, driverId, vehicleId, vehicleTypeId };
 }
 
-/// Books, accepts, starts and completes one ride over real HTTP, returning the
-/// fare the server priced it at.
-export async function completeRide(
+/// Books a ride request over real HTTP — the quote/estimate-producing half of
+/// `completeRide`, split out so a caller that needs to inspect state
+/// (e.g. `Ride.commissionAmount`) between acceptance and completion can do so.
+export async function bookRideRequest(
   app: FastifyInstance,
   world: RideWorld,
-  options: { distanceKm: number; durationMin: number; paymentMethod?: string },
-): Promise<{ rideId: string; fare: FareRow }> {
+  options: { distanceKm: number; paymentMethod?: string },
+): Promise<string> {
   const requested = await app.inject({
     method: 'POST',
     url: '/api/v1/rides/requests',
@@ -97,8 +169,17 @@ export async function completeRide(
     },
   });
   assert.equal(requested.statusCode, 200, requested.payload);
-  const requestId = requested.json().data.id;
+  return requested.json().data.id;
+}
 
+/// Offers and accepts one already-booked request over real HTTP, returning
+/// the ride's id. This is the exact moment `Ride.driverPaymentModel` /
+/// `Ride.commissionAmount` are determined and stored (spec.md FR-013b).
+export async function acceptRide(
+  app: FastifyInstance,
+  world: RideWorld,
+  requestId: string,
+): Promise<string> {
   await makeDispatchOffer(requestId, world.driverId);
 
   const accepted = await app.inject({
@@ -109,8 +190,17 @@ export async function completeRide(
   });
   assert.equal(accepted.statusCode, 200, accepted.payload);
 
-  const rideId = accepted.json().data.ride.id;
+  return accepted.json().data.ride.id;
+}
 
+/// Arrives, starts and completes an already-accepted ride over real HTTP,
+/// returning the fare the server priced it at.
+export async function finishRide(
+  app: FastifyInstance,
+  world: RideWorld,
+  rideId: string,
+  options: { distanceKm: number; durationMin: number },
+): Promise<FareRow> {
   const arrived = await app.inject({
     method: 'POST',
     url: `/api/v1/rides/${rideId}/arrive`,
@@ -136,7 +226,20 @@ export async function completeRide(
   assert.equal(completed.statusCode, 200, completed.payload);
 
   const fare = await db().client.rideFare.findUniqueOrThrow({ where: { rideId } });
-  return { rideId, fare: fare as unknown as FareRow };
+  return fare as unknown as FareRow;
+}
+
+/// Books, accepts, starts and completes one ride over real HTTP, returning the
+/// fare the server priced it at.
+export async function completeRide(
+  app: FastifyInstance,
+  world: RideWorld,
+  options: { distanceKm: number; durationMin: number; paymentMethod?: string },
+): Promise<{ rideId: string; fare: FareRow }> {
+  const requestId = await bookRideRequest(app, world, options);
+  const rideId = await acceptRide(app, world, requestId);
+  const fare = await finishRide(app, world, rideId, options);
+  return { rideId, fare };
 }
 
 /// Net position of a ledger account: credits less debits.
@@ -176,20 +279,36 @@ export async function fundWallet(
   });
   assert.equal(topup.statusCode, 200, topup.payload);
 
+  // Real Razorpay webhook envelope — `event` at the top, the payment nested
+  // under `payload.payment.entity`, `order_id` (the intent's own
+  // `gatewayIntentId`, not its internal id) as the order reference. The
+  // event id itself arrives only in the `X-Razorpay-Event-Id` header on a
+  // real delivery.
   const body = JSON.stringify({
-    id: `evt_${randomUUID()}`,
-    type: 'payment.succeeded',
-    created: Math.floor(Date.now() / 1000),
-    data: { object: { id: topup.json().data.intentId } },
+    event: 'payment.captured',
+    created_at: Math.floor(Date.now() / 1000),
+    payload: {
+      payment: {
+        entity: {
+          id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
+          order_id: topup.json().data.gatewayIntentId,
+          status: 'captured',
+        },
+      },
+    },
   });
   const delivered = await app.inject({
     method: 'POST',
     url: '/api/v1/payments/webhooks/razorpay',
     headers: {
       'content-type': 'application/json',
-      'x-razorpay-signature': createHmac('sha256', paymentConfig.webhookSecret)
+      'x-razorpay-signature': createHmac(
+        'sha256',
+        paymentConfig.razorpayWebhookSecret ?? paymentConfig.webhookSecret,
+      )
         .update(body)
         .digest('hex'),
+      'x-razorpay-event-id': `evt_${randomUUID()}`,
     },
     payload: body,
   });

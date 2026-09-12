@@ -135,9 +135,29 @@ function makeWorld() {
     string,
     { totalRides: number; totalDistanceKm: number; lastRideAt: Date }
   >();
+  // Every driver in this file defaults to COMMISSION with an always-funded
+  // wallet, so the 004-driver-subscription-wallet accept-time gate is a
+  // no-op for suites that predate the feature and are not exercising it.
+  const commissionWalletService = {
+    async hasSufficientBalance() {
+      return true;
+    },
+    async deductInTx() {
+      return {
+        outcome: 'DEDUCTED' as const,
+        amount: { toNumber: () => 0 } as never,
+        transaction: {} as never,
+      };
+    },
+  };
+  const driverSubscriptionRepository = {
+    async findActive() {
+      return null;
+    },
+  };
   const driverRepository = {
     async findById(driverId: string) {
-      return { id: driverId, userId: `user_of_${driverId}` };
+      return { id: driverId, userId: `user_of_${driverId}`, paymentModel: 'COMMISSION' };
     },
     async recordCompletedRide(driverId: string, distanceKm: number, completedAt: Date) {
       const current = completionCounters.get(driverId) ?? {
@@ -283,6 +303,8 @@ function makeWorld() {
     } as never,
     { rideStarted() {}, rideCompleted() {}, rideCancelled() {}, driverArriving() {} } as never,
     redisService as never,
+    commissionWalletService as never,
+    driverSubscriptionRepository as never,
   );
 
   /// Puts a live PENDING offer in front of a driver, the way a dispatch round
@@ -900,7 +922,24 @@ describe('Ride lifecycle concurrency', () => {
     assert.equal(world.rides.get('ride_1')?.status, 'CANCELLED_BY_SYSTEM');
   });
 
-  it('leaves a non-cash ride unpaid until payments settles it', async () => {
+  it('leaves a wallet ride unpaid until payments settles it', async () => {
+    const world = makeWorld();
+    world.rides.set('ride_1', {
+      id: 'ride_1',
+      status: 'IN_PROGRESS',
+      driverId: 'driver_1',
+      customerId: 'cust_1',
+      vehicleTypeId: 'v1',
+      paymentMethod: 'WALLET',
+      waitTimeMin: 0,
+    });
+
+    await world.service.completeRide('ride_1', 'driver_1', 10, 20);
+
+    assert.equal(world.rides.get('ride_1')?.paymentStatus, 'PENDING');
+  });
+
+  it('pays a card ride the moment it ends, exactly like cash — the customer paid the driver directly', async () => {
     const world = makeWorld();
     world.rides.set('ride_1', {
       id: 'ride_1',
@@ -914,7 +953,7 @@ describe('Ride lifecycle concurrency', () => {
 
     await world.service.completeRide('ride_1', 'driver_1', 10, 20);
 
-    assert.equal(world.rides.get('ride_1')?.paymentStatus, 'PENDING');
+    assert.equal(world.rides.get('ride_1')?.paymentStatus, 'PAID');
   });
 
   describe('the offer gate on accept', () => {

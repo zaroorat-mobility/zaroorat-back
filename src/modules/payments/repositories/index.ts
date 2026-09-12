@@ -10,3 +10,5 @@ export * from './chargeback.repository.js';
 export * from './webhook.repository.js';
 export * from './idempotency.repository.js';
 export * from './ride-payment.repository.js';
+export * from './commission-wallet.repository.js';
+export * from './wallet-recharge-option.repository.js';

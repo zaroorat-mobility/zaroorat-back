@@ -75,10 +75,12 @@ export class CollectionSweepJob {
 
   /// Completed, still owed, and not attempted too recently.
   ///
-  /// The backoff doubles per failed attempt so a persistently declining card
+  /// The backoff doubles per failed attempt so a persistent wallet shortfall
   /// is not hammered every minute — with the defaults that is 5 minutes, then
-  /// 10, 20, 40. Cash is excluded: it is settled at completion while BD-5's
-  /// flag is off, and waits on a driver rather than on this job when it is on.
+  /// 10, 20, 40. WALLET is the only method this job ever retries: the
+  /// customer's ride fare is never a gateway transaction, so CASH, CARD and
+  /// UPI are all excluded here — they are settled at completion while BD-5's
+  /// flag is off, and wait on a driver rather than on this job when it is on.
   private async findDue(now: Date): Promise<{ id: string }[]> {
     return this.db.client.$queryRaw<{ id: string }[]>`
       SELECT r."id"
@@ -92,7 +94,7 @@ export class CollectionSweepJob {
       ) last ON true
       WHERE r."status" = 'COMPLETED'
         AND r."payment_status" = 'PENDING'
-        AND r."payment_method" <> 'CASH'
+        AND r."payment_method" = 'WALLET'
         AND (
           last."created_at" IS NULL
           OR last."created_at" <= ${now}::timestamptz
@@ -104,7 +106,9 @@ export class CollectionSweepJob {
     `;
   }
 
-  /// Cash rides nobody acknowledged in time (BD-6).
+  /// Driver-collected rides nobody acknowledged in time (BD-6, extended to
+  /// CARD/UPI alongside CASH — the customer paying the driver directly by any
+  /// of the three).
   ///
   /// Five of the six required conditions are here; the sixth — the flag — is
   /// the early return above. Every one is checked again inside
@@ -116,7 +120,7 @@ export class CollectionSweepJob {
       SELECT r."id"
       FROM "rides" r
       WHERE r."status" = 'COMPLETED'
-        AND r."payment_method" = 'CASH'
+        AND r."payment_method" <> 'WALLET'
         AND r."payment_status" = 'PENDING'
         AND r."completed_at" <= ${now}::timestamptz
           - ${paymentConfig.cashConfirmGraceSeconds}::int * interval '1 second'

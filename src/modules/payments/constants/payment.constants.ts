@@ -29,6 +29,13 @@ export const LEDGER_ACCOUNTS = {
   /// created. Booking bad debt early would understate what the platform is
   /// still owed.
   BAD_DEBT_EXPENSE: 'BAD_DEBT_EXPENSE',
+  /// 004-driver-subscription-wallet. Liability — credited on a driver's
+  /// Commission Wallet recharge, debited on a commission deduction. Mirrors
+  /// CUSTOMER_WALLET's existing treatment (decisions.md BD-6/data-model.md §5).
+  DRIVER_COMMISSION_WALLET: 'DRIVER_COMMISSION_WALLET',
+  /// 004-driver-subscription-wallet. Revenue — credited once, when a driver's
+  /// subscription payment is confirmed. Recognised immediately, not per ride.
+  SUBSCRIPTION_REVENUE: 'SUBSCRIPTION_REVENUE',
 } as const;
 export type LedgerAccount = (typeof LEDGER_ACCOUNTS)[keyof typeof LEDGER_ACCOUNTS];
 export const LEDGER_DIRECTION = {

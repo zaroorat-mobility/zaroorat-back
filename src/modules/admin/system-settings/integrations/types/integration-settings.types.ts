@@ -2,35 +2,58 @@ import type { IntegrationKind } from '../constants/integration-settings.constant
 
 export type IntegrationHealthStatus = 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'DOWN';
 
+// Cashfree is deliberately absent: not exposed or selectable for now.
 export type PaymentGatewayName = 'mock' | 'razorpay' | 'stripe';
+export type PaymentEnvironment = 'sandbox' | 'live';
 export type SmsProviderName = 'mock' | 'msg91';
 export type PushProviderName = 'mock';
 export type EmailProviderName = 'smtp';
 
-export interface PaymentSettingsView {
-  defaultGateway: PaymentGatewayName;
-  defaultCurrency: string;
+export interface PaymentProviderView {
+  enabled: boolean;
+  environment: PaymentEnvironment;
+  /// True once every credential this provider needs to make a real API call
+  /// is present (admin setting or env fallback) — never reveals the values
+  /// themselves, only whether they exist.
   configured: boolean;
   webhookConfigured: boolean;
+}
+
+export interface PaymentSettingsView {
+  defaultCurrency: string;
   version: number;
-  razorpay: {
-    keyId: string;
-    keySecret: string;
-    configured: boolean;
-  };
-  stripe: {
-    secretKey: string;
-    configured: boolean;
+  /// The ONE provider every NEW PaymentIntent uses — subscription payments,
+  /// Commission Wallet recharges, wallet top-ups, all of it. Applies only
+  /// going forward — an existing PaymentIntent keeps whatever provider it was
+  /// created with (`PaymentIntent.gateway`), unaffected by a later change here.
+  activeProvider: PaymentGatewayName;
+  providers: {
+    razorpay: PaymentProviderView & { keyId: string; keySecret: string; webhookSecret: string };
+    stripe: PaymentProviderView & { secretKey: string; webhookSecret: string };
   };
 }
 
 export interface UpdatePaymentSettingsBody {
-  defaultGateway?: PaymentGatewayName;
   defaultCurrency?: string;
-  razorpayKeyId?: string;
-  razorpayKeySecret?: string;
-  stripeSecretKey?: string;
-  webhookSecret?: string;
+  /// 'mock' stays selectable for test/staging use, matching the same
+  /// escape hatch every provider field already had — never Cashfree, which is
+  /// not exposed at all.
+  activeProvider?: PaymentGatewayName;
+  providers?: {
+    razorpay?: {
+      enabled?: boolean;
+      environment?: PaymentEnvironment;
+      keyId?: string;
+      keySecret?: string;
+      webhookSecret?: string;
+    };
+    stripe?: {
+      enabled?: boolean;
+      environment?: PaymentEnvironment;
+      secretKey?: string;
+      webhookSecret?: string;
+    };
+  };
   expectedVersion?: number;
 }
 

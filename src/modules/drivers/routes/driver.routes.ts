@@ -33,4 +33,14 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/:driverId/wallet/transactions', (req, reply) =>
     controller.wallet.listTransactions(req, reply),
   );
+
+  fastify.post('/payment-model', (req, reply) => controller.paymentModel.select(req, reply));
+  fastify.get('/payment-model', (req, reply) => controller.paymentModel.getStatus(req, reply));
+
+  fastify.get('/:driverId/commission-wallet', (req, reply) =>
+    controller.commissionWallet.getWallet(req, reply),
+  );
+  fastify.get('/:driverId/commission-wallet/transactions', (req, reply) =>
+    controller.commissionWallet.listTransactions(req, reply),
+  );
 }

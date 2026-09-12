@@ -14,6 +14,19 @@ export const holdWalletSchema = z.object({
   referenceId: z.string().uuid().optional(),
 });
 export type HoldWalletBody = z.infer<typeof holdWalletSchema>;
+/// 004-driver-subscription-wallet. Exactly one of amount/rechargeOptionId —
+/// spec.md FR-008/FR-008a. Validated server-side against the configured
+/// min/max (custom) or the active option list (predefined) before any
+/// payment is initiated; never trusted from the client beyond "which one."
+export const rechargeCommissionWalletSchema = z
+  .object({
+    amount: z.number().positive().optional(),
+    rechargeOptionId: z.string().uuid().optional(),
+  })
+  .refine((body) => (body.amount != null) !== (body.rechargeOptionId != null), {
+    message: 'Provide exactly one of amount or rechargeOptionId',
+  });
+export type RechargeCommissionWalletBody = z.infer<typeof rechargeCommissionWalletSchema>;
 /// `rideId` is deliberately absent. A client may fund its own wallet; it may
 /// not declare which ride a payment settles, because that let a rider point a
 /// 1-rupee intent at a 500-rupee fare (FR-012). Which ride an intent belongs

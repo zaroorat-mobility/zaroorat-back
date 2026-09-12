@@ -1,6 +1,7 @@
 export * from './gateway/index.js';
 export * from './ledger/index.js';
 export * from './wallet/index.js';
+export * from './commission-wallet/index.js';
 export * from './collection/index.js';
 export * from './debt/index.js';
 export * from './writeoff/index.js';

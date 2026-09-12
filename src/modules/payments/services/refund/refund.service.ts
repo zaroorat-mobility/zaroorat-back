@@ -2,7 +2,7 @@ import { Decimal } from '../../types/index.js';
 import { TransactionManager } from '@core/database';
 import { EventPublisher } from '@core/events';
 import { RefundRepository } from '../../repositories/refund.repository.js';
-import { PaymentGatewayProvider } from '../gateway/gateway.provider.js';
+import { PaymentGatewayResolverService } from '../gateway/payment-gateway-resolver.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { RefundNotAllowedError } from '../../errors/payment.errors.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
@@ -11,7 +11,7 @@ import type { Refund } from '../../types';
 export class RefundService {
   constructor(
     private readonly refundRepo: RefundRepository,
-    private readonly gateway: PaymentGatewayProvider,
+    private readonly gatewayResolver: PaymentGatewayResolverService,
     private readonly ledgerService: LedgerService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
@@ -65,7 +65,12 @@ export class RefundService {
         },
         tx,
       );
-      const gatewayRes = await this.gateway.createRefund(
+      // A refund MUST go back through the same provider that took the
+      // original payment — resolved from the transaction's own stored
+      // `gateway`, never from current purpose routing (which may have moved
+      // on to a different provider since).
+      const gateway = await this.gatewayResolver.forProviderName(transaction.gateway ?? 'mock');
+      const gatewayRes = await gateway.createRefund(
         data.transactionId,
         data.amount,
         data.idempotencyKey,
@@ -140,7 +145,8 @@ export class RefundService {
         );
       }
 
-      const gatewayRes = await this.gateway.createRefund(
+      const gateway = await this.gatewayResolver.forProviderName(transaction.gateway ?? 'mock');
+      const gatewayRes = await gateway.createRefund(
         refund.transactionId,
         refund.amount,
         refund.idempotencyKey,

@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, bootEventConsumers, db, drainOutbox, resetState } from './helpers/harness.js';
 import {
   accountBalance,
+  captureGatewayIntentInputs,
   completeRide,
   fundWallet,
   replayOutboxEvent,
@@ -15,17 +16,24 @@ import { container } from '../../src/core/di.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import type { RideCollectionService } from '../../src/modules/payments/services/collection/collection.service.js';
-import type { PaymentGatewayProvider } from '../../src/modules/payments/services/gateway/gateway.provider.js';
 import type { CollectionSweepJob } from '../../src/modules/payments/jobs/collection-sweep.job.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 
 const CUSTOMER = '+919876604001';
 const DRIVER = '+919876604002';
 
+/// 004-driver-subscription-wallet. What the driver is actually credited for a
+/// non-cash ride once they have a payment model: their fare-side earning plus
+/// the commission-sized component, redistributed rather than recognised again
+/// as PLATFORM_COMMISSION (LedgerService.recordTripPayment) — that commission
+/// was already collected through the model's own mechanism.
+function earnedInFull(fare: { driverEarning: Decimal; platformCommission: Decimal }): Decimal {
+  return new Decimal(fare.driverEarning).add(new Decimal(fare.platformCommission));
+}
+
 describe('ride collection (integration, real HTTP)', () => {
   let app: FastifyInstance;
   let stopConsumers: Unsubscribe;
-  let restoreGateway: (() => void) | null = null;
 
   before(async () => {
     app = await bootApp();
@@ -37,30 +45,12 @@ describe('ride collection (integration, real HTTP)', () => {
     await app.close();
   });
   afterEach(async () => {
-    restoreGateway?.();
-    restoreGateway = null;
     await db().client.$executeRawUnsafe('TRUNCATE "gateway_events" CASCADE');
     await resetState();
   });
 
   const world = (): Promise<RideWorld> => rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
   const collection = () => container.resolve<RideCollectionService>('rideCollectionService');
-
-  /// Makes the gateway decline, the way the harness pins the OTP generator:
-  /// the provider is a container singleton, so the method is swapped on the
-  /// resolved instance rather than on the registration.
-  function declineGateway(): void {
-    const gateway = container.resolve<PaymentGatewayProvider>(
-      'paymentGatewayProvider',
-    ) as unknown as {
-      confirmIntent: (id: string) => Promise<{ gatewayIntentId: string; status: string }>;
-    };
-    const original = gateway.confirmIntent.bind(gateway);
-    gateway.confirmIntent = async (id: string) => ({ gatewayIntentId: id, status: 'FAILED' });
-    restoreGateway = () => {
-      gateway.confirmIntent = original;
-    };
-  }
 
   function attempts(rideId: string) {
     return db().client.ridePayment.findMany({ where: { rideId }, orderBy: { createdAt: 'asc' } });
@@ -162,38 +152,88 @@ describe('ride collection (integration, real HTTP)', () => {
     );
     assert.equal(
       (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
-      new Decimal(fare.driverEarning).toFixed(2),
+      earnedInFull(fare).toFixed(2),
       'the driver is credited once, not twice',
     );
   });
 
-  // T036 -- a card ride never touches the wallet
+  // T036 -- a card ride is paid to the driver directly, never through a
+  // gateway, and never touches the customer's wallet.
+  //
+  // Business model correction: the customer pays the driver directly (cash,
+  // UPI, phone, GPay, or a card the driver's own machine handles) — the
+  // platform never receives a ride fare through Cashfree/Razorpay/Stripe. So
+  // a CARD ride behaves exactly like a CASH ride: paid the moment it
+  // completes (flag off), debited against DRIVER_PAYABLE for what the driver
+  // owes back, never against a GATEWAY_CLEARING account that money never
+  // actually reached.
 
-  it('funds a card ride from GATEWAY_CLEARING and leaves the wallet alone', async () => {
+  it('pays a card ride to the driver directly at completion, never through a gateway or the wallet', async () => {
     const w = await world();
     await fundWallet(app, w.customer, 500);
     const before = await walletOf(w.customer.userId);
+    const capture = captureGatewayIntentInputs();
 
-    const { rideId, fare } = await completeRide(app, w, { distanceKm: 9, durationMin: 20 });
-    await drainOutbox();
+    try {
+      const { rideId, fare } = await completeRide(app, w, { distanceKm: 9, durationMin: 20 });
+      await drainOutbox();
 
-    const entries = await db().client.paymentLedgerEntry.findMany({
-      where: { referenceType: 'RIDE', referenceId: rideId },
-    });
-    const debit = entries.find((e) => e.direction === 'DEBIT');
-    assert.equal(debit?.account, 'GATEWAY_CLEARING');
-    assert.equal(new Decimal(debit!.amount).toFixed(2), new Decimal(fare.totalFare).toFixed(2));
+      assert.equal(capture.calls.length, 0, 'a card ride never calls a payment gateway');
 
-    assert.equal(
-      (await walletOf(w.customer.userId)).balance.toFixed(2),
-      before.balance.toFixed(2),
-      'the wallet is untouched',
-    );
-    assert.equal(
-      (await accountBalance('CUSTOMER_WALLET', { rideId })).toFixed(2),
-      '0.00',
-      'and so is its ledger position',
-    );
+      const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+      assert.equal(ride.paymentStatus, 'PAID', 'settled at completion, exactly like cash');
+
+      const entries = await db().client.paymentLedgerEntry.findMany({
+        where: { referenceType: 'RIDE', referenceId: rideId },
+      });
+      const debit = entries.find((e) => e.direction === 'DEBIT');
+      assert.equal(
+        debit?.account,
+        'DRIVER_PAYABLE',
+        'the driver already has the money, so what is booked is what they owe back',
+      );
+      const owedByDriver = new Decimal(fare.totalFare)
+        .sub(new Decimal(fare.driverEarning))
+        .sub(new Decimal(fare.platformCommission));
+      assert.equal(new Decimal(debit!.amount).toFixed(2), owedByDriver.toFixed(2));
+      assert.equal(
+        entries.some((e) => e.account === 'GATEWAY_CLEARING'),
+        false,
+        'no gateway ever touched this money',
+      );
+
+      assert.equal(
+        (await walletOf(w.customer.userId)).balance.toFixed(2),
+        before.balance.toFixed(2),
+        'the wallet is untouched',
+      );
+      assert.equal(
+        (await accountBalance('CUSTOMER_WALLET', { rideId })).toFixed(2),
+        '0.00',
+        'and so is its ledger position',
+      );
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('never routes a UPI ride through a payment gateway either', async () => {
+    const w = await world();
+    const capture = captureGatewayIntentInputs();
+    try {
+      const { rideId } = await completeRide(app, w, {
+        distanceKm: 5,
+        durationMin: 11,
+        paymentMethod: 'UPI',
+      });
+      await drainOutbox();
+
+      assert.equal(capture.calls.length, 0, 'a UPI ride never calls a payment gateway either');
+      const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
+      assert.equal(ride.paymentStatus, 'PAID');
+    } finally {
+      capture.restore();
+    }
   });
 
   // T037 -- RT-3: the amount is the server's, not the client's
@@ -235,9 +275,14 @@ describe('ride collection (integration, real HTTP)', () => {
 
   it('leaves the ride COMPLETED and the driver ONLINE when collection declines', async () => {
     const w = await world();
-    declineGateway();
-
-    const { rideId } = await completeRide(app, w, { distanceKm: 7, durationMin: 15 });
+    // WALLET, deliberately unfunded: CASH/CARD/UPI all mean the driver was
+    // paid directly and can never decline, so an unfunded wallet is the only
+    // way left to produce a genuine collection decline.
+    const { rideId } = await completeRide(app, w, {
+      distanceKm: 7,
+      durationMin: 15,
+      paymentMethod: 'WALLET',
+    });
     await drainOutbox();
 
     const ride = await db().client.ride.findUniqueOrThrow({ where: { id: rideId } });
@@ -261,9 +306,12 @@ describe('ride collection (integration, real HTTP)', () => {
 
   it('turns the obligation into a receivable once the attempt budget runs out', async () => {
     const w = await world();
-    declineGateway();
-
-    const { rideId, fare } = await completeRide(app, w, { distanceKm: 7, durationMin: 15 });
+    // WALLET, deliberately unfunded — see above.
+    const { rideId, fare } = await completeRide(app, w, {
+      distanceKm: 7,
+      durationMin: 15,
+      paymentMethod: 'WALLET',
+    });
     await drainOutbox();
 
     // Exhaust the configured budget. The first attempt was the consumer's.
@@ -295,7 +343,7 @@ describe('ride collection (integration, real HTTP)', () => {
     );
     assert.equal(
       (await accountBalance('DRIVER_PAYABLE', { rideId })).toFixed(2),
-      new Decimal(fare.driverEarning).toFixed(2),
+      earnedInFull(fare).toFixed(2),
     );
     assert.equal(
       (await accountBalance('BAD_DEBT_EXPENSE', { rideId })).toFixed(2),

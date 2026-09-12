@@ -1,2 +1,2 @@
 export * from './amount.util.js';
-export * from './signature.util.js';
+export * from './webhook-payload-parser.js';

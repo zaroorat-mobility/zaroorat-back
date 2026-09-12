@@ -7,6 +7,7 @@ import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config';
 import { assignRole, RoleSlug, seedRoles } from '../shared/roles';
 import { seedVehicleTypes } from '../shared/vehicle-types';
 import { seedNotificationTemplates } from '../shared/notification-templates';
+import { seedAppConfig } from '../shared/app-config';
 
 type Prisma = ProviderClient;
 
@@ -291,6 +292,7 @@ export async function seedDevelopment(prisma: Prisma) {
   // needs it, and no client can obtain a vehicleTypeId without it.
   await seedVehicleTypes(prisma);
   await seedNotificationTemplates(prisma);
+  await seedAppConfig(prisma);
 
   const fixtures: Array<{
     phone: string;

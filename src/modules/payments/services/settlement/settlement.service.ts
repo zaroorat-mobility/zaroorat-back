@@ -41,7 +41,11 @@ export class SettlementService {
       data.periodStart,
       data.periodEnd,
     );
-    const stillOwedOnCash = Decimal.max(0, earned.owedOnCash.sub(alreadyRecovered));
+    const stillOwedOnCash = Decimal.max(0, earned.owedOnCash.sub(alreadyRecovered.recovered));
+    /// The commission-labelled slice of `stillOwedOnCash` — nonzero only for
+    /// a legacy, no-payment-model ride. A payment-model ride's cash debt is
+    /// tax + fee (it still reduces `netPayable` below), never commission, so
+    /// it must not inflate the `commission` figure the settlement records.
 
     /// What this settlement is actually netting: the platform's commission on
     /// the rides it collected, plus anything still owed on cash rides that has
@@ -65,7 +69,11 @@ export class SettlementService {
     // finance correction can override the carry.
     const carried = Decimal.min(0, await this.settlementRepo.cumulativeNetPayable(data.driverId));
     const adjustments = data.adjustments ?? carried;
-    const commission = earned.commissionOnCollected.add(stillOwedOnCash);
+    const stillOwedCommissionOnCash = Decimal.max(
+      0,
+      earned.commissionOwedOnCash.sub(alreadyRecovered.commissionRecovered),
+    );
+    const commission = earned.commissionOnCollected.add(stillOwedCommissionOnCash);
     const netPayable = earned.earnedOnCollected.sub(stillOwedOnCash).add(adjustments);
     return this.txManager.execute(async (tx) => {
       const settlement = await this.settlementRepo.create(
@@ -80,12 +88,13 @@ export class SettlementService {
         },
         tx,
       );
-      // A driver who ran cash-only rides can legitimately net negative here
-      // (they owe commission out of pocket, see `aggregateEarnings`) — there
-      // is nothing to credit, and crediting a negative amount isn't a wallet
-      // debit this flow is meant to perform, so only positive payouts move
-      // money. The settlement row itself is still written either way, as the
-      // period's record of account.
+      // A driver who ran cash-only rides can legitimately net negative here —
+      // they owe back the tax and platform fee they collected in cash (and,
+      // for a legacy no-payment-model ride only, commission too — see
+      // `aggregateEarnings`) — there is nothing to credit, and crediting a
+      // negative amount isn't a wallet debit this flow is meant to perform,
+      // so only positive payouts move money. The settlement row itself is
+      // still written either way, as the period's record of account.
       if (netPayable.gt(0)) {
         await this.settlementWalletRepo.credit(
           {

@@ -9,16 +9,17 @@ import { paymentConfig } from '../../src/config/payment/payment.config.js';
 
 const URL = '/api/v1/payments/webhooks/razorpay';
 const CUSTOMER = '+919876602001';
+const SECRET = paymentConfig.razorpayWebhookSecret ?? paymentConfig.webhookSecret;
 
 function sign(rawBody: string): string {
-  return createHmac('sha256', paymentConfig.webhookSecret).update(rawBody).digest('hex');
+  return createHmac('sha256', SECRET).update(rawBody).digest('hex');
 }
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-describe('payment webhook signature (integration, real HTTP)', () => {
+describe('payment webhook signature (integration, real HTTP — Razorpay route)', () => {
   let app: FastifyInstance;
 
   before(async () => {
@@ -32,38 +33,57 @@ describe('payment webhook signature (integration, real HTTP)', () => {
     await resetState();
   });
 
-  function deliver(rawBody: string, signature?: string) {
+  function deliver(rawBody: string, signature?: string, eventId?: string) {
     return app.inject({
       method: 'POST',
       url: URL,
       headers: {
         'content-type': 'application/json',
         ...(signature === undefined ? {} : { 'x-razorpay-signature': signature }),
+        ...(eventId === undefined ? {} : { 'x-razorpay-event-id': eventId }),
       },
       payload: rawBody,
     });
   }
 
-  function payload(overrides: Record<string, unknown> = {}): string {
+  /// Real Razorpay webhook envelope — `event` at the top, the payment nested
+  /// under `payload.payment.entity`, `order_id` (not a body-level `id`) as
+  /// the order reference. The event id itself is never in this body at all
+  /// on a real Razorpay delivery — it arrives only in the
+  /// `X-Razorpay-Event-Id` header, which `deliver()` sets separately.
+  function payload(
+    overrides: {
+      event?: string;
+      createdAt?: number;
+      paymentId?: string;
+      orderId?: string;
+    } = {},
+  ): string {
     return JSON.stringify({
-      id: `evt_${randomUUID()}`,
-      type: 'payment.succeeded',
-      created: nowSeconds(),
-      data: { object: { id: `pi_${randomUUID()}` } },
-      ...overrides,
+      event: overrides.event ?? 'payment.captured',
+      created_at: overrides.createdAt ?? nowSeconds(),
+      payload: {
+        payment: {
+          entity: {
+            id: overrides.paymentId ?? `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
+            order_id: overrides.orderId ?? `order_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
+            status: 'captured',
+          },
+        },
+      },
     });
   }
 
   it('is reachable without a bearer token — and only this route is', async () => {
     const body = payload();
-    const response = await deliver(body, sign(body));
+    const response = await deliver(body, sign(body), randomUUID());
 
     assert.notEqual(response.statusCode, 401, response.payload);
   });
 
   it('accepts a correctly signed webhook', async () => {
     const body = payload();
-    const response = await deliver(body, sign(body));
+    const response = await deliver(body, sign(body), randomUUID());
 
     assert.equal(response.statusCode, 200, response.payload);
     assert.equal(response.json().received, true);
@@ -71,7 +91,7 @@ describe('payment webhook signature (integration, real HTTP)', () => {
 
   it('rejects an invalid signature', async () => {
     const body = payload();
-    const response = await deliver(body, 'f'.repeat(64));
+    const response = await deliver(body, 'f'.repeat(64), randomUUID());
 
     assert.equal(response.statusCode, 401, response.payload);
     assert.equal(response.json().error.code, 'WEBHOOK_SIGNATURE_INVALID');
@@ -80,7 +100,7 @@ describe('payment webhook signature (integration, real HTTP)', () => {
 
   it('rejects a missing signature header', async () => {
     const body = payload();
-    const response = await deliver(body);
+    const response = await deliver(body, undefined, randomUUID());
 
     assert.equal(response.statusCode, 401, response.payload);
     assert.equal(await db().client.gatewayEvent.count(), 0);
@@ -90,7 +110,7 @@ describe('payment webhook signature (integration, real HTTP)', () => {
     const signed = payload();
     const tampered = JSON.stringify({ ...JSON.parse(signed), amount: 999999 });
 
-    const response = await deliver(tampered, sign(signed));
+    const response = await deliver(tampered, sign(signed), randomUUID());
 
     assert.equal(response.statusCode, 401, response.payload);
     assert.equal(await db().client.gatewayEvent.count(), 0);
@@ -102,13 +122,14 @@ describe('payment webhook signature (integration, real HTTP)', () => {
     const reordered = JSON.stringify(Object.fromEntries(Object.entries(parsed).reverse()));
     assert.notEqual(reordered, original, 'precondition: the bytes differ');
 
-    const response = await deliver(reordered, sign(original));
+    const response = await deliver(reordered, sign(original), randomUUID());
     assert.equal(response.statusCode, 401, response.payload);
   });
 
   it('rejects a replayed event outside the timestamp window', async () => {
-    const body = payload({ created: nowSeconds() - (paymentConfig.webhookToleranceSeconds + 120) });
-    const response = await deliver(body, sign(body));
+    const staleCreatedAt = nowSeconds() - (paymentConfig.webhookToleranceSeconds + 120);
+    const body = payload({ createdAt: staleCreatedAt });
+    const response = await deliver(body, sign(body), randomUUID());
 
     assert.equal(response.statusCode, 400, response.payload);
     assert.equal(response.json().error.code, 'WEBHOOK_REPLAY_REJECTED');
@@ -116,10 +137,12 @@ describe('payment webhook signature (integration, real HTTP)', () => {
   });
 
   it('rejects a payload carrying no gateway event id', async () => {
+    // No X-Razorpay-Event-Id header, and no payment/order identifiers in the
+    // body for the parser to fall back to — nothing here resolves to an id.
     const body = JSON.stringify({
-      type: 'payment.succeeded',
-      created: nowSeconds(),
-      data: { object: { id: 'pi_1' } },
+      event: 'payment.captured',
+      created_at: nowSeconds(),
+      payload: {},
     });
 
     const response = await deliver(body, sign(body));
@@ -130,9 +153,10 @@ describe('payment webhook signature (integration, real HTTP)', () => {
   it('handles a duplicate delivery idempotently', async () => {
     const body = payload();
     const signature = sign(body);
+    const eventId = randomUUID();
 
-    const first = await deliver(body, signature);
-    const second = await deliver(body, signature);
+    const first = await deliver(body, signature, eventId);
+    const second = await deliver(body, signature, eventId);
 
     assert.equal(first.statusCode, 200, first.payload);
     assert.equal(second.statusCode, 200, second.payload);
@@ -145,12 +169,16 @@ describe('payment webhook signature (integration, real HTTP)', () => {
   it('settles the intent exactly once across a redelivery', async () => {
     const customer = await loginAs(app, CUSTOMER);
     const intentId = await makePendingIntent(customer.userId, 750);
+    const intentRow = await db().client.paymentIntent.findUniqueOrThrow({
+      where: { id: intentId },
+    });
 
-    const body = payload({ data: { object: { id: intentId } } });
+    const body = payload({ orderId: intentRow.gatewayIntentId! });
     const signature = sign(body);
+    const eventId = randomUUID();
 
-    await deliver(body, signature);
-    await deliver(body, signature);
+    await deliver(body, signature, eventId);
+    await deliver(body, signature, eventId);
 
     const intent = await db().client.paymentIntent.findUniqueOrThrow({ where: { id: intentId } });
     assert.equal(intent.status, 'SUCCEEDED');
@@ -167,7 +195,11 @@ describe('payment webhook signature (integration, real HTTP)', () => {
 
   it('does not log the raw payload or the secret', async () => {
     const marker = `SENSITIVE_${randomUUID()}`;
-    const body = payload({ data: { object: { id: 'pi_1', note: marker } } });
+    const body = JSON.stringify({
+      event: 'payment.captured',
+      created_at: nowSeconds(),
+      payload: { payment: { entity: { id: 'pay_1', order_id: 'order_1', note: marker } } },
+    });
 
     const lines: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
@@ -180,16 +212,13 @@ describe('payment webhook signature (integration, real HTTP)', () => {
     }) as typeof originalWrite;
 
     try {
-      await deliver(body, 'bad-signature');
+      await deliver(body, 'bad-signature', randomUUID());
     } finally {
       (process.stdout as unknown as { write: typeof originalWrite }).write = originalWrite;
     }
 
     const logged = lines.join('');
     assert.ok(!logged.includes(marker), 'the webhook body must not reach the logs');
-    assert.ok(
-      !logged.includes(paymentConfig.webhookSecret),
-      'the signing secret must never be logged',
-    );
+    assert.ok(!logged.includes(SECRET), 'the signing secret must never be logged');
   });
 });

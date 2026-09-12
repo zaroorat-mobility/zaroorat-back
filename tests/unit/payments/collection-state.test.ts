@@ -8,10 +8,14 @@ import {
 
 const FARE = new Decimal(180);
 
+// WALLET, not CARD: CASH, CARD and UPI all mean the customer paid the driver
+// directly, so all three now land in AWAITING_CASH_CONFIRMATION — WALLET is
+// the one method the platform actually collects, so it is the default that
+// exercises the ordinary retry-budget path this table is mostly about.
 function project(overrides: Partial<CollectionInput>) {
   return projectCollectionState({
     paymentStatus: 'PENDING',
-    method: 'CARD',
+    method: 'WALLET',
     attempts: [],
     totalFare: FARE,
     ...overrides,
@@ -20,16 +24,18 @@ function project(overrides: Partial<CollectionInput>) {
 
 describe('collectionState projection (data-model §2.2)', () => {
   it('maps every row of the table', () => {
-    assert.equal(
-      project({ method: 'CASH' }).collectionState,
-      'AWAITING_CASH_CONFIRMATION',
-      'cash, unconfirmed',
-    );
-    assert.equal(project({}).collectionState, 'AWAITING_COLLECTION', 'non-cash, no attempt yet');
+    for (const method of ['CASH', 'CARD', 'UPI'] as const) {
+      assert.equal(
+        project({ method }).collectionState,
+        'AWAITING_CASH_CONFIRMATION',
+        `${method}, unconfirmed`,
+      );
+    }
+    assert.equal(project({}).collectionState, 'AWAITING_COLLECTION', 'wallet, no attempt yet');
     assert.equal(
       project({ attempts: [{ status: 'FAILED' }] }).collectionState,
       'RETRYING',
-      'non-cash, an attempt failed',
+      'wallet, an attempt failed',
     );
     assert.equal(
       project({ paymentStatus: 'PAID', attempts: [{ status: 'SUCCEEDED' }] }).collectionState,

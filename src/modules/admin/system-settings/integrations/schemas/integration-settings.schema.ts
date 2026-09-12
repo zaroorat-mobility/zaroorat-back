@@ -1,13 +1,41 @@
 import { z } from 'zod';
 
+// Cashfree is deliberately absent: not exposed or selectable for now.
+const paymentGatewayNameSchema = z.enum(['mock', 'razorpay', 'stripe']);
+const paymentEnvironmentSchema = z.enum(['sandbox', 'live']);
+
 export const updatePaymentSettingsSchema = z.object({
-  defaultGateway: z.enum(['mock', 'razorpay', 'stripe']).optional(),
   defaultCurrency: z.string().length(3).optional(),
-  razorpayKeyId: z.string().optional(),
-  razorpayKeySecret: z.string().optional(),
-  stripeSecretKey: z.string().optional(),
-  webhookSecret: z.string().optional(),
+  // The ONE gateway every new subscription payment and commission-wallet
+  // recharge automatically uses — a single value, not a per-purpose map, so
+  // "activate both at once" cannot even be expressed.
+  activeProvider: paymentGatewayNameSchema.optional(),
+  providers: z
+    .object({
+      razorpay: z
+        .object({
+          enabled: z.boolean().optional(),
+          environment: paymentEnvironmentSchema.optional(),
+          keyId: z.string().optional(),
+          keySecret: z.string().optional(),
+          webhookSecret: z.string().optional(),
+        })
+        .optional(),
+      stripe: z
+        .object({
+          enabled: z.boolean().optional(),
+          environment: paymentEnvironmentSchema.optional(),
+          secretKey: z.string().optional(),
+          webhookSecret: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   expectedVersion: z.number().int().positive().optional(),
+});
+
+export const paymentIntegrationTestSchema = z.object({
+  provider: paymentGatewayNameSchema.optional(),
 });
 
 export const updateSmsSettingsSchema = z.object({

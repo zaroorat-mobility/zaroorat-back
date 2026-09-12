@@ -42,11 +42,12 @@ export class RefundRepository {
     userId: string;
     amount: Decimal;
     status: string;
+    gateway: string | null;
   } | null> {
     const client = tx ?? this.db.client;
     const txn = await client.paymentTransaction.findUnique({
       where: { id: transactionId },
-      select: { id: true, userId: true, amount: true, status: true },
+      select: { id: true, userId: true, amount: true, status: true, gateway: true },
     });
     return txn ?? null;
   }
