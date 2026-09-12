@@ -19,6 +19,7 @@ function harness(transaction: { userId: string; amount: number } | null) {
             userId: transaction.userId,
             amount: new Decimal(transaction.amount),
             status: 'SUCCEEDED',
+            gateway: 'mock',
           }
         : null;
     },
@@ -37,9 +38,13 @@ function harness(transaction: { userId: string; amount: number } | null) {
   const service = new RefundService(
     refundRepo as never,
     {
-      gatewayName: 'mock',
-      async createRefund() {
-        return { gatewayRefundId: 'grf_1', status: 'SUCCEEDED' };
+      async forProviderName() {
+        return {
+          gatewayName: 'mock',
+          async createRefund() {
+            return { gatewayRefundId: 'grf_1', status: 'SUCCEEDED' };
+          },
+        };
       },
     } as never,
     {

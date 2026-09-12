@@ -31,16 +31,27 @@ export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/refunds', { preHandler: fastify.rateLimit(rateLimits.payment) }, (req, reply) =>
     controller.refund.processRefund(req, reply),
   );
+  // 004-driver-subscription-wallet. spec.md FR-008/FR-008a/FR-008b.
+  fastify.get('/driver-wallet/recharge-options', (req, reply) =>
+    controller.commissionWallet.listRechargeOptions(req, reply),
+  );
+  fastify.post(
+    '/driver-wallet/recharge',
+    { preHandler: fastify.rateLimit(rateLimits.payment) },
+    (req, reply) => controller.commissionWallet.recharge(req, reply),
+  );
 
   await fastify.register(async (webhookScope) => {
     registerRawJsonParser(webhookScope);
-    webhookScope.post(
-      '/webhooks/:gateway',
-      {
-        config: { public: true },
-        preHandler: webhookScope.rateLimit(rateLimits.webhook),
-      },
-      (req, reply) => controller.webhook.handleWebhook(req, reply),
+    const webhookRoute = {
+      config: { public: true },
+      preHandler: webhookScope.rateLimit(rateLimits.webhook),
+    };
+    webhookScope.post('/webhooks/razorpay', webhookRoute, (req, reply) =>
+      controller.webhook.handleRazorpayWebhook(req, reply),
+    );
+    webhookScope.post('/webhooks/stripe', webhookRoute, (req, reply) =>
+      controller.webhook.handleStripeWebhook(req, reply),
     );
   });
 }

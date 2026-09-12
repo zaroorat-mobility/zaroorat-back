@@ -152,3 +152,65 @@ model WalletReconciliation {
   @@index([walletType, walletId, asOf])
   @@map("wallet_reconciliations")
 }
+
+/// 004-driver-subscription-wallet. A COMMISSION-model driver's manually-recharged
+/// balance, used specifically to cover ride commission owed to the company.
+/// Distinct from DriverWallet (earnings/payout, credited by settlement, the
+/// opposite economic direction) and from CustomerWallet. No lockedBalance —
+/// there is no reservation/freeze mechanism (spec.md FR-017a).
+model DriverCommissionWallet {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  driverId          String    @unique @map("driver_id") @db.Uuid
+  balance           Decimal   @default(0) @db.Decimal(12, 2)
+  currency          String    @default("INR") @db.Char(3)
+  lastTransactionAt DateTime? @map("last_transaction_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  driver       Driver                              @relation(fields: [driverId], references: [id])
+  transactions DriverCommissionWalletTransaction[]
+
+  @@map("driver_commission_wallets")
+}
+
+/// Immutable per spec.md FR-013 — no correction ever edits a row here, only a
+/// new, separate transaction. No expectedAmount/shortfall field: a
+/// RIDE_COMMISSION row is written only when the FULL ride.commissionAmount is
+/// deducted; when the wallet can't cover it, no row is written at all
+/// (spec.md FR-024).
+model DriverCommissionWalletTransaction {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  walletId      String   @map("wallet_id") @db.Uuid
+  driverId      String   @map("driver_id") @db.Uuid
+  rideId        String?  @map("ride_id") @db.Uuid
+  txnType       String   @map("txn_type") // MANUAL_RECHARGE | RIDE_COMMISSION | REFUND | ADMIN_CREDIT | ADMIN_DEBIT
+  amount        Decimal  @db.Decimal(12, 2) // signed: credit positive, debit negative
+  balanceAfter  Decimal  @map("balance_after") @db.Decimal(12, 2)
+  referenceType String?  @map("reference_type") // 'RECHARGE' | 'RIDE' | 'ADMIN_ADJUSTMENT'
+  referenceId   String?  @map("reference_id") @db.Uuid
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  wallet DriverCommissionWallet @relation(fields: [walletId], references: [id])
+  ride   Ride?                  @relation(fields: [rideId], references: [id])
+
+  @@index([walletId, createdAt])
+  @@index([driverId, createdAt])
+  @@map("driver_commission_wallet_transactions")
+}
+
+/// Company-configurable predefined recharge amounts ("boxes"). Deactivating one
+/// never rewrites a past transaction that used it — history references the
+/// amount directly, not this row.
+model WalletRechargeOption {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  amount    Decimal  @db.Decimal(12, 2)
+  label     String?
+  status    String   @default("ACTIVE") // 'ACTIVE' | 'INACTIVE'
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, sortOrder])
+  @@map("wallet_recharge_options")
+}
