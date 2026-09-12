@@ -3,7 +3,7 @@ import { TransactionManager } from '@core/database';
 import { EventPublisher } from '@core/events';
 import { PayoutRepository } from '../../repositories/payout.repository.js';
 import { SettlementRepository } from '../../repositories/settlement.repository.js';
-import { PaymentGatewayProvider } from '../gateway/gateway.provider.js';
+import { PaymentGatewayResolverService } from '../gateway/payment-gateway-resolver.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import { PaymentMetrics } from '../../metrics/payment.metrics.js';
@@ -17,7 +17,7 @@ export class PayoutService {
   constructor(
     private readonly payoutRepo: PayoutRepository,
     private readonly settlementRepo: SettlementRepository,
-    private readonly gateway: PaymentGatewayProvider,
+    private readonly gatewayResolver: PaymentGatewayResolverService,
     private readonly ledgerService: LedgerService,
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
@@ -48,6 +48,13 @@ export class PayoutService {
         if (data.amount.gt(available)) {
           throw new PayoutExceedsAvailableError(data.amount.toString(), available.toString());
         }
+        // The same single admin-active gateway every other new payment uses
+        // — driver payout is outbound to the platform's own bank rail, not a
+        // customer/driver payment collection, but there is only one gateway
+        // selection in the whole system now, not a separate one per flow.
+        // Resolved once, before the record is written, so the row and the
+        // actual gateway call below always agree on which provider was used.
+        const gateway = await this.gatewayResolver.getActiveGateway();
         const payoutRecord = await this.payoutRepo.createPayout(
           {
             driverId: data.driverId,
@@ -55,7 +62,7 @@ export class PayoutService {
             bankAccountId: data.bankAccountId ?? null,
             amount: data.amount,
             idempotencyKey: data.idempotencyKey,
-            gateway: this.gateway.gatewayName,
+            gateway: gateway.gatewayName,
           },
           tx,
         );
@@ -67,7 +74,7 @@ export class PayoutService {
           tx,
         );
         try {
-          const gatewayRes = await this.gateway.createPayout(
+          const gatewayRes = await gateway.createPayout(
             data.driverId,
             data.bankAccountId ?? 'default',
             data.amount,

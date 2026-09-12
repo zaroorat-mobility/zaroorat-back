@@ -35,6 +35,19 @@ interface StoredSnapshot {
 export class IntegrationHealthService {
   constructor(private readonly redisService: RedisService) {}
 
+  /// Qualified by provider, not just integration kind — `payment` is the one
+  /// integration with two independently-testable providers (Razorpay/Stripe),
+  /// so a connectivity probe for one must not overwrite another's snapshot,
+  /// even though only one of them is ever the active gateway at a time. Every
+  /// other integration (sms/push/email/maps) only ever probes a single
+  /// provider at a time, so qualifying their keys too is a no-op in effect —
+  /// same one key, just named more specifically — and needs no change at any
+  /// call site, since `provider` was already a required parameter everywhere
+  /// this is called.
+  private key(prefix: string, integration: IntegrationKind, provider: string): string {
+    return `${prefix}:${integration}:${provider}`;
+  }
+
   async recordProbe(
     integration: IntegrationKind,
     provider: string,
@@ -46,8 +59,8 @@ export class IntegrationHealthService {
     },
   ): Promise<IntegrationHealthSnapshot> {
     const now = new Date().toISOString();
-    const historyKey = `${INTEGRATION_HEALTH_HISTORY_PREFIX}:${integration}`;
-    const snapshotKey = `${INTEGRATION_HEALTH_SNAPSHOT_PREFIX}:${integration}`;
+    const historyKey = this.key(INTEGRATION_HEALTH_HISTORY_PREFIX, integration, provider);
+    const snapshotKey = this.key(INTEGRATION_HEALTH_SNAPSHOT_PREFIX, integration, provider);
 
     const historyEntry: ProbeHistoryEntry = {
       ok: input.ok,
@@ -65,7 +78,7 @@ export class IntegrationHealthService {
       const existingRaw = await client.get(snapshotKey);
       const existing = existingRaw ? (JSON.parse(existingRaw) as StoredSnapshot) : null;
 
-      const history = await this.readHistory(integration);
+      const history = await this.readHistory(integration, provider);
       const recentFailureCount = history.filter((h) => !h.ok).length;
       const p95ResponseTimeMs = computeP95(history.map((h) => h.responseTimeMs));
 
@@ -109,7 +122,11 @@ export class IntegrationHealthService {
     },
   ): Promise<IntegrationHealthSnapshot> {
     try {
-      const snapshotKey = `${INTEGRATION_HEALTH_SNAPSHOT_PREFIX}:${integration}`;
+      const snapshotKey = this.key(
+        INTEGRATION_HEALTH_SNAPSHOT_PREFIX,
+        integration,
+        fallback.provider,
+      );
       const raw = await this.redisService.provider.client.get(snapshotKey);
 
       if (raw) {
@@ -154,10 +171,13 @@ export class IntegrationHealthService {
     return { overall, integrations };
   }
 
-  private async readHistory(integration: IntegrationKind): Promise<ProbeHistoryEntry[]> {
+  private async readHistory(
+    integration: IntegrationKind,
+    provider: string,
+  ): Promise<ProbeHistoryEntry[]> {
     try {
       const rawEntries = await this.redisService.provider.client.lrange(
-        `${INTEGRATION_HEALTH_HISTORY_PREFIX}:${integration}`,
+        this.key(INTEGRATION_HEALTH_HISTORY_PREFIX, integration, provider),
         0,
         INTEGRATION_HEALTH_HISTORY_MAX - 1,
       );

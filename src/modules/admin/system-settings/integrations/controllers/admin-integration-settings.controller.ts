@@ -13,8 +13,10 @@ import {
   updatePushSettingsSchema,
   updateEmailSettingsSchema,
   integrationTestSchema,
+  paymentIntegrationTestSchema,
 } from '../schemas/integration-settings.schema.js';
 import type { UpdatePaymentSettingsBody } from '../types/integration-settings.types.js';
+import type { PaymentIntegrationTestInput } from '../services/admin-payment-settings.service.js';
 import type { UpdateSmsSettingsBody } from '../types/integration-settings.types.js';
 import type { UpdatePushSettingsBody } from '../types/integration-settings.types.js';
 import type { UpdateEmailSettingsBody } from '../types/integration-settings.types.js';
@@ -64,7 +66,9 @@ export class AdminIntegrationSettingsController {
 
   async testPayment(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
-      const body = integrationTestSchema.parse(req.body ?? {}) as IntegrationTestInput;
+      const body = paymentIntegrationTestSchema.parse(
+        req.body ?? {},
+      ) as PaymentIntegrationTestInput;
       reply.send({ data: await this.adminPaymentSettingsService.testPayment(body) });
     } catch (error) {
       reply
@@ -76,6 +80,20 @@ export class AdminIntegrationSettingsController {
             req.id,
           ),
         );
+    }
+  }
+
+  /// Per-provider payment gateway health — enabled/disabled, environment,
+  /// configured, last successful/failed probe — for Razorpay and Stripe at
+  /// once. Never exposes a secret value.
+  async getPaymentProvidersHealth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    try {
+      reply.send({ data: await this.adminPaymentSettingsService.getPaymentProvidersHealth() });
+    } catch (error) {
+      logger.error({ error }, '[AdminIntegrationSettingsController] getPaymentProvidersHealth');
+      reply
+        .status(500)
+        .send(errorEnvelope('INTERNAL_ERROR', 'Failed to fetch payment provider health', req.id));
     }
   }
 

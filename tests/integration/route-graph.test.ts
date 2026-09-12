@@ -30,8 +30,12 @@ const SANCTIONED_PUBLIC: ReadonlyMap<string, string> = new Map([
       'a rider or customer number is refused with 401 INVALID_CREDENTIALS.',
   ],
   [
-    'POST /api/v1/payments/webhooks/:gateway',
+    'POST /api/v1/payments/webhooks/razorpay',
     'A payment gateway holds no bearer token. Authenticated by HMAC over the raw body.',
+  ],
+  [
+    'POST /api/v1/payments/webhooks/stripe',
+    "A payment gateway holds no bearer token. Authenticated by Stripe's t=/v1= Stripe-Signature scheme.",
   ],
   ['GET /health', 'Load-balancer probe.'],
   ['GET /api/v1/health', 'Load-balancer probe (prefixed).'],
@@ -129,7 +133,7 @@ describe('production route graph (integration)', () => {
     const url = '/api/v1/payments/webhooks/stripe';
     const body = JSON.stringify({
       id: `evt_${randomUUID()}`,
-      type: 'payment.succeeded',
+      type: 'payment_intent.succeeded',
       created: Math.floor(Date.now() / 1000),
       data: { object: { id: 'pi_unknown' } },
     });
@@ -152,11 +156,18 @@ describe('production route graph (integration)', () => {
     });
     assert.equal(badSignature.json().error.code, 'WEBHOOK_SIGNATURE_INVALID');
 
-    const signature = createHmac('sha256', paymentConfig.webhookSecret).update(body).digest('hex');
+    // Real Stripe-Signature scheme: t=<seconds>,v1=<hmac of "t.body"> — not a
+    // bare hex HMAC over the raw body.
+    const secret = paymentConfig.stripeWebhookSecret ?? paymentConfig.webhookSecret;
+    const timestamp = Math.floor(Date.now() / 1000);
+    const v1 = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
     const signed = await app.inject({
       method: 'POST',
       url,
-      headers: { 'content-type': 'application/json', 'stripe-signature': signature },
+      headers: {
+        'content-type': 'application/json',
+        'stripe-signature': `t=${timestamp},v1=${v1}`,
+      },
       payload: body,
     });
     assert.equal(signed.statusCode, 200, signed.payload);
