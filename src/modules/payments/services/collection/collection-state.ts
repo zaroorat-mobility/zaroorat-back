@@ -51,10 +51,14 @@ export function projectCollectionState(input: CollectionInput): CollectionProjec
 
   const zero = { amountOwed: new Decimal(0) };
 
-  // Cash waits on a person, not on a gateway, so the retry budget never
-  // applies to it. Reachable only while BD-5's flag is on; with the flag off
-  // a cash ride is already PAID by the time anyone can ask.
-  if (input.method === 'CASH' && !has('SUCCEEDED')) {
+  // Cash, and CARD/UPI paid straight to the driver, all wait on a person, not
+  // on a gateway, so the retry budget never applies to any of them. Reachable
+  // only while BD-5's flag is on; with the flag off a driver-collected ride
+  // is already PAID by the time anyone can ask.
+  if (
+    (input.method === 'CASH' || input.method === 'CARD' || input.method === 'UPI') &&
+    !has('SUCCEEDED')
+  ) {
     return { collectionState: 'AWAITING_CASH_CONFIRMATION', ...zero };
   }
 

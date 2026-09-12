@@ -158,27 +158,32 @@ describe('ride fare reaches the ledger intact (FR-006)', () => {
     });
   }
 
+  // WALLET is the one payment method the platform actually collects — CASH,
+  // CARD and UPI all mean the customer paid the driver directly, so the
+  // driver never receives a DRIVER_PAYABLE credit for any of the three (see
+  // the driver-collected case just below instead).
   it('credits the driver their earning when the platform collected the fare', async () => {
-    for (const method of ['WALLET', 'CARD', 'UPI']) {
-      const items = await post(ORDINARY, method);
-      assert.equal(
-        net(items, 'DRIVER_PAYABLE').toFixed(2),
-        new Decimal(ORDINARY.driverEarning).toFixed(2),
-        `${method}: the platform owes the driver exactly their earning`,
-      );
-    }
+    const items = await post(ORDINARY, 'WALLET');
+    assert.equal(
+      net(items, 'DRIVER_PAYABLE').toFixed(2),
+      new Decimal(ORDINARY.driverEarning).toFixed(2),
+      'the platform owes the driver exactly their earning',
+    );
   });
 
-  it('debits the driver the whole platform share when they took the cash', async () => {
-    const items = await post(ORDINARY, 'CASH');
-    // They collected 330 and are entitled to 240, so they owe 90 — the
-    // commission plus the tax and the fee they are also holding. Charging only
-    // the commission left 30 in the driver's pocket with nothing recording it.
-    assert.equal(net(items, 'DRIVER_PAYABLE').toFixed(2), '-90.00');
-    assert.ok(
-      new Decimal(90).gt(new Decimal(ORDINARY.platformCommission)),
-      'the debt exceeds the commission alone whenever tax or a fee applies',
-    );
+  it('debits the driver the whole platform share when they took the money directly (CASH, CARD or UPI)', async () => {
+    for (const method of ['CASH', 'CARD', 'UPI']) {
+      const items = await post(ORDINARY, method);
+      // They collected 330 and are entitled to 240, so they owe 90 — the
+      // commission plus the tax and the fee they are also holding. Charging
+      // only the commission left 30 in the driver's pocket with nothing
+      // recording it.
+      assert.equal(net(items, 'DRIVER_PAYABLE').toFixed(2), '-90.00', method);
+      assert.ok(
+        new Decimal(90).gt(new Decimal(ORDINARY.platformCommission)),
+        'the debt exceeds the commission alone whenever tax or a fee applies',
+      );
+    }
   });
 
   it('never writes a zero-amount leg', async () => {
