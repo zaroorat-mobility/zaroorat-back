@@ -19,6 +19,12 @@ export const EnvironmentSchema = z
     // outside production so development and test keep working off a derivation
     // of JWT_REFRESH_SECRET; required below where it matters.
     RIDE_PIN_PEPPER: z.string().min(32).optional(),
+    // Which push provider to boot. 'fcm' requires FIREBASE_SERVICE_ACCOUNT_JSON
+    // (or Application Default Credentials). 'mock' is for development/test only.
+    PUSH_PROVIDER: z.string().optional(),
+    // Full Firebase service-account JSON blob. Required in prod/staging when
+    // PUSH_PROVIDER=fcm and Application Default Credentials are not configured.
+    FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     // Deployed environments must key credential encryption to a secret of its
@@ -55,6 +61,26 @@ export const EnvironmentSchema = z
           `required when APP_ENV=${env.APP_ENV}. Generate 32+ random bytes and store it in ` +
           'the secret manager. It must NOT be derived from, or equal to, JWT_REFRESH_SECRET. ' +
           'Changing it later invalidates every rider Ride PIN.',
+      });
+    }
+    // FCM push credentials: when a deployed environment selects 'fcm' and no
+    // Application Default Credentials are available, the service-account JSON
+    // must be supplied explicitly. We cannot validate ADC here (it depends on
+    // the runtime environment), so we enforce the env-var path and document the
+    // alternative. If ADC is configured, leave FIREBASE_SERVICE_ACCOUNT_JSON
+    // unset and this rule is satisfied.
+    if (
+      (env.APP_ENV === 'production' || env.APP_ENV === 'staging') &&
+      env.PUSH_PROVIDER === 'fcm' &&
+      !env.FIREBASE_SERVICE_ACCOUNT_JSON
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['FIREBASE_SERVICE_ACCOUNT_JSON'],
+        message:
+          `required when APP_ENV=${env.APP_ENV} and PUSH_PROVIDER=fcm. ` +
+          'Set it to the Firebase service-account JSON blob from the Firebase console, ' +
+          'or configure Application Default Credentials and leave this unset.',
       });
     }
   });

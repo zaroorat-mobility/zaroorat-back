@@ -2,10 +2,13 @@ import { config } from '@config';
 import { MockProvider } from './providers/mock.provider';
 import { Msg91Provider } from '../../integrations/msg91/msg91.client.js';
 import { MockPushProvider } from './providers/mock-push.provider';
+import { FcmPushProvider } from '../../integrations/firebase/fcm-push.provider.js';
+import { initFcmApp } from '../../integrations/firebase/fcm-app.js';
 import type { SmsProvider } from './providers/sms.provider';
 import type { PushProvider } from './providers/push.provider';
+import type { DeviceRepository } from '../auth/repositories/device.repository.js';
 export type SmsProviderName = 'mock' | 'msg91';
-export type PushProviderName = 'mock';
+export type PushProviderName = 'mock' | 'fcm';
 const NON_DELIVERING_PROVIDERS: readonly SmsProviderName[] = Object.freeze(['mock']);
 const DELIVERY_REQUIRED_ENVIRONMENTS: readonly string[] = Object.freeze(['production', 'staging']);
 export class PushProviderNotDeliverableError extends Error {
@@ -75,20 +78,30 @@ export function resolveSmsProviderName(
 /// hatch here would be used once, in a hurry, and never removed. Exported and
 /// pure so it can be tested against every environment — the running process
 /// reads `config.app.environment` once at import.
+/// Resolves which push provider to boot for the given environment.
+///
+/// Rules:
+/// - 'fcm' is allowed in any environment and is required in delivery-required ones.
+/// - 'mock' is allowed only in non-delivery-required environments.
+/// - Any other value is a configuration error in every environment.
+/// - If no PUSH_PROVIDER is set, delivery-required environments throw
+///   PushProviderNotDeliverableError (same guard as before, now only triggered
+///   when the resolved provider is still 'mock').
 export function resolvePushProviderName(
   environment: string,
   explicit: string | undefined,
 ): PushProviderName {
-  if (explicit && explicit !== 'mock') {
+  if (explicit && explicit !== 'mock' && explicit !== 'fcm') {
     throw new Error(
-      `PUSH_PROVIDER "${explicit}" is not implemented — only "mock" exists today. ` +
-        'Add a real provider behind createPushProvider before configuring one.',
+      `PUSH_PROVIDER "${explicit}" is not implemented. ` +
+        'Supported values: "fcm" (production), "mock" (development/test only).',
     );
   }
-  if (DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment)) {
+  const provider: PushProviderName = explicit === 'fcm' ? 'fcm' : 'mock';
+  if (DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment) && provider === 'mock') {
     throw new PushProviderNotDeliverableError(environment, 'mock');
   }
-  return 'mock';
+  return provider;
 }
 export function getNotificationConfig(): NotificationConfig {
   const smsProvider = resolveSmsProviderName(config.app.environment, process.env.SMS_PROVIDER);
@@ -115,6 +128,12 @@ export function createSmsProvider(notificationConfig: NotificationConfig): SmsPr
   }
   return new MockProvider();
 }
-export function createPushProvider(): PushProvider {
+export function createPushProvider(
+  notificationConfig: NotificationConfig,
+  deviceRepository: DeviceRepository,
+): PushProvider {
+  if (notificationConfig.pushProvider === 'fcm') {
+    return new FcmPushProvider(initFcmApp(), deviceRepository);
+  }
   return new MockPushProvider();
 }

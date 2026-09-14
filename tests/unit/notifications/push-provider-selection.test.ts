@@ -61,10 +61,27 @@ describe('push provider selection (H-5)', () => {
   });
 
   it('still refuses a provider name that has no implementation', () => {
-    // Unchanged behaviour, and deliberately a different error: "fcm" is a
-    // configuration mistake in any environment, whereas mock-in-production is a
-    // deployment that would have run.
-    assert.throws(() => resolvePushProviderName('development', 'fcm'), /not implemented/);
-    assert.throws(() => resolvePushProviderName('production', 'fcm'), /not implemented/);
+    // Unchanged behaviour, and deliberately a different error: an unknown name
+    // is a configuration mistake in any environment.
+    assert.throws(() => resolvePushProviderName('development', 'apns'), /not implemented/);
+    assert.throws(() => resolvePushProviderName('production', 'apns'), /not implemented/);
+  });
+
+  describe('"fcm" is the real production provider', () => {
+    it('accepts "fcm" in development', () => {
+      assert.equal(resolvePushProviderName('development', 'fcm'), 'fcm');
+    });
+
+    it('accepts "fcm" in test', () => {
+      assert.equal(resolvePushProviderName('test', 'fcm'), 'fcm');
+    });
+
+    it('accepts "fcm" in staging', () => {
+      assert.equal(resolvePushProviderName('staging', 'fcm'), 'fcm');
+    });
+
+    it('accepts "fcm" in production', () => {
+      assert.equal(resolvePushProviderName('production', 'fcm'), 'fcm');
+    });
   });
 });
