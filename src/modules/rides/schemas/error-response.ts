@@ -24,8 +24,10 @@ export function handleRideError(err: unknown, request: FastifyRequest, reply: Fa
     return;
   }
   request.log.error({ err }, '[rides] unhandled error');
-  reply
-    .status(500)
-    .send(errorEnvelope('INTERNAL', 'An unexpected rides error occurred', request.id));
+  const message =
+    (err as Error)?.message && process.env.NODE_ENV !== 'production'
+      ? (err as Error).message
+      : 'An unexpected rides error occurred';
+  reply.status(500).send(errorEnvelope('INTERNAL', message, request.id));
 }
 export { RideError };

@@ -160,13 +160,15 @@ async function ensureAssignedVehicle(
   input: {
     registrationNumber: string;
     verified: boolean;
+    vehicleTypeCode?: string;
     make?: string;
     model?: string;
     color?: string;
   },
 ) {
+  const vehicleTypeCode = input.vehicleTypeCode ?? 'CAB_ECONOMY';
   const vehicleType = await prisma.vehicleType.findUniqueOrThrow({
-    where: { code: 'CAB_ECONOMY' },
+    where: { code: vehicleTypeCode },
   });
   let vehicle = await prisma.vehicle.findUnique({
     where: { registrationNumber: input.registrationNumber },
@@ -244,11 +246,17 @@ async function ensureAssignedVehicle(
   }
 
   const assignment = await prisma.vehicleAssignment.findFirst({
-    where: { driverId, vehicleId: vehicle.id, status: 'ACTIVE', releasedAt: null },
+    where: { driverId, status: 'ACTIVE', releasedAt: null },
   });
   if (!assignment) {
     await prisma.vehicleAssignment.create({
       data: { driverId, vehicleId: vehicle.id, status: 'ACTIVE' },
+    });
+  } else if (assignment.vehicleId !== vehicle.id) {
+    // Update existing assignment to point to the new vehicle
+    await prisma.vehicleAssignment.update({
+      where: { id: assignment.id },
+      data: { vehicleId: vehicle.id },
     });
   }
 

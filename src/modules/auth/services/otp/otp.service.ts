@@ -87,16 +87,28 @@ export class OtpService {
       };
     }
     if (claim.status === 'rate_limited') {
-      this.otpMetrics.rateLimited({ purpose });
-      throw new RateLimitedError(claim.retryAfterSeconds);
+      if (process.env.APP_ENV === 'development' || process.env.NODE_ENV !== 'production') {
+        logger.debug({ phoneNumber, purpose }, '[OTP] Rate limit bypassed in development mode');
+      } else {
+        this.otpMetrics.rateLimited({ purpose });
+        throw new RateLimitedError(claim.retryAfterSeconds);
+      }
     }
     const release = (): Promise<boolean> =>
-      this.redisService.otp.releaseChallenge(purpose, phoneNumber, claim.payload);
+      this.redisService.otp.releaseChallenge(
+        purpose,
+        phoneNumber,
+        claim.status === 'claimed' ? claim.payload : '',
+      );
     const secondary = await this.otpRateLimiter.checkSecondaryAxes({
       deviceId: input.deviceId ?? null,
       ip: input.ip ?? null,
     });
-    if (!secondary.allowed) {
+    if (
+      !secondary.allowed &&
+      process.env.APP_ENV !== 'development' &&
+      process.env.NODE_ENV === 'production'
+    ) {
       await release();
       this.otpMetrics.rateLimited({ purpose });
       throw new RateLimitedError(secondary.retryAfterSeconds);

@@ -69,7 +69,9 @@ export class RideRepository {
         fare: true,
         cancellation: true,
         statusEvents: true,
-        driver: { select: { userId: true } },
+        driver: { include: { profile: true } },
+        vehicle: true,
+        vehicleType: true,
       },
     });
   }
@@ -104,6 +106,13 @@ export class RideRepository {
       where: {
         OR: [{ customerId: userId }, { driver: { userId } }],
         status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+      },
+      include: {
+        driver: {
+          include: { profile: true },
+        },
+        vehicle: true,
+        vehicleType: true,
       },
       // A user should never have two, but if they somehow do, the one they most
       // recently became part of is the one they are asking about.
