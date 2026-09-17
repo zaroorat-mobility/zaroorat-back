@@ -1,6 +1,12 @@
 import type { AppClient, AppColorScheme, Prisma } from '../../../generated/prisma/index.js';
+import { otpConfig } from '@config/otp/otp.config.js';
+import { geoConfig } from '@config/geo/geo.config.js';
+import { rideConfig } from '@config/ride/ride.config.js';
+import { driverConfig } from '@config/driver/driver.config.js';
+import { vehicleConfig } from '@config/vehicle/vehicle.config.js';
 import { SystemSettingService } from '@modules/admin/system-settings/services/system-setting.service.js';
 import { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
+import { PlatformConfigResolver } from '@modules/admin/system-settings/platform/services/platform-config-resolver.service.js';
 import { logger } from '@shared/logger/index.js';
 import { AppConfigRepository } from '../repositories/app-config.repository.js';
 import { AppConfigCache } from '../cache/app-config.cache.js';
@@ -13,6 +19,56 @@ import {
   type AppClientSlug,
   type ColorSchemeSlug,
 } from '../constants/app-config.constants.js';
+
+export interface AppGeneralSettings {
+  platformName: string;
+  logoUrl: string;
+  supportPhone: string;
+  supportEmail: string;
+  defaultLanguage: string;
+  timezone: string;
+  currency: string;
+}
+
+export interface AppRideSettings {
+  requestExpiryMinutes: number;
+  dispatchTimeoutSeconds: number;
+  dispatchBatchSize: number;
+  searchRadiusMeters: number;
+  maxSearchRadiusMeters: number;
+  cancellationGraceMinutes: number;
+  defaultCancellationFee: number;
+}
+
+export interface AppOtpSettings {
+  enabled: boolean;
+  codeLength: number;
+  ttlSeconds: number;
+  maxVerifyAttempts: number;
+  lockoutSeconds: number;
+  resendIntervalSeconds: number;
+}
+
+export interface AppOnboardingSettings {
+  driverRequiredDocuments: string[];
+  vehicleRequiredDocuments: string[];
+  driverDocExpiryWarningDays: number;
+  requireApprovedDocuments: boolean;
+}
+
+/** Public maintenance payload — omit admin-only fields. */
+export interface AppMaintenanceSettings {
+  enabled: boolean;
+  message: string;
+}
+
+export interface AppPlatformSettings {
+  general: AppGeneralSettings;
+  ride: AppRideSettings;
+  otp: AppOtpSettings;
+  onboarding: AppOnboardingSettings;
+  maintenance: AppMaintenanceSettings;
+}
 
 export interface AppConfigBundle {
   version: number;
@@ -38,7 +94,13 @@ export interface AppConfigBundle {
     sortOrder: number;
   }>;
   strings: Record<string, string>;
+  /** Resolved feature flags (admin `/admin/settings/feature-flags`). */
   featureFlags: Record<string, boolean>;
+  /**
+   * Platform system settings safe for client apps.
+   * Sourced from admin `/admin/settings/{general,ride,otp,onboarding,maintenance}`.
+   */
+  settings: AppPlatformSettings;
 }
 
 const APP_CLIENT_MAP: Record<AppClientSlug, AppClient> = {
@@ -60,12 +122,52 @@ export function toColorScheme(scheme: ColorSchemeSlug): AppColorScheme {
   return COLOR_SCHEME_MAP[scheme];
 }
 
+export const DEFAULT_PLATFORM_SETTINGS: AppPlatformSettings = Object.freeze({
+  general: {
+    platformName: 'Zaroorat',
+    logoUrl: '',
+    supportPhone: '',
+    supportEmail: '',
+    defaultLanguage: 'en',
+    timezone: 'Asia/Kolkata',
+    currency: 'INR',
+  },
+  ride: {
+    requestExpiryMinutes: rideConfig.requestExpiryMinutes,
+    dispatchTimeoutSeconds: rideConfig.dispatchTimeoutSeconds,
+    dispatchBatchSize: rideConfig.dispatchBatchSize,
+    searchRadiusMeters: geoConfig.searchRadiusMeters,
+    maxSearchRadiusMeters: geoConfig.maxSearchRadiusMeters,
+    cancellationGraceMinutes: rideConfig.cancellationGraceMinutes,
+    defaultCancellationFee: rideConfig.defaultCancellationFee,
+  },
+  otp: {
+    enabled: true,
+    codeLength: otpConfig.codeLength,
+    ttlSeconds: otpConfig.ttlSeconds,
+    maxVerifyAttempts: otpConfig.maxVerifyAttempts,
+    lockoutSeconds: otpConfig.lockoutSeconds,
+    resendIntervalSeconds: otpConfig.resendIntervalSeconds,
+  },
+  onboarding: {
+    driverRequiredDocuments: [...driverConfig.requiredDocumentTypes],
+    vehicleRequiredDocuments: [...vehicleConfig.requiredDocumentTypes],
+    driverDocExpiryWarningDays: 30,
+    requireApprovedDocuments: driverConfig.requireApprovedDocuments,
+  },
+  maintenance: {
+    enabled: false,
+    message: 'The platform is under maintenance. Please try again later.',
+  },
+});
+
 export class AppConfigService {
   constructor(
     private readonly appConfigRepository: AppConfigRepository,
     private readonly appConfigCache: AppConfigCache,
     private readonly systemSettingService: SystemSettingService,
     private readonly featureFlagService?: FeatureFlagService,
+    private readonly platformConfigResolver?: PlatformConfigResolver,
   ) {}
 
   async getVersion(): Promise<number> {
@@ -94,13 +196,14 @@ export class AppConfigService {
     if (cached) return cached;
 
     const appKey = toAppClient(app);
-    const [light, dark, fonts, locales, translations, featureFlags] = await Promise.all([
+    const [light, dark, fonts, locales, translations, featureFlags, settings] = await Promise.all([
       this.appConfigRepository.findTheme(appKey, 'LIGHT'),
       this.appConfigRepository.findTheme(appKey, 'DARK'),
       this.appConfigRepository.findFontsByApp(appKey),
       this.appConfigRepository.findLocales(),
       this.appConfigRepository.findTranslations(locale, appKey),
       this.loadFeatureFlags(),
+      this.loadPlatformSettings(),
     ]);
 
     const strings: Record<string, string> = {};
@@ -137,6 +240,7 @@ export class AppConfigService {
       })),
       strings,
       featureFlags,
+      settings,
     };
 
     await this.appConfigCache.setBundle(app, locale, version, bundle, APP_CONFIG_CACHE_TTL_SECONDS);
@@ -189,6 +293,34 @@ export class AppConfigService {
     } catch (err) {
       logger.warn({ err }, '[AppConfigService] Failed to load feature flags');
       return {};
+    }
+  }
+
+  private async loadPlatformSettings(): Promise<AppPlatformSettings> {
+    if (!this.platformConfigResolver) {
+      return structuredClone(DEFAULT_PLATFORM_SETTINGS);
+    }
+    try {
+      const [general, ride, otp, onboarding, maintenance] = await Promise.all([
+        this.platformConfigResolver.getGeneralConfig(),
+        this.platformConfigResolver.getRideConfig(),
+        this.platformConfigResolver.getOtpConfig(),
+        this.platformConfigResolver.getOnboardingConfig(),
+        this.platformConfigResolver.getMaintenanceConfig(),
+      ]);
+      return {
+        general,
+        ride,
+        otp,
+        onboarding,
+        maintenance: {
+          enabled: maintenance.enabled,
+          message: maintenance.message,
+        },
+      };
+    } catch (err) {
+      logger.warn({ err }, '[AppConfigService] Failed to load platform settings');
+      return structuredClone(DEFAULT_PLATFORM_SETTINGS);
     }
   }
 }
