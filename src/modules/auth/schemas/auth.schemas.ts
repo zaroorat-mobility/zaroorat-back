@@ -41,7 +41,12 @@ export const logoutSchema = z
     allDevices: z.boolean().optional(),
   })
   .optional();
+export const updatePushTokenSchema = z.object({
+  fcmToken: z.string().min(1).max(512),
+  deviceId: z.string().min(1).max(128).optional(),
+});
 export type SendOtpBody = z.infer<typeof sendOtpSchema>;
 export type VerifyOtpBody = z.infer<typeof verifyOtpSchema>;
 export type RefreshBody = z.infer<typeof refreshSchema>;
 export type AdminPasswordLoginBody = z.infer<typeof adminPasswordLoginSchema>;
+export type UpdatePushTokenBody = z.infer<typeof updatePushTokenSchema>;

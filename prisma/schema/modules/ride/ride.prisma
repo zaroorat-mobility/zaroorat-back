@@ -105,6 +105,9 @@ model Ride {
   /// ride's pinned PricingRule and never recalculated (spec.md FR-013b/FR-020).
   /// Null for SUBSCRIPTION-model rides.
   commissionAmount   Decimal?                              @map("commission_amount") @db.Decimal(12, 2)
+  /// Optional early-end reason when the trip finished short of destination.
+  earlyEndReasonCode RideEndReason?                        @map("early_end_reason_code")
+  earlyEndReasonText String?                               @map("early_end_reason_text")
   createdAt          DateTime                              @default(now()) @map("created_at")
   updatedAt          DateTime                              @updatedAt @map("updated_at")
 
@@ -147,6 +150,7 @@ model Ride {
 
   @@index([customerId])
   @@index([driverId])
+  @@index([driverId, completedAt])
   @@index([status])
   @@index([createdAt])
   @@map("rides")
@@ -324,15 +328,21 @@ model ScheduledRide {
   id             String    @id @default(uuid(7)) @db.Uuid
   requestId      String    @map("request_id") @db.Uuid
   customerId     String    @map("customer_id") @db.Uuid
+  /// Driver offered the pickup, or who has accepted it. Null while unassigned.
+  driverId       String?   @map("driver_id") @db.Uuid
   scheduledFor   DateTime  @map("scheduled_for")
   status         String    @default("SCHEDULED")
   reminderSentAt DateTime? @map("reminder_sent_at")
   rideId         String?   @map("ride_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   request RideRequest @relation(fields: [requestId], references: [id])
+  driver  Driver?     @relation(fields: [driverId], references: [id])
 
   @@index([scheduledFor])
+  @@index([driverId, scheduledFor])
+  @@index([status, scheduledFor, reminderSentAt])
   @@map("scheduled_rides")
 }
 

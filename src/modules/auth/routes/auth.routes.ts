@@ -201,6 +201,47 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     controller.revokeDevice,
   );
+  app.post(
+    '/me/device/push-token',
+    {
+      schema: {
+        tags: ['Auth'],
+        summary: 'Refresh device FCM push token',
+        description:
+          'Updates the Firebase Cloud Messaging token for the caller’s current device ' +
+          '(or a named deviceId). Used by mobile clients when the OS rotates the token.',
+        security: [{ bearerAuth: [] }],
+        body: {
+          type: 'object',
+          required: ['fcmToken'],
+          properties: {
+            fcmToken: { type: 'string', minLength: 1, maxLength: 512 },
+            deviceId: { type: 'string', minLength: 1, maxLength: 128 },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: {
+                type: 'object',
+                properties: {
+                  deviceId: { type: 'string' },
+                  fcmToken: { type: 'string' },
+                },
+                required: ['deviceId', 'fcmToken'],
+              },
+            },
+            required: ['data'],
+          },
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          500: errorResponseSchema,
+        },
+      },
+    },
+    controller.updatePushToken,
+  );
   app.get(
     '/me',
     {

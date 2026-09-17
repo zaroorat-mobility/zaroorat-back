@@ -324,6 +324,17 @@ export class AuthService {
   async revokeDevice(userId: string, deviceId: string): Promise<number | null> {
     return this.deviceService.revokeForUser(userId, deviceId);
   }
+
+  /// Refresh the FCM push token for the caller's current (or named) device.
+  async updatePushToken(
+    userId: string,
+    sessionId: string,
+    fcmToken: string,
+    deviceId?: string,
+  ): Promise<{ deviceId: string; fcmToken: string }> {
+    return this.deviceService.updateFcmToken(userId, sessionId, fcmToken, deviceId);
+  }
+
   async grantRole(
     userId: string,
     roleSlug: string,

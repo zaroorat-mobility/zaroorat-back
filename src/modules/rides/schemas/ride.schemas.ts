@@ -56,10 +56,36 @@ export const startRideSchema = z.object({
   }),
 });
 export type StartRideBody = z.infer<typeof startRideSchema>;
-export const completeRideSchema = z.object({
-  actualDistanceKm: z.number().nonnegative(),
-  actualDurationMin: z.number().int().nonnegative(),
-});
+export const RIDE_END_REASON_CODES = [
+  'RIDER_REQUESTED_END',
+  'DESTINATION_CHANGED',
+  'RIDER_STOP_HERE',
+  'SAFETY_CONCERN',
+  'VEHICLE_BREAKDOWN',
+  'ACCIDENT',
+  'MEDICAL_EMERGENCY',
+  'ROAD_BLOCKED',
+  'RIDER_BEHAVIOUR',
+  'UNABLE_TO_CONTINUE',
+  'OTHER',
+] as const;
+export const rideEndReasonCodeSchema = z.enum(RIDE_END_REASON_CODES);
+export const completeRideSchema = z
+  .object({
+    actualDistanceKm: z.number().nonnegative(),
+    actualDurationMin: z.number().int().nonnegative(),
+    endReasonCode: rideEndReasonCodeSchema.optional(),
+    endReasonText: z.string().max(500).optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (body.endReasonCode === 'OTHER' && !body.endReasonText?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endReasonText'],
+        message: 'endReasonText is required when endReasonCode is OTHER',
+      });
+    }
+  });
 export type CompleteRideBody = z.infer<typeof completeRideSchema>;
 export const cancelRideSchema = z.object({
   reasonCode: z.string().max(50),

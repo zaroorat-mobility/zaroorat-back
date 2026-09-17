@@ -21,6 +21,8 @@ import {
   DriverEligibilityService,
   PaymentModelService,
 } from './services/index.js';
+import { DriverEarningsService } from './services/earnings/index.js';
+import { DriverWithdrawalService } from './services/withdrawal/index.js';
 import {
   DriverOnboardingController,
   DriverDocumentsController,
@@ -29,6 +31,9 @@ import {
   DriverWalletController,
   DriverPaymentModelController,
   DriverCommissionWalletController,
+  DriverEarningsController,
+  DriverWithdrawalController,
+  DriverScheduledController,
   DriverController,
 } from './controllers/index.js';
 import { HeartbeatTimeoutJob, DocExpirationJob } from './jobs/index.js';
@@ -64,6 +69,8 @@ export function registerDriversModule(container: AwilixContainer): void {
     driverWalletViewService: asClass(DriverWalletViewService).singleton(),
     shiftService: asClass(ShiftService).singleton(),
     paymentModelService: asClass(PaymentModelService).singleton(),
+    driverEarningsService: asClass(DriverEarningsService).singleton(),
+    driverWithdrawalService: asClass(DriverWithdrawalService).singleton(),
     driverService: asClass(DriverService)
       .singleton()
       .inject((c) => ({
@@ -81,6 +88,9 @@ export function registerDriversModule(container: AwilixContainer): void {
     driverWalletController: asClass(DriverWalletController).singleton(),
     driverPaymentModelController: asClass(DriverPaymentModelController).singleton(),
     driverCommissionWalletController: asClass(DriverCommissionWalletController).singleton(),
+    driverEarningsController: asClass(DriverEarningsController).singleton(),
+    driverWithdrawalController: asClass(DriverWithdrawalController).singleton(),
+    driverScheduledController: asClass(DriverScheduledController).singleton(),
     driverController: asClass(DriverController)
       .singleton()
       .inject((c) => ({
@@ -91,6 +101,9 @@ export function registerDriversModule(container: AwilixContainer): void {
         wallet: c.resolve('driverWalletController'),
         paymentModel: c.resolve('driverPaymentModelController'),
         commissionWallet: c.resolve('driverCommissionWalletController'),
+        earnings: c.resolve('driverEarningsController'),
+        withdrawals: c.resolve('driverWithdrawalController'),
+        scheduled: c.resolve('driverScheduledController'),
       })),
     heartbeatTimeoutJob: asClass(HeartbeatTimeoutJob).singleton(),
     driverRepo: aliasTo('driverRepository'),

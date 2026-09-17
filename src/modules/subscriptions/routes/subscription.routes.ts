@@ -14,6 +14,7 @@ export async function subscriptionRoutes(fastify: FastifyInstance): Promise<void
 
   fastify.get('/plans', (req, reply) => controller.listPlans(req, reply));
   fastify.post('/plans', canFinanceExecute, (req, reply) => controller.createPlan(req, reply));
+  fastify.get('/invoices', (req, reply) => controller.listInvoices(req, reply));
   fastify.post('/', { preHandler: fastify.rateLimit(rateLimits.payment) }, (req, reply) =>
     controller.purchase(req, reply),
   );

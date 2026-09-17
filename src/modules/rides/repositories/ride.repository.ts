@@ -136,6 +136,20 @@ export class RideRepository {
       actualDistanceKm?: Decimal;
       actualDurationMin?: number;
       paymentStatus?: 'PENDING' | 'AUTHORIZED' | 'PAID' | 'FAILED' | 'REFUNDED';
+      earlyEndReasonCode?:
+        | 'RIDER_REQUESTED_END'
+        | 'DESTINATION_CHANGED'
+        | 'RIDER_STOP_HERE'
+        | 'SAFETY_CONCERN'
+        | 'VEHICLE_BREAKDOWN'
+        | 'ACCIDENT'
+        | 'MEDICAL_EMERGENCY'
+        | 'ROAD_BLOCKED'
+        | 'RIDER_BEHAVIOUR'
+        | 'UNABLE_TO_CONTINUE'
+        | 'OTHER'
+        | null;
+      earlyEndReasonText?: string | null;
     },
     tx?: TransactionClient,
   ): Promise<Ride> {
@@ -158,6 +172,20 @@ export class RideRepository {
       actualDistanceKm?: Decimal;
       actualDurationMin?: number;
       paymentStatus?: 'PENDING' | 'AUTHORIZED' | 'PAID' | 'FAILED' | 'REFUNDED';
+      earlyEndReasonCode?:
+        | 'RIDER_REQUESTED_END'
+        | 'DESTINATION_CHANGED'
+        | 'RIDER_STOP_HERE'
+        | 'SAFETY_CONCERN'
+        | 'VEHICLE_BREAKDOWN'
+        | 'ACCIDENT'
+        | 'MEDICAL_EMERGENCY'
+        | 'ROAD_BLOCKED'
+        | 'RIDER_BEHAVIOUR'
+        | 'UNABLE_TO_CONTINUE'
+        | 'OTHER'
+        | null;
+      earlyEndReasonText?: string | null;
     } = {},
     tx?: TransactionClient,
   ): Promise<boolean> {

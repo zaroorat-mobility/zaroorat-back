@@ -5,6 +5,10 @@ import { DriverLocationController } from './driver-location.controller.js';
 import { DriverWalletController } from './driver-wallet.controller.js';
 import { DriverPaymentModelController } from './driver-payment-model.controller.js';
 import { DriverCommissionWalletController } from './driver-commission-wallet.controller.js';
+import { DriverEarningsController } from './driver-earnings.controller.js';
+import { DriverWithdrawalController } from './driver-withdrawal.controller.js';
+import { DriverScheduledController } from './driver-scheduled.controller.js';
+
 export class DriverController {
   constructor(
     public readonly onboarding: DriverOnboardingController,
@@ -14,5 +18,8 @@ export class DriverController {
     public readonly wallet: DriverWalletController,
     public readonly paymentModel: DriverPaymentModelController,
     public readonly commissionWallet: DriverCommissionWalletController,
+    public readonly earnings: DriverEarningsController,
+    public readonly withdrawals: DriverWithdrawalController,
+    public readonly scheduled: DriverScheduledController,
   ) {}
 }

@@ -1,4 +1,4 @@
-import { asClass, aliasTo, AwilixContainer } from 'awilix';
+import { asClass, asFunction, aliasTo, AwilixContainer } from 'awilix';
 import { RideMetrics } from './metrics/ride.metrics.js';
 import {
   RideRequestRepository,
@@ -19,13 +19,19 @@ import {
   RidePinThrottle,
   RidePinVerificationService,
 } from './services/index.js';
+import { ScheduledRideService } from './services/scheduled/index.js';
+import { RideChatService } from './services/chat/index.js';
+import { RideCallService, createCallProvider } from './services/call/index.js';
 import {
   RideRequestController,
   RideStateController,
   RideQueryController,
   RideController,
+  RideChatController,
+  RideCallController,
+  RideScheduledController,
 } from './controllers/index.js';
-import { DispatchTimeoutJob, RequestExpiryJob } from './jobs/index.js';
+import { DispatchTimeoutJob, RequestExpiryJob, ScheduledRideReminderJob } from './jobs/index.js';
 import {
   RideRequestedConsumer,
   RideNotificationConsumer,
@@ -62,6 +68,10 @@ export function registerRidesModule(container: AwilixContainer): void {
     dispatchService: asClass(DispatchService).singleton(),
     lifecycleService: asClass(LifecycleService).singleton(),
     receiptService: asClass(ReceiptService).singleton(),
+    scheduledRideService: asClass(ScheduledRideService).singleton(),
+    rideChatService: asClass(RideChatService).singleton(),
+    callProvider: asFunction(createCallProvider).singleton(),
+    rideCallService: asClass(RideCallService).singleton(),
     rideService: asClass(RideService)
       .singleton()
       .inject((c) => ({
@@ -75,15 +85,22 @@ export function registerRidesModule(container: AwilixContainer): void {
     rideRequestController: asClass(RideRequestController).singleton(),
     rideStateController: asClass(RideStateController).singleton(),
     rideQueryController: asClass(RideQueryController).singleton(),
+    rideChatController: asClass(RideChatController).singleton(),
+    rideCallController: asClass(RideCallController).singleton(),
+    rideScheduledController: asClass(RideScheduledController).singleton(),
     rideController: asClass(RideController)
       .singleton()
       .inject((c) => ({
         request: c.resolve('rideRequestController'),
         state: c.resolve('rideStateController'),
         query: c.resolve('rideQueryController'),
+        chat: c.resolve('rideChatController'),
+        call: c.resolve('rideCallController'),
+        scheduled: c.resolve('rideScheduledController'),
       })),
     dispatchTimeoutJob: asClass(DispatchTimeoutJob).singleton(),
     requestExpiryJob: asClass(RequestExpiryJob).singleton(),
+    scheduledRideReminderJob: asClass(ScheduledRideReminderJob).singleton(),
     rideRequestedConsumer: asClass(RideRequestedConsumer).singleton(),
     rideNotificationConsumer: asClass(RideNotificationConsumer).singleton(),
     rideRealtimeConsumer: asClass(RideRealtimeConsumer).singleton(),
