@@ -14,8 +14,11 @@ export class WalletService {
     private readonly eventPublisher: EventPublisher,
     private readonly paymentMetrics: PaymentMetrics,
   ) {}
-  async getWallet(userId: string): Promise<CustomerWallet> {
-    return this.walletRepository.getOrCreateWallet(userId);
+  /// Read-only. Customer wallets are retired: a historical row is still
+  /// returned, but a read never creates one — null means the customer never
+  /// had a wallet.
+  async getWallet(userId: string): Promise<CustomerWallet | null> {
+    return this.walletRepository.findByUserId(userId);
   }
   /// Credits a wallet inside a transaction the caller already owns.
   ///
@@ -139,52 +142,14 @@ export class WalletService {
     );
     return updated;
   }
-  async hold(
-    userId: string,
-    amount: Decimal,
-    reason?: string,
-    referenceId?: string,
-  ): Promise<WalletHold> {
-    if (amount.lte(0)) {
-      throw new Error('Hold amount must be greater than zero');
-    }
-    return this.txManager.execute(async (tx) => {
-      const wallet = await this.walletRepository.getOrCreateWallet(userId, tx);
-      const locked = await this.walletRepository.lockForUpdate(userId, tx);
-      const activeWallet = locked ?? wallet;
-      const availableBalance = activeWallet.balance.sub(activeWallet.lockedBalance);
-      if (availableBalance.lt(amount)) {
-        this.paymentMetrics.insufficientBalance({ userId });
-        throw new InsufficientBalanceError();
-      }
-      const newLockedBalance = activeWallet.lockedBalance.add(amount);
-      await this.walletRepository.updateBalances(
-        wallet.id,
-        activeWallet.balance,
-        newLockedBalance,
-        tx,
-      );
-      const holdParams = {
-        walletType: 'CUSTOMER',
-        walletId: wallet.id,
-        ownerId: userId,
-        amount,
-        referenceType: 'HOLD',
-        ...(reason !== undefined ? { reason } : {}),
-        ...(referenceId !== undefined ? { referenceId } : {}),
-      };
-      const holdRecord = await this.walletRepository.createHold(holdParams, tx);
-      await this.eventPublisher.publish(
-        paymentEvent(PAYMENT_EVENT_CATALOG.WALLET_HOLD_CREATED, userId, {
-          holdId: holdRecord.id,
-          userId,
-          amount: amount.toNumber(),
-        }),
-        tx,
-      );
-      return holdRecord;
-    });
-  }
+  /// Releases a hold placed before customer wallet holds were withdrawn.
+  ///
+  /// Nothing can create a hold any more (`POST /payments/wallet/hold` and
+  /// `hold()` are gone), so this exists only to unwind rows that already
+  /// exist. It is kept — rather than removed with the rest — because an ACTIVE
+  /// hold keeps a customer's own balance locked, and dropping the only code
+  /// that can release one would strand it. Retire it together with
+  /// `wallet_holds`, once production shows no ACTIVE holds remain.
   async releaseHold(userId: string, holdId: string): Promise<WalletHold> {
     return this.txManager.execute(async (tx) => {
       const wallet = await this.walletRepository.getOrCreateWallet(userId, tx);

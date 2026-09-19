@@ -12,6 +12,7 @@ import {
   appClientSchema,
 } from '../schemas/app-config.schemas.js';
 import {
+  DEFAULT_APP_CLIENT,
   DEFAULT_THEME_COMPONENTS,
   DEFAULT_THEME_TOKENS_DARK,
   DEFAULT_THEME_TOKENS_LIGHT,
@@ -54,7 +55,7 @@ export class AppConfigAdminController {
 
   async listFonts(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
-      const app = appClientSchema.parse((req.query as { app?: string }).app ?? 'driver');
+      const app = appClientSchema.parse((req.query as { app?: string }).app ?? DEFAULT_APP_CLIENT);
       reply.send({ data: await this.appConfigAdminService.listFonts(app) });
     } catch (error) {
       logger.error({ error }, '[AppConfigAdminController] listFonts');
@@ -128,7 +129,7 @@ export class AppConfigAdminController {
   async listTranslations(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const query = req.query as { app?: string; locale?: string };
-      const app = appClientSchema.parse(query.app ?? 'driver');
+      const app = appClientSchema.parse(query.app ?? DEFAULT_APP_CLIENT);
       const locale = typeof query.locale === 'string' ? query.locale : 'en';
       reply.send({ data: await this.appConfigAdminService.listTranslations(app, locale) });
     } catch (error) {

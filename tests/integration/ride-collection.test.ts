@@ -243,16 +243,15 @@ describe('ride collection (integration, real HTTP)', () => {
     await fundWallet(app, w.customer, 3000);
 
     // A rider raising their own 1-rupee intent, and trying to name the ride it
-    // settles. The schema no longer accepts rideId at all, so this cannot even
-    // be expressed -- which is the point of FR-012.
+    // settles. A customer cannot create a gateway intent at all any more --
+    // the route does not exist -- so this cannot even be expressed (FR-012).
     const intent = await app.inject({
       method: 'POST',
       url: '/api/v1/payments/intents',
       headers: { ...w.customer.authHeader, 'idempotency-key': `${Date.now()}-cheat` },
       payload: { amount: 1, methodType: 'CARD', rideId: '00000000-0000-4000-8000-000000000000' },
     });
-    assert.equal(intent.statusCode, 200, intent.payload);
-    assert.equal(intent.json().data.rideId, null, 'a client cannot bind a payment to a ride');
+    assert.equal(intent.statusCode, 404, intent.payload);
 
     const { rideId, fare } = await completeRide(app, w, {
       distanceKm: 11,

@@ -5,6 +5,11 @@ export const APP_CONFIG_CACHE_TTL_SECONDS = 3600;
 export const APP_CLIENTS = ['driver', 'rider', 'admin'] as const;
 export type AppClientSlug = (typeof APP_CLIENTS)[number];
 
+/// Which client app an admin read targets when the request names none. This
+/// is an APP CLIENT (whose themes/fonts/strings to show), never a caller
+/// identity — the acting user always comes from `req.auth`.
+export const DEFAULT_APP_CLIENT: AppClientSlug = 'driver';
+
 export const COLOR_SCHEMES = ['light', 'dark'] as const;
 export type ColorSchemeSlug = (typeof COLOR_SCHEMES)[number];
 

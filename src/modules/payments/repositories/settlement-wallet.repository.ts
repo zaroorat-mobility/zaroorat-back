@@ -111,4 +111,67 @@ export class SettlementWalletRepository {
     });
     return updated;
   }
+
+  /// Payout reservations (Option A safety hotfix).
+  ///
+  /// `lockedBalance` is money promised to an INITIATED payout. It is still the
+  /// driver's — `balance` does not change — but it is no longer available to
+  /// any other payout: `availableBalance = balance − lockedBalance`. One wallet
+  /// row serves every payout rail, so a reservation made by one payout blocks
+  /// every other payout of the same driver, on any settlement.
+  ///
+  /// All three expect the caller to ALREADY hold this wallet's row lock
+  /// (`lockForUpdate`); that lock is what makes check-then-write atomic.
+  async reserve(driverId: string, amount: Decimal, tx: TransactionClient): Promise<DriverWallet> {
+    return tx.driverWallet.update({
+      where: { driverId },
+      data: { lockedBalance: { increment: amount } },
+    });
+  }
+
+  async release(driverId: string, amount: Decimal, tx: TransactionClient): Promise<DriverWallet> {
+    return tx.driverWallet.update({
+      where: { driverId },
+      data: { lockedBalance: { decrement: amount } },
+    });
+  }
+
+  /// Spends a reservation: the money leaves (`balance −= amount`) and stops
+  /// being held (`lockedBalance −= amount`) in one write, with exactly one
+  /// WITHDRAWAL row. Stored negative, matching `debit` — reconciliation sums
+  /// the transaction column against `balance`.
+  async withdrawReserved(
+    data: {
+      driverId: string;
+      amount: Decimal;
+      referenceType: string;
+      referenceId: string;
+      description: string;
+    },
+    tx: TransactionClient,
+  ): Promise<DriverWallet> {
+    const wallet = await tx.driverWallet.findUniqueOrThrow({ where: { driverId: data.driverId } });
+    const newBalance = wallet.balance.sub(data.amount);
+    const updated = await tx.driverWallet.update({
+      where: { driverId: data.driverId },
+      data: {
+        balance: newBalance,
+        lockedBalance: wallet.lockedBalance.sub(data.amount),
+        lastTransactionAt: new Date(),
+      },
+    });
+    await tx.driverWalletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        driverId: data.driverId,
+        txnType: 'WITHDRAWAL',
+        amount: data.amount.neg(),
+        balanceAfter: newBalance,
+        referenceType: data.referenceType,
+        referenceId: data.referenceId,
+        description: data.description,
+      },
+    });
+    return updated;
+  }
 }

@@ -3,7 +3,7 @@
 ## Current Milestone: Production Readiness Remediation
 
 - **Current Position**: Phase 1 Complete (Implementation + Code Verification PASS, Staging/Device Certification PENDING)
-- **Next Step**: Phase 2 (Production Infrastructure Readiness - on user instruction)
+- **Next Step**: Phase 2 (Production Infrastructure Readiness: Airtel DLT + SMS Verification, 35-day DB PITR, Pino/Prometheus metrics - on user instruction)
 
 ## Milestone Status Summary
 
@@ -12,7 +12,7 @@
   - Implementation: COMPLETE
   - Contract Verification: PASS (10/10 checks)
   - Staging/Device Certification: PENDING (Smoke matrix required prior to production release)
-- **Phase 2**: Production Infrastructure Readiness — Pending
+- **Phase 2**: Production Infrastructure Readiness (Airtel DLT + SMS, DB PITR, APM) — Pending
 - **Phase 3**: Outbox Worker Deployment Decision — Pending
 - **Phase 4**: Middleware Cleanup — Pending
 - **Phase 5**: Full Production E2E Testing — Pending

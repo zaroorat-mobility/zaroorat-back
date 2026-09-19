@@ -23,3 +23,13 @@ export const suspendDriverBodySchema = z.object({
 
 export type ListDriversQuery = z.infer<typeof listDriversQuerySchema>;
 export type SuspendDriverBody = z.infer<typeof suspendDriverBodySchema>;
+
+/// Phase 1 bank-account verification gate.
+export const bankAccountParamSchema = z.object({
+  driverId: z.string().uuid(),
+  accountId: z.string().uuid(),
+});
+export const bankAccountDriverParamSchema = z.object({ driverId: z.string().uuid() });
+export const bankAccountReasonBodySchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+});

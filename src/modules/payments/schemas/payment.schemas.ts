@@ -1,19 +1,4 @@
 import { z } from 'zod';
-export const topupWalletSchema = z.object({
-  amount: z.number().positive({ message: 'Amount must be greater than zero' }),
-  referenceId: z.string().uuid().optional(),
-  description: z.string().max(255).optional(),
-  /// How the rider intends to fund the top-up. Optional and additive: an
-  /// existing client that sends neither gets a card intent.
-  methodType: z.enum(['CARD', 'UPI', 'NETBANKING']).optional(),
-});
-export type TopupWalletBody = z.infer<typeof topupWalletSchema>;
-export const holdWalletSchema = z.object({
-  amount: z.number().positive(),
-  reason: z.string().max(255).optional(),
-  referenceId: z.string().uuid().optional(),
-});
-export type HoldWalletBody = z.infer<typeof holdWalletSchema>;
 /// 004-driver-subscription-wallet. Exactly one of amount/rechargeOptionId —
 /// spec.md FR-008/FR-008a. Validated server-side against the configured
 /// min/max (custom) or the active option list (predefined) before any
@@ -27,16 +12,6 @@ export const rechargeCommissionWalletSchema = z
     message: 'Provide exactly one of amount or rechargeOptionId',
   });
 export type RechargeCommissionWalletBody = z.infer<typeof rechargeCommissionWalletSchema>;
-/// `rideId` is deliberately absent. A client may fund its own wallet; it may
-/// not declare which ride a payment settles, because that let a rider point a
-/// 1-rupee intent at a 500-rupee fare (FR-012). Which ride an intent belongs
-/// to is decided server-side, from the ride's own fare.
-export const createIntentSchema = z.object({
-  amount: z.number().positive(),
-  methodType: z.enum(['CARD', 'UPI', 'NETBANKING', 'WALLET']),
-  paymentMethodId: z.string().uuid().optional(),
-});
-export type CreateIntentBody = z.infer<typeof createIntentSchema>;
 export const processRefundSchema = z.object({
   transactionId: z.string().uuid(),
   amount: z.number().positive(),
@@ -46,7 +21,29 @@ export type ProcessRefundBody = z.infer<typeof processRefundSchema>;
 export const executePayoutSchema = z.object({
   driverId: z.string().uuid(),
   settlementId: z.string().uuid().optional(),
-  bankAccountId: z.string().uuid().optional(),
+  /// Required. It used to be optional, which meant the bank-account checks a
+  /// payout depends on — ownership, verification, payoutEnabled — had nothing
+  /// to run against; when omitted the service passed the literal string
+  /// 'default' to the gateway. You cannot pay someone without an account.
+  bankAccountId: z.string().uuid(),
   amount: z.number().positive(),
 });
 export type ExecutePayoutBody = z.infer<typeof executePayoutSchema>;
+
+/// Finance recording that a bank transfer for this payout actually executed.
+/// The reference is the bank's own (UTR/NEFT ref) and is the audit link
+/// between this row and the money that left the platform's account, so it is
+/// mandatory and non-empty.
+export const confirmPayoutSchema = z.object({
+  externalReference: z.string().trim().min(1).max(140),
+});
+export type ConfirmPayoutBody = z.infer<typeof confirmPayoutSchema>;
+
+export const failPayoutSchema = z.object({
+  reason: z.string().trim().min(1).max(500),
+});
+export type FailPayoutBody = z.infer<typeof failPayoutSchema>;
+
+export const payoutIdParamSchema = z.object({
+  id: z.string().uuid(),
+});

@@ -100,6 +100,7 @@ model Ride {
   /// precedent): every ride created by this feature's code always sets it;
   /// NULL means "created before this column existed," and completion treats
   /// that as a legacy ride with no dual-model handling, never as an error.
+  /// DB CHECK `rides_driver_payment_model_check` enforces the allowed values.
   driverPaymentModel String?                               @map("driver_payment_model")
   /// COMMISSION-model rides only; determined ONCE at acceptance from the
   /// ride's pinned PricingRule and never recalculated (spec.md FR-013b/FR-020).

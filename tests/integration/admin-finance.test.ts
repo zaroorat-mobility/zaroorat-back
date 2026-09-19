@@ -132,7 +132,7 @@ describe('admin financial operations (integration)', () => {
     assert.ok(dash.revenue);
     assert.ok(dash.actions);
     assert.ok(dash.health);
-    assert.ok(Array.isArray(dash.gateways));
+    assert.equal(dash.gateways, undefined, 'no fabricated per-gateway performance data');
 
     const txns = await app.inject({
       method: 'GET',

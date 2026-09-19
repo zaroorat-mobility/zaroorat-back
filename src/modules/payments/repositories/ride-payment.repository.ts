@@ -77,18 +77,4 @@ export class RidePaymentRepository {
     const client = tx ?? this.db.client;
     return client.ridePayment.count({ where: { rideId, status: 'FAILED' } });
   }
-
-  /// Rides the collection sweep should try again: still owed, last attempt
-  /// older than the backoff window. Ordered oldest-first so a backlog drains
-  /// fairly rather than starving the earliest failures.
-  ///
-  /// Uses the `(status, created_at)` index added alongside this repository.
-  async findRetryable(before: Date, limit: number, tx?: TransactionClient): Promise<RidePayment[]> {
-    const client = tx ?? this.db.client;
-    return client.ridePayment.findMany({
-      where: { status: 'FAILED', createdAt: { lte: before } },
-      orderBy: { createdAt: 'asc' },
-      take: limit,
-    });
-  }
 }

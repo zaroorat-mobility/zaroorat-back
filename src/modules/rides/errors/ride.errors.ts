@@ -283,3 +283,17 @@ export class PromotionsUnavailableError extends RideError {
     this.name = 'PromotionsUnavailableError';
   }
 }
+
+/// D1. A new ride may only be booked as CASH, UPI or CARD. Rides booked before
+/// that rule keep working — this refuses the booking, never the processing of
+/// an existing WALLET ride.
+export class WalletRidesNotAcceptedError extends RideError {
+  constructor() {
+    super(
+      'Wallet is no longer accepted for new rides; pay the driver by cash, UPI or card',
+      'WALLET_RIDES_NOT_ACCEPTED',
+      422,
+    );
+    this.name = 'WalletRidesNotAcceptedError';
+  }
+}

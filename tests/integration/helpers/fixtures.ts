@@ -4,6 +4,11 @@ import { driverConfig } from '../../../src/config/driver/driver.config.js';
 import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config.js';
 import { hashRidePin } from '../../../src/modules/auth/utils/ride-pin.js';
 import { db } from './harness.js';
+import type { SettlementStatus } from '../../../src/generated/prisma/index.js';
+import {
+  BANK_ENCRYPTION_VERIFIED_SETTING,
+  protectAccountNumber,
+} from '../../../src/shared/crypto/bank-account-crypto.js';
 
 /// The Ride PIN every test rider gets. Not on the weak-PIN blocklist, and
 /// deliberately not a round number — a test that passes with `1234` would be
@@ -319,10 +324,19 @@ export async function makePaidTransaction(
   return { intentId: intent.id, transactionId: transaction.id };
 }
 
+/// A settled period, in the state the real settlement job leaves behind:
+/// a `driver_settlements` row AND the matching driver wallet credit.
+///
+/// The wallet credit is not decoration. `SettlementService.calculateSettlement`
+/// credits `driver_wallets.balance` with `netPayable`, and a payout now debits
+/// that same balance — so a fixture that wrote only the settlement row
+/// described a state the application never produces, and any test of payout
+/// wallet accounting run against it would be testing a fiction.
+/// Pass `creditWallet: false` to get the bare row deliberately.
 export async function makeSettlement(
   driverId: string,
   netPayable: number,
-  options: { status?: string } = {},
+  options: { status?: SettlementStatus; creditWallet?: boolean } = {},
 ): Promise<string> {
   const periodEnd = new Date();
   const periodStart = new Date(periodEnd.getTime() - Math.floor(Math.random() * 1e9));
@@ -339,7 +353,121 @@ export async function makeSettlement(
       status: options.status ?? 'PENDING',
     },
   });
+
+  if (options.creditWallet !== false && netPayable > 0) {
+    await creditDriverWallet(driverId, netPayable, 'SETTLEMENT', settlement.id);
+  }
   return settlement.id;
+}
+
+export async function creditDriverWallet(
+  driverId: string,
+  amount: number,
+  referenceType: string,
+  referenceId: string,
+): Promise<void> {
+  const wallet = await db().client.driverWallet.upsert({
+    where: { driverId },
+    create: { driverId, balance: amount, lockedBalance: 0, currency: 'INR' },
+    update: { balance: { increment: amount } },
+  });
+  await db().client.driverWalletTransaction.create({
+    data: {
+      walletId: wallet.id,
+      driverId,
+      txnType: 'RIDE_EARNING',
+      amount,
+      balanceAfter: wallet.balance,
+      referenceType,
+      referenceId,
+      description: `Fixture settlement credit`,
+    },
+  });
+}
+
+export async function driverWalletBalance(driverId: string): Promise<number> {
+  const wallet = await db().client.driverWallet.findUnique({ where: { driverId } });
+  return Number((wallet?.balance ?? 0).toString());
+}
+
+/// A driver bank account. Defaults to the state a payout actually requires —
+/// verified, payout-enabled, active, encrypted, and the bank-encryption gate
+/// recorded — because that is the uninteresting setup for most tests; the
+/// rejection cases opt out explicitly.
+///
+/// Phase 1: the number is stored the way production stores it (ciphertext,
+/// last4, keyed hash, no plaintext), and the lifecycle `status` follows the
+/// options so the DB CHECK (payout_enabled ⇔ status = PAYOUT_ENABLED) holds.
+export async function makeBankAccount(
+  driverId: string,
+  options: {
+    verificationStatus?: 'PENDING' | 'VERIFIED' | 'REJECTED';
+    payoutEnabled?: boolean;
+    isActive?: boolean;
+    encrypted?: boolean;
+    enteredBy?: string;
+    accountNumber?: string;
+  } = {},
+): Promise<string> {
+  const verificationStatus = options.verificationStatus ?? 'VERIFIED';
+  const payoutEnabled = (options.payoutEnabled ?? true) && verificationStatus === 'VERIFIED';
+  const isActive = options.isActive ?? true;
+  const status = !isActive
+    ? 'DEACTIVATED'
+    : verificationStatus === 'REJECTED'
+      ? 'REJECTED'
+      : verificationStatus === 'PENDING'
+        ? 'ENTERED'
+        : payoutEnabled
+          ? 'PAYOUT_ENABLED'
+          : 'VERIFIED';
+  const number =
+    options.accountNumber ?? `9${randomUUID().replace(/\D/g, '').padEnd(11, '7').slice(0, 11)}`;
+  const protectedNumber = protectAccountNumber(number);
+  const account = await db().client.driverBankAccount.create({
+    data: {
+      driverId,
+      accountHolderName: 'Fixture Driver',
+      bankName: 'Fixture Bank',
+      ifscCode: 'HDFC0001234',
+      accountNumberEnc: null,
+      ...(options.encrypted === false
+        ? {}
+        : {
+            accountNumberCiphertext: protectedNumber.ciphertext,
+            accountNumberLast4: protectedNumber.last4,
+            accountNumberHash: protectedNumber.hash,
+            encryptionKeyVersion: protectedNumber.keyVersion,
+          }),
+      verificationStatus,
+      status,
+      isActive,
+      payoutEnabled: payoutEnabled && isActive,
+      ...(options.enteredBy ? { enteredBy: options.enteredBy } : {}),
+      isDefault: true,
+    },
+  });
+  await markBankEncryptionVerified();
+  return account.id;
+}
+
+/// The gate a clean `verifyBankAccountEncryption` run writes. `system_settings`
+/// survives `resetState`, so this is idempotent across tests.
+export async function markBankEncryptionVerified(): Promise<void> {
+  await db().client.systemSetting.upsert({
+    where: { key: BANK_ENCRYPTION_VERIFIED_SETTING },
+    create: {
+      key: BANK_ENCRYPTION_VERIFIED_SETTING,
+      value: new Date().toISOString(),
+      category: 'bank_accounts',
+      isSecret: false,
+    },
+    update: {},
+  });
+}
+
+export async function clearBankEncryptionVerified(): Promise<void> {
+  await db().client.systemSetting.deleteMany({ where: { key: BANK_ENCRYPTION_VERIFIED_SETTING } });
 }
 
 export async function makePendingIntent(userId: string, amount: number): Promise<string> {

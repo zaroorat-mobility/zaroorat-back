@@ -16,6 +16,13 @@ export class DriverSubscriptionRepository {
     });
   }
 
+  async findPending(driverId: string, tx?: TransactionClient): Promise<DriverSubscription | null> {
+    const client = tx ?? this.db.client;
+    return client.driverSubscription.findFirst({
+      where: { driverId, status: 'PENDING_PAYMENT' },
+    });
+  }
+
   async lockForUpdate(driverId: string, tx: TransactionClient): Promise<DriverSubscription | null> {
     const locked = await tx.$queryRaw<
       {
@@ -74,6 +81,20 @@ export class DriverSubscriptionRepository {
       data: { status: 'ACTIVE', paymentStatus: 'PAID', startDate, expiryDate },
     });
     return count === 1;
+  }
+
+  /// Phase 1 refunds. A subscription whose payment was refunded no longer
+  /// entitles the driver to new rides. PENDING_PAYMENT is included so an
+  /// activation event that arrives after the refund can never activate it
+  /// (`activateIfPending` only claims PENDING_PAYMENT). Rides already accepted
+  /// are unaffected — completion never consults the subscription.
+  async endForRefund(paymentIntentId: string, tx?: TransactionClient): Promise<number> {
+    const client = tx ?? this.db.client;
+    const { count } = await client.driverSubscription.updateMany({
+      where: { paymentIntentId, status: { in: ['ACTIVE', 'PENDING_PAYMENT'] } },
+      data: { status: 'REFUNDED' },
+    });
+    return count;
   }
 
   async requestCancel(driverId: string, tx?: TransactionClient): Promise<boolean> {

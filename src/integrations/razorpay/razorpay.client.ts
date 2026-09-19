@@ -1,11 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { Decimal } from '../../modules/payments/types/index.js';
 import type {
   PaymentGatewayProvider,
   CreateGatewayIntentInput,
   GatewayIntentResult,
   GatewayRefundResult,
-  GatewayPayoutResult,
+  CreateGatewayRefundInput,
 } from '../../modules/payments/services/gateway/gateway.provider.js';
 
 const SANDBOX_BASE_URL = 'https://api.razorpay.com/v1';
@@ -141,51 +140,54 @@ export class RazorpayGatewayProvider implements PaymentGatewayProvider {
     return { gatewayIntentId, status: mapPaymentStatus(authoritative.status) };
   }
 
-  async createRefund(
-    transactionId: string,
-    amount: Decimal,
-    idempotencyKey: string,
-  ): Promise<GatewayRefundResult> {
-    const amountPaise = amount.mul(100).toDecimalPlaces(0).toNumber();
-    const refund = await this.request<{ id: string; status: string }>(
+  /// `providerPaymentId` is the Razorpay payment id (`pay_...`). This used to be
+  /// our internal PaymentTransaction UUID, which Razorpay rejects, so every real
+  /// refund failed. Our refund id travels as `receipt` and in `notes` so
+  /// `findRefund` can recover the refund after a timeout. Razorpay refunds have
+  /// no idempotency header, so find-before-create (in RefundService) is what
+  /// stops a retry from refunding twice.
+  async createRefund(input: CreateGatewayRefundInput): Promise<GatewayRefundResult> {
+    const amountPaise = input.amount.mul(100).toDecimalPlaces(0).toNumber();
+    const refund = await this.request<RazorpayRefundEntity>(
       'POST',
-      `/payments/${encodeURIComponent(transactionId)}/refund`,
-      { amount: amountPaise, notes: { idempotencyKey } },
+      `/payments/${encodeURIComponent(input.providerPaymentId)}/refund`,
+      {
+        amount: amountPaise,
+        receipt: input.refundReference,
+        notes: { refund_reference: input.refundReference },
+      },
     );
-    return {
-      gatewayRefundId: refund.id,
-      status: refund.status === 'processed' ? 'SUCCEEDED' : 'PENDING',
-    };
+    return { gatewayRefundId: refund.id, status: mapRazorpayRefundStatus(refund.status) };
   }
 
-  /// RazorpayX Payouts — a distinct product from Orders/Payments, requiring a
-  /// funded RazorpayX account and a `fund_account_id` rather than a raw bank
-  /// account id. `bankAccountId` here is expected to already BE a RazorpayX
-  /// fund account id (resolving a raw bank account to one is an account-setup
-  /// concern outside payment collection, and belongs wherever driver bank
-  /// accounts are provisioned against RazorpayX, not in this call).
-  async createPayout(
-    _driverId: string,
-    bankAccountId: string,
-    amount: Decimal,
-    idempotencyKey: string,
-  ): Promise<GatewayPayoutResult> {
-    const amountPaise = amount.mul(100).toDecimalPlaces(0).toNumber();
-    const payout = await this.request<{ id: string; status: string }>('POST', '/payouts', {
-      account_number: bankAccountId,
-      fund_account_id: bankAccountId,
-      amount: amountPaise,
-      currency: 'INR',
-      mode: 'IMPS',
-      purpose: 'payout',
-      queue_if_low_balance: true,
-      reference_id: idempotencyKey,
-    });
-    return {
-      gatewayPayoutId: payout.id,
-      status: payout.status === 'processed' ? 'COMPLETED' : 'PENDING',
-    };
+  async findRefund(
+    providerPaymentId: string,
+    refundReference: string,
+  ): Promise<GatewayRefundResult | null> {
+    const list = await this.request<{ items: RazorpayRefundEntity[] }>(
+      'GET',
+      `/payments/${encodeURIComponent(providerPaymentId)}/refunds?count=100`,
+    );
+    const match = list.items.find(
+      (r) => r.notes?.refund_reference === refundReference || r.receipt === refundReference,
+    );
+    return match
+      ? { gatewayRefundId: match.id, status: mapRazorpayRefundStatus(match.status) }
+      : null;
   }
+}
+
+interface RazorpayRefundEntity {
+  id: string;
+  status: string;
+  receipt?: string | null;
+  notes?: Record<string, string> | null;
+}
+
+function mapRazorpayRefundStatus(status: string): 'SUCCEEDED' | 'PENDING' | 'FAILED' {
+  if (status === 'processed') return 'SUCCEEDED';
+  if (status === 'failed') return 'FAILED';
+  return 'PENDING';
 }
 
 function mapOrderStatus(status: string): string {

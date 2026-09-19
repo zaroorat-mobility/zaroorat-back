@@ -25,8 +25,24 @@ export const EnvironmentSchema = z
     // Full Firebase service-account JSON blob. Required in prod/staging when
     // PUSH_PROVIDER=fcm and Application Default Credentials are not configured.
     FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+    // Driver bank-account protection (bank-account-crypto.ts). Separate from
+    // ENCRYPTION_KEY on purpose: bank data and settings credentials rotate on
+    // different schedules. Optional outside production; required below.
+    BANK_DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
+    BANK_ACCOUNT_HASH_KEY: z.string().min(32).optional(),
   })
   .superRefine((env, ctx) => {
+    for (const name of ['BANK_DATA_ENCRYPTION_KEY', 'BANK_ACCOUNT_HASH_KEY'] as const) {
+      if ((env.APP_ENV === 'production' || env.APP_ENV === 'staging') && !env[name]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [name],
+          message:
+            `required when APP_ENV=${env.APP_ENV}: driver bank account numbers are encrypted ` +
+            'and hashed with it. Set it once and never change it without a key-rotation run.',
+        });
+      }
+    }
     // Deployed environments must key credential encryption to a secret of its
     // own. Falling through to JWT_ACCESS_SECRET ties the lifetime of every
     // stored credential to a token secret that is rotated on a different

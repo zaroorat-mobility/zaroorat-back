@@ -30,6 +30,12 @@ const SENSITIVE_FIELDS = [
   // otp/phone redaction paths there — so a development log could carry the full
   // SMS body. A Ride PIN is a standing credential even on a developer's laptop.
   'devSmsBody',
+  // Driver bank-account numbers, in every spelling they travel under. Only the
+  // masked last four may ever reach a log or a response.
+  'accountNumber',
+  'accountNumberEnc',
+  'accountNumberCiphertext',
+  'bankAccountNumber',
   'verificationCode',
   'body',
   'variables',

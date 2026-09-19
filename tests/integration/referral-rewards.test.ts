@@ -145,7 +145,7 @@ describe('referral rewards and qualification (integration)', () => {
       );
     });
 
-    it('counts distinct rides and pays once the threshold is genuinely met', async () => {
+    it('counts distinct rides and qualifies once the threshold is genuinely met', async () => {
       const programId = await makeProgram({ qualifyingThreshold: 2 });
       const referrer = await makeUser('+919876660020');
       const code = await makeCode(referrer, programId);
@@ -163,12 +163,14 @@ describe('referral rewards and qualification (integration)', () => {
         where: { programId, refereeId: referee },
       });
       assert.equal(referral.qualifyingRides, 2);
-      assert.equal(referral.status, 'REWARDED');
+      // A rider referral is non-monetary (customer wallet retirement): it ends
+      // at QUALIFIED with no reward, even on this legacy CUSTOMER-wallet row.
+      assert.equal(referral.status, 'QUALIFIED');
       assert.equal(
         await db().client.referralReward.count({ where: { referralId: referral.id } }),
-        2,
-        'referrer and referee are each paid once',
+        0,
       );
+      assert.equal(await db().client.customerWalletTransaction.count(), 0);
     });
   });
 
@@ -178,20 +180,17 @@ describe('referral rewards and qualification (integration)', () => {
       // shape that used to `return` from grantReward, leave the reward PENDING
       // and set the referral REWARDED anyway.
       const programId = await makeProgram({
-        audience: 'RIDER',
+        audience: 'DRIVER',
+        qualifyingEvent: 'DRIVER_APPROVED',
         rewardWallet: 'DRIVER',
-        qualifyingThreshold: 1,
       });
       const referrer = await makeUser('+919876660030');
-      const code = await makeCode(referrer, programId);
       const referee = await makeUser('+919876660031');
-      await applyService.applyAtSignup({
-        code: code.code,
-        refereeUserId: referee,
-        audience: 'RIDER',
+      await db().client.referral.create({
+        data: { programId, referrerId: referrer, refereeId: referee, status: 'SIGNED_UP' },
       });
 
-      await runtime.handleRideCompleted(await completedRideFor(referee));
+      await runtime.handleDriverVerified(referee);
 
       const referral = await db().client.referral.findFirstOrThrow({
         where: { programId, refereeId: referee },
@@ -209,6 +208,33 @@ describe('referral rewards and qualification (integration)', () => {
         await db().client.referralReward.count({ where: { referralId: referral.id } }),
         0,
         'the reward row must roll back with the transaction that made it',
+      );
+    });
+
+    it('never converts a rider referral into a driver-wallet reward', async () => {
+      // A legacy RIDER row carrying the DRIVER wallet, whose referrer IS a
+      // driver: under the old code this paid the driver settlement wallet.
+      const programId = await makeProgram({ audience: 'RIDER', rewardWallet: 'DRIVER' });
+      const referrerUser = await makeUser('+919876660035');
+      await makeDriver(referrerUser);
+      const code = await makeCode(referrerUser, programId);
+      const referee = await makeUser('+919876660036');
+      await applyService.applyAtSignup({
+        code: code.code,
+        refereeUserId: referee,
+        audience: 'RIDER',
+      });
+
+      await runtime.handleRideCompleted(await completedRideFor(referee));
+
+      const referral = await db().client.referral.findFirstOrThrow({
+        where: { programId, refereeId: referee },
+      });
+      assert.equal(referral.status, 'QUALIFIED');
+      assert.equal(await db().client.referralReward.count(), 0);
+      assert.equal(
+        await db().client.driverWalletTransaction.count({ where: { referenceType: 'REFERRAL' } }),
+        0,
       );
     });
 
@@ -347,8 +373,10 @@ describe('referral rewards and qualification (integration)', () => {
   });
 
   it('keeps at most one active program per audience (FR-026, BD-7)', async () => {
-    const first = await makeProgram({ audience: 'RIDER', code: 'RIDER_ONE' });
-    const second = await makeProgram({ audience: 'RIDER', code: 'RIDER_TWO' });
+    // Rider programs are non-monetary, so an active one carries no amounts.
+    const nonMonetary = { referrerReward: 0, refereeReward: 0 };
+    const first = await makeProgram({ audience: 'RIDER', code: 'RIDER_ONE', ...nonMonetary });
+    const second = await makeProgram({ audience: 'RIDER', code: 'RIDER_TWO', ...nonMonetary });
     const driverProgram = await makeProgram({ audience: 'DRIVER', code: 'DRIVER_ONE' });
 
     // Created directly here, so enforce it the way the admin service does.

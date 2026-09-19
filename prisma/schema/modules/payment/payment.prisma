@@ -138,11 +138,31 @@ model Refund {
   userId          String    @map("user_id") @db.Uuid
   amount          Decimal   @db.Decimal(10, 2)
   reason          String?
+  /// PENDING    — requested; nothing reserved, no provider call (admin review).
+  /// PROCESSING — the refunded amount is reserved (balance debited, ledger in
+  ///              REFUND_IN_TRANSIT) and the provider was, or may have been,
+  ///              asked to refund. An unknown provider outcome STAYS here and is
+  ///              resolved by `RefundReconciliationJob` — it never becomes FAILED
+  ///              on a timeout.
+  /// SUCCEEDED  — provider-confirmed. FAILED — provider-refused; reservation undone.
   status          String    @default("PENDING")
-  gatewayRefundId String?   @map("gateway_refund_id")
+  gatewayRefundId String?   @unique @map("gateway_refund_id")
   idempotencyKey  String    @unique @map("idempotency_key")
   createdAt       DateTime  @default(now()) @map("created_at")
   completedAt     DateTime? @map("completed_at")
+
+  /// Phase 1 refund lifecycle. `purpose` is copied from the original
+  /// PaymentIntent at reservation and decides which balance and which ledger
+  /// accounts the refund reverses. `providerPaymentId` is the provider's own
+  /// payment id (`PaymentTransaction.gatewayTxnId`) — never our internal id.
+  purpose           String?   @map("purpose")
+  providerPaymentId String?   @map("provider_payment_id")
+  reservedAt        DateTime? @map("reserved_at")
+  dispatchAttempts  Int       @default(0) @map("dispatch_attempts")
+  lastDispatchAt    DateTime? @map("last_dispatch_at")
+  lastDispatchError String?   @map("last_dispatch_error")
+  failedAt          DateTime? @map("failed_at")
+  failureReason     String?   @map("failure_reason")
 
   // Admin finance workflow (optional; gateway fields above remain source of truth for payout)
   displayCode    String?   @map("display_code")
@@ -164,6 +184,7 @@ model Refund {
 
   @@index([transactionId])
   @@index([workflowStatus, createdAt])
+  @@index([status, lastDispatchAt])
   @@map("refunds")
 }
 
@@ -221,7 +242,10 @@ model DriverSettlement {
   commission        Decimal  @default(0) @db.Decimal(12, 2)
   adjustments       Decimal  @default(0) @db.Decimal(12, 2)
   netPayable        Decimal  @default(0) @map("net_payable") @db.Decimal(12, 2)
-  status            String   @default("PENDING")
+  /// Only a COMPLETED DriverPayout covering the full `netPayable` may set
+  /// PAID — see `PayoutService.confirmPayout`. Neither the settlement job nor
+  /// admin batch completion writes it.
+  status            SettlementStatus @default(PENDING)
   settlementBatchId String?  @map("settlement_batch_id") @db.Uuid
   createdAt         DateTime @default(now()) @map("created_at")
 
@@ -271,14 +295,21 @@ model DriverPayout {
   driverId        String    @map("driver_id") @db.Uuid
   settlementId    String?   @map("settlement_id") @db.Uuid
   bankAccountId   String?   @map("bank_account_id") @db.Uuid
-  amount          Decimal   @db.Decimal(12, 2)
-  status          String    @default("INITIATED")
+  amount          Decimal      @db.Decimal(12, 2)
+  status          PayoutStatus @default(INITIATED)
+  /// 'MANUAL' for an externally executed bank transfer — the only kind this
+  /// platform performs today. A provider name goes here when a payout rail is
+  /// actually integrated.
   gateway         String?
-  gatewayPayoutId String?   @map("gateway_payout_id")
-  idempotencyKey  String    @unique @map("idempotency_key")
-  failureReason   String?   @map("failure_reason")
-  initiatedAt     DateTime  @default(now()) @map("initiated_at")
-  completedAt     DateTime? @map("completed_at")
+  gatewayPayoutId String?      @map("gateway_payout_id")
+  /// The bank's own reference for a manual transfer (UTR/NEFT ref), supplied
+  /// by finance at confirmation. This is the audit link between our row and
+  /// the money that actually left the platform's bank account.
+  externalReference String?    @map("external_reference")
+  idempotencyKey  String       @unique @map("idempotency_key")
+  failureReason   String?      @map("failure_reason")
+  initiatedAt     DateTime     @default(now()) @map("initiated_at")
+  completedAt     DateTime?    @map("completed_at")
 
   driver      Driver             @relation(fields: [driverId], references: [id])
   settlement  DriverSettlement?  @relation(fields: [settlementId], references: [id])
@@ -286,6 +317,7 @@ model DriverPayout {
   items       PayoutItem[]
 
   @@index([driverId])
+  @@index([settlementId])
   @@map("driver_payouts")
 }
 

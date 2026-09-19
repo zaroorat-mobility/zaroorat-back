@@ -24,6 +24,7 @@ export const JOB_NAMES = Object.freeze({
   DRIVER_DOC_EXPIRATION: 'driver-doc-expiration',
   PAYMENT_RECONCILIATION: 'payment-reconciliation',
   PAYMENT_INTENT_RECONCILIATION: 'payment-intent-reconciliation',
+  REFUND_RECONCILIATION: 'refund-reconciliation',
   PAYMENT_COLLECTION_SWEEP: 'payment-collection-sweep',
   PAYMENT_RECEIVABLE_WRITEOFF: 'payment-receivable-writeoff',
   DRIVER_SETTLEMENT: 'driver-settlement',

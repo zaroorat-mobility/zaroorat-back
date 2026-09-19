@@ -1,21 +1,11 @@
 export interface WalletView {
-  id: string;
+  /// Null when the customer has no (historical) wallet row.
+  id: string | null;
   userId: string;
   balance: number;
   lockedBalance: number;
   availableBalance: number;
   currency: string;
-}
-/// The top-up response. Every `WalletView` field is still present and still
-/// means the same thing — `balance` is simply the balance as it stands, which
-/// is now the *uncredited* one, because a top-up no longer moves money by
-/// itself. The intent fields tell the client what to take to the gateway.
-export interface WalletTopupView extends WalletView {
-  intentId: string;
-  intentStatus: string;
-  gateway: string | null;
-  gatewayIntentId: string | null;
-  amount: number;
 }
 export interface IntentView {
   id: string;

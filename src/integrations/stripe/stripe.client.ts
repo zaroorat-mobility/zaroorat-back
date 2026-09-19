@@ -1,11 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { Decimal } from '../../modules/payments/types/index.js';
 import type {
   PaymentGatewayProvider,
   CreateGatewayIntentInput,
   GatewayIntentResult,
   GatewayRefundResult,
-  GatewayPayoutResult,
+  CreateGatewayRefundInput,
 } from '../../modules/payments/services/gateway/gateway.provider.js';
 
 const BASE_URL = 'https://api.stripe.com/v1';
@@ -143,96 +142,93 @@ export class StripeGatewayProvider implements PaymentGatewayProvider {
     return { gatewayIntentId: intent.id, status: mapIntentStatus(intent.status) };
   }
 
-  async createRefund(
-    transactionId: string,
-    amount: Decimal,
-    idempotencyKey: string,
-  ): Promise<GatewayRefundResult> {
-    const amountMinorUnits = amount.mul(100).toDecimalPlaces(0).toNumber();
+  /// `providerPaymentId` is Stripe's own id — the charge (`ch_…`, what the
+  /// webhook stores as `gatewayTxnId`) or the PaymentIntent (`pi_…`). This used
+  /// to send our internal PaymentTransaction UUID as `payment_intent`, which
+  /// Stripe rejects. `refundReference` (our Refund.id) is the Idempotency-Key,
+  /// so a retry after a timeout returns the SAME refund, and it is stored in
+  /// metadata so `findRefund` can recover it.
+  async createRefund(input: CreateGatewayRefundInput): Promise<GatewayRefundResult> {
     const form = new URLSearchParams();
-    form.set('payment_intent', transactionId);
-    form.set('amount', String(amountMinorUnits));
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(`${BASE_URL}/refunds`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.secretKey}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Stripe-Version': API_VERSION,
-          'Idempotency-Key': idempotencyKey,
-        },
-        body: form.toString(),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
-    const text = await res.text();
-    const json = (text ? JSON.parse(text) : {}) as { id: string; status: string } & StripeErrorBody;
-    if (!res.ok) {
-      throw new StripeApiError(
-        json.error?.message ?? `Stripe refund failed with status ${res.status}`,
-        res.status,
-        json.error?.code,
-      );
-    }
-    return {
-      gatewayRefundId: json.id,
-      status: json.status === 'succeeded' ? 'SUCCEEDED' : 'PENDING',
-    };
+    form.set(stripePaymentField(input.providerPaymentId), input.providerPaymentId);
+    form.set('amount', String(input.amount.mul(100).toDecimalPlaces(0).toNumber()));
+    form.set('metadata[refund_reference]', input.refundReference);
+    const json = await this.refundRequest<StripeRefund>('POST', '/refunds', form, {
+      'Idempotency-Key': `refund-${input.refundReference}`,
+    });
+    return { gatewayRefundId: json.id, status: mapStripeRefundStatus(json.status) };
   }
 
-  /// Stripe payouts move platform balance to the platform's OWN bank account
-  /// (Stripe Connect is a separate product for paying third parties like
-  /// drivers, and is out of scope here) — implemented against the real
-  /// `/v1/payouts` endpoint for interface completeness, but this is not the
-  /// mechanism this codebase should route driver payouts through without
-  /// first adopting Stripe Connect.
-  async createPayout(
-    _driverId: string,
-    _bankAccountId: string,
-    amount: Decimal,
-    idempotencyKey: string,
-  ): Promise<GatewayPayoutResult> {
-    const amountMinorUnits = amount.mul(100).toDecimalPlaces(0).toNumber();
-    const form = new URLSearchParams();
-    form.set('amount', String(amountMinorUnits));
-    form.set('currency', 'inr');
+  async findRefund(
+    providerPaymentId: string,
+    refundReference: string,
+  ): Promise<GatewayRefundResult | null> {
+    const query = new URLSearchParams();
+    query.set(stripePaymentField(providerPaymentId), providerPaymentId);
+    query.set('limit', '100');
+    const json = await this.refundRequest<{ data: StripeRefund[] }>(
+      'GET',
+      `/refunds?${query.toString()}`,
+    );
+    const match = json.data.find((r) => r.metadata?.refund_reference === refundReference);
+    return match
+      ? { gatewayRefundId: match.id, status: mapStripeRefundStatus(match.status) }
+      : null;
+  }
+
+  private async refundRequest<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    form?: URLSearchParams,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let res: Response;
     try {
-      res = await fetch(`${BASE_URL}/payouts`, {
-        method: 'POST',
+      res = await fetch(`${BASE_URL}${path}`, {
+        method,
         headers: {
           Authorization: `Bearer ${this.secretKey}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
           'Stripe-Version': API_VERSION,
-          'Idempotency-Key': idempotencyKey,
+          ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+          ...extraHeaders,
         },
-        body: form.toString(),
+        ...(form ? { body: form.toString() } : {}),
         signal: controller.signal,
       });
     } finally {
       clearTimeout(timeout);
     }
     const text = await res.text();
-    const json = (text ? JSON.parse(text) : {}) as { id: string; status: string } & StripeErrorBody;
+    const json = (text ? JSON.parse(text) : {}) as T & StripeErrorBody;
     if (!res.ok) {
       throw new StripeApiError(
-        json.error?.message ?? `Stripe payout failed with status ${res.status}`,
+        json.error?.message ?? `Stripe refund request failed with status ${res.status}`,
         res.status,
         json.error?.code,
       );
     }
-    return {
-      gatewayPayoutId: json.id,
-      status: json.status === 'paid' ? 'COMPLETED' : 'PENDING',
-    };
+    return json;
   }
+}
+
+interface StripeRefund {
+  id: string;
+  status: string;
+  metadata?: Record<string, string> | null;
+}
+
+/// Stripe refunds a charge (`ch_…`) or a PaymentIntent (`pi_…`) by different
+/// parameter names; the stored provider payment id says which one it is.
+function stripePaymentField(providerPaymentId: string): 'charge' | 'payment_intent' {
+  return providerPaymentId.startsWith('ch_') ? 'charge' : 'payment_intent';
+}
+
+function mapStripeRefundStatus(status: string): 'SUCCEEDED' | 'PENDING' | 'FAILED' {
+  if (status === 'succeeded') return 'SUCCEEDED';
+  if (status === 'failed' || status === 'canceled') return 'FAILED';
+  return 'PENDING';
 }
 
 function mapIntentStatus(status: string): string {

@@ -5,6 +5,7 @@ import { actingDriverId } from '@modules/drivers/controllers/driver-identity.js'
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { SubscriptionService } from '../services/subscription.service.js';
 import { SubscriptionPlanRepository } from '../repositories/subscription-plan.repository.js';
+import { PaymentService } from '@modules/payments/services/payment.service.js';
 import {
   purchaseSubscriptionSchema,
   createSubscriptionPlanSchema,
@@ -15,6 +16,7 @@ export class SubscriptionController {
     private readonly subscriptionService: SubscriptionService,
     private readonly subscriptionPlanRepository: SubscriptionPlanRepository,
     private readonly driverRepository: DriverRepository,
+    private readonly paymentService: PaymentService,
   ) {}
 
   async listPlans(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -35,19 +37,31 @@ export class SubscriptionController {
     const driverId = await actingDriverId(req, this.driverRepository);
     const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     const body = purchaseSubscriptionSchema.parse(req.body);
-    const result = await this.subscriptionService.purchase(
-      driverId,
+    // Required, never defaulted: a missing key used to become '' — one global
+    // key shared by every purchase that omitted the header. The wrapper refuses
+    // a missing/blank key (400) and replays the first response for a retry of
+    // the same driver's same request, so a retry creates no second
+    // subscription row and no second intent.
+    const data = await this.paymentService.withIdempotency(
       userId,
-      body.planId,
-      idempotencyKey ?? '',
-    );
-    reply.send({
-      data: {
-        subscriptionId: result.subscription?.id ?? null,
-        status: result.subscription?.status ?? null,
-        intentId: result.intentId,
+      '/subscriptions',
+      idempotencyKey,
+      body,
+      async () => {
+        const result = await this.subscriptionService.purchase(
+          driverId,
+          userId,
+          body.planId,
+          idempotencyKey as string,
+        );
+        return {
+          subscriptionId: result.subscription?.id ?? null,
+          status: result.subscription?.status ?? null,
+          intentId: result.intentId,
+        };
       },
-    });
+    );
+    reply.send({ data });
   }
 
   async getStatus(req: FastifyRequest, reply: FastifyReply): Promise<void> {

@@ -35,7 +35,7 @@ flowchart TD
 
 ### Phase 2: Production Infrastructure Readiness
 
-- [ ] Populate Msg91 DLT template environment variables (`MSG91_AUTH_KEY`, `MSG91_SENDER_ID`, `OTP_TEMPLATE_ID`)
+- [ ] Airtel DLT + SMS Production Verification (Principal Entity registration, sender/header, approved templates & IDs, template variables, production API credentials & endpoint, delivery callbacks, failure/retry handling, rate limits, non-sensitive logging)
 - [ ] Verify cloud database 35-day PITR automated backup retention & validate `db-restore.sh`
 - [ ] Confirm Pino structured logging & Prometheus metrics endpoint scraping
 
@@ -65,7 +65,7 @@ flowchart TD
 ### Phase 8: Staging Certification
 
 - [ ] Deploy container to staging cluster
-- [ ] End-to-end staging validation with Razorpay sandbox, Msg91 SMS, and FCM push notifications
+- [ ] End-to-end staging validation with Razorpay sandbox, Airtel SMS, and FCM push notifications
 
 ### Phase 9: Production Release
 

@@ -74,9 +74,18 @@ describe('finance.mappers (unit)', () => {
 
     it('normalizes gateway names', () => {
       assert.equal(mapGateway('razorpay_live'), 'razorpay');
-      assert.equal(mapGateway('PhonePe'), 'phonepe');
-      assert.equal(mapGateway('cashfree-v2'), 'cashfree');
+      assert.equal(mapGateway('STRIPE'), 'stripe');
       assert.equal(mapGateway(null), undefined);
+    });
+
+    /// Only Razorpay and Stripe are integrated, so every other provider string
+    /// can only be historical or imported data. It must stay READABLE — shown
+    /// as itself, lower-cased — rather than being normalised onto a provider
+    /// this platform does not have.
+    it('leaves an unknown gateway readable instead of mapping it to a provider', () => {
+      assert.equal(mapGateway('PhonePe_v2'), 'phonepe_v2');
+      assert.equal(mapGateway('Paytm_old'), 'paytm_old');
+      assert.equal(mapGateway('cashfree-v2'), 'cashfree-v2');
     });
   });
 

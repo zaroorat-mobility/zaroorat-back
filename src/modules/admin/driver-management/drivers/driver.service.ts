@@ -1,4 +1,5 @@
 import { DatabaseService } from '@core/database';
+import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type { UserStatus } from '@core/database/types';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { SessionService } from '@modules/auth/services/session/session.service.js';
@@ -75,11 +76,17 @@ export interface DriverDetailsDto extends DriverListItemDto {
     fitnessExpiry?: string;
   };
   bankAccounts: Array<{
+    id: string;
     bankAccountName?: string;
     bankName?: string;
     bankIfsc?: string;
+    /// Last four digits only (`****1234`) — the number itself is never returned.
+    accountNumberMasked: string | null;
     upiId?: string;
+    status: string;
     verificationStatus: string;
+    payoutEnabled: boolean;
+    isActive: boolean;
     isDefault: boolean;
   }>;
   ledger: Array<{
@@ -306,11 +313,16 @@ export class AdminDriverService {
           }
         : {}),
       bankAccounts: row.bankAccounts.map((account) => ({
+        id: account.id,
         ...(account.accountHolderName ? { bankAccountName: account.accountHolderName } : {}),
         ...(account.bankName ? { bankName: account.bankName } : {}),
         ...(account.ifscCode ? { bankIfsc: account.ifscCode } : {}),
+        accountNumberMasked: maskAccountNumber(account.accountNumberLast4),
         ...(account.upiId ? { upiId: account.upiId } : {}),
+        status: account.status,
         verificationStatus: account.verificationStatus,
+        payoutEnabled: account.payoutEnabled,
+        isActive: account.isActive,
         isDefault: account.isDefault,
       })),
       ledger: walletTxns.map((txn) => ({

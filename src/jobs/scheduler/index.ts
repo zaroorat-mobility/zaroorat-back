@@ -71,6 +71,13 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
   },
   {
     queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
+    name: JOB_NAMES.REFUND_RECONCILIATION,
+    // A refund with an unknown provider outcome stays PROCESSING; this asks the
+    // provider again (same reference, never a second refund) after 5 minutes.
+    pattern: process.env.REFUND_RECONCILIATION_CRON ?? '*/5 * * * *',
+  },
+  {
+    queue: QUEUE_NAMES.PAYMENTS_MAINTENANCE,
     name: JOB_NAMES.PAYMENT_COLLECTION_SWEEP,
     // Every five minutes. The completion consumer already collects the happy
     // path within seconds; this only picks up what it could not finish, and

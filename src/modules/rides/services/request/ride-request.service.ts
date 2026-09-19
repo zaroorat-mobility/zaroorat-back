@@ -21,9 +21,11 @@ import {
   IncompleteProfileError,
   RidePinNotConfiguredError,
   PromotionsUnavailableError,
+  WalletRidesNotAcceptedError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
+import { NEW_RIDE_PAYMENT_METHODS } from '../../constants/ride.constants.js';
 import { DebtService } from '@modules/payments/services/debt/debt.service.js';
 import { RiderDebtLimitExceededError } from '@modules/payments/errors/payment.errors.js';
 import {
@@ -309,6 +311,15 @@ export class RideRequestService {
     // carrying a code would be billed in full without ever saying so.
     if (input.promoCode !== undefined && input.promoCode.trim() !== '') {
       throw new PromotionsUnavailableError();
+    }
+    // D1. Refused here as well as in the request schema, so a caller that does
+    // not go through the HTTP route cannot book a wallet ride either. Nothing
+    // is written and no wallet balance is read.
+    if (
+      input.paymentMethod !== undefined &&
+      !(NEW_RIDE_PAYMENT_METHODS as readonly string[]).includes(input.paymentMethod)
+    ) {
+      throw new WalletRidesNotAcceptedError();
     }
     const profile = await this.userProfileRepository.findByUserId(input.customerId);
     if (!profile?.firstName || !profile.lastName) {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '@core/database';
-import { Prisma } from '../../../generated/prisma/index.js';
+import { Prisma, type SettlementStatus } from '../../../generated/prisma/index.js';
 import { Decimal } from '@modules/payments/types/index.js';
 import { RefundService } from '@modules/payments/services/refund/refund.service.js';
 import { SettlementService } from '@modules/payments/services/settlement/settlement.service.js';
@@ -159,24 +159,13 @@ export class AdminFinanceService {
       (t) => t.status === 'fully_refunded' || t.status === 'partially_refunded',
     ).length;
 
-    const gateways = ['razorpay', 'phonepe', 'cashfree', 'paytm'] as const;
-    const gatewayPerformance = gateways.map((pg) => {
-      const pgTxns = mapped.filter((t) => t.gateway === pg);
-      const totalPg = pgTxns.length;
-      const successPg = pgTxns.filter((t) => t.status === 'captured').length;
-      const failedPg = pgTxns.filter((t) => t.status === 'failed').length;
-      return {
-        gateway: pg.toUpperCase(),
-        successRate: totalPg > 0 ? Math.round((successPg / totalPg) * 1000) / 10 : 100,
-        failedCount: failedPg,
-        avgResponseTime:
-          pg === 'razorpay' ? 1.2 : pg === 'phonepe' ? 1.5 : pg === 'cashfree' ? 2.1 : 1.8,
-      };
-    });
-
     const settlementTotal = await this.client.driverSettlement.count();
+    // 'COMPLETED' was never a status this table wrote — the column was an
+    // unconstrained string and this counted a value that did not exist. Now
+    // that it is an enum, PAID is the only settled state, and it means a
+    // confirmed payout rather than a calculation having run.
     const settlementPaid = await this.client.driverSettlement.count({
-      where: { status: { in: ['PAID', 'COMPLETED'] } },
+      where: { status: 'PAID' },
     });
 
     return {
@@ -201,13 +190,11 @@ export class AdminFinanceService {
       },
       health: {
         successRate: Math.round((successCount / totalAttempts) * 1000) / 10,
-        avgGatewayResponseTime: 1.3,
         refundRatio: Math.round((refundedCount / totalAttempts) * 1000) / 10,
         disputeRatio: Math.round((openDisputes / Math.max(1, allTxns.length)) * 1000) / 10,
         settlementSuccessRate:
           settlementTotal > 0 ? Math.round((settlementPaid / settlementTotal) * 1000) / 10 : 100,
       },
-      gateways: gatewayPerformance,
     };
   }
 
@@ -472,7 +459,9 @@ export class AdminFinanceService {
 
     if (!txn) throw new FinanceNotFoundError('Payment transaction was not found');
 
-    const userId = body.riderId ?? txn.userId;
+    // The refund always belongs to the payer. `riderId` from the request only
+    // ever labelled the row; money is reversed on the transaction's own user.
+    const userId = txn.userId;
     const amount = new Decimal(body.requestedAmount);
     const now = new Date();
     const actor = actorLabel(actorName);
@@ -639,6 +628,13 @@ export class AdminFinanceService {
         if (['completed', 'rejected'].includes(row.workflowStatus)) {
           throw new FinanceConflictError(`Cannot reject from status ${row.workflowStatus}`);
         }
+        // A PROCESSING refund has its amount reserved and may already be with
+        // the provider; flipping it to FAILED here would strand that reservation.
+        if (row.status === 'PROCESSING' || row.status === 'SUCCEEDED') {
+          throw new FinanceConflictError(
+            `A refund that is ${row.status} with the provider cannot be rejected`,
+          );
+        }
         const name = reviewerName?.trim() || actor;
         return {
           data: {
@@ -703,6 +699,14 @@ export class AdminFinanceService {
         throw new FinanceConflictError('Refund must be approved before completion');
       }
       await this.refundService.processPendingRefund(id);
+      // The provider may not have answered yet (timeout, 5xx, still pending).
+      // Completion records a confirmed refund; it never assumes one.
+      const settled = await this.client.refund.findUnique({ where: { id } });
+      if (settled?.status !== 'SUCCEEDED') {
+        throw new FinanceConflictError(
+          `Refund is ${settled?.status ?? 'missing'}; it can only be completed once the provider confirms it`,
+        );
+      }
     }
 
     return this.updateRefundWorkflow(
@@ -990,19 +994,34 @@ export class AdminFinanceService {
         include: this.batchInclude,
       });
 
-      const driverStatus =
-        body.status === 'completed'
-          ? 'PAID'
-          : body.status === 'failed'
-            ? 'FAILED'
-            : body.status === 'processing'
-              ? 'PROCESSING'
-              : 'PENDING';
+      /// Batch status describes the BATCH's own workflow, never whether a
+      /// driver was paid.
+      ///
+      /// `completed` used to cascade `PAID` onto every child settlement. It no
+      /// longer touches them at all: a driver becomes PAID only when a
+      /// COMPLETED `DriverPayout` covers their `netPayable`
+      /// (`PayoutService.confirmPayout`). Completing the batch means finance
+      /// is done dispatching it, which is not the same claim.
+      const driverStatus: SettlementStatus | null =
+        body.status === 'failed'
+          ? 'FAILED'
+          : body.status === 'processing'
+            ? 'PROCESSING'
+            : body.status === 'pending'
+              ? 'APPROVED'
+              : body.status === 'draft'
+                ? 'PENDING'
+                : null;
 
-      await tx.driverSettlement.updateMany({
-        where: { settlementBatchId: id },
-        data: { status: driverStatus },
-      });
+      if (driverStatus !== null) {
+        await tx.driverSettlement.updateMany({
+          /// A settlement already PAID is a completed money movement. No batch
+          /// transition may walk it back to PENDING/PROCESSING/FAILED and
+          /// re-open it for a second payout.
+          where: { settlementBatchId: id, status: { not: 'PAID' } },
+          data: { status: driverStatus },
+        });
+      }
 
       await recordAdminAction(tx, {
         actorId,

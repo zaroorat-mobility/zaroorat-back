@@ -341,6 +341,7 @@ model OutboxEvent {
   createdAt   DateTime  @default(now()) @map("created_at")
 
   @@index([status, nextAttemptAt, createdAt, id])
+  @@index([status, publishedAt])
   @@map("outbox_events")
 }
 
