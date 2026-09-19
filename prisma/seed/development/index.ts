@@ -88,7 +88,7 @@ async function ensureDriver(
     });
     await prisma.driverWallet.upsert({
       where: { driverId: updated.id },
-      create: { driverId: updated.id, balance: 1250, lockedBalance: 0 },
+      create: { driverId: updated.id, balance: 0, lockedBalance: 0 },
       update: {},
     });
     return updated;
@@ -1283,15 +1283,16 @@ async function seedReferralFixtures(prisma: Prisma) {
   const now = new Date();
   const in180Days = new Date(now.getTime() + 180 * 86400000);
 
-  // ── Rider program (customer app: share + claim, reward on first ride) ──
+  // ── Rider program (customer app: share + claim, qualifies on first ride) ──
+  // Non-monetary: customer wallets are retired, so a rider referral pays
+  // nothing and the program sets no reward wallet and no milestones.
   const riderProgram = await prisma.referralProgram.upsert({
     where: { code: 'REFLAUNCH' },
     update: {
       name: 'Launch referral',
       audience: 'RIDER',
-      referrerReward: 50,
-      refereeReward: 50,
-      rewardWallet: 'CUSTOMER',
+      referrerReward: 0,
+      refereeReward: 0,
       qualifyingEvent: 'FIRST_RIDE',
       qualifyingThreshold: 1,
       isActive: true,
@@ -1302,10 +1303,9 @@ async function seedReferralFixtures(prisma: Prisma) {
       code: 'REFLAUNCH',
       name: 'Launch referral',
       audience: 'RIDER',
-      referrerReward: 50,
-      refereeReward: 50,
+      referrerReward: 0,
+      refereeReward: 0,
       rewardType: 'WALLET',
-      rewardWallet: 'CUSTOMER',
       qualifyingEvent: 'FIRST_RIDE',
       qualifyingThreshold: 1,
       maxReferralsPerUser: 25,
@@ -1315,37 +1315,6 @@ async function seedReferralFixtures(prisma: Prisma) {
       isActive: true,
     },
   });
-
-  const riderMilestones = [
-    { name: '5 friends', requiredReferrals: 5, bonusAmount: 100 },
-    { name: '10 friends', requiredReferrals: 10, bonusAmount: 250 },
-  ];
-  for (const m of riderMilestones) {
-    const existing = await prisma.referralMilestone.findFirst({
-      where: { programId: riderProgram.id, name: m.name },
-    });
-    if (existing) {
-      await prisma.referralMilestone.update({
-        where: { id: existing.id },
-        data: {
-          requiredReferrals: m.requiredReferrals,
-          bonusAmount: m.bonusAmount,
-          isActive: true,
-        },
-      });
-    } else {
-      await prisma.referralMilestone.create({
-        data: {
-          programId: riderProgram.id,
-          name: m.name,
-          requiredReferrals: m.requiredReferrals,
-          bonusAmount: m.bonusAmount,
-          rewardType: 'WALLET',
-          isActive: true,
-        },
-      });
-    }
-  }
 
   const riderReferrer = await prisma.user.findFirst({
     where: { phoneNumber: '+10000000002', deletedAt: null },
@@ -1518,12 +1487,14 @@ async function seedReferralFixtures(prisma: Prisma) {
   console.log('  Referral dev workflow (RIDER lane — customer app)');
   console.log('  ─────────────────────────────────────────────────');
   console.log('  Referrer : Demo Passenger  +10000000002  code DEMOREF01');
-  console.log('  Pending  : Invite Friend   +10000000004  (SIGNED_UP — reward on first ride)');
+  console.log('  Pending  : Invite Friend   +10000000004  (SIGNED_UP — qualifies on first ride)');
   console.log(
     '  History  : 4 REWARDED invites (+10000000005–08) → 1 away from "5 friends" milestone',
   );
   console.log('  APIs     : GET/POST /api/v1/referrals/rider/me | /apply');
-  console.log('  Trigger  : complete a ride as +10000000004 → wallet credits + possible milestone');
+  console.log(
+    '  Trigger  : complete a ride as +10000000004 → referral QUALIFIED (non-monetary, no wallet credit)',
+  );
   console.log('');
   console.log('  Referral dev workflow (DRIVER lane — driver app)');
   console.log('  ─────────────────────────────────────────────────');
@@ -2402,7 +2373,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
                34.0700, 74.8400,
                ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography,
                'Boulevard Road, Srinagar', 'Shankaracharya Hill, Srinagar',
-               'MATCHED', 1.0, 'WALLET', $4)`,
+               'MATCHED', 1.0, 'UPI', $4)`,
       reqId,
       passengerUser.id,
       cabType.id,
@@ -2416,7 +2387,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           drop_location, drop_address, accepted_at, cancelled_at,
           wait_time_min, is_scheduled, created_at, updated_at)
        VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
-               'CANCELLED_BY_CUSTOMER', 'WALLET', 'PENDING',
+               'CANCELLED_BY_CUSTOMER', 'UPI', 'PENDING',
                ST_SetSRID(ST_MakePoint(74.8300, 34.0850), 4326)::geography, 'Boulevard Road, Srinagar',
                ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography, 'Shankaracharya Hill, Srinagar',
                $8, $9,
@@ -3232,85 +3203,90 @@ async function seedFinanceFixtures(prisma: Prisma) {
     return;
   }
 
-  const gateways = ['razorpay', 'phonepe', 'cashfree', 'paytm'] as const;
-  const methods = ['UPI', 'CARD', 'WALLET', 'CASH'] as const;
-  const createdTxnIds: string[] = [];
-
+  // A customer's ride fare is paid to the driver directly (cash, UPI, card), so
+  // a completed ride gets a `ride_payments` RECORD and never a gateway payment.
+  const rideMethods = ['CASH', 'UPI', 'CARD'] as const;
   for (let i = 0; i < completedRides.length; i++) {
     const ride = completedRides[i]!;
-    const amount = Number(ride.fare?.totalFare ?? 200);
+    const existingRidePayment = await prisma.ridePayment.findFirst({ where: { rideId: ride.id } });
+    if (existingRidePayment) continue;
+    await prisma.ridePayment.create({
+      data: {
+        rideId: ride.id,
+        amount: Number(ride.fare?.totalFare ?? 200),
+        method: rideMethods[i % rideMethods.length]!,
+        // 'SUCCEEDED' is the attempt status `RidePaymentRepository` and
+        // `projectCollectionState` read; 'PAID' is the ride-level obligation.
+        status: 'SUCCEEDED',
+        settledAt: ride.completedAt ?? new Date(),
+      },
+    });
+  }
+
+  const verifiedDrivers = await prisma.driver.findMany({
+    where: { verificationStatus: 'VERIFIED', deletedAt: null },
+    include: { profile: true, wallet: true },
+    take: 3,
+  });
+
+  // The only money a gateway ever handles: a driver buying a subscription or
+  // topping up commission credit, on a provider this platform actually
+  // supports. Mirrors `GATEWAY_PAYMENT_PURPOSES`.
+  const gateways = ['razorpay', 'stripe'] as const;
+  const purposes = ['DRIVER_SUBSCRIPTION_PAYMENT', 'DRIVER_COMMISSION_RECHARGE'] as const;
+  const createdTxnIds: string[] = [];
+
+  for (let i = 0; i < verifiedDrivers.length * 2; i++) {
+    const d = verifiedDrivers[i % verifiedDrivers.length]!;
+    const purpose = purposes[i % purposes.length]!;
     const gateway = gateways[i % gateways.length]!;
-    const method = methods[i % methods.length]!;
-    const idempotencyKey = `seed-intent-${ride.id}`;
+    const amount = purpose === 'DRIVER_SUBSCRIPTION_PAYMENT' ? 500 : 1000;
+    const idempotencyKey = `seed-driver-intent-${d.id}-${purpose}`;
+    const createdAt = new Date(now - (i + 1) * 6 * 3600000);
 
     let intent = await prisma.paymentIntent.findFirst({ where: { idempotencyKey } });
     if (!intent) {
       intent = await prisma.paymentIntent.create({
         data: {
-          rideId: ride.id,
-          userId: ride.customerId,
+          userId: d.userId,
           amount,
           currency: 'INR',
-          methodType: method,
-          status: 'CAPTURED',
+          methodType: 'CARD',
+          status: 'SUCCEEDED',
           gateway,
-          gatewayIntentId: `gi_seed_${ride.rideCode}`,
+          gatewayIntentId: `gi_seed_${d.id.slice(0, 8)}_${i}`,
           idempotencyKey,
-          createdAt: ride.completedAt ?? new Date(now - (i + 1) * 3600000),
+          purpose,
+          createdAt,
         },
       });
     }
 
     let txn = await prisma.paymentTransaction.findFirst({
-      where: { intentId: intent.id, txnType: 'CHARGE' },
+      where: { intentId: intent.id, txnType: 'PAYMENT' },
     });
     if (!txn) {
-      const isFailed = i % 7 === 0;
-      const isVariance = i % 9 === 0 && !isFailed;
+      const isFailed = i % 5 === 0;
+      const isVariance = i % 4 === 0 && !isFailed;
       txn = await prisma.paymentTransaction.create({
         data: {
           intentId: intent.id,
-          rideId: ride.id,
-          userId: ride.customerId,
-          txnType: 'CHARGE',
+          userId: d.userId,
+          txnType: 'PAYMENT',
           amount: isVariance ? amount - 50 : amount,
           currency: 'INR',
           status: isFailed ? 'FAILED' : 'SUCCEEDED',
           gateway,
-          gatewayTxnId: isFailed ? null : `gtxn_seed_${ride.rideCode}`,
+          gatewayTxnId: isFailed ? null : `pay_seed${d.id.slice(0, 8)}${i}`,
           gatewayFee: isFailed ? 0 : Math.round(amount * 0.02 * 100) / 100,
-          errorCode: isFailed
-            ? (['GATEWAY_TIMEOUT', 'BANK_DECLINED', 'OTP_EXPIRED', 'INSUFFICIENT_FUNDS'] as const)[
-                i % 4
-              ]!
-            : null,
+          errorCode: isFailed ? 'BANK_DECLINED' : null,
           errorMessage: isFailed ? 'Seeded gateway failure for admin finance UI' : null,
           varianceStatus: isVariance ? 'variance_found' : isFailed ? null : 'matched',
-          createdAt: ride.completedAt ?? new Date(now - (i + 1) * 3600000),
+          createdAt,
         },
       });
     }
     createdTxnIds.push(txn.id);
-
-    const existingRidePayment = await prisma.ridePayment.findFirst({ where: { rideId: ride.id } });
-    if (!existingRidePayment && txn.status === 'SUCCEEDED') {
-      await prisma.ridePayment.create({
-        data: {
-          rideId: ride.id,
-          amount,
-          method:
-            method === 'CARD'
-              ? 'CARD'
-              : method === 'UPI'
-                ? 'UPI'
-                : method === 'WALLET'
-                  ? 'WALLET'
-                  : 'CASH',
-          status: 'PAID',
-          settledAt: ride.completedAt ?? new Date(),
-        },
-      });
-    }
   }
 
   const driver = completedRides.find((r) => r.driver)?.driver;
@@ -3475,12 +3451,12 @@ async function seedFinanceFixtures(prisma: Prisma) {
           transactionId: successTxn.id,
           rideId: successTxn.rideId,
           userId: successTxn.userId,
-          amount: 70,
-          reason: 'Fare overcharge dispute resolution',
+          amount: 500,
+          reason: 'Subscription refund requested by the driver',
           status: 'PENDING',
           idempotencyKey: `seed-refund-${successTxn.id}`,
           displayCode: refundDisplay,
-          refundType: 'DISPUTE_RESOLUTION',
+          refundType: 'SUBSCRIPTION_REFUND',
           workflowStatus: 'requested',
           approvalLevel: 'support',
           refundSource: 'dispute',
@@ -3509,13 +3485,13 @@ async function seedFinanceFixtures(prisma: Prisma) {
           transactionId: successTxn.id,
           rideId: successTxn.rideId,
           userId: successTxn.userId,
-          amount: 121,
-          reason: 'Double payment reversal',
+          amount: 1000,
+          reason: 'Unused commission credit returned',
           status: 'SUCCEEDED',
           gatewayRefundId: `grf_seed_${successTxn.id.slice(0, 8)}`,
           idempotencyKey: `seed-refund-completed-${successTxn.id}`,
           displayCode: completedRefundCode,
-          refundType: 'DOUBLE_PAYMENT',
+          refundType: 'RECHARGE_REFUND',
           workflowStatus: 'completed',
           approvalLevel: 'support',
           refundSource: 'dispute',
@@ -3535,7 +3511,7 @@ async function seedFinanceFixtures(prisma: Prisma) {
               action: 'Refund Approved',
               actor: 'Support Agent B',
               timestamp: new Date(now - 3 * 3600000).toISOString(),
-              notes: 'Approve refund amount: ₹121.00',
+              notes: 'Approve refund amount: ₹1000.00',
             },
             {
               action: 'Refund Completed',
@@ -3547,12 +3523,6 @@ async function seedFinanceFixtures(prisma: Prisma) {
       });
     }
   }
-
-  const verifiedDrivers = await prisma.driver.findMany({
-    where: { verificationStatus: 'VERIFIED', deletedAt: null },
-    include: { profile: true, wallet: true },
-    take: 3,
-  });
 
   if (verifiedDrivers.length === 0) return;
 
@@ -3695,7 +3665,7 @@ async function seedFinanceFixtures(prisma: Prisma) {
           periodEnd: oldEnd,
         },
       },
-      update: { status: 'PAID', settlementBatchId: created.id },
+      update: { status: 'APPROVED', settlementBatchId: created.id },
       create: {
         driverId: verifiedDrivers[0].id,
         periodStart: oldStart,
@@ -3704,7 +3674,10 @@ async function seedFinanceFixtures(prisma: Prisma) {
         commission: 1015,
         adjustments: 0,
         netPayable: 13985,
-        status: 'PAID',
+        // APPROVED, not PAID: only a COMPLETED DriverPayout covering the whole
+        // netPayable may set PAID (`PayoutService.confirmPayout`), and this
+        // seed creates no payout.
+        status: 'APPROVED',
         settlementBatchId: created.id,
       },
     });

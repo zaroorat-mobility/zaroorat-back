@@ -24,3 +24,15 @@ export const TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER = 3;
 export const TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM = 5;
 export const TRIP_DURATION_PLAUSIBILITY_MULTIPLIER = 4;
 export const TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN = 15;
+
+/// D1. The payment methods a NEW ride may be booked with. The customer pays the
+/// driver directly — cash, a UPI transfer, or a card — and the platform never
+/// collects the fare.
+///
+/// WALLET is deliberately absent and must NOT be added back: the customer
+/// wallet can no longer be topped up, so a new WALLET ride could only spend a
+/// historical balance. It remains in the `PaymentMethod` database enum, and
+/// every wallet collection/receivable/write-off path stays live, because rides
+/// booked before this rule still have to be collected and settled.
+export const NEW_RIDE_PAYMENT_METHODS = ['CASH', 'UPI', 'CARD'] as const;
+export type NewRidePaymentMethod = (typeof NEW_RIDE_PAYMENT_METHODS)[number];

@@ -107,7 +107,16 @@ export class SettlementService {
           tx,
         );
       }
-      const settled = await this.settlementRepo.updateStatus(settlement.id, 'PAID', tx);
+      /// The settlement STAYS `PENDING` here.
+      ///
+      /// This used to write `PAID` in the very transaction that created the
+      /// row — before any payout existed, before any money moved. `PAID` now
+      /// means one thing only: a COMPLETED `DriverPayout` covers the whole
+      /// `netPayable`, which only `PayoutService.confirmPayout` can establish.
+      /// Calculating what a driver is owed is not paying them.
+      ///
+      /// The event name is unchanged (consumers depend on it) but it marks the
+      /// completion of the CALCULATION, not of a payment.
       await this.eventPublisher.publish(
         paymentEvent(PAYMENT_EVENT_CATALOG.SETTLEMENT_COMPLETED, data.driverId, {
           settlementId: settlement.id,
@@ -116,7 +125,7 @@ export class SettlementService {
         }),
         tx,
       );
-      return settled;
+      return settlement;
     });
   }
   /// The production entry point: given a window, find every driver with a

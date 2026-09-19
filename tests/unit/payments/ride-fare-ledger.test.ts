@@ -59,7 +59,6 @@ async function post(split: Split, paymentMethod: string): Promise<LedgerItemInpu
     {
       totalFare: new Decimal(split.totalFare),
       driverEarning: new Decimal(split.driverEarning),
-      driverPayable: new Decimal(split.driverEarning),
       platformCommission: new Decimal(split.platformCommission),
       taxAmount: new Decimal(split.taxAmount),
       platformFee: new Decimal(split.platformFee),

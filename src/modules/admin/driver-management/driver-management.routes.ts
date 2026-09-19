@@ -51,4 +51,33 @@ export async function adminDriverRoutes(fastify: FastifyInstance): Promise<void>
   fastify.post('/drivers/:id/suspend', canWrite, (req, reply) => controller.suspend(req, reply));
   fastify.post('/drivers/:id/block', canWrite, (req, reply) => controller.block(req, reply));
   fastify.post('/drivers/:id/activate', canWrite, (req, reply) => controller.activate(req, reply));
+
+  // ─── Bank accounts (Phase 1 verification gate; masked data only) ─────────
+  const canVerifyBank = {
+    preHandler: fastify.authorize({ permissions: ['bank_accounts:verify'] }),
+  };
+  fastify.get('/drivers/:driverId/bank-accounts', canVerifyBank, (req, reply) =>
+    controller.listBankAccounts(req, reply),
+  );
+  fastify.post('/drivers/:driverId/bank-accounts/:accountId/verify', canVerifyBank, (req, reply) =>
+    controller.verifyBankAccount(req, reply),
+  );
+  fastify.post('/drivers/:driverId/bank-accounts/:accountId/reject', canVerifyBank, (req, reply) =>
+    controller.rejectBankAccount(req, reply),
+  );
+  fastify.post(
+    '/drivers/:driverId/bank-accounts/:accountId/enable-payouts',
+    canVerifyBank,
+    (req, reply) => controller.enableBankAccountPayouts(req, reply),
+  );
+  fastify.post(
+    '/drivers/:driverId/bank-accounts/:accountId/disable-payouts',
+    canVerifyBank,
+    (req, reply) => controller.disableBankAccountPayouts(req, reply),
+  );
+  fastify.post(
+    '/drivers/:driverId/bank-accounts/:accountId/deactivate',
+    canVerifyBank,
+    (req, reply) => controller.deactivateBankAccount(req, reply),
+  );
 }

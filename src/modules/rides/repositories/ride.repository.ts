@@ -3,13 +3,19 @@ import { DatabaseService } from '@core/database';
 import { Prisma } from '../../../generated/prisma';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { Decimal, type Ride, type RideStatus } from '../types';
+import type { NewRidePaymentMethod } from '../constants/ride.constants.js';
 export interface CreateRideInput {
   requestId: string;
   customerId: string;
   driverId: string;
   vehicleId: string;
   vehicleTypeId: string;
-  paymentMethod: 'CASH' | 'WALLET' | 'CARD' | 'UPI';
+  /// D1. Narrower than the `PaymentMethod` database enum on purpose: a ride
+  /// ROW may still be WALLET (historical rides are read and processed
+  /// normally), but a NEW one can only be created with a permitted method, so
+  /// the compiler refuses a wallet ride here as well as the runtime guard in
+  /// `LifecycleService.acceptRideRequest`.
+  paymentMethod: NewRidePaymentMethod;
   pickupLat: Decimal;
   pickupLng: Decimal;
   pickupAddress?: string | null;

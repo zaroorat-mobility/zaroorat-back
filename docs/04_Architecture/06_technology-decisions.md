@@ -77,6 +77,19 @@ ops overhead**, while enforced module boundaries keep the door open to extract h
 
 ---
 
+## Payment gateways — decided
+
+**Razorpay and Stripe**, admin-selectable, one active at a time (`mock` exists for development and
+is refused in production/staging). They process **driver** money only: `DRIVER_SUBSCRIPTION_PAYMENT`
+and `DRIVER_COMMISSION_RECHARGE`. The invariant lives in `GATEWAY_PAYMENT_PURPOSES`
+(`src/modules/payments/constants/payment.constants.ts`) and is enforced in
+`IntentService.createIntent` before any provider call.
+
+A customer's ride fare never reaches a gateway: the rider pays the driver directly in cash, by UPI,
+or by card, so there is nothing for the platform to collect and no customer payment gateway to
+choose. PhonePe and Paytm may be the rider's own UPI app in that hand-to-hand payment — they are
+**not** Zaroorat gateway integrations, and neither is Cashfree.
+
 ## Decisions deliberately deferred
 
 We are **not** deciding these yet; committing early would be guessing. Each becomes an ADR when a
@@ -84,7 +97,6 @@ real requirement forces it:
 
 | Deferred                                    | Trigger to decide                                     |
 | ------------------------------------------- | ----------------------------------------------------- |
-| Payment/UPI gateway (Razorpay/PhonePe/etc.) | M2/M4 — when wallet→UPI is scoped                     |
 | SMS provider(s) for Kashmir                 | M0 — reliability testing in-region (PRD Q1)           |
 | Maps/routing provider                       | M1 — coverage validation in-region (PRD Q2)           |
 | Extracting matching/realtime into a service | When a module's scale or team boundary justifies it   |

@@ -1,4 +1,5 @@
 import { DatabaseService } from '@core/database';
+import { protectAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import { AuthService } from '@modules/auth/services/auth.service.js';
 import { DriverService } from '@modules/drivers/services/driver.service.js';
 import { DRIVER_DOCUMENT_TYPE } from '@modules/drivers/constants/driver.constants.js';
@@ -469,18 +470,28 @@ export class AdminApplicationService {
         data: { currentVehicleId: vehicle.id },
       });
 
+      // Phase 1. The number is stored encrypted (plus last4 and a keyed hash);
+      // the legacy plaintext column is no longer written. Approving the
+      // APPLICATION does not verify the BANK ACCOUNT: it enters it, and a
+      // different staff member must verify it before payouts can be enabled.
+      const bankNumber = protectAccountNumber(input.bankAccountNumber);
       await tx.driverBankAccount.create({
         data: {
           driverId: driver.id,
           accountHolderName: input.bankAccountName,
           bankName: input.bankName,
           ifscCode: input.bankIfsc.toUpperCase(),
-          accountNumberEnc: input.bankAccountNumber,
+          accountNumberEnc: null,
+          accountNumberCiphertext: bankNumber.ciphertext,
+          accountNumberLast4: bankNumber.last4,
+          accountNumberHash: bankNumber.hash,
+          encryptionKeyVersion: bankNumber.keyVersion,
           ...(input.upiId && input.upiId.length > 0 ? { upiId: input.upiId } : {}),
           isDefault: true,
           payoutEnabled: false,
-          verificationStatus: docStatus,
-          ...(approveImmediately ? { verifiedAt: new Date(), verifiedBy: actorId } : {}),
+          status: 'ENTERED',
+          verificationStatus: 'PENDING',
+          enteredBy: actorId,
         },
       });
 

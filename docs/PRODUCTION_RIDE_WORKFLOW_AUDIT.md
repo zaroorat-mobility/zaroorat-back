@@ -921,6 +921,8 @@ Production Impact:    Double payouts, unrecorded outbound money, lock contention
                       settlements.
 ```
 
+**Resolved for payouts (current architecture).** The payout half of this finding no longer applies: there is no `gateway.createPayout` anywhere — the gateway adapters expose no payout method, so no provider call can sit inside a transaction. `PayoutService` records `DriverPayout(INITIATED)` and commits; finance executes the bank transfer outside the platform and calls `confirmPayout`, which debits the wallet and posts the ledger group in a second short transaction. `failPayout` writes `FAILED` in its own committed transaction, so a failed attempt is kept rather than rolled back. `RefundService` likewise reserves in one transaction, calls the provider outside any transaction, and applies the outcome in another, with `RefundReconciliationJob` resolving unknown provider states.
+
 ### F-P0-12 — No idempotency on any ride state-changing endpoint
 
 ```

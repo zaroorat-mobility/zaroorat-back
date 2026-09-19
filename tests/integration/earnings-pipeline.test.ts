@@ -12,7 +12,7 @@ import {
   resetState,
   type LoggedInUser,
 } from './helpers/harness.js';
-import { grantRole, makeDispatchOffer, RIDE_PIN } from './helpers/fixtures.js';
+import { grantRole, makeBankAccount, makeDispatchOffer, RIDE_PIN } from './helpers/fixtures.js';
 import {
   accountBalance,
   completeRide as flowCompleteRide,
@@ -393,9 +393,14 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
   });
 
   describe('payout is bounded by the derived settlement', () => {
+    /// `bankAccountId` is passed in, not created here: a payout now requires a
+    /// verified, payout-enabled account, and the idempotency case calls this
+    /// twice with one key — a fresh account per call would change the payload
+    /// under that key. Each test creates the account once in its own setup.
     async function settleAndPay(
       w: RideWorld,
       finance: LoggedInUser,
+      bankAccountId: string,
       amount: number,
       idempotencyKey = randomUUID(),
     ): Promise<{ status: number; body: string; settlementId: string; netPayable: Decimal }> {
@@ -410,7 +415,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
         method: 'POST',
         url: '/api/v1/admin/payments/payouts',
         headers: { ...finance.authHeader, 'idempotency-key': idempotencyKey },
-        payload: { driverId: w.driverId, settlementId: settlement.id, amount },
+        payload: { driverId: w.driverId, settlementId: settlement.id, bankAccountId, amount },
       });
 
       return {
@@ -421,7 +426,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       };
     }
 
-    it('pays out exactly what the rides earned', async () => {
+    it('reserves a payout of exactly what the rides earned', async () => {
       const w = await world();
       await fundWallet(app, w.customer, 5000);
       const ride = await completeRide(w, {
@@ -430,9 +435,10 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
         paymentMethod: 'WALLET',
       });
       const earned = Number(earnedInFull(ride.fare).toFixed(2));
+      const bankAccountId = await makeBankAccount(w.driverId);
 
       const finance = await loginWithRole(FINANCE, 'finance');
-      const result = await settleAndPay(w, finance, earned);
+      const result = await settleAndPay(w, finance, bankAccountId, earned);
 
       assert.equal(result.status, 200, result.body);
       assert.equal(result.netPayable.toFixed(2), earned.toFixed(2));
@@ -453,9 +459,10 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
         paymentMethod: 'WALLET',
       });
       const overspend = Number(earnedInFull(ride.fare).add(0.01).toFixed(2));
+      const bankAccountId = await makeBankAccount(w.driverId);
 
       const finance = await loginWithRole(FINANCE, 'finance');
-      const result = await settleAndPay(w, finance, overspend);
+      const result = await settleAndPay(w, finance, bankAccountId, overspend);
 
       assert.equal(result.status, 422, result.body);
       assert.equal(JSON.parse(result.body).error.code, 'PAYOUT_EXCEEDS_AVAILABLE');
@@ -465,9 +472,10 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
     it('refuses any payout to a driver whose cash rides left them owing', async () => {
       const w = await world();
       await completeRide(w, { distanceKm: 10, durationMin: 20, paymentMethod: 'CASH' });
+      const bankAccountId = await makeBankAccount(w.driverId);
 
       const finance = await loginWithRole(FINANCE, 'finance');
-      const result = await settleAndPay(w, finance, 1);
+      const result = await settleAndPay(w, finance, bankAccountId, 1);
 
       assert.ok(result.netPayable.lt(0), 'the driver owes tax + platform fee on the cash ride');
       assert.equal(result.status, 422, result.body);
@@ -490,13 +498,19 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
         periodEnd,
       });
       const finance = await loginWithRole(FINANCE, 'finance');
+      const bankAccountId = await makeBankAccount(w.driverId);
 
       const pay = () =>
         app.inject({
           method: 'POST',
           url: '/api/v1/admin/payments/payouts',
           headers: { ...finance.authHeader, 'idempotency-key': randomUUID() },
-          payload: { driverId: w.driverId, settlementId: settlement.id, amount: earned },
+          payload: {
+            driverId: w.driverId,
+            settlementId: settlement.id,
+            bankAccountId,
+            amount: earned,
+          },
         });
 
       await Promise.all([pay(), pay(), pay()]);
@@ -522,10 +536,11 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       });
       const half = Number(earnedInFull(ride.fare).div(2).toFixed(2));
       const key = randomUUID();
+      const bankAccountId = await makeBankAccount(w.driverId);
 
       const finance = await loginWithRole(FINANCE, 'finance');
-      const first = await settleAndPay(w, finance, half, key);
-      const second = await settleAndPay(w, finance, half, key);
+      const first = await settleAndPay(w, finance, bankAccountId, half, key);
+      const second = await settleAndPay(w, finance, bankAccountId, half, key);
 
       assert.equal(first.status, 200, first.body);
       assert.equal(second.status, 200, second.body);

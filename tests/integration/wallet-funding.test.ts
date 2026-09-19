@@ -8,6 +8,10 @@ import { container } from '../../src/core/di.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { WalletService } from '../../src/modules/payments/services/wallet/wallet.service.js';
+import type { IntentService } from '../../src/modules/payments/services/intent/intent.service.js';
+import type { GatewayPaymentPurpose } from '../../src/modules/payments/constants/payment.constants.js';
+import { PaymentPurposeNotAllowedError } from '../../src/modules/payments/errors/payment.errors.js';
+import { captureGatewayIntentInputs } from './helpers/ride-flow.js';
 import type { TransactionManager } from '../../src/core/database/TransactionManager.js';
 
 const RIDER = '+919876603001';
@@ -29,13 +33,24 @@ describe('wallet funding integrity (integration)', () => {
     await resetState();
   });
 
-  function topup(user: LoggedInUser, amount: number) {
-    return app.inject({
-      method: 'POST',
-      url: TOPUP,
-      headers: { ...user.authHeader, 'idempotency-key': randomUUID() },
-      payload: { amount },
+  /// A historical CUSTOMER_WALLET_TOPUP intent, still awaiting capture. New
+  /// top-ups can no longer be created (`GATEWAY_PAYMENT_PURPOSES`); this is the
+  /// only kind left, and it must still credit exactly once when captured.
+  async function legacyTopup(user: LoggedInUser, amount: number): Promise<string> {
+    const intent = await db().client.paymentIntent.create({
+      data: {
+        userId: user.userId,
+        amount,
+        currency: 'INR',
+        methodType: 'CARD',
+        idempotencyKey: `legacy_topup_${randomUUID()}`,
+        status: 'PENDING',
+        gateway: 'mock',
+        gatewayIntentId: `mock_pi_${randomUUID()}`,
+        purpose: 'CUSTOMER_WALLET_TOPUP',
+      },
     });
+    return intent.id;
   }
 
   async function balanceOf(user: LoggedInUser): Promise<number> {
@@ -95,63 +110,89 @@ describe('wallet funding integrity (integration)', () => {
     });
   }
 
-  // ── RT-1: a request is not a payment ──────────────────────────────────────
+  // ── RT-1: customers cannot start a gateway payment ─────────────────────
 
-  it('does not credit a balance for a top-up with no payment behind it', async () => {
+  it('has no customer top-up route — a ride fare is paid to the driver, never a gateway', async () => {
     const rider = await loginAs(app, RIDER);
 
-    const response = await topup(rider, 500);
-
-    assert.equal(response.statusCode, 200, response.payload);
-    assert.equal(response.json().data.balance, 0, 'asking to pay is not paying');
-    assert.equal(await balanceOf(rider), 0, 'and it is still zero on re-read');
-    assert.equal(await ledgerPosition(rider.userId), 0, 'the books agree');
-  });
-
-  it('returns a payment intent to take to the gateway', async () => {
-    const rider = await loginAs(app, RIDER);
-
-    const body = (await topup(rider, 500)).json().data;
-
-    assert.ok(body.intentId, 'the client is told what to pay');
-    assert.equal(body.amount, 500);
-    // Additive: every field the old response carried is still here.
-    for (const field of [
-      'id',
-      'userId',
-      'balance',
-      'lockedBalance',
-      'availableBalance',
-      'currency',
-    ])
-      assert.ok(field in body, `${field} survives`);
-
-    const intent = await db().client.paymentIntent.findUniqueOrThrow({
-      where: { id: body.intentId },
-    });
-    assert.equal(intent.userId, rider.userId);
-    assert.equal(intent.status, 'PENDING');
-  });
-
-  it('refuses a top-up with no idempotency key', async () => {
-    const rider = await loginAs(app, RIDER);
-
-    const response = await app.inject({
-      method: 'POST',
-      url: TOPUP,
-      headers: rider.authHeader,
-      payload: { amount: 500 },
-    });
-
-    assert.equal(response.statusCode, 400, response.payload);
+    for (const url of [TOPUP, '/api/v1/payments/intents', '/api/v1/payments/wallet/hold']) {
+      const response = await app.inject({
+        method: 'POST',
+        url,
+        headers: { ...rider.authHeader, 'idempotency-key': randomUUID() },
+        payload: { amount: 500, methodType: 'CARD' },
+      });
+      assert.equal(response.statusCode, 404, `${url}: ${response.payload}`);
+    }
+    assert.equal(
+      await db().client.paymentIntent.count({ where: { userId: rider.userId } }),
+      0,
+      'no intent was created',
+    );
+    assert.equal(await db().client.walletHold.count(), 0, 'no hold was created');
     assert.equal(await balanceOf(rider), 0);
+  });
+
+  it('refuses any purpose outside the gateway invariant before calling a gateway', async () => {
+    const rider = await loginAs(app, RIDER);
+    const intents = container.resolve<IntentService>('intentService');
+    const capture = captureGatewayIntentInputs();
+    try {
+      for (const purpose of ['CUSTOMER_WALLET_TOPUP', 'CUSTOMER_RIDE_PAYMENT']) {
+        await assert.rejects(
+          intents.createIntent({
+            userId: rider.userId,
+            amount: new Decimal(500),
+            methodType: 'CARD',
+            idempotencyKey: randomUUID(),
+            purpose: purpose as GatewayPaymentPurpose,
+          }),
+          PaymentPurposeNotAllowedError,
+        );
+      }
+      assert.equal(capture.calls.length, 0, 'no gateway was ever asked');
+    } finally {
+      capture.restore();
+    }
+    assert.equal(await db().client.paymentIntent.count({ where: { userId: rider.userId } }), 0);
+  });
+
+  it('reads the balance without ever creating a customer wallet', async () => {
+    const rider = await loginAs(app, RIDER);
+
+    for (let i = 0; i < 2; i++) {
+      const response = await app.inject({ method: 'GET', url: BALANCE, headers: rider.authHeader });
+      assert.equal(response.statusCode, 200, response.payload);
+      assert.deepEqual(response.json().data, {
+        id: null,
+        userId: rider.userId,
+        balance: 0,
+        lockedBalance: 0,
+        availableBalance: 0,
+        currency: 'INR',
+      });
+    }
+    assert.equal(
+      await db().client.customerWallet.count({ where: { userId: rider.userId } }),
+      0,
+      'a read inserts no customer_wallets row',
+    );
+  });
+
+  it('does not credit a historical top-up that was never captured', async () => {
+    const rider = await loginAs(app, RIDER);
+
+    await legacyTopup(rider, 500);
+
+    assert.equal(await balanceOf(rider), 0, 'asking to pay is not paying');
+    assert.equal(await ledgerPosition(rider.userId), 0, 'the books agree');
   });
 
   // ── RT-2: a confirmed payment credits exactly once ────────────────────────
 
   it('credits exactly once when the gateway confirms, and not again on redelivery', async () => {
     const rider = await loginAs(app, RIDER);
-    const { intentId } = (await topup(rider, 750)).json().data;
+    const intentId = await legacyTopup(rider, 750);
 
     const eventId = `evt_${randomUUID()}`;
     const first = await deliverWebhook(intentId, eventId);
@@ -169,7 +210,7 @@ describe('wallet funding integrity (integration)', () => {
 
   it('credits once even when the gateway sends a second, distinct event', async () => {
     const rider = await loginAs(app, RIDER);
-    const { intentId } = (await topup(rider, 300)).json().data;
+    const intentId = await legacyTopup(rider, 300);
 
     await deliverWebhook(intentId);
     // A different event id, so the gateway-event guard does not catch it — the
@@ -181,7 +222,7 @@ describe('wallet funding integrity (integration)', () => {
 
   it('leaves the balance alone when the gateway reports a failure', async () => {
     const rider = await loginAs(app, RIDER);
-    const { intentId } = (await topup(rider, 400)).json().data;
+    const intentId = await legacyTopup(rider, 400);
 
     const body = JSON.stringify({
       event: 'payment.failed',
@@ -222,7 +263,7 @@ describe('wallet funding integrity (integration)', () => {
     const rider = await loginAs(app, RIDER);
 
     for (const amount of [120.5, 79.25, 1000]) {
-      const { intentId } = (await topup(rider, amount)).json().data;
+      const intentId = await legacyTopup(rider, amount);
       await deliverWebhook(intentId);
     }
 
@@ -234,7 +275,7 @@ describe('wallet funding integrity (integration)', () => {
 
   it('lets exactly one of two concurrent overlapping debits through', async () => {
     const rider = await loginAs(app, RIDER);
-    const { intentId } = (await topup(rider, 1000)).json().data;
+    const intentId = await legacyTopup(rider, 1000);
     await deliverWebhook(intentId);
 
     const wallet = container.resolve<WalletService>('walletService');
@@ -261,7 +302,7 @@ describe('wallet funding integrity (integration)', () => {
 
   it('records a spend as a negative wallet transaction', async () => {
     const rider = await loginAs(app, RIDER);
-    const { intentId } = (await topup(rider, 500)).json().data;
+    const intentId = await legacyTopup(rider, 500);
     await deliverWebhook(intentId);
 
     const wallet = container.resolve<WalletService>('walletService');

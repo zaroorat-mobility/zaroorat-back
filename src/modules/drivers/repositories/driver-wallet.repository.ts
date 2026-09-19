@@ -3,17 +3,6 @@ import type { TransactionClient } from '@core/database/TransactionManager';
 import { Decimal, type DriverWallet, type DriverWalletTransaction } from '../types';
 export class DriverWalletRepository {
   constructor(private readonly db: DatabaseService) {}
-  async lockForUpdate(driverId: string, tx: TransactionClient): Promise<DriverWallet | null> {
-    const locked = await tx.$queryRaw<
-      {
-        id: string;
-      }[]
-    >`
-      SELECT "id" FROM "driver_wallets" WHERE "driver_id" = ${driverId}::uuid FOR UPDATE
-    `;
-    if (locked.length === 0) return null;
-    return tx.driverWallet.findUnique({ where: { driverId } });
-  }
   async getOrCreateWallet(driverId: string, tx?: TransactionClient): Promise<DriverWallet> {
     const client = tx ?? this.db.client;
     const existing = await client.driverWallet.findUnique({
@@ -28,6 +17,15 @@ export class DriverWalletRepository {
         currency: 'INR',
       },
     });
+  }
+  async lockForUpdate(driverId: string, tx?: TransactionClient): Promise<DriverWallet | null> {
+    const client = tx ?? this.db.client;
+    await this.getOrCreateWallet(driverId, client);
+    const locked = await client.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "driver_wallets" WHERE "driver_id" = ${driverId}::uuid FOR UPDATE
+    `;
+    if (locked.length === 0) return null;
+    return client.driverWallet.findUnique({ where: { driverId } });
   }
   async listTransactions(
     driverId: string,

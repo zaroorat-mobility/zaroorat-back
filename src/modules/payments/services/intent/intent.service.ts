@@ -8,7 +8,16 @@ import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import { CommissionWalletService } from '../commission-wallet/commission-wallet.service.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
-import { InvalidStateTransitionError, PaymentNotFoundError } from '../../errors/payment.errors.js';
+import {
+  DuplicateIdempotencyKeyError,
+  InvalidStateTransitionError,
+  PaymentNotFoundError,
+  PaymentPurposeNotAllowedError,
+} from '../../errors/payment.errors.js';
+import {
+  GATEWAY_PAYMENT_PURPOSES,
+  type GatewayPaymentPurpose,
+} from '../../constants/payment.constants.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import { PaymentMetrics } from '../../metrics/payment.metrics.js';
 import type { PaymentIntent } from '../../types';
@@ -18,7 +27,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   PENDING: ['PROCESSING', 'SUCCEEDED', 'FAILED', 'CANCELLED'],
   PROCESSING: ['SUCCEEDED', 'FAILED', 'CANCELLED'],
   SUCCEEDED: ['REFUND_PENDING', 'REFUNDED'],
-  FAILED: [],
+  FAILED: ['SUCCEEDED'],
   CANCELLED: [],
   REFUND_PENDING: ['REFUNDED'],
   REFUNDED: [],
@@ -48,11 +57,24 @@ export class IntentService {
     methodType: string;
     paymentMethodId?: string;
     idempotencyKey: string;
-    /// 004-driver-subscription-wallet. Defaults to the existing behavior.
-    purpose?: string;
+    /// Required, and only a platform charge: a customer's ride fare is paid to
+    /// the driver directly and never reaches a gateway.
+    purpose: GatewayPaymentPurpose;
   }): Promise<PaymentIntent> {
+    // Checked before anything else — before the idempotency lookup and before
+    // any provider call — so nothing outside the invariant is ever created or
+    // sent to a gateway, whatever a caller passes at runtime.
+    if (!(GATEWAY_PAYMENT_PURPOSES as readonly string[]).includes(data.purpose)) {
+      throw new PaymentPurposeNotAllowedError(String(data.purpose));
+    }
     const existing = await this.intentRepo.findByIdempotencyKey(data.idempotencyKey);
-    if (existing) return existing;
+    if (existing) {
+      // A replay must be the same payment. Without this, a key that collides
+      // with a historical CUSTOMER_WALLET_TOPUP intent would hand that intent
+      // back to be paid, re-opening the gateway path the check above closes.
+      if (existing.purpose !== data.purpose) throw new DuplicateIdempotencyKeyError();
+      return existing;
+    }
     // The active provider is resolved ONCE, here, at creation — the result is
     // what gets written to PaymentIntent.gateway below and is authoritative
     // for this intent's entire lifetime, regardless of any later change to
@@ -77,7 +99,7 @@ export class IntentService {
           idempotencyKey: data.idempotencyKey,
           gateway: gateway.gatewayName,
           gatewayIntentId: gatewayRes.gatewayIntentId,
-          ...(data.purpose !== undefined ? { purpose: data.purpose } : {}),
+          purpose: data.purpose,
         },
         tx,
       );
@@ -107,7 +129,7 @@ export class IntentService {
   async confirmIntent(intentId: string): Promise<PaymentIntent> {
     const intent = await this.intentRepo.findById(intentId);
     if (!intent) throw new PaymentNotFoundError(intentId);
-    this.validateTransition(intent.status, 'PROCESSING');
+    if (intent.status === 'SUCCEEDED') return intent;
     // Resolved by the intent's OWN stored provider — never by current
     // routing, which may have changed since this intent was created.
     const gateway = await this.gatewayResolver.forProviderName(intent.gateway ?? 'mock');
@@ -129,7 +151,16 @@ export class IntentService {
   ): Promise<PaymentIntent> {
     const locked = await this.intentRepo.lockForUpdate(intentId, tx);
     if (!locked) throw new PaymentNotFoundError(intentId);
-    const nextStatus = gatewayStatus === 'SUCCEEDED' ? 'SUCCEEDED' : 'FAILED';
+    let nextStatus: string;
+    if (gatewayStatus === 'SUCCEEDED') {
+      nextStatus = 'SUCCEEDED';
+    } else if (gatewayStatus === 'FAILED' || gatewayStatus === 'CANCELLED') {
+      nextStatus = gatewayStatus;
+    } else {
+      // Non-terminal gateway status (e.g. PENDING, PROCESSING, CREATED, AUTHORIZED).
+      // Must NOT be converted to FAILED.
+      return locked;
+    }
     if (locked.status === nextStatus) return locked;
     this.validateTransition(locked.status, nextStatus);
     const intent = locked;
@@ -234,6 +265,9 @@ export class IntentService {
           tx,
         );
       } else {
+        // CUSTOMER_WALLET_TOPUP — historical intents only. `createIntent` no
+        // longer creates this purpose, but an intent created before that
+        // change can still be captured and must still be credited.
         await this.ledgerService.postTransactionGroup(
           [
             {

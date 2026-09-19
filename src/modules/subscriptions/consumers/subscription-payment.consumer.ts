@@ -38,9 +38,30 @@ export class SubscriptionPaymentConsumer {
   ) {}
 
   register(): Unsubscribe {
-    return this.eventBus.on(PAYMENT_EVENT_CATALOG.DRIVER_SUBSCRIPTION_PAYMENT_COMPLETED, (e) =>
-      this.onPaymentCompleted(e),
+    const offCompleted = this.eventBus.on(
+      PAYMENT_EVENT_CATALOG.DRIVER_SUBSCRIPTION_PAYMENT_COMPLETED,
+      (e) => this.onPaymentCompleted(e),
     );
+    const offRefunded = this.eventBus.on(PAYMENT_EVENT_CATALOG.REFUND_PROCESSED, (e) =>
+      this.onRefundProcessed(e),
+    );
+    return () => {
+      offCompleted();
+      offRefunded();
+    };
+  }
+
+  /// Phase 1 refunds. A provider-confirmed refund of a subscription payment
+  /// ends that subscription's entitlement. Idempotent: a redelivered event
+  /// finds nothing ACTIVE/PENDING_PAYMENT left to end.
+  private async onRefundProcessed(envelope: EventEnvelope): Promise<void> {
+    const { purpose, paymentIntentId } = envelope.data as {
+      purpose?: string;
+      paymentIntentId?: string;
+    };
+    if (purpose !== 'DRIVER_SUBSCRIPTION_PAYMENT' || !paymentIntentId) return;
+    const ended = await this.driverSubscriptionRepository.endForRefund(paymentIntentId);
+    logger.info({ paymentIntentId, ended }, '[subscriptions] subscription ended by refund');
   }
 
   private async onPaymentCompleted(envelope: EventEnvelope): Promise<void> {
@@ -50,18 +71,20 @@ export class SubscriptionPaymentConsumer {
       const subscription =
         await this.driverSubscriptionRepository.findByPaymentIntentId(paymentIntentId);
       if (!subscription) {
-        logger.warn(
-          { paymentIntentId },
-          '[subscriptions] payment-confirmed event for an unknown subscription',
+        throw new Error(
+          `[subscriptions] payment-confirmed event for an unknown subscription (paymentIntentId: ${paymentIntentId})`,
         );
-        return;
       }
       if (subscription.status !== 'PENDING_PAYMENT') {
         // Already activated by a prior delivery — safe to replay.
         return;
       }
       const plan = await this.subscriptionPlanRepository.findById(subscription.planId);
-      if (!plan) return;
+      if (!plan) {
+        throw new Error(
+          `[subscriptions] subscription plan ${subscription.planId} not found for subscription ${subscription.id}`,
+        );
+      }
       const startDate = new Date();
       const expiryDate = addBillingPeriod(startDate, plan.billingPeriod);
       await this.txManager.execute(async (tx) => {
@@ -83,9 +106,8 @@ export class SubscriptionPaymentConsumer {
         '[subscriptions] subscription activated',
       );
     } catch (err) {
-      // Swallowed deliberately, matching RideCollectionConsumer: the relay
-      // must not stall on one driver, and this is safe to retry on redelivery.
       logger.error({ err, paymentIntentId }, '[subscriptions] activation failed unexpectedly');
+      throw err;
     }
   }
 }

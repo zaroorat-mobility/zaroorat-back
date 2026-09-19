@@ -95,4 +95,17 @@ export class DeviceRepository extends BaseRepository {
     });
     return count;
   }
+  /// Nulls `fcmToken` on every device row holding the exact token value.
+  /// Called by FcmPushProvider when FCM returns a definitive invalid/unregistered
+  /// error, so no further sends are attempted to a dead registration.
+  ///
+  /// Uses `updateMany` with an exact-match `where` — safe because FCM registration
+  /// tokens are globally unique across all devices and users in normal operation.
+  /// No `userId` is required; the provider only knows the token, not who owns it.
+  async clearFcmTokenByValue(token: string): Promise<void> {
+    await this.client.userDevice.updateMany({
+      where: { fcmToken: token },
+      data: { fcmToken: null },
+    });
+  }
 }

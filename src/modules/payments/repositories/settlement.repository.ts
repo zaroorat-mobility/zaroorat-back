@@ -1,6 +1,7 @@
 import { Decimal } from '../types/index.js';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
+import type { SettlementStatus } from '../../../generated/prisma/index.js';
 import type { DriverSettlement } from '../types';
 export class SettlementRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -194,7 +195,7 @@ export class SettlementRepository {
   }
   async updateStatus(
     id: string,
-    status: string,
+    status: SettlementStatus,
     tx?: TransactionClient,
   ): Promise<DriverSettlement> {
     const client = tx ?? this.db.client;

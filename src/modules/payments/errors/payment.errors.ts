@@ -113,6 +113,123 @@ export class InvalidPayoutAmountError extends PaymentError {
     this.name = 'InvalidPayoutAmountError';
   }
 }
+/// Payout/settlement Option A — a payout is refused unless the driver has a
+/// bank account that is theirs, verified, and explicitly payout-enabled. Kept
+/// as distinct codes rather than one generic rejection so finance can see
+/// which precondition failed without reading logs.
+export class PayoutBankAccountInvalidError extends PaymentError {
+  constructor(message = 'Bank account does not exist or does not belong to this driver') {
+    super(message, 'PAYOUT_BANK_ACCOUNT_INVALID', 422);
+    this.name = 'PayoutBankAccountInvalidError';
+  }
+}
+export class PayoutBankAccountNotVerifiedError extends PaymentError {
+  constructor(status: string) {
+    super(
+      `Bank account verification status is ${status}; a payout requires VERIFIED`,
+      'PAYOUT_BANK_ACCOUNT_NOT_VERIFIED',
+      422,
+    );
+    this.name = 'PayoutBankAccountNotVerifiedError';
+  }
+}
+export class PayoutBankAccountNotEnabledError extends PaymentError {
+  constructor(message = 'Bank account is not enabled for payouts') {
+    super(message, 'PAYOUT_BANK_ACCOUNT_NOT_ENABLED', 422);
+    this.name = 'PayoutBankAccountNotEnabledError';
+  }
+}
+/// The settlement has reached a state that no longer admits payment — it is
+/// already fully PAID, or finance marked it FAILED.
+export class SettlementNotPayableError extends PaymentError {
+  constructor(status: string) {
+    super(`Settlement is ${status} and can no longer be paid out`, 'SETTLEMENT_NOT_PAYABLE', 422);
+    this.name = 'SettlementNotPayableError';
+  }
+}
+/// A payout may never overdraw the driver wallet. The wallet is allowed to go
+/// negative for a cash-ride debt (`SettlementWalletRepository.debit`), but that
+/// is the platform reclaiming its own share — paying a driver more than they
+/// hold is a different thing entirely, and is always a bug upstream.
+export class PayoutExceedsWalletBalanceError extends PaymentError {
+  constructor(requested: string, available: string) {
+    super(
+      `Payout of ${requested} exceeds the available driver wallet balance of ${available}`,
+      'PAYOUT_EXCEEDS_WALLET_BALANCE',
+      422,
+    );
+    this.name = 'PayoutExceedsWalletBalanceError';
+  }
+}
+export class PayoutNotFoundError extends PaymentError {
+  constructor(message = 'Payout was not found') {
+    super(message, 'PAYOUT_NOT_FOUND', 404);
+    this.name = 'PayoutNotFoundError';
+  }
+}
+/// Confirming or failing a payout is only meaningful while it is INITIATED.
+/// A second confirmation is what would double-debit the driver wallet, so this
+/// is the guard that makes the wallet debit exactly-once.
+export class PayoutNotPendingError extends PaymentError {
+  constructor(status: string) {
+    super(
+      `Payout is ${status}; only an INITIATED payout can be confirmed or failed`,
+      'PAYOUT_NOT_PENDING',
+      409,
+    );
+    this.name = 'PayoutNotPendingError';
+  }
+}
+/// A PaymentIntent was asked to fund something that is not a platform charge
+/// (`GATEWAY_PAYMENT_PURPOSES`) — a customer's ride fare above all.
+export class PaymentPurposeNotAllowedError extends PaymentError {
+  constructor(purpose: string) {
+    super(
+      `Payment purpose "${purpose}" cannot be processed by a payment gateway`,
+      'PAYMENT_PURPOSE_NOT_ALLOWED',
+      422,
+    );
+    this.name = 'PaymentPurposeNotAllowedError';
+  }
+}
+/// Commission credit is prepaid platform commission, so only a driver on (or
+/// staged to switch to) the COMMISSION model may buy it. Refused before any
+/// idempotency record or gateway payment exists.
+export class CommissionRechargeNotAllowedError extends PaymentError {
+  constructor(message = 'Only a commission-model driver can recharge commission credit') {
+    super(message, 'COMMISSION_RECHARGE_NOT_ALLOWED', 403);
+    this.name = 'CommissionRechargeNotAllowedError';
+  }
+}
+/// The credit a refund would reverse is no longer there — it was spent on
+/// rides or commission. Refunding it anyway would return money twice.
+export class RefundBalanceUnavailableError extends PaymentError {
+  constructor(requested: string, available?: string) {
+    super(
+      available != null
+        ? `Refund of ${requested} exceeds the ${available} still unused on the refunded balance`
+        : `Refund of ${requested} exceeds what is still unused on the refunded balance`,
+      'REFUND_BALANCE_UNAVAILABLE',
+      422,
+    );
+    this.name = 'RefundBalanceUnavailableError';
+  }
+}
+export class PayoutBankAccountInactiveError extends PaymentError {
+  constructor(message = 'Bank account is deactivated') {
+    super(message, 'PAYOUT_BANK_ACCOUNT_INACTIVE', 422);
+    this.name = 'PayoutBankAccountInactiveError';
+  }
+}
+/// Payouts stay closed until bank-account encryption has been backfilled and
+/// verified (`bank_accounts.encryption_verified_at`) and the account itself
+/// holds encrypted data.
+export class PayoutBankSecurityNotReadyError extends PaymentError {
+  constructor(message = 'Bank-account security prerequisites are not met') {
+    super(message, 'PAYOUT_BANK_SECURITY_NOT_READY', 422);
+    this.name = 'PayoutBankSecurityNotReadyError';
+  }
+}
 export class LedgerImbalanceError extends PaymentError {
   constructor(debitSum: number, creditSum: number) {
     super(

@@ -42,6 +42,26 @@ const SANCTIONED_PUBLIC: ReadonlyMap<string, string> = new Map([
   ['GET /ready', 'Kubernetes readiness probe.'],
   ['GET /api/v1/ready', 'Kubernetes readiness probe (prefixed).'],
   ['GET /metrics', 'Prometheus scrape. Must be restricted to the monitoring network at ingress.'],
+  [
+    'GET /api/v1/app-config',
+    'Pre-authentication presentation bundle: theme tokens, fonts, the locale list, translated ' +
+      'UI strings and a feature-flag on/off map, so a client can render its login screen themed ' +
+      'and localised before it holds a token. Read-only, no user data. Opted out via ' +
+      '`config: { public: true }` and IP rate limited by rateLimits.appConfig. Every write ' +
+      'lives under /api/v1/admin/app-config and requires settings:write. Flag KEYS are ' +
+      'therefore world-readable: never encode anything sensitive in a flag name.',
+  ],
+  [
+    'GET /api/v1/app-config/',
+    'Same handler as GET /api/v1/app-config — Fastify registers the prefixed `/` route with ' +
+      'and without the trailing slash.',
+  ],
+  [
+    'GET /api/v1/app-config/locales/:code',
+    'Pre-authentication locale strings for one language, for the same reason as the bundle: ' +
+      'switching language on the login screen happens before a token exists. Read-only, IP ' +
+      'rate limited by rateLimits.appConfig.',
+  ],
 ]);
 
 function isDocsRoute(url: string): boolean {

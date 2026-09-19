@@ -5,7 +5,9 @@ import { paymentConfig } from '@config';
 import { PaymentService } from '../services/payment.service.js';
 import { WalletRechargeOptionRepository } from '../repositories/wallet-recharge-option.repository.js';
 import { rechargeCommissionWalletSchema } from '../schemas/payment.schemas.js';
+import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import {
+  CommissionRechargeNotAllowedError,
   InvalidRechargeAmountError,
   RechargeOptionNotFoundError,
 } from '../errors/payment.errors.js';
@@ -19,10 +21,16 @@ export class CommissionWalletController {
   constructor(
     private readonly paymentService: PaymentService,
     private readonly rechargeOptionRepository: WalletRechargeOptionRepository,
+    private readonly driverRepository: DriverRepository,
   ) {}
 
   async recharge(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const userId = callerId(req);
+    // Before the idempotency record and before any intent: a caller who may
+    // not buy commission credit gets nothing created, and never reaches a
+    // gateway. Previously any authenticated user could pay here; the webhook
+    // then threw "no driver profile" — money captured, never credited.
+    await this.assertMayRecharge(userId);
     const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     const body = rechargeCommissionWalletSchema.parse(req.body);
     const result = await this.paymentService.withIdempotency(
@@ -70,6 +78,18 @@ export class CommissionWalletController {
       },
     );
     reply.send({ data: result });
+  }
+
+  /// Commission credit only pays platform commission, so only a COMMISSION
+  /// driver may buy it — or a SUBSCRIPTION driver whose switch to COMMISSION is
+  /// already staged (BD-5, `pendingPaymentModel`), who needs credit ready for
+  /// the moment the paid period ends.
+  private async assertMayRecharge(userId: string): Promise<void> {
+    const driver = await this.driverRepository.findByUserId(userId);
+    const eligible =
+      driver != null &&
+      (driver.paymentModel === 'COMMISSION' || driver.pendingPaymentModel === 'COMMISSION');
+    if (!eligible) throw new CommissionRechargeNotAllowedError();
   }
 
   async listRechargeOptions(_req: FastifyRequest, reply: FastifyReply): Promise<void> {

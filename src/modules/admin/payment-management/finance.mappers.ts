@@ -63,13 +63,22 @@ export function mapPaymentMethod(method?: string | null): string {
   return 'upi';
 }
 
+/// Normalises the provider recorded on a transaction.
+///
+/// Razorpay and Stripe are the only integrated gateways (plus `mock`, for
+/// development). Cashfree, PhonePe and Paytm are deliberately not handled:
+/// none was ever an integrated provider here, so no row this platform wrote
+/// can carry one. PhonePe/Paytm may still be how a CUSTOMER pays a DRIVER
+/// directly over UPI — that is the rider's own rail, never a Zaroorat gateway,
+/// and it never reaches this column.
+///
+/// An unrecognised value falls through lower-cased rather than being mapped
+/// onto a provider that does not exist here, so a historical or imported
+/// gateway string stays readable in the admin UI.
 export function mapGateway(gateway?: string | null): string | undefined {
   if (!gateway) return undefined;
   const g = gateway.toLowerCase();
   if (g.includes('razor')) return 'razorpay';
-  if (g.includes('cashfree')) return 'cashfree';
-  if (g.includes('phone')) return 'phonepe';
-  if (g.includes('paytm')) return 'paytm';
   return g;
 }
 

@@ -3,7 +3,7 @@ import { SubscriptionPlanRepository, DriverSubscriptionRepository } from './repo
 import { SubscriptionService } from './services/index.js';
 import { SubscriptionController } from './controllers/index.js';
 import { SubscriptionPaymentConsumer } from './consumers/index.js';
-import { SubscriptionExpiryJob } from './jobs/index.js';
+import { SubscriptionExpiryJob, SubscriptionReconciliationJob } from './jobs/index.js';
 export * from './controllers/index.js';
 export * from './routes/index.js';
 export * from './schemas/index.js';
@@ -22,6 +22,7 @@ export function registerSubscriptionsModule(container: AwilixContainer): void {
     subscriptionController: asClass(SubscriptionController).singleton(),
     subscriptionPaymentConsumer: asClass(SubscriptionPaymentConsumer).singleton(),
     subscriptionExpiryJob: asClass(SubscriptionExpiryJob).singleton(),
+    subscriptionReconciliationJob: asClass(SubscriptionReconciliationJob).singleton(),
     txManager: aliasTo('transactionManager'),
   });
 }

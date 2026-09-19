@@ -172,6 +172,44 @@ describe('subscription purchase → payment → activation (integration, real HT
     assert.equal(stat.json().data, null);
   });
 
+  it('refuses a purchase with a missing or blank Idempotency-Key — nothing is created', async () => {
+    const { driver, driverId } = await driverWorld('+919876660020');
+    const planId = await makeSubscriptionPlan({ billingPeriod: 'WEEKLY', price: 500 });
+
+    for (const headers of [driver.authHeader, { ...driver.authHeader, 'idempotency-key': '   ' }]) {
+      const res = await app.inject({ method: 'POST', url: PURCHASE, headers, payload: { planId } });
+      assert.equal(res.statusCode, 400, res.payload);
+      assert.equal(res.json().error.code, 'IDEMPOTENCY_KEY_REQUIRED');
+    }
+    assert.equal(await db().client.driverSubscription.count({ where: { driverId } }), 0);
+    assert.equal(
+      await db().client.paymentIntent.count({ where: { idempotencyKey: '' } }),
+      0,
+      'no global empty-string intent key',
+    );
+  });
+
+  it('replays a retried purchase with the same key — one subscription row, one intent', async () => {
+    const { driver, driverId } = await driverWorld('+919876660021');
+    const planId = await makeSubscriptionPlan({ billingPeriod: 'WEEKLY', price: 500 });
+    const headers = { ...driver.authHeader, 'idempotency-key': randomUUID() };
+
+    const first = await app.inject({ method: 'POST', url: PURCHASE, headers, payload: { planId } });
+    const retry = await app.inject({ method: 'POST', url: PURCHASE, headers, payload: { planId } });
+
+    assert.equal(first.statusCode, 200, first.payload);
+    assert.equal(retry.statusCode, 200, retry.payload);
+    assert.deepEqual(retry.json().data, first.json().data, 'the retry returns the same purchase');
+    assert.equal(await db().client.driverSubscription.count({ where: { driverId } }), 1);
+    const intent = await db().client.paymentIntent.findUniqueOrThrow({
+      where: { id: first.json().data.intentId },
+    });
+    assert.ok(
+      intent.idempotencyKey.startsWith(`subscription:${driverId}:`),
+      "the stored key is scoped to this driver, not the client's raw key",
+    );
+  });
+
   it('activates on webhook confirmation, with the correct start date, expiry date and duration for the plan — and the driver becomes ride-eligible', async () => {
     // `rideWorld` with an explicit `paymentModel: null` skips its own
     // SUBSCRIPTION-with-active-subscription default (see its own comment) —

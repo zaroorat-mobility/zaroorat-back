@@ -1,7 +1,7 @@
 import { Decimal } from '../types/index.js';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
-import type { CustomerWallet, CustomerWalletTransaction, WalletHold, WalletTopup } from '../types';
+import type { CustomerWallet, CustomerWalletTransaction, WalletHold } from '../types';
 export class WalletRepository {
   constructor(private readonly db: DatabaseService) {}
   async findByUserId(userId: string, tx?: TransactionClient): Promise<CustomerWallet | null> {
@@ -87,59 +87,12 @@ export class WalletRepository {
       take: limit,
     });
   }
-  async createHold(
-    data: {
-      walletType: string;
-      walletId: string;
-      ownerId: string;
-      amount: Decimal;
-      reason?: string;
-      referenceType?: string;
-      referenceId?: string;
-    },
-    tx: TransactionClient,
-  ): Promise<WalletHold> {
-    return tx.walletHold.create({
-      data: {
-        walletType: data.walletType,
-        walletId: data.walletId,
-        ownerId: data.ownerId,
-        amount: data.amount,
-        reason: data.reason ?? null,
-        status: 'ACTIVE',
-        referenceType: data.referenceType ?? null,
-        referenceId: data.referenceId ?? null,
-      },
-    });
-  }
   async releaseHold(holdId: string, tx: TransactionClient): Promise<WalletHold> {
     return tx.walletHold.update({
       where: { id: holdId },
       data: {
         status: 'RELEASED',
         releasedAt: new Date(),
-      },
-    });
-  }
-  async createTopupRecord(
-    data: {
-      userId: string;
-      walletId: string;
-      amount: Decimal;
-      idempotencyKey: string;
-      paymentIntentId?: string;
-    },
-    tx: TransactionClient,
-  ): Promise<WalletTopup> {
-    return tx.walletTopup.create({
-      data: {
-        userId: data.userId,
-        walletId: data.walletId,
-        amount: data.amount,
-        currency: 'INR',
-        idempotencyKey: data.idempotencyKey,
-        paymentIntentId: data.paymentIntentId ?? null,
-        status: 'PENDING',
       },
     });
   }

@@ -188,6 +188,13 @@ export const PERMISSION_SEED = [
     description: 'Execute payouts, refunds, and other money-moving admin actions',
   },
   {
+    code: 'bank_accounts:verify',
+    resource: 'bank_accounts',
+    action: 'verify',
+    description:
+      'View masked driver bank accounts and verify, reject, enable or disable them for payouts',
+  },
+  {
     code: 'payouts:execute',
     resource: 'payouts',
     action: 'execute',
@@ -342,6 +349,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<RoleSlug, readonly PermissionCode
       'finance:execute',
       'payouts:execute',
       'refunds:process_any',
+      'bank_accounts:verify',
       'rides:read_any',
     ] as const),
   });

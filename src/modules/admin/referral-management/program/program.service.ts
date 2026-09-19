@@ -6,12 +6,13 @@ import {
   ReferralProgramNotFoundError,
   ReferralMilestoneNotFoundError,
 } from '../referral.errors.js';
-import type {
-  CreateMilestoneBody,
-  CreateProgramBody,
-  ListProgramsQuery,
-  UpdateMilestoneBody,
-  UpdateProgramBody,
+import {
+  programConfigError,
+  type CreateMilestoneBody,
+  type CreateProgramBody,
+  type ListProgramsQuery,
+  type UpdateMilestoneBody,
+  type UpdateProgramBody,
 } from '../schemas.js';
 
 function toNum(value: { toString(): string } | number | null | undefined): number | null {
@@ -29,29 +30,21 @@ type QualifyingEvent =
   | 'DRIVER_NTH_RIDE';
 type RewardWallet = 'CUSTOMER' | 'DRIVER';
 
-const RIDER_EVENTS: QualifyingEvent[] = ['SIGNUP', 'FIRST_RIDE', 'NTH_RIDE'];
-const DRIVER_EVENTS: QualifyingEvent[] = [
-  'DRIVER_APPROVED',
-  'DRIVER_FIRST_RIDE',
-  'DRIVER_NTH_RIDE',
-];
+function assertProgramConfig(config: Parameters<typeof programConfigError>[0]): void {
+  const message = programConfigError(config);
+  if (message) throw new ReferralProgramConflictError(message);
+}
 
-function assertAudienceConsistency(
+/// A milestone bonus is paid by the same runtime path as the program's rewards,
+/// so a RIDER program cannot carry an active monetary one either. Deactivating a
+/// legacy one stays allowed.
+function assertMilestoneConfig(
   audience: ProgramAudience,
-  qualifyingEvent: QualifyingEvent,
-  rewardWallet: RewardWallet,
+  milestone: { bonusAmount: number; isActive: boolean },
 ): void {
-  if (audience === 'RIDER') {
-    if (!RIDER_EVENTS.includes(qualifyingEvent) || rewardWallet !== 'CUSTOMER') {
-      throw new ReferralProgramConflictError(
-        'RIDER programs require CUSTOMER wallet and rider qualifying events',
-      );
-    }
-    return;
-  }
-  if (!DRIVER_EVENTS.includes(qualifyingEvent) || rewardWallet !== 'DRIVER') {
+  if (audience === 'RIDER' && milestone.isActive && milestone.bonusAmount > 0) {
     throw new ReferralProgramConflictError(
-      'DRIVER programs require DRIVER wallet and driver qualifying events',
+      'A RIDER program cannot have an active monetary milestone bonus',
     );
   }
 }
@@ -75,7 +68,9 @@ export interface ProgramDto {
   referrerReward: number;
   refereeReward: number;
   rewardType: string;
-  rewardWallet: RewardWallet;
+  /// Null for RIDER: rider referrals are non-monetary, and the stored column
+  /// (NOT NULL, defaulting to CUSTOMER) is a retired value the runtime ignores.
+  rewardWallet: RewardWallet | null;
   qualifyingEvent: QualifyingEvent;
   qualifyingThreshold: number;
   maxReferralsPerUser: number | null;
@@ -154,7 +149,7 @@ export class AdminReferralProgramService {
       referrerReward: toNum(row.referrerReward) ?? 0,
       refereeReward: toNum(row.refereeReward) ?? 0,
       rewardType: row.rewardType,
-      rewardWallet: row.rewardWallet,
+      rewardWallet: row.audience === 'RIDER' ? null : row.rewardWallet,
       qualifyingEvent: row.qualifyingEvent,
       qualifyingThreshold: row.qualifyingThreshold,
       maxReferralsPerUser: row.maxReferralsPerUser,
@@ -222,10 +217,17 @@ export class AdminReferralProgramService {
 
   async create(body: CreateProgramBody): Promise<ProgramDto> {
     const audience = body.audience ?? 'RIDER';
-    const rewardWallet = body.rewardWallet ?? (audience === 'DRIVER' ? 'DRIVER' : 'CUSTOMER');
+    const rewardWallet = body.rewardWallet ?? (audience === 'DRIVER' ? 'DRIVER' : undefined);
     const qualifyingEvent =
       body.qualifyingEvent ?? (audience === 'DRIVER' ? 'DRIVER_APPROVED' : 'FIRST_RIDE');
-    assertAudienceConsistency(audience, qualifyingEvent, rewardWallet);
+    assertProgramConfig({
+      audience,
+      qualifyingEvent,
+      rewardWallet,
+      referrerReward: body.referrerReward ?? 0,
+      refereeReward: body.refereeReward ?? 0,
+      isActive: body.isActive ?? true,
+    });
 
     let code = body.code?.trim().toUpperCase();
     if (!code) code = generateUniqueCode(body.name, audience === 'DRIVER' ? 'DREF' : 'REF');
@@ -257,7 +259,8 @@ export class AdminReferralProgramService {
         referrerReward: body.referrerReward ?? 0,
         refereeReward: body.refereeReward ?? 0,
         rewardType: body.rewardType ?? 'WALLET',
-        rewardWallet,
+        // Omitted for RIDER, so the column keeps its database default.
+        ...(rewardWallet !== undefined ? { rewardWallet } : {}),
         qualifyingEvent,
         qualifyingThreshold: body.qualifyingThreshold ?? 1,
         maxReferralsPerUser: body.maxReferralsPerUser ?? null,
@@ -279,9 +282,19 @@ export class AdminReferralProgramService {
     if (!existing) throw new ReferralProgramNotFoundError();
 
     const audience = body.audience ?? existing.audience;
-    const rewardWallet = body.rewardWallet ?? existing.rewardWallet;
+    // A RIDER row's stored wallet is the retired default, not a selection, so
+    // only a wallet sent in this request counts against it.
+    const rewardWallet =
+      audience === 'DRIVER' ? (body.rewardWallet ?? existing.rewardWallet) : body.rewardWallet;
     const qualifyingEvent = body.qualifyingEvent ?? existing.qualifyingEvent;
-    assertAudienceConsistency(audience, qualifyingEvent, rewardWallet);
+    assertProgramConfig({
+      audience,
+      qualifyingEvent,
+      rewardWallet,
+      referrerReward: body.referrerReward ?? toNum(existing.referrerReward) ?? 0,
+      refereeReward: body.refereeReward ?? toNum(existing.refereeReward) ?? 0,
+      isActive: body.isActive ?? existing.isActive,
+    });
 
     if (body.code) {
       const code = body.code.trim().toUpperCase();
@@ -366,6 +379,10 @@ export class AdminReferralProgramService {
       where: { id: programId },
     });
     if (!program) throw new ReferralProgramNotFoundError();
+    assertMilestoneConfig(program.audience, {
+      bonusAmount: body.bonusAmount,
+      isActive: body.isActive ?? true,
+    });
 
     const row = await this.databaseService.client.referralMilestone.create({
       data: {
@@ -383,8 +400,13 @@ export class AdminReferralProgramService {
   async updateMilestone(id: string, body: UpdateMilestoneBody): Promise<MilestoneDto> {
     const existing = await this.databaseService.client.referralMilestone.findUnique({
       where: { id },
+      include: { program: { select: { audience: true } } },
     });
     if (!existing) throw new ReferralMilestoneNotFoundError();
+    assertMilestoneConfig(existing.program.audience, {
+      bonusAmount: body.bonusAmount ?? toNum(existing.bonusAmount) ?? 0,
+      isActive: body.isActive ?? existing.isActive,
+    });
 
     const row = await this.databaseService.client.referralMilestone.update({
       where: { id },

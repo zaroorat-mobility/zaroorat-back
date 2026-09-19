@@ -176,4 +176,36 @@ describe('Gateway adapters — real order/intent creation against the actual API
       assert.throws(() => new StripeGatewayProvider(''));
     });
   });
+
+  /// Payout Option A. No provider may perform a driver payout. The adapters
+  /// have no payout method at all — `POST /v1/payouts` on a Stripe platform
+  /// account would pay the PLATFORM'S OWN bank account and report a driver as
+  /// settled — so the guarantee is structural rather than a runtime refusal.
+  describe('driver payouts are not a gateway capability', () => {
+    it('no provider exposes a payout method', () => {
+      for (const provider of [
+        new StripeGatewayProvider('sk_test_1'),
+        new RazorpayGatewayProvider('id', 'secret', 'sandbox'),
+      ]) {
+        assert.equal('createPayout' in provider, false, provider.gatewayName);
+      }
+    });
+
+    it('leaves Stripe collection working normally', async () => {
+      const calls = stubFetch(() =>
+        jsonResponse(200, { id: 'pi_collection_1', status: 'succeeded' }),
+      );
+      restore = () => (calls as unknown as { restore: () => void }).restore();
+
+      const provider = new StripeGatewayProvider('sk_test_1');
+      const result = await provider.createIntent({
+        amount: new Decimal(25),
+        currency: 'inr',
+        idempotencyKey: 'idem-collection',
+      });
+
+      assert.equal(result.gatewayIntentId, 'pi_collection_1');
+      assert.equal(calls.length, 1, 'collection still reaches the provider');
+    });
+  });
 });

@@ -21,6 +21,7 @@ model Driver {
   /// 004-driver-subscription-wallet. 'SUBSCRIPTION' | 'COMMISSION' | null (not yet selected).
   /// Read the same way verificationStatus/isSuspended already are, by every
   /// ride-eligibility check — see spec.md FR-000.
+  /// DB CHECK `drivers_payment_model_check` enforces the allowed values.
   paymentModel        String?                  @map("payment_model")
   /// Staged switch target, applied by the subscription-expiry sweep per BD-5.
   pendingPaymentModel String?                  @map("pending_payment_model")
@@ -124,11 +125,32 @@ model DriverBankAccount {
   isDefault             Boolean            @default(false) @map("is_default")
   createdAt             DateTime           @default(now()) @map("created_at")
 
+  /// Phase 1 bank-account security. `status` is authoritative for payouts;
+  /// `verificationStatus` above is kept for existing readers. A DB CHECK keeps
+  /// `payoutEnabled` true exactly when status = PAYOUT_ENABLED on an active row.
+  status                  BankAccountStatus @default(ENTERED)
+  isActive                Boolean           @default(true) @map("is_active")
+  /// `bank:v1:` AES-256-GCM ciphertext. `accountNumberEnc` above is the legacy
+  /// PLAINTEXT column: no longer written, kept until the verified contract step.
+  accountNumberCiphertext String?           @map("account_number_ciphertext")
+  accountNumberLast4      String?           @map("account_number_last4") @db.Char(4)
+  /// HMAC-SHA256 of the normalized number — finds one account used by several
+  /// drivers without decrypting anything.
+  accountNumberHash       String?           @map("account_number_hash")
+  encryptionKeyVersion    Int?              @map("encryption_key_version") @db.SmallInt
+  enteredBy               String?           @map("entered_by") @db.Uuid
+  statusReason            String?           @map("status_reason")
+  statusChangedAt         DateTime?         @map("status_changed_at")
+  statusChangedBy         String?           @map("status_changed_by") @db.Uuid
+  payoutEnabledAt         DateTime?         @map("payout_enabled_at")
+  deactivatedAt           DateTime?         @map("deactivated_at")
+
   driver             Driver              @relation(fields: [driverId], references: [id])
   payouts            DriverPayout[]
   withdrawalRequests WithdrawalRequest[]
 
   @@index([driverId])
+  @@index([accountNumberHash])
   @@map("driver_bank_accounts")
 }
 

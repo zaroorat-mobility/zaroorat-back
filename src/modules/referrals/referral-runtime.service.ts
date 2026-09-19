@@ -1,11 +1,11 @@
 import type { DatabaseService } from '@core/database';
 import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager.js';
 import { Decimal } from '@modules/payments/types/index.js';
-import { WalletService } from '@modules/payments/services/wallet/wallet.service.js';
 import { SettlementWalletRepository } from '@modules/payments/repositories/settlement-wallet.repository.js';
 import type {
   ReferralQualifyingEvent,
   ReferralProgramAudience,
+  ReferralRewardWallet,
 } from '../../generated/prisma/index.js';
 import { logger } from '@shared/logger/index.js';
 import { Prisma } from '../../generated/prisma/index.js';
@@ -31,11 +31,23 @@ function toNum(value: { toString(): string } | number): number {
   return typeof value === 'number' ? value : Number(value.toString());
 }
 
+/// Customer wallet retirement. Zaroorat holds no customer money — a ride is
+/// paid CASH/UPI/CARD straight to the driver — so a RIDER referral has nothing
+/// to pay into, and the module has no non-wallet reward to use instead. The one
+/// monetary referral left is a DRIVER program paying the driver wallet. Keyed on
+/// both fields so a legacy RIDER row carrying either wallet value pays nothing:
+/// never the customer wallet, and never converted into a driver reward.
+function paysMoney(program: {
+  audience: ReferralProgramAudience;
+  rewardWallet: ReferralRewardWallet;
+}): boolean {
+  return program.audience === 'DRIVER' && program.rewardWallet === 'DRIVER';
+}
+
 export class ReferralRuntimeService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly transactionManager: TransactionManager,
-    private readonly walletService: WalletService,
     private readonly settlementWalletRepository: SettlementWalletRepository,
     private readonly referralMetrics: ReferralMetrics,
   ) {}
@@ -182,6 +194,15 @@ export class ReferralRuntimeService {
     }
 
     const program = referral.program;
+    if (!paysMoney(program)) {
+      // Terminal at QUALIFIED: the referral and its qualifying rides stay on
+      // record, but no reward row, wallet credit or milestone bonus is created.
+      logger.info(
+        { referralId, programId: program.id, audience: program.audience },
+        '[referral] qualified; program is non-monetary, no reward granted',
+      );
+      return;
+    }
     const referrerAmount = toNum(program.referrerReward);
     const refereeAmount = toNum(program.refereeReward);
 
@@ -227,7 +248,7 @@ export class ReferralRuntimeService {
     beneficiary: 'REFERRER' | 'REFEREE' | 'MILESTONE';
     userId: string;
     amount: number;
-    program: { code: string; rewardWallet: 'CUSTOMER' | 'DRIVER' };
+    program: { code: string };
     description: string;
     milestoneId?: string;
   }): Promise<void> {
@@ -243,52 +264,39 @@ export class ReferralRuntimeService {
       },
     });
 
-    let walletTxnId: string | null;
-    if (input.program.rewardWallet === 'DRIVER') {
-      const driver = await input.tx.driver.findUnique({ where: { userId: input.userId } });
-      if (!driver) {
-        // FR-023. This used to `return`, so `qualifyAndReward` carried on and set
-        // the referral to REWARDED while the ReferralReward row it had just
-        // created stayed PENDING. The status guard at the top of that method then
-        // short-circuited forever and no job swept pending rewards: money owed,
-        // booked as paid, and unrecoverable without someone noticing by hand.
-        //
-        // Throwing rolls the whole transaction back — reward row included — so
-        // the referral stays QUALIFIED and is retried rather than silently lost.
-        this.referralMetrics.rewardWalletMissing({ beneficiary: input.beneficiary });
-        throw new ReferralRewardWalletMissingError(
-          `No driver wallet for user ${input.userId}; referral reward cannot be credited`,
-        );
-      }
-      const wallet = await this.settlementWalletRepository.credit(
-        {
-          driverId: driver.id,
-          amount,
-          referenceType: 'REFERRAL',
-          referenceId: reward.id,
-          description: input.description,
-          txnType: 'BONUS',
-        },
-        input.tx,
+    // Only reached for a DRIVER-wallet program — `qualifyAndReward` returns
+    // before any reward for everything else (see `paysMoney`).
+    const driver = await input.tx.driver.findUnique({ where: { userId: input.userId } });
+    if (!driver) {
+      // FR-023. This used to `return`, so `qualifyAndReward` carried on and set
+      // the referral to REWARDED while the ReferralReward row it had just
+      // created stayed PENDING. The status guard at the top of that method then
+      // short-circuited forever and no job swept pending rewards: money owed,
+      // booked as paid, and unrecoverable without someone noticing by hand.
+      //
+      // Throwing rolls the whole transaction back — reward row included — so
+      // the referral stays QUALIFIED and is retried rather than silently lost.
+      this.referralMetrics.rewardWalletMissing({ beneficiary: input.beneficiary });
+      throw new ReferralRewardWalletMissingError(
+        `No driver wallet for user ${input.userId}; referral reward cannot be credited`,
       );
-      const txn = await input.tx.driverWalletTransaction.findFirst({
-        where: { walletId: wallet.id, referenceId: reward.id },
-        orderBy: { createdAt: 'desc' },
-      });
-      walletTxnId = txn?.id ?? null;
-    } else {
-      await this.walletService.creditInTx(input.userId, amount, input.tx, {
+    }
+    const wallet = await this.settlementWalletRepository.credit(
+      {
+        driverId: driver.id,
+        amount,
         referenceType: 'REFERRAL',
         referenceId: reward.id,
         description: input.description,
-        txnType: 'REFERRAL',
-      });
-      const txn = await input.tx.customerWalletTransaction.findFirst({
-        where: { userId: input.userId, referenceId: reward.id },
-        orderBy: { createdAt: 'desc' },
-      });
-      walletTxnId = txn?.id ?? null;
-    }
+        txnType: 'BONUS',
+      },
+      input.tx,
+    );
+    const txn = await input.tx.driverWalletTransaction.findFirst({
+      where: { walletId: wallet.id, referenceId: reward.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const walletTxnId = txn?.id ?? null;
 
     if (walletTxnId === null) {
       // The credit call returned without a transaction row to point at. That
@@ -323,7 +331,7 @@ export class ReferralRuntimeService {
     referrerId: string,
     programId: string,
     triggeringReferralId: string,
-    program: { code: string; rewardWallet: 'CUSTOMER' | 'DRIVER' },
+    program: { code: string },
     tx: TransactionClient,
   ): Promise<void> {
     const rewardedCount = await tx.referral.count({

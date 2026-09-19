@@ -1,6 +1,7 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { DriverBankAccount } from '../types';
+import { protectAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 export class DriverBankRepository {
   constructor(private readonly db: DatabaseService) {}
   async createAccount(
@@ -9,13 +10,16 @@ export class DriverBankRepository {
       accountHolderName: string;
       bankName: string;
       ifscCode: string;
-      accountNumberEnc: string;
+      /// Plaintext as entered. Encrypted here; never stored as-is.
+      accountNumber: string;
       upiId?: string;
       isDefault?: boolean;
+      enteredBy?: string;
     },
     tx?: TransactionClient,
   ): Promise<DriverBankAccount> {
     const client = tx ?? this.db.client;
+    const bankNumber = protectAccountNumber(data.accountNumber);
     if (data.isDefault) {
       await client.driverBankAccount.updateMany({
         where: { driverId: data.driverId },
@@ -28,11 +32,17 @@ export class DriverBankRepository {
         accountHolderName: data.accountHolderName,
         bankName: data.bankName,
         ifscCode: data.ifscCode,
-        accountNumberEnc: data.accountNumberEnc,
+        accountNumberEnc: null,
+        accountNumberCiphertext: bankNumber.ciphertext,
+        accountNumberLast4: bankNumber.last4,
+        accountNumberHash: bankNumber.hash,
+        encryptionKeyVersion: bankNumber.keyVersion,
         upiId: data.upiId ?? null,
         isDefault: data.isDefault ?? true,
         payoutEnabled: false,
+        status: 'ENTERED',
         verificationStatus: 'PENDING',
+        enteredBy: data.enteredBy ?? null,
       },
     });
   }

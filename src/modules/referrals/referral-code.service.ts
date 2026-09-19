@@ -134,25 +134,34 @@ export class ReferralCodeService {
       where: { referrerId: userId, programId: program.id },
       select: { status: true },
     });
+    // Customer wallet retirement: a rider referral is non-monetary and ends at
+    // QUALIFIED (see `ReferralRuntimeService`), so for riders QUALIFIED is
+    // done, not pending, and no amount or milestone bonus is advertised —
+    // whatever a legacy program row still carries. `rewardedInvites` still
+    // counts historical REWARDED referrals.
+    const monetary = audience === 'DRIVER';
     const rewardedInvites = referralsMade.filter((r) => r.status === 'REWARDED').length;
-    const pendingInvites = referralsMade.filter((r) =>
-      ['PENDING', 'SIGNED_UP', 'QUALIFIED'].includes(r.status),
-    ).length;
+    const pendingStatuses = monetary
+      ? ['PENDING', 'SIGNED_UP', 'QUALIFIED']
+      : ['PENDING', 'SIGNED_UP'];
+    const pendingInvites = referralsMade.filter((r) => pendingStatuses.includes(r.status)).length;
 
     const achievements = await client.referralMilestoneAchievement.findMany({
       where: { userId, milestone: { programId: program.id } },
       select: { milestoneId: true },
     });
     const achievedIds = new Set(achievements.map((a) => a.milestoneId));
-    const nextMilestone = program.milestones.find((m) => !achievedIds.has(m.id)) ?? null;
+    const nextMilestone = monetary
+      ? (program.milestones.find((m) => !achievedIds.has(m.id)) ?? null)
+      : null;
 
     const applied = await client.referral.findFirst({
       where: { refereeId: userId, programId: program.id },
       include: { referrer: { select: { phoneNumber: true } }, program: { select: { code: true } } },
     });
 
-    const referrerReward = Number(program.referrerReward.toString());
-    const refereeReward = Number(program.refereeReward.toString());
+    const referrerReward = monetary ? Number(program.referrerReward.toString()) : 0;
+    const refereeReward = monetary ? Number(program.refereeReward.toString()) : 0;
 
     return {
       audience,
@@ -172,7 +181,7 @@ export class ReferralCodeService {
       shareMessage:
         audience === 'DRIVER'
           ? `Join Zaroorat as a driver with my code ${codeRow.code} and earn ₹${refereeReward} after approval.`
-          : `Use my Zaroorat code ${codeRow.code} on signup and get ₹${refereeReward} after your first ride.`,
+          : `Join Zaroorat with my code ${codeRow.code} when you sign up.`,
       stats: {
         totalInvites: referralsMade.length,
         rewardedInvites,

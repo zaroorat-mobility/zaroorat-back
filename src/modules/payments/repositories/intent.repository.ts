@@ -2,6 +2,7 @@ import { Decimal } from '../types/index.js';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { PaymentIntent, PaymentTransaction } from '../types';
+import type { GatewayPaymentPurpose } from '../constants/payment.constants.js';
 export interface CreateIntentInput {
   userId: string;
   rideId?: string | null;
@@ -11,10 +12,9 @@ export interface CreateIntentInput {
   idempotencyKey: string;
   gateway?: string | null;
   gatewayIntentId?: string | null;
-  /// 004-driver-subscription-wallet. Defaults to the existing behavior
-  /// ('CUSTOMER_WALLET_TOPUP') when omitted — every pre-existing caller is
-  /// unaffected.
-  purpose?: string;
+  /// Always explicit — see `GATEWAY_PAYMENT_PURPOSES`. The column's
+  /// 'CUSTOMER_WALLET_TOPUP' default only describes historical rows.
+  purpose: GatewayPaymentPurpose;
 }
 export class IntentRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -37,7 +37,7 @@ export class IntentRepository {
         status: 'PENDING',
         gateway: input.gateway ?? null,
         gatewayIntentId: input.gatewayIntentId ?? null,
-        purpose: input.purpose ?? 'CUSTOMER_WALLET_TOPUP',
+        purpose: input.purpose,
       },
     });
   }

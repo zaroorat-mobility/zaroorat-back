@@ -36,9 +36,12 @@ import {
   PaymentModelNotSelectedError,
   DriverSubscriptionRequiredError,
   InsufficientCommissionBalanceError,
+  WalletRidesNotAcceptedError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import {
+  NEW_RIDE_PAYMENT_METHODS,
+  type NewRidePaymentMethod,
   TRIP_DISTANCE_PLAUSIBILITY_MULTIPLIER,
   TRIP_DISTANCE_PLAUSIBILITY_BUFFER_KM,
   TRIP_DURATION_PLAUSIBILITY_MULTIPLIER,
@@ -362,6 +365,17 @@ export class LifecycleService {
         throw new DriverNotAvailableError('You must be online to accept a ride');
       }
       await this.assertVehicleEligible(data.vehicleId, data.driverId, request.vehicleTypeId, tx);
+      // D1. The ride row is minted here, so this is the last boundary a new
+      // WALLET ride could slip through — a request booked before the rule took
+      // effect still carries its method. Refused rather than silently re-billed
+      // as cash: the rider agreed to a method this platform no longer collects.
+      // Existing WALLET rides are untouched; only creating another is refused.
+      if (
+        request.paymentMethod != null &&
+        !(NEW_RIDE_PAYMENT_METHODS as readonly string[]).includes(request.paymentMethod)
+      ) {
+        throw new WalletRidesNotAcceptedError();
+      }
       // 004-driver-subscription-wallet. spec.md FR-000/FR-004/FR-015–FR-017a,
       // decisions.md BD-7 — a driver's payment model gates whether this
       // request can be accepted at all, decided exactly once, right here.
@@ -417,7 +431,7 @@ export class LifecycleService {
           driverId: data.driverId,
           vehicleId: data.vehicleId,
           vehicleTypeId: request.vehicleTypeId,
-          paymentMethod: (request.paymentMethod as Ride['paymentMethod']) ?? 'CASH',
+          paymentMethod: (request.paymentMethod as NewRidePaymentMethod | null) ?? 'CASH',
           pickupLat: request.pickupLat,
           pickupLng: request.pickupLng,
           pickupAddress: request.pickupAddress,
@@ -942,7 +956,6 @@ export class LifecycleService {
         await this.ledgerService.recordTripPayment(
           {
             totalFare: new Decimal(itemizedFare.totalFare),
-            driverPayable: new Decimal(itemizedFare.driverEarning),
             driverEarning: new Decimal(itemizedFare.driverEarning),
             platformCommission: new Decimal(itemizedFare.platformCommission),
             // FR-006. Tax and the platform fee are now distinct destinations

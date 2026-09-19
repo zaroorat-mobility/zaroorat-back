@@ -12,6 +12,7 @@ export { MockProvider } from './providers/mock.provider';
 export { SmtpEmailProvider, type SmtpConfig } from './providers/smtp.provider.js';
 export { Msg91Provider, type Msg91Config } from '../../integrations/msg91/msg91.client.js';
 export { MockPushProvider } from './providers/mock-push.provider';
+export { FcmPushProvider } from '../../integrations/firebase/fcm-push.provider.js';
 export {
   getNotificationConfig,
   createSmsProvider,

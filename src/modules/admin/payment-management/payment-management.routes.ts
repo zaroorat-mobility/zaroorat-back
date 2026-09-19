@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { ZodError } from 'zod';
 import { container } from '@core/di';
 import { rateLimits } from '@config';
 import { AdminPaymentManagementController } from './payment-management.controller.js';
@@ -7,6 +8,7 @@ import { DocumentComplianceController } from './document-compliance.controller.j
 import { handlePaymentError } from '@modules/payments/schemas/error-response.js';
 import { FinanceAdminError } from './finance.errors.js';
 import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
+import { IdempotencyInFlightError } from '@core/cache';
 
 export async function adminPaymentRoutes(fastify: FastifyInstance): Promise<void> {
   // Error handlers are scoped to the Fastify plugin that registers them. These
@@ -14,6 +16,27 @@ export async function adminPaymentRoutes(fastify: FastifyInstance): Promise<void
   // coded domain errors were falling through to the global handler and losing
   // their code/status/details. Restored per constitution S13.3.
   fastify.setErrorHandler((err, request, reply) => {
+    // Matches every sibling admin scope (geographic, pricing, promotions,
+    // operations, communications). This was the one that lacked it, so a
+    // schema rejection here fell through to `handlePaymentError` — which only
+    // knows about coded errors — and surfaced a client mistake as a 500.
+    if (err instanceof ZodError) {
+      reply.status(400).send(
+        errorEnvelope('VALIDATION', 'Request validation failed', request.id, {
+          details: err.issues,
+        }),
+      );
+      return;
+    }
+    // A second request carrying the same Idempotency-Key while the first is
+    // still running. Refusing it is correct — nothing is written — and the
+    // caller should retry; the auth and users modules already answer this
+    // with 409. The error has a `code` but no `statusCode`, so `isCodedError`
+    // misses it, and concurrent same-key payout requests used to get a 500.
+    if (err instanceof IdempotencyInFlightError) {
+      reply.status(409).send(errorEnvelope(err.code, err.message, request.id));
+      return;
+    }
     if (err instanceof FinanceAdminError || isCodedError(err)) {
       const coded = err as { code: string; statusCode: number; message: string; details?: unknown };
       if (coded.statusCode < 500) {
@@ -50,9 +73,18 @@ export async function adminPaymentRoutes(fastify: FastifyInstance): Promise<void
     preHandler: [fastify.authorize({ permissions: ['drivers:verify'] })],
   };
 
-  // Existing payout endpoint (unchanged)
+  // ─── Driver payouts (manual/external bank transfer) ───────────────────────
+  // Two phases on purpose. Creating a payout records an INTENT and moves no
+  // money; confirming it is what recognises an externally executed bank
+  // transfer, debits the driver wallet and can mark the settlement PAID.
   fastify.post('/payments/payouts', canFinanceExecute, (req, reply) =>
     payoutController.executePayout(req, reply),
+  );
+  fastify.post('/payments/payouts/:id/confirm', canFinanceExecute, (req, reply) =>
+    payoutController.confirmPayout(req, reply),
+  );
+  fastify.post('/payments/payouts/:id/fail', canFinanceExecute, (req, reply) =>
+    payoutController.failPayout(req, reply),
   );
 
   // ─── Finance dashboard / transactions ─────────────────────────────────────

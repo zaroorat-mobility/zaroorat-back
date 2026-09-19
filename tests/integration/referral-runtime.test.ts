@@ -11,7 +11,7 @@ import {
   resetState,
 } from './helpers/harness.js';
 import { completeProfile, grantRole, makeDriver } from './helpers/fixtures.js';
-import { completeRide, fundWallet, rideWorld } from './helpers/ride-flow.js';
+import { completeRide, rideWorld } from './helpers/ride-flow.js';
 import { driverConfig } from '../../src/config/driver/driver.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 
@@ -111,7 +111,20 @@ describe('referral runtime (integration)', () => {
     return loginAs(app, ADMIN);
   }
 
-  it('credits customer wallets when a referred rider completes their first ride', async () => {
+  /// Customer wallet retirement. The program below is a legacy row written
+  /// straight to the database — CUSTOMER wallet, ₹50/₹30 and a ₹75 milestone —
+  /// which the admin API now refuses. The runtime must still pay it nothing.
+  async function customerWalletMoney(userIds: string[]) {
+    const [wallets, referralTxns] = await Promise.all([
+      db().client.customerWallet.count({ where: { userId: { in: userIds } } }),
+      db().client.customerWalletTransaction.count({
+        where: { userId: { in: userIds }, txnType: 'REFERRAL' },
+      }),
+    ]);
+    return { wallets, referralTxns };
+  }
+
+  it('qualifies a referred rider on their first ride and creates no customer wallet money', async () => {
     await seedRiderProgram();
 
     const referrerSeed = await loginAs(app, REFERRER);
@@ -134,46 +147,41 @@ describe('referral runtime (integration)', () => {
     assert.equal(applied.json().data.status, 'SIGNED_UP');
 
     const world = await rideWorld(app, { customer: REFEREE, driver: RIDE_DRIVER });
-    await fundWallet(app, world.customer, 500);
     await completeRide(app, world, { distanceKm: 6, durationMin: 14 });
     await drainOutbox();
 
     const referral = await db().client.referral.findFirstOrThrow({
       where: { refereeId: refereeSeed.userId, programId: program.id },
     });
-    assert.equal(referral.status, 'REWARDED');
+    assert.equal(referral.status, 'QUALIFIED', 'tracked to qualification, never REWARDED');
+    assert.ok(referral.qualifiedAt);
+    assert.equal(referral.rewardedAt, null);
+    assert.equal(referral.qualifyingRides, 1);
 
-    const rewards = await db().client.referralReward.findMany({
-      where: { referralId: referral.id },
-      orderBy: { beneficiary: 'asc' },
-    });
-    assert.equal(rewards.length, 2);
-    assert.ok(rewards.every((r) => r.status === 'CREDITED'));
-
-    const referrerWallet = await db().client.customerWallet.findUniqueOrThrow({
-      where: { userId: referrerSeed.userId },
-    });
-    const refereeWallet = await db().client.customerWallet.findUniqueOrThrow({
-      where: { userId: refereeSeed.userId },
-    });
-    assert.equal(Number(referrerWallet.balance), 50);
-    // Referee wallet was funded with 500 before the qualifying ride.
-    assert.equal(Number(refereeWallet.balance), 530);
+    assert.equal(
+      await db().client.referralReward.count({ where: { referralId: referral.id } }),
+      0,
+      'no reward row for a rider referral',
+    );
+    assert.deepEqual(
+      await customerWalletMoney([referrerSeed.userId, refereeSeed.userId]),
+      { wallets: 0, referralTxns: 0 },
+      'no customer wallet is created or credited',
+    );
   });
 
-  it('grants milestone bonus after the second rewarded rider referral', async () => {
+  it('never grants a rider milestone bonus', async () => {
     await seedRiderProgram();
     const program = await db().client.referralProgram.findUniqueOrThrow({
       where: { code: 'RTRUN01' },
-    });
-    const milestone = await db().client.referralMilestone.findFirstOrThrow({
-      where: { programId: program.id, name: '2 friends' },
     });
 
     const referrerSeed = await loginAs(app, REFERRER);
     await completeProfile(referrerSeed.userId);
     const code = await createReferralCode(referrerSeed.userId, program.id, 'RIDREF02');
 
+    // A historical REWARDED referral: with the one below, the ₹75 milestone's
+    // required count of two would be met under the old rules.
     const firstReferee = await loginAs(app, REFEREE);
     await completeProfile(firstReferee.userId);
     await db().client.referral.create({
@@ -199,27 +207,47 @@ describe('referral runtime (integration)', () => {
     });
 
     const world = await rideWorld(app, { customer: RIDE_DRIVER, driver: MILESTONE_RIDE_DRIVER });
-    await fundWallet(app, world.customer, 500);
     await completeRide(app, world, { distanceKm: 5, durationMin: 12 });
     await drainOutbox();
 
-    const achievement = await db().client.referralMilestoneAchievement.findUnique({
-      where: { milestoneId_userId: { milestoneId: milestone.id, userId: referrerSeed.userId } },
+    const second = await db().client.referral.findFirstOrThrow({
+      where: { refereeId: secondReferee.userId, programId: program.id },
     });
-    assert.ok(achievement);
+    assert.equal(second.status, 'QUALIFIED');
+    assert.equal(await db().client.referralMilestoneAchievement.count(), 0);
+    assert.equal(await db().client.referralReward.count(), 0);
+    assert.deepEqual(await customerWalletMoney([referrerSeed.userId, secondReferee.userId]), {
+      wallets: 0,
+      referralTxns: 0,
+    });
+  });
 
-    const milestoneReward = await db().client.referralReward.findFirst({
-      where: { userId: referrerSeed.userId, beneficiary: 'MILESTONE' },
+  it('a SIGNUP rider program qualifies at signup and pays nothing', async () => {
+    const riderProgram = await seedRiderProgram();
+    await db().client.referralProgram.update({
+      where: { id: riderProgram.id },
+      data: { qualifyingEvent: 'SIGNUP' },
     });
-    assert.ok(milestoneReward);
-    assert.equal(milestoneReward.status, 'CREDITED');
-    assert.equal(Number(milestoneReward.amount), 75);
 
-    const referrerWallet = await db().client.customerWallet.findUniqueOrThrow({
-      where: { userId: referrerSeed.userId },
+    const referrerSeed = await loginAs(app, REFERRER);
+    await completeProfile(referrerSeed.userId);
+    const refereeSeed = await loginAs(app, REFEREE);
+    await completeProfile(refereeSeed.userId);
+    await createReferralCode(referrerSeed.userId, riderProgram.id, 'RIDREF03');
+
+    const applied = await app.inject({
+      method: 'POST',
+      url: '/api/v1/referrals/rider/apply',
+      headers: refereeSeed.authHeader,
+      payload: { code: 'RIDREF03' },
     });
-    // 50 from second referral + 75 milestone (first was pre-seeded REWARDED without wallet)
-    assert.equal(Number(referrerWallet.balance), 125);
+    assert.equal(applied.statusCode, 201, applied.payload);
+    assert.equal(applied.json().data.status, 'QUALIFIED');
+    assert.equal(await db().client.referralReward.count(), 0);
+    assert.deepEqual(await customerWalletMoney([referrerSeed.userId, refereeSeed.userId]), {
+      wallets: 0,
+      referralTxns: 0,
+    });
   });
 
   it('credits driver wallets when a referred applicant is verified', async () => {
@@ -297,6 +325,12 @@ describe('referral runtime (integration)', () => {
     assert.equal(riderBody.audience, 'RIDER');
     assert.ok(riderBody.code);
     assert.ok(riderBody.shareMessage?.includes(riderBody.code));
+    // The seeded program still carries ₹50/₹30 and a ₹75 milestone; a rider
+    // must not be promised any of it.
+    assert.equal(riderBody.program.referrerReward, 0);
+    assert.equal(riderBody.program.refereeReward, 0);
+    assert.equal(riderBody.stats.nextMilestone, null);
+    assert.ok(!riderBody.shareMessage.includes('₹'), riderBody.shareMessage);
 
     const driverUser = await loginAs(app, DRIVER_REFERRER);
     await grantRole(driverUser.userId, 'driver');

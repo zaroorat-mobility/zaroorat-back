@@ -133,6 +133,7 @@ import {
   AdminEmailSettingsService,
   AdminIntegrationSettingsController,
 } from './system-settings/index.js';
+import { AdminBankAccountService } from './driver-management/bank-accounts/bank-account.service.js';
 import { appConfigAdminRoutes } from '@modules/app-config';
 
 export function registerAdminModule(container: AwilixContainer): void {
@@ -177,6 +178,7 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminReferralController: asClass(AdminReferralController).singleton(),
     adminDriverService: asClass(AdminDriverService).singleton(),
     adminApplicationService: asClass(AdminApplicationService).singleton(),
+    adminBankAccountService: asClass(AdminBankAccountService).singleton(),
     adminDriverManagementController: asClass(AdminDriverManagementController).singleton(),
     adminVehicleService: asClass(AdminVehicleService).singleton(),
     adminVehicleManagementController: asClass(AdminVehicleManagementController).singleton(),

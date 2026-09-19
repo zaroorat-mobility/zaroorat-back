@@ -393,7 +393,6 @@ export class RideCollectionService {
       await this.ledgerService.recordTripPayment(
         {
           totalFare: fare.totalFare,
-          driverPayable: fare.driverEarning,
           driverEarning: fare.driverEarning,
           platformCommission: fare.platformCommission,
           taxAmount: fare.taxAmount,

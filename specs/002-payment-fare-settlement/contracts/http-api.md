@@ -206,9 +206,15 @@ What the caller owes. A rider sees unpaid rides; a driver sees commission accrue
 
 ## Settlement and payout
 
-### `POST /api/v1/admin/payments/payouts` — **UNCHANGED behaviour · RELOCATED**
+### `POST /api/v1/admin/payments/payouts` — **UNCHANGED behaviour · RELOCATED** — _superseded_
 
 Staff-only, ceiling-bounded, idempotent. `PayoutService` is byte-unchanged. **Relocated** to the admin module by the in-flight work and verified serving at `/api/v1/admin/payments/payouts`; `payout-authorization` is 20/20 green. **Behaviour does not change**; only the settlement figure it bounds against becomes accurate. Called out because its ceiling and concurrency tests are correct today and must stay green **unmodified**.
+
+> **Superseded by payout/settlement Option A.** This endpoint no longer completes a payout. It now records an
+> `INITIATED` payout that moves no money and requires a verified, payout-enabled `bankAccountId`; money movement is
+> recognised only by `POST /api/v1/admin/payments/payouts/:id/confirm`, and `DriverSettlement.status = PAID` is written
+> from there alone. The ceiling, idempotency and concurrency behaviour described above still holds and its tests are
+> still green. See `tests/integration/payout-settlement-lifecycle.test.ts`.
 
 ### `POST /refunds` — **UNCHANGED**
 

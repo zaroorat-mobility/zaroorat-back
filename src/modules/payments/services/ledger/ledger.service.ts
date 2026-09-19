@@ -110,7 +110,6 @@ export class LedgerService {
   }
   async recordTripPayment(
     data: RideFareSplit & {
-      driverPayable: Decimal;
       customerUserId: string;
       driverId: string;
       rideId: string;

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { latitudeSchema, longitudeSchema } from '@modules/location';
 import { ridePinConfig } from '@config';
+import { NEW_RIDE_PAYMENT_METHODS } from '../constants/ride.constants.js';
 /// Drop coordinates are required, not optional.
 ///
 /// They were optional here while every path behind them insisted on having
@@ -35,7 +36,8 @@ export const createRideRequestSchema = z.object({
   dropLat: latitudeSchema,
   dropLng: longitudeSchema,
   dropAddress: z.string().max(255).optional(),
-  paymentMethod: z.enum(['CASH', 'WALLET', 'CARD', 'UPI']).optional(),
+  /// D1. WALLET is not accepted for a new ride — see NEW_RIDE_PAYMENT_METHODS.
+  paymentMethod: z.enum(NEW_RIDE_PAYMENT_METHODS).optional(),
   promoCode: z.string().max(50).optional(),
 });
 export type CreateRideRequestBody = z.infer<typeof createRideRequestSchema>;

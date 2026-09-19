@@ -231,13 +231,34 @@ export async function finishRide(
 
 /// Books, accepts, starts and completes one ride over real HTTP, returning the
 /// fare the server priced it at.
+///
+/// D1: a new ride can no longer be booked as WALLET, so `paymentMethod:
+/// 'WALLET'` here produces what such a ride now IS — a **historical** one: it
+/// is booked and accepted with a permitted method, then the stored
+/// `rides.payment_method` is set to WALLET directly, exactly as a row created
+/// before the rule looks. Completion, collection, receivables and write-off
+/// then run their real wallet paths against it, which is what the suites using
+/// this option are testing.
 export async function completeRide(
   app: FastifyInstance,
   world: RideWorld,
   options: { distanceKm: number; durationMin: number; paymentMethod?: string },
 ): Promise<{ rideId: string; fare: FareRow }> {
-  const requestId = await bookRideRequest(app, world, options);
+  const historicalWallet = options.paymentMethod === 'WALLET';
+  const requestId = await bookRideRequest(
+    app,
+    world,
+    historicalWallet ? { ...options, paymentMethod: 'CARD' } : options,
+  );
   const rideId = await acceptRide(app, world, requestId);
+  if (historicalWallet) {
+    await db().client
+      .$executeRaw`ALTER TABLE "rides" DISABLE TRIGGER "trg_check_no_new_wallet_ride"`;
+    await db().client
+      .$executeRaw`UPDATE "rides" SET "payment_method" = 'WALLET'::"PaymentMethod" WHERE "id" = ${rideId}::uuid`;
+    await db().client
+      .$executeRaw`ALTER TABLE "rides" ENABLE TRIGGER "trg_check_no_new_wallet_ride"`;
+  }
   const fare = await finishRide(app, world, rideId, options);
   return { rideId, fare };
 }
@@ -266,18 +287,29 @@ export async function accountBalance(
 /// payment produced is exactly the defect US1 closed, and seeding one would
 /// leave the wallet position disagreeing with the ledger in every assertion
 /// made afterwards.
+///
+/// New customer top-ups can no longer be created (`GATEWAY_PAYMENT_PURPOSES`),
+/// so this seeds the one kind that still exists — a historical, still-PENDING
+/// `CUSTOMER_WALLET_TOPUP` intent row — and captures it through the real,
+/// signed webhook, which credits the wallet and the ledger together.
 export async function fundWallet(
   app: FastifyInstance,
   user: LoggedInUser,
   amount: number,
 ): Promise<void> {
-  const topup = await app.inject({
-    method: 'POST',
-    url: '/api/v1/payments/wallet/topup',
-    headers: { ...user.authHeader, 'idempotency-key': randomUUID() },
-    payload: { amount },
+  const intent = await db().client.paymentIntent.create({
+    data: {
+      userId: user.userId,
+      amount,
+      currency: 'INR',
+      methodType: 'CARD',
+      idempotencyKey: `legacy_topup_${randomUUID()}`,
+      status: 'PENDING',
+      gateway: 'mock',
+      gatewayIntentId: `mock_pi_${randomUUID()}`,
+      purpose: 'CUSTOMER_WALLET_TOPUP',
+    },
   });
-  assert.equal(topup.statusCode, 200, topup.payload);
 
   // Real Razorpay webhook envelope — `event` at the top, the payment nested
   // under `payload.payment.entity`, `order_id` (the intent's own
@@ -291,7 +323,7 @@ export async function fundWallet(
       payment: {
         entity: {
           id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
-          order_id: topup.json().data.gatewayIntentId,
+          order_id: intent.gatewayIntentId,
           status: 'captured',
         },
       },

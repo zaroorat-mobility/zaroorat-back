@@ -7,7 +7,11 @@ import {
 } from '@modules/drivers/schemas/driver.schemas.js';
 import { AdminDriverService } from './drivers/driver.service.js';
 import { AdminApplicationService } from './applications/application.service.js';
+import { AdminBankAccountService } from './bank-accounts/bank-account.service.js';
 import {
+  bankAccountDriverParamSchema,
+  bankAccountParamSchema,
+  bankAccountReasonBodySchema,
   driverIdParamSchema,
   listDriversQuerySchema,
   suspendDriverBodySchema,
@@ -25,6 +29,7 @@ export class AdminDriverManagementController {
     private readonly driverService: DriverService,
     private readonly adminDriverService: AdminDriverService,
     private readonly adminApplicationService: AdminApplicationService,
+    private readonly adminBankAccountService: AdminBankAccountService,
   ) {}
 
   async list(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -198,5 +203,59 @@ export class AdminDriverManagementController {
       '[admin-drivers] driver reactivated by operator',
     );
     reply.send({ data: driver });
+  }
+
+  // ─── Bank accounts (Phase 1 verification gate) ───────────────────────────
+  async listBankAccounts(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { driverId } = bankAccountDriverParamSchema.parse(req.params);
+    reply.send({ data: await this.adminBankAccountService.list(driverId) });
+  }
+
+  async verifyBankAccount(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { driverId, accountId } = bankAccountParamSchema.parse(req.params);
+    reply.send({
+      data: await this.adminBankAccountService.verify(driverId, accountId, callerId(req)),
+    });
+  }
+
+  async rejectBankAccount(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { driverId, accountId } = bankAccountParamSchema.parse(req.params);
+    const { reason } = bankAccountReasonBodySchema.parse(req.body);
+    reply.send({
+      data: await this.adminBankAccountService.reject(driverId, accountId, callerId(req), reason),
+    });
+  }
+
+  async enableBankAccountPayouts(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { driverId, accountId } = bankAccountParamSchema.parse(req.params);
+    reply.send({
+      data: await this.adminBankAccountService.enablePayouts(driverId, accountId, callerId(req)),
+    });
+  }
+
+  async disableBankAccountPayouts(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { driverId, accountId } = bankAccountParamSchema.parse(req.params);
+    const { reason } = bankAccountReasonBodySchema.parse(req.body);
+    reply.send({
+      data: await this.adminBankAccountService.disablePayouts(
+        driverId,
+        accountId,
+        callerId(req),
+        reason,
+      ),
+    });
+  }
+
+  async deactivateBankAccount(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { driverId, accountId } = bankAccountParamSchema.parse(req.params);
+    const { reason } = bankAccountReasonBodySchema.parse(req.body);
+    reply.send({
+      data: await this.adminBankAccountService.deactivate(
+        driverId,
+        accountId,
+        callerId(req),
+        reason,
+      ),
+    });
   }
 }

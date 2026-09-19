@@ -9,9 +9,14 @@ export const PAYMENT_EVENT_CATALOG = {
   WALLET_HOLD_CREATED: 'payment.wallet.hold_created',
   WALLET_HOLD_RELEASED: 'payment.wallet.hold_released',
   REFUND_PROCESSED: 'payment.refund.processed',
+  /// The provider refused the refund; the reservation was undone.
+  REFUND_FAILED: 'payment.refund.failed',
   SETTLEMENT_COMPLETED: 'payment.settlement.completed',
   PAYOUT_INITIATED: 'payment.payout.initiated',
   PAYOUT_COMPLETED: 'payment.payout.completed',
+  /// A payout attempt that moved no money. Published so a failed attempt is
+  /// visible downstream instead of only existing as a FAILED database row.
+  PAYOUT_FAILED: 'payment.payout.failed',
   RECONCILIATION_MISMATCH: 'payment.reconciliation.mismatch',
   /// Every successful ride collection, whatever the method. Cash confirmation
   /// is a collection too, which is why there is no separate cash event.

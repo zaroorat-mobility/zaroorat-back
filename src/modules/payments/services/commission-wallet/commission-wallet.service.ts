@@ -4,6 +4,7 @@ import { EventPublisher } from '@core/events';
 import { CommissionWalletRepository } from '../../repositories/commission-wallet.repository.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import { PaymentMetrics } from '../../metrics/payment.metrics.js';
+import { RefundBalanceUnavailableError } from '../../errors/payment.errors.js';
 import type { DriverCommissionWallet, DriverCommissionWalletTransaction } from '../../types';
 
 export type CommissionDeductionResult =
@@ -13,10 +14,11 @@ export type CommissionDeductionResult =
 
 /// spec.md FR-007–FR-024e / decisions.md BD-1/BD-4/BD-7. A commission-model
 /// driver's Commission Wallet: a single balance, no locked/reserved portion
-/// (no reservation/freeze — BD-4), and exactly two money-affecting operations:
-/// recharge (`creditInTx`) and a ride's full, exact, once-only commission
-/// deduction (`deductInTx`). There is deliberately no `reserve`/`release`
-/// method and no partial-deduction code path anywhere in this class.
+/// (no reservation/freeze — BD-4). Money moves only by recharge (`creditInTx`),
+/// a ride's full, exact, once-only commission deduction (`deductInTx`), and —
+/// Phase 1 — the refund of still-unused recharged credit
+/// (`debitForRefundInTx` / `restoreRefundedCreditInTx`). There is deliberately
+/// no `reserve`/`release` method and no partial ride-deduction path.
 export class CommissionWalletService {
   constructor(
     private readonly commissionWalletRepository: CommissionWalletRepository,
@@ -90,6 +92,70 @@ export class CommissionWalletService {
       tx,
     );
     return { ...active, balance: newBalance };
+  }
+
+  /// Phase 1 refunds — reverses recharged credit that is still UNUSED.
+  ///
+  /// Commission credit is prepaid platform commission, so a refund can only
+  /// return what has not already paid for rides; anything more would hand the
+  /// driver back money the platform already earned. Called by `RefundService`
+  /// when it reserves a DRIVER_COMMISSION_RECHARGE refund, in the same
+  /// transaction as the matching ledger reservation. This is a refund, not a
+  /// ride commission: it never touches `deductInTx` or its per-ride index.
+  async debitForRefundInTx(
+    driverId: string,
+    amount: Decimal,
+    tx: TransactionClient,
+    reference: { referenceId: string; description: string },
+  ): Promise<void> {
+    const wallet = await this.commissionWalletRepository.getOrCreateWallet(driverId, tx);
+    const locked = await this.commissionWalletRepository.lockForUpdate(driverId, tx);
+    const active = locked ?? wallet;
+    if (active.balance.lt(amount)) {
+      throw new RefundBalanceUnavailableError(amount.toFixed(2), active.balance.toFixed(2));
+    }
+    const newBalance = active.balance.sub(amount);
+    await this.commissionWalletRepository.updateBalance(wallet.id, newBalance, tx);
+    await this.commissionWalletRepository.recordTransaction(
+      {
+        walletId: wallet.id,
+        driverId,
+        txnType: 'REFUND',
+        amount: amount.neg(),
+        balanceAfter: newBalance,
+        referenceType: 'REFUND',
+        referenceId: reference.referenceId,
+        description: reference.description,
+      },
+      tx,
+    );
+  }
+
+  /// Puts refunded credit back when the provider refuses the refund.
+  async restoreRefundedCreditInTx(
+    driverId: string,
+    amount: Decimal,
+    tx: TransactionClient,
+    reference: { referenceId: string; description: string },
+  ): Promise<void> {
+    const wallet = await this.commissionWalletRepository.getOrCreateWallet(driverId, tx);
+    const locked = await this.commissionWalletRepository.lockForUpdate(driverId, tx);
+    const active = locked ?? wallet;
+    const newBalance = active.balance.add(amount);
+    await this.commissionWalletRepository.updateBalance(wallet.id, newBalance, tx);
+    await this.commissionWalletRepository.recordTransaction(
+      {
+        walletId: wallet.id,
+        driverId,
+        txnType: 'REFUND_REVERSAL',
+        amount,
+        balanceAfter: newBalance,
+        referenceType: 'REFUND',
+        referenceId: reference.referenceId,
+        description: reference.description,
+      },
+      tx,
+    );
   }
 
   /// spec.md FR-020–FR-024e / decisions.md BD-1 (reversed) — the sole

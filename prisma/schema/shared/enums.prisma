@@ -454,3 +454,45 @@ enum DeviceTrustState {
   SUSPICIOUS
   REVOKED
 }
+
+/// Payout/settlement Option A. `status` on these two tables used to be a bare
+/// `String` with no constraint, which is how three separate code paths were
+/// able to write `PAID` without any money having moved.
+///
+/// PENDING   — calculated by the settlement job, nothing approved yet.
+/// APPROVED  — finance approved the batch it belongs to; payable.
+/// PROCESSING— a batch is being paid out; individual payouts are in flight.
+/// PAID      — EVERY rupee of `net_payable` is covered by a COMPLETED payout.
+///             Nothing else may write this value.
+/// FAILED    — finance abandoned the batch; the period stays unpaid.
+enum SettlementStatus {
+  PENDING
+  APPROVED
+  PROCESSING
+  PAID
+  FAILED
+}
+
+/// INITIATED — recorded and reserved against the settlement, money NOT moved.
+/// COMPLETED — finance confirmed an externally executed bank transfer; this is
+///             the only transition that debits the driver wallet and posts the
+///             DRIVER_PAYABLE ledger debit.
+/// FAILED    — the attempt did not move money. The row is kept, never deleted.
+enum PayoutStatus {
+  INITIATED
+  COMPLETED
+  FAILED
+}
+
+/// Phase 1 bank-account lifecycle. A payout is only ever possible from
+/// PAYOUT_ENABLED, and an account only gets there through an explicit,
+/// audited verification by a staff member other than the one who entered it.
+/// PROVISIONED is reserved for the payout-provider fund-account step (later phase).
+enum BankAccountStatus {
+  ENTERED
+  PROVISIONED
+  VERIFIED
+  PAYOUT_ENABLED
+  REJECTED
+  DEACTIVATED
+}

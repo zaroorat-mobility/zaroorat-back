@@ -319,11 +319,11 @@ Authenticated traffic fails **closed** on Redis loss by deliberate design (epoch
 
 A Prometheus scraper carries no token, so the endpoint is public and network placement is the access control. It must not be reachable from the internet. The payload is aggregate counters with a bounded label set — no PII, no per-user detail — but it does expose traffic volumes and failure rates. **Ingress rule required; nothing in this repository can enforce it.**
 
-### R-5 · Payout gateway call sits inside the database transaction — **MEDIUM**
+### R-5 · Driver payouts are executed by hand — **MEDIUM**
 
-`executePayout` calls `gateway.createPayout` while the settlement row lock is held. A slow gateway holds a Postgres connection and blocks every other payout against that settlement for the duration. Correct, but it will not scale; the standard fix is to record the intent, commit, then call the gateway and reconcile asynchronously.
+No payment provider is wired for outbound payouts, and the gateway adapters have no payout method at all: a payout cannot be sent from this system. `PayoutService` is two-phase and performs no network call — `executePayout` records a `DriverPayout` as `INITIATED` and reserves the amount against the settlement and the driver wallet (`lockedBalance`), then finance executes the bank transfer **outside** this platform and calls `confirmPayout` with the bank's own reference (UTR/NEFT). Only that confirmation debits the wallet, posts the `DRIVER_PAYABLE` / `BANK_CLEARING` ledger group, and can mark the settlement `PAID`. `failPayout` keeps the row with a reason and releases the reservation.
 
-Related: the inner `catch` marks the payout `FAILED` and rethrows — which rolls back that write too, so no `FAILED` row survives. Harmless for the invariant (a rolled-back payout consumes no balance) but it means gateway failures leave no trace in `driver_payouts`.
+The residual risk is operational rather than technical: every payout depends on a person performing and confirming a transfer, `externalReference` is free text, and one `finance:execute` holder can both initiate and confirm.
 
 ### R-6 · Permission model is declared but not enforced — **LOW**
 
