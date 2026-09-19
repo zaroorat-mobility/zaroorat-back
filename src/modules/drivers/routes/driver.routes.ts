@@ -3,11 +3,23 @@ import { container } from '@core/di';
 import { rateLimits } from '@config';
 import { DriverController } from '../controllers/driver.controller.js';
 import { handleDriverError } from '../schemas/error-response.js';
+
 export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<DriverController>('driverController');
   fastify.setErrorHandler(handleDriverError);
+
+  // Static `/me/*` routes MUST be registered before `/:driverId` params so
+  // Fastify does not capture `me` as a driver id.
   fastify.get('/me', (req, reply) => controller.onboarding.getMe(req, reply));
   fastify.post('/me/onboard', (req, reply) => controller.onboarding.onboard(req, reply));
+
+  fastify.get('/me/earnings/summary', (req, reply) => controller.earnings.summary(req, reply));
+  fastify.get('/me/earnings/daily', (req, reply) => controller.earnings.daily(req, reply));
+  fastify.get('/me/rides', (req, reply) => controller.earnings.rides(req, reply));
+  fastify.get('/me/scheduled-rides', (req, reply) => controller.scheduled.list(req, reply));
+  fastify.get('/me/withdrawals', (req, reply) => controller.withdrawals.list(req, reply));
+  fastify.post('/me/withdrawals', (req, reply) => controller.withdrawals.create(req, reply));
+
   fastify.patch('/:driverId/profile', (req, reply) =>
     controller.onboarding.updateProfile(req, reply),
   );

@@ -70,6 +70,12 @@ export class DeviceRepository extends BaseRepository {
   async touchLastSeen(id: string, at: Date = new Date(), tx?: TransactionClient): Promise<void> {
     await (tx ?? this.client).userDevice.update({ where: { id }, data: { lastSeenAt: at } });
   }
+  async updateFcmToken(id: string, fcmToken: string, tx?: TransactionClient): Promise<UserDevice> {
+    return (tx ?? this.client).userDevice.update({
+      where: { id },
+      data: { fcmToken },
+    });
+  }
   async updateTrustState(
     id: string,
     trustState: DeviceTrustState,

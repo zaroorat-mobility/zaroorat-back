@@ -76,4 +76,45 @@ export class DeviceService {
     this.sessionMetrics.deviceRevoked({ deviceId, sessionsRevoked: revoked });
     return revoked;
   }
+
+  async updateFcmToken(
+    userId: string,
+    sessionId: string,
+    fcmToken: string,
+    deviceId?: string,
+  ): Promise<{ deviceId: string; fcmToken: string }> {
+    let targetId = deviceId ?? null;
+    if (!targetId) {
+      targetId = await this.sessionService.deviceIdFor(sessionId);
+    }
+    if (!targetId) {
+      // No session-bound device yet — register a lightweight row so the token
+      // is not dropped on a client that refreshed before re-binding a device.
+      const created = await this.deviceRepository.create({
+        userId,
+        fcmToken,
+        ...(deviceId ? { deviceId } : {}),
+      });
+      return { deviceId: created.id, fcmToken };
+    }
+    const owned = await this.deviceRepository.findOwned(userId, targetId);
+    if (!owned) {
+      // `deviceId` from the body may be the client-side stable id, not the row id.
+      const byClientId = await this.deviceRepository.findByUserAndDevice(userId, targetId);
+      if (byClientId) {
+        await this.deviceRepository.updateFcmToken(byClientId.id, fcmToken);
+        await this.deviceRepository.touchLastSeen(byClientId.id);
+        return { deviceId: byClientId.id, fcmToken };
+      }
+      const created = await this.deviceRepository.create({
+        userId,
+        deviceId: targetId,
+        fcmToken,
+      });
+      return { deviceId: created.id, fcmToken };
+    }
+    await this.deviceRepository.updateFcmToken(owned.id, fcmToken);
+    await this.deviceRepository.touchLastSeen(owned.id);
+    return { deviceId: owned.id, fcmToken };
+  }
 }

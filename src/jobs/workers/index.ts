@@ -38,6 +38,7 @@ export const MAINTENANCE_HANDLERS: Readonly<Record<MaintenanceJobName, string>> 
   [JOB_NAMES.AUTH_RETENTION]: 'authRetentionJob',
   [JOB_NAMES.DISPATCH_TIMEOUT]: 'dispatchTimeoutJob',
   [JOB_NAMES.REQUEST_EXPIRY]: 'requestExpiryJob',
+  [JOB_NAMES.SCHEDULED_RIDE_REMINDER]: 'scheduledRideReminderJob',
   [JOB_NAMES.DRIVER_HEARTBEAT_TIMEOUT]: 'heartbeatTimeoutJob',
   [JOB_NAMES.DRIVER_DOC_EXPIRATION]: 'docExpirationJob',
   [JOB_NAMES.PAYMENT_RECONCILIATION]: 'reconciliationJob',

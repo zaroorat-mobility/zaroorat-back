@@ -89,6 +89,12 @@ export class SubscriptionController {
     reply.send({ data: { cancelled: true } });
   }
 
+  async listInvoices(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const driverId = await actingDriverId(req, this.driverRepository);
+    const data = await this.subscriptionService.listInvoices(driverId);
+    reply.send({ data });
+  }
+
   // Admin — finance:execute (payment-management.routes.ts's own precedent).
   async createPlan(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createSubscriptionPlanSchema.parse(req.body);

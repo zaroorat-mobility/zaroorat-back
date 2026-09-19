@@ -94,6 +94,10 @@ export class RideStateController {
       driverId,
       body.actualDistanceKm,
       body.actualDurationMin,
+      {
+        ...(body.endReasonCode !== undefined ? { endReasonCode: body.endReasonCode } : {}),
+        ...(body.endReasonText !== undefined ? { endReasonText: body.endReasonText } : {}),
+      },
     );
     reply.send({ data: ride });
   }

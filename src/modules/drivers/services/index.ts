@@ -6,4 +6,6 @@ export * from './shift/index.js';
 export * from './eligibility/index.js';
 export * from './documents/index.js';
 export * from './payment-model/index.js';
+export { DriverEarningsService } from './earnings/index.js';
+export * from './withdrawal/index.js';
 export * from './driver.service.js';

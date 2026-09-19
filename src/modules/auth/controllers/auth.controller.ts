@@ -11,6 +11,7 @@ import {
   refreshSchema,
   logoutSchema,
   adminPasswordLoginSchema,
+  updatePushTokenSchema,
 } from '../schemas/auth.schemas';
 function toDeviceContext(device: z.infer<typeof verifyOtpSchema>['device']): DeviceContext {
   if (!device) return {};
@@ -246,6 +247,27 @@ export class AuthController {
     const revoked = await this.authService.revokeDevice(auth.userId, id);
     if (revoked === null) return replyAuthError(request, reply, 'NOT_FOUND', 'Device not found');
     return reply.status(204).send();
+  };
+  updatePushToken = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const auth = request.auth;
+    if (!auth) return replyAuthError(request, reply, 'TOKEN_INVALID', 'Not authenticated');
+    const parsed = updatePushTokenSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return replyAuthError(request, reply, 'VALIDATION', 'Request validation failed', {
+        details: parsed.error.issues,
+      });
+    }
+    try {
+      const result = await this.authService.updatePushToken(
+        auth.userId,
+        auth.sid,
+        parsed.data.fcmToken,
+        parsed.data.deviceId,
+      );
+      return reply.status(200).send({ data: result });
+    } catch (err) {
+      return this.handle(request, reply, err);
+    }
   };
   getMe = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const auth = request.auth;

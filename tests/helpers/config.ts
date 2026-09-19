@@ -16,7 +16,7 @@ export function makeOtpConfig(overrides: OtpConfigOverrides = {}): OtpConfig {
     codeLength: 6,
     ttlSeconds: 300,
     maxVerifyAttempts: 5,
-    lockoutSeconds: 900,
+    lockoutSeconds: 0,
     resendIntervalSeconds: 60,
     rateLimits: {
       perPhone: { scope: 'otp:req', limit: 3, windowSeconds: 3600 },

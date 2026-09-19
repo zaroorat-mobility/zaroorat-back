@@ -47,6 +47,11 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     pattern: process.env.RIDE_REQUEST_EXPIRY_CRON ?? '* * * * *',
   },
   {
+    queue: QUEUE_NAMES.RIDES_MAINTENANCE,
+    name: JOB_NAMES.SCHEDULED_RIDE_REMINDER,
+    pattern: process.env.SCHEDULED_RIDE_REMINDER_CRON ?? '* * * * *',
+  },
+  {
     queue: QUEUE_NAMES.DRIVERS_MAINTENANCE,
     name: JOB_NAMES.DRIVER_HEARTBEAT_TIMEOUT,
     pattern: process.env.DRIVER_HEARTBEAT_CRON ?? '* * * * *',

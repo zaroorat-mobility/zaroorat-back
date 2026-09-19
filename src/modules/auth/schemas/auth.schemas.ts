@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { otpConfig } from '@config/otp/otp.config.js';
 import { E164_PATTERN } from '@shared/validation';
 const phoneNumber = z
   .string()
@@ -21,7 +22,12 @@ export const sendOtpSchema = z.object({
 });
 export const verifyOtpSchema = z.object({
   phoneNumber,
-  code: z.string().regex(/^\d{6}$/, 'code must be 6 digits'),
+  code: z
+    .string()
+    .regex(
+      new RegExp(`^\\d{${otpConfig.codeLength}}$`),
+      `code must be ${otpConfig.codeLength} digits`,
+    ),
   challengeId: z.string().min(1).optional(),
   device: deviceSchema,
 });
@@ -41,7 +47,12 @@ export const logoutSchema = z
     allDevices: z.boolean().optional(),
   })
   .optional();
+export const updatePushTokenSchema = z.object({
+  fcmToken: z.string().min(1).max(512),
+  deviceId: z.string().min(1).max(128).optional(),
+});
 export type SendOtpBody = z.infer<typeof sendOtpSchema>;
 export type VerifyOtpBody = z.infer<typeof verifyOtpSchema>;
 export type RefreshBody = z.infer<typeof refreshSchema>;
 export type AdminPasswordLoginBody = z.infer<typeof adminPasswordLoginSchema>;
+export type UpdatePushTokenBody = z.infer<typeof updatePushTokenSchema>;

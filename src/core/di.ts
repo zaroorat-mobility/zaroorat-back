@@ -47,11 +47,12 @@ registerPromotionsModule(container);
 registerReferralsModule(container);
 registerAdminModule(container);
 registerLocationModule(container);
-registerRealtimeModule(container);
 registerMatchingModule(container);
 registerRatingModule(container);
 registerAppConfigModule(container);
 registerRidesModule(container);
+// Realtime depends on ride chat for socket `chat.message.send`; register after rides.
+registerRealtimeModule(container);
 container.register({
   db: aliasTo('databaseService'),
   redis: aliasTo('redisService'),

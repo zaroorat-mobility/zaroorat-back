@@ -305,6 +305,7 @@ function makeWorld() {
     redisService as never,
     commissionWalletService as never,
     driverSubscriptionRepository as never,
+    {} as never, // RideChatService
   );
 
   /// Puts a live PENDING offer in front of a driver, the way a dispatch round

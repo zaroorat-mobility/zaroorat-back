@@ -5,4 +5,7 @@ export * from './driver-location.controller.js';
 export * from './driver-wallet.controller.js';
 export * from './driver-payment-model.controller.js';
 export * from './driver-commission-wallet.controller.js';
+export * from './driver-earnings.controller.js';
+export * from './driver-withdrawal.controller.js';
+export * from './driver-scheduled.controller.js';
 export * from './driver.controller.js';

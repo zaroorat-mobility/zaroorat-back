@@ -5,11 +5,20 @@ import { isCodedError } from '@core/errors/envelope.js';
 import { logger } from '@shared/logger/index.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { createRedisClient } from '@core/cache/client.js';
-import { CLIENT_COMMAND, SOCKET_EVENT, room, type SocketEnvelope } from './events.js';
+import {
+  CLIENT_COMMAND,
+  SOCKET_EVENT,
+  room,
+  socketEnvelope,
+  type SocketEnvelope,
+} from './events.js';
 import { RealtimeError, SocketUnauthenticatedError } from './realtime.errors.js';
 import { SocketAuthService, type SocketPrincipal } from './socket-auth.service.js';
 import { RoomAuthorizationService } from './room-authorization.service.js';
 import { LocationStreamService } from './location-stream.service.js';
+import { RideChatService } from '@modules/rides/services/chat/ride-chat.service.js';
+import { uuidV7 } from '@shared/crypto';
+import { z } from 'zod';
 
 /// The principal is stashed on the socket by the handshake middleware and read
 /// back by every handler. It is never re-derived from client input.
@@ -20,6 +29,16 @@ interface AuthedSocket extends Socket {
 function ack(callback: unknown, response: Record<string, unknown>): void {
   if (typeof callback === 'function') (callback as (r: unknown) => void)(response);
 }
+
+const chatSendSchema = z.object({
+  rideId: z.string().uuid(),
+  content: z.string().trim().min(1).max(2000),
+});
+
+const chatTypingSchema = z.object({
+  rideId: z.string().uuid(),
+  isTyping: z.boolean().default(true),
+});
 
 /// Owns the Socket.IO server: its lifecycle, its authentication middleware, its
 /// room bookkeeping, and the one API the rest of the platform uses to reach a
@@ -32,6 +51,7 @@ export class RealtimeGateway {
     private readonly socketAuthService: SocketAuthService,
     private readonly roomAuthorizationService: RoomAuthorizationService,
     private readonly locationStreamService: LocationStreamService,
+    private readonly rideChatService: RideChatService,
   ) {}
 
   get isRunning(): boolean {
@@ -129,6 +149,12 @@ export class RealtimeGateway {
     socket.on(CLIENT_COMMAND.LOCATION_UPDATE, (payload: unknown, callback: unknown) => {
       void this.onLocationUpdate(socket, principal, payload, callback);
     });
+    socket.on(CLIENT_COMMAND.CHAT_MESSAGE_SEND, (payload: unknown, callback: unknown) => {
+      void this.onChatSend(socket, principal, payload, callback);
+    });
+    socket.on(CLIENT_COMMAND.CHAT_TYPING, (payload: unknown, callback: unknown) => {
+      void this.onChatTyping(socket, principal, payload, callback);
+    });
     socket.on('disconnect', () => {
       // socket.io leaves every room for us; the only thing it cannot know about
       // is the per-driver throttle state.
@@ -206,6 +232,69 @@ export class RealtimeGateway {
         rooms: rideRooms.length,
         fixId: accepted.envelope.data.fixId ?? null,
       });
+    } catch (err) {
+      this.failFrom(socket, callback, err);
+    }
+  }
+
+  private async onChatSend(
+    socket: AuthedSocket,
+    principal: SocketPrincipal,
+    payload: unknown,
+    callback: unknown,
+  ): Promise<void> {
+    const parsed = chatSendSchema.safeParse(payload);
+    if (!parsed.success) {
+      return this.fail(
+        socket,
+        callback,
+        'INVALID_SOCKET_PAYLOAD',
+        'rideId and content are required',
+      );
+    }
+    try {
+      await this.roomAuthorizationService.assertCanJoinRide(principal, parsed.data.rideId);
+      const message = await this.rideChatService.sendMessage(
+        parsed.data.rideId,
+        principal.userId,
+        parsed.data.content,
+      );
+      this.emitToRoom(
+        room.ride(parsed.data.rideId),
+        socketEnvelope(uuidV7(), SOCKET_EVENT.CHAT_MESSAGE_NEW, {
+          rideId: parsed.data.rideId,
+          conversationId: message.conversationId,
+          messageId: message.id,
+          senderId: message.senderId,
+          content: message.content,
+          messageType: message.messageType,
+          createdAt: message.createdAt,
+        }),
+      );
+      ack(callback, { ok: true, message });
+    } catch (err) {
+      this.failFrom(socket, callback, err);
+    }
+  }
+
+  private async onChatTyping(
+    socket: AuthedSocket,
+    principal: SocketPrincipal,
+    payload: unknown,
+    callback: unknown,
+  ): Promise<void> {
+    const parsed = chatTypingSchema.safeParse(payload);
+    if (!parsed.success) {
+      return this.fail(socket, callback, 'INVALID_SOCKET_PAYLOAD', 'rideId is required');
+    }
+    try {
+      await this.roomAuthorizationService.assertCanJoinRide(principal, parsed.data.rideId);
+      socket.to(room.ride(parsed.data.rideId)).emit(CLIENT_COMMAND.CHAT_TYPING, {
+        rideId: parsed.data.rideId,
+        userId: principal.userId,
+        isTyping: parsed.data.isTyping,
+      });
+      ack(callback, { ok: true });
     } catch (err) {
       this.failFrom(socket, callback, err);
     }

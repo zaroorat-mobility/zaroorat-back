@@ -244,6 +244,7 @@ function makeWorld() {
     } as never,
     commissionWalletService as never,
     driverSubscriptionRepository as never,
+    {} as never, // RideChatService
   );
 
   function offer(requestId: string, driverId: string, overrides: Record<string, unknown> = {}) {

@@ -127,4 +127,24 @@ export class SubscriptionService {
     const cancelled = await this.driverSubscriptionRepository.requestCancel(driverId);
     if (!cancelled) throw new SubscriptionNotFoundError();
   }
+
+  /// Billing history for the authenticated driver — one row per subscription
+  /// purchase / renewal attempt, joined with plan metadata.
+  async listInvoices(driverId: string, limit = 50) {
+    const rows = await this.driverSubscriptionRepository.listHistory(driverId, limit);
+    return rows.map((row) => ({
+      id: row.id,
+      planId: row.planId,
+      planName: row.plan.name,
+      billingPeriod: row.plan.billingPeriod,
+      amount: Number(row.plan.price),
+      currency: row.plan.currency,
+      status: row.status,
+      paymentStatus: row.paymentStatus,
+      paymentIntentId: row.paymentIntentId,
+      startDate: row.startDate?.toISOString() ?? null,
+      expiryDate: row.expiryDate?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
 }

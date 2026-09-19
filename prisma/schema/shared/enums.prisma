@@ -93,6 +93,22 @@ enum RideStatus {
   NO_DRIVERS_FOUND
 }
 
+/// Early-end-trip reason codes reported by the driver app when completing a
+/// ride before the planned destination (Phase 6b).
+enum RideEndReason {
+  RIDER_REQUESTED_END
+  DESTINATION_CHANGED
+  RIDER_STOP_HERE
+  SAFETY_CONCERN
+  VEHICLE_BREAKDOWN
+  ACCIDENT
+  MEDICAL_EMERGENCY
+  ROAD_BLOCKED
+  RIDER_BEHAVIOUR
+  UNABLE_TO_CONTINUE
+  OTHER
+}
+
 enum NotificationChannel {
   PUSH
   SMS

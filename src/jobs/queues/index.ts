@@ -20,6 +20,7 @@ export const JOB_NAMES = Object.freeze({
   AUTH_RETENTION: 'auth-retention',
   DISPATCH_TIMEOUT: 'dispatch-timeout',
   REQUEST_EXPIRY: 'request-expiry',
+  SCHEDULED_RIDE_REMINDER: 'scheduled-ride-reminder',
   DRIVER_HEARTBEAT_TIMEOUT: 'driver-heartbeat-timeout',
   DRIVER_DOC_EXPIRATION: 'driver-doc-expiration',
   PAYMENT_RECONCILIATION: 'payment-reconciliation',
