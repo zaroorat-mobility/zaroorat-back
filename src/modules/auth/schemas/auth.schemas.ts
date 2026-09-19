@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { otpConfig } from '@config/otp/otp.config.js';
 import { E164_PATTERN } from '@shared/validation';
 const phoneNumber = z
   .string()
@@ -21,7 +22,12 @@ export const sendOtpSchema = z.object({
 });
 export const verifyOtpSchema = z.object({
   phoneNumber,
-  code: z.string().regex(/^\d{6}$/, 'code must be 6 digits'),
+  code: z
+    .string()
+    .regex(
+      new RegExp(`^\\d{${otpConfig.codeLength}}$`),
+      `code must be ${otpConfig.codeLength} digits`,
+    ),
   challengeId: z.string().min(1).optional(),
   device: deviceSchema,
 });
