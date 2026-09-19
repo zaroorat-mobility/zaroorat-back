@@ -2373,7 +2373,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
                34.0700, 74.8400,
                ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography,
                'Boulevard Road, Srinagar', 'Shankaracharya Hill, Srinagar',
-               'MATCHED', 1.0, 'WALLET', $4)`,
+               'MATCHED', 1.0, 'UPI', $4)`,
       reqId,
       passengerUser.id,
       cabType.id,
@@ -2387,7 +2387,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           drop_location, drop_address, accepted_at, cancelled_at,
           wait_time_min, is_scheduled, created_at, updated_at)
        VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
-               'CANCELLED_BY_CUSTOMER', 'WALLET', 'PENDING',
+               'CANCELLED_BY_CUSTOMER', 'UPI', 'PENDING',
                ST_SetSRID(ST_MakePoint(74.8300, 34.0850), 4326)::geography, 'Boulevard Road, Srinagar',
                ST_SetSRID(ST_MakePoint(74.8400, 34.0700), 4326)::geography, 'Shankaracharya Hill, Srinagar',
                $8, $9,
