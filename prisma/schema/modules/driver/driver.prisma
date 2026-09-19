@@ -42,6 +42,7 @@ model Driver {
   assignments        VehicleAssignment[]
   dispatches         RideDispatch[]
   rides              Ride[]
+  scheduledRides     ScheduledRide[]
   settlements        DriverSettlement[]
   payouts            DriverPayout[]
   withdrawalRequests WithdrawalRequest[]

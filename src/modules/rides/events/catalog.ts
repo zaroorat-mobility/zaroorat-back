@@ -15,6 +15,9 @@ export const RIDE_EVENT_CATALOG = {
   STARTED: 'ride.started',
   COMPLETED: 'ride.completed',
   CANCELLED: 'ride.cancelled',
+  SCHEDULED_ACCEPTED: 'ride.scheduled.accepted',
+  SCHEDULED_DECLINED: 'ride.scheduled.declined',
+  SCHEDULED_REMINDER: 'ride.scheduled.reminder',
 } as const;
 export function rideEvent(
   name: (typeof RIDE_EVENT_CATALOG)[keyof typeof RIDE_EVENT_CATALOG],

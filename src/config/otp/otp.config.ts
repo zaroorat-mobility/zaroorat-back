@@ -11,7 +11,7 @@ export const otpConfig = Object.freeze({
   codeLength: Number(process.env.OTP_CODE_LENGTH ?? 6),
   ttlSeconds: Number(process.env.OTP_TTL_SECONDS ?? 300),
   maxVerifyAttempts: Number(process.env.OTP_MAX_VERIFY_ATTEMPTS ?? 5),
-  lockoutSeconds: Number(process.env.OTP_LOCKOUT_SECONDS ?? 900),
+  lockoutSeconds: Number(process.env.OTP_LOCKOUT_SECONDS ?? 90),
   resendIntervalSeconds: Number(process.env.OTP_RESEND_INTERVAL_SECONDS ?? 60),
   trailRetentionDays: Number(process.env.OTP_TRAIL_RETENTION_DAYS ?? 30),
   delivery: {

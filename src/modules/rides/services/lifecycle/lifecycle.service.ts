@@ -50,6 +50,7 @@ import { LedgerService } from '@modules/payments/services/ledger/ledger.service.
 import { CommissionWalletService } from '@modules/payments/services/commission-wallet/commission-wallet.service.js';
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
 import { DriverSubscriptionRepository } from '@modules/subscriptions/repositories/driver-subscription.repository.js';
+import { RideChatService } from '../chat/ride-chat.service.js';
 import type { Ride, RideRequest, RideStatus } from '../../types';
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   ACCEPTED: [
@@ -108,6 +109,7 @@ export class LifecycleService {
     private readonly redisService: RedisService,
     private readonly commissionWalletService: CommissionWalletService,
     private readonly driverSubscriptionRepository: DriverSubscriptionRepository,
+    private readonly rideChatService: RideChatService,
   ) {}
   validateTransition(fromState: string, toState: string): void {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
@@ -448,6 +450,12 @@ export class LifecycleService {
         }),
         tx,
       );
+      await this.rideChatService.ensureConversationForRide(
+        ride.id,
+        request.customerId,
+        acceptingDriver.userId,
+        tx,
+      );
       return { ride };
     });
     return result;
@@ -658,6 +666,21 @@ export class LifecycleService {
     driverId: string,
     actualDistanceKm: number,
     actualDurationMin: number,
+    endReason?: {
+      endReasonCode?:
+        | 'RIDER_REQUESTED_END'
+        | 'DESTINATION_CHANGED'
+        | 'RIDER_STOP_HERE'
+        | 'SAFETY_CONCERN'
+        | 'VEHICLE_BREAKDOWN'
+        | 'ACCIDENT'
+        | 'MEDICAL_EMERGENCY'
+        | 'ROAD_BLOCKED'
+        | 'RIDER_BEHAVIOUR'
+        | 'UNABLE_TO_CONTINUE'
+        | 'OTHER';
+      endReasonText?: string;
+    },
   ): Promise<Ride> {
     const completed = await this.txManager.execute(async (tx) => {
       const ride = await this.lockAndValidate(
@@ -788,6 +811,12 @@ export class LifecycleService {
             actualDistanceKm: new Decimal(billedDistanceKm),
             actualDurationMin: billedDurationMin,
             paymentStatus,
+            ...(endReason?.endReasonCode !== undefined
+              ? { earlyEndReasonCode: endReason.endReasonCode }
+              : {}),
+            ...(endReason?.endReasonText !== undefined
+              ? { earlyEndReasonText: endReason.endReasonText }
+              : {}),
           },
           tx,
         ))

@@ -116,5 +116,11 @@ export function createSmsProvider(notificationConfig: NotificationConfig): SmsPr
   return new MockProvider();
 }
 export function createPushProvider(): PushProvider {
+  // PUSH_PROVIDER remains `mock` until a real FCM adapter is selected.
+  // To enable Firebase Admin later:
+  //   1. add `firebase-admin` dependency
+  //   2. implement FcmPushProvider behind createPushProvider
+  //   3. set PUSH_PROVIDER=fcm and FIREBASE_CREDENTIALS_JSON / GOOGLE_APPLICATION_CREDENTIALS
+  // Production/staging refuse boot on mock — see resolvePushProviderName.
   return new MockPushProvider();
 }

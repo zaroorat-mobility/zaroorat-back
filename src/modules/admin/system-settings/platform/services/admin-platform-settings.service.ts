@@ -1,4 +1,5 @@
 import type { DatabaseService, TransactionManager } from '@core/database';
+import { container } from '@core/di';
 import { geoConfig } from '@config/geo/geo.config.js';
 import { otpConfig } from '@config/otp/otp.config.js';
 import { rideConfig } from '@config/ride/ride.config.js';
@@ -29,6 +30,7 @@ import type {
   UpdateFeatureFlagsBody,
   UpdateMaintenanceSettingsBody,
 } from '../schemas/platform-settings.schema.js';
+import { logger } from '@shared/logger/index.js';
 
 type SettingField<T> = { value: T; source: 'database' | 'default' };
 
@@ -321,6 +323,7 @@ export class AdminPlatformSettingsService {
         after: body.flags,
       });
     }
+    await this.invalidatePublicAppConfig(actorId);
     return this.getFeatureFlags();
   }
 
@@ -425,5 +428,25 @@ export class AdminPlatformSettingsService {
       }
     });
     await this.systemSettingsCache.invalidateCategory(category);
+    await this.invalidatePublicAppConfig(actorId);
+  }
+
+  /**
+   * Platform settings are embedded in the public app-config bundle.
+   * Bump version + purge Redis so clients revalidate via ETag on next boot.
+   */
+  private async invalidatePublicAppConfig(actorId?: string): Promise<void> {
+    try {
+      const appConfigService = container.resolve('appConfigService') as {
+        bumpVersion: (updatedBy?: string | null) => Promise<number>;
+      };
+      const appConfigCache = container.resolve('appConfigCache') as {
+        purgeAll: () => Promise<void>;
+      };
+      await appConfigService.bumpVersion(actorId ?? null);
+      await appConfigCache.purgeAll();
+    } catch (err) {
+      logger.warn({ err }, '[AdminPlatformSettings] Failed to invalidate public app-config');
+    }
   }
 }

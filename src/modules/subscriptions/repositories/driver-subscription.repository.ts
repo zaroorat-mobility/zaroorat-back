@@ -118,4 +118,26 @@ export class DriverSubscriptionRepository {
     });
     return count === 1;
   }
+
+  async listHistory(
+    driverId: string,
+    limit = 50,
+    tx?: TransactionClient,
+  ): Promise<
+    Array<
+      DriverSubscription & {
+        plan: { name: string; billingPeriod: string; price: unknown; currency: string };
+      }
+    >
+  > {
+    const client = tx ?? this.db.client;
+    return client.driverSubscription.findMany({
+      where: { driverId },
+      include: {
+        plan: { select: { name: true, billingPeriod: true, price: true, currency: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
 }

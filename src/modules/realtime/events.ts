@@ -35,6 +35,12 @@ export const SOCKET_EVENT = {
 
   /// Server → ride room. Remaining route distance and ETA refresh.
   ETA_UPDATED: 'ride.eta.updated',
+
+  /// Server → driver + customer rooms. Upcoming scheduled pickup (T-30min).
+  SCHEDULED_REMINDER: 'ride.scheduled.reminder',
+
+  /// Server → ride room. New chat message on an active ride conversation.
+  CHAT_MESSAGE_NEW: 'chat.message.new',
 } as const;
 
 /// Client → server.
@@ -42,6 +48,10 @@ export const CLIENT_COMMAND = {
   JOIN_RIDE: 'ride.join',
   LEAVE_RIDE: 'ride.leave',
   LOCATION_UPDATE: 'driver.location.update',
+  /// Client → server. Persist + fan-out a chat message (also available via REST).
+  CHAT_MESSAGE_SEND: 'chat.message.send',
+  /// Client → server. Ephemeral typing indicator for the ride room.
+  CHAT_TYPING: 'chat.typing',
 } as const;
 
 export type SocketEventName = (typeof SOCKET_EVENT)[keyof typeof SOCKET_EVENT];

@@ -45,6 +45,15 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     controller.state.rejectOffer(req, reply),
   );
   fastify.post('/accept', driverOnly, (req, reply) => controller.state.accept(req, reply));
+
+  // Scheduled pickup actions before `/:id` so `scheduled` is not captured as an id.
+  fastify.post('/scheduled/:id/accept', driverOnlyById, (req, reply) =>
+    controller.scheduled.accept(req, reply),
+  );
+  fastify.post('/scheduled/:id/decline', driverOnlyById, (req, reply) =>
+    controller.scheduled.decline(req, reply),
+  );
+
   fastify.post('/:id/arriving', driverOnlyById, (req, reply) =>
     controller.state.arriving(req, reply),
   );
@@ -61,6 +70,11 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
 
   fastify.get('/active', (req, reply) => controller.query.getActive(req, reply));
   fastify.get('/history', (req, reply) => controller.query.listHistory(req, reply));
+
+  fastify.get('/:id/messages', byId, (req, reply) => controller.chat.list(req, reply));
+  fastify.post('/:id/messages', byId, (req, reply) => controller.chat.send(req, reply));
+  fastify.post('/:id/call', byId, (req, reply) => controller.call.initiate(req, reply));
+
   fastify.get('/:id', byId, (req, reply) => controller.query.getById(req, reply));
   fastify.get('/:id/receipt', byId, (req, reply) => controller.query.getReceipt(req, reply));
   fastify.get('/:id/driver-location', byId, (req, reply) =>

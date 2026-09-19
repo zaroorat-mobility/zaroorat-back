@@ -79,7 +79,7 @@ export const verifyOtpBodySchema = {
       type: 'string',
       description: 'E.164 phone number, required (e.g. +919876543210)',
     },
-    code: { type: 'string', description: '6-digit OTP code, required' },
+    code: { type: 'string', description: 'OTP code (length from OTP_CODE_LENGTH), required' },
     challengeId: {
       type: 'string',
       description: 'Opaque challenge ID returned by /otp/send. Bound to this phone and purpose.',
