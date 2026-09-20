@@ -123,7 +123,6 @@ model Ride {
   fare                         RideFare?
   fareLines                    RideFareLine[]
   cancellation                 RideCancellation?
-  otps                         RideOtp[]
   receipt                      RideReceipt?
   payments                     RidePayment[]
   billingInvoices              BillingInvoice[]
@@ -245,23 +244,6 @@ model RideCancellation {
   ride Ride @relation(fields: [rideId], references: [id])
 
   @@map("ride_cancellations")
-}
-
-model RideOtp {
-  id         String    @id @default(uuid(7)) @db.Uuid
-  rideId     String    @map("ride_id") @db.Uuid
-  otpHash    String    @map("otp_hash")
-  purpose    String    @default("START")
-  attempts   Int       @default(0) @db.SmallInt
-  verified   Boolean   @default(false)
-  verifiedAt DateTime? @map("verified_at")
-  expiresAt  DateTime  @map("expires_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
-
-  ride Ride @relation(fields: [rideId], references: [id])
-
-  @@index([rideId])
-  @@map("ride_otps")
 }
 
 model RideReceipt {

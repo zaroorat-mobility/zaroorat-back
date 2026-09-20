@@ -49,6 +49,7 @@ model Notification {
   body          String?
   data          Json?
   status        NotificationStatus   @default(PENDING)
+  idempotencyKey String?             @unique @map("idempotency_key")
   referenceType String?              @map("reference_type")
   referenceId   String?              @map("reference_id") @db.Uuid
   createdAt     DateTime             @default(now()) @map("created_at")

@@ -30,7 +30,10 @@ export interface MaintenanceRunner {
 export interface JobResolver {
   resolve<T>(registration: string): T;
 }
-export type MaintenanceJobName = Exclude<JobName, typeof JOB_NAMES.OTP_SEND>;
+export type MaintenanceJobName = Exclude<
+  JobName,
+  typeof JOB_NAMES.OTP_SEND | typeof JOB_NAMES.NOTIFICATION_DELIVERY
+>;
 export const MAINTENANCE_HANDLERS: Readonly<Record<MaintenanceJobName, string>> = Object.freeze({
   [JOB_NAMES.FILE_SWEEP]: 'fileSweeperJob',
   [JOB_NAMES.FILE_RETENTION]: 'fileRetentionJob',

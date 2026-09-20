@@ -4,11 +4,13 @@ import { describe, it } from 'node:test';
 import { hashRidePin } from '../../../src/modules/auth/utils/ride-pin.js';
 import { RidePinVerificationService } from '../../../src/modules/rides/services/pin/ride-pin-verification.service.js';
 import { RidePinThrottle } from '../../../src/modules/rides/services/pin/ride-pin-throttle.service.js';
+import { LifecycleService } from '../../../src/modules/rides/services/lifecycle/lifecycle.service.js';
 import {
   RidePinInvalidError,
   RidePinLockedError,
   RidePinThrottledError,
   RidePinUnavailableError,
+  RideDriverMismatchError,
 } from '../../../src/modules/rides/errors/ride.errors.js';
 import { ridePinConfig } from '../../../src/config/ride-pin/ride-pin.config.js';
 
@@ -292,5 +294,182 @@ describe('RidePinThrottle', () => {
       3,
       'the attempt count must outlive the rolled-back transaction',
     );
+  });
+});
+
+describe('Duplicate Ride PIN Customer-Binding & Concurrency Integration Test', () => {
+  function makeDuplicatePinWorld() {
+    const pin8274Hash = hashRidePin('8274');
+    const callsToFindRidePin: string[] = [];
+
+    const users = new Map<string, { verifier: string | null; version: number }>([
+      ['cust-A', { verifier: pin8274Hash, version: 1 }],
+      ['cust-B', { verifier: pin8274Hash, version: 1 }],
+    ]);
+
+    const rides = new Map<string, Record<string, unknown>>([
+      [
+        'ride-A',
+        { id: 'ride-A', customerId: 'cust-A', driverId: 'drv-A', status: 'DRIVER_ARRIVED' },
+      ],
+      [
+        'ride-B',
+        { id: 'ride-B', customerId: 'cust-B', driverId: 'drv-B', status: 'DRIVER_ARRIVED' },
+      ],
+    ]);
+
+    const userRepo = {
+      async findRidePin(id: string) {
+        callsToFindRidePin.push(id);
+        const u = users.get(id);
+        return u ? { ridePinVerifier: u.verifier, ridePinVersion: u.version } : null;
+      },
+    };
+
+    const verifierService = new RidePinVerificationService(
+      userRepo as never,
+      metricsSpy() as never,
+    );
+
+    const locks = new Map<string, Promise<void>>();
+    const rideRepo = {
+      async findById(id: string) {
+        return rides.get(id) ? { ...rides.get(id) } : null;
+      },
+      async lockForUpdate(id: string) {
+        const previous = locks.get(id) ?? Promise.resolve();
+        let release!: () => void;
+        locks.set(
+          id,
+          new Promise<void>((r) => {
+            release = r;
+          }),
+        );
+        await previous;
+        queueMicrotask(() => release());
+        return rides.get(id) ? { ...rides.get(id) } : null;
+      },
+      async updateStatusIf(
+        id: string,
+        expected: string,
+        next: string,
+        extra: Record<string, unknown> = {},
+      ) {
+        const ride = rides.get(id);
+        if (!ride || ride.status !== expected) return false;
+        rides.set(id, { ...ride, ...extra, status: next });
+        return true;
+      },
+    };
+
+    const statusEventRepo = { async record() {} };
+    const eventPublisher = { async publish() {} };
+    const rideMetrics = metricsSpy();
+    const redisService = fakeRedis();
+    const throttle = new RidePinThrottle(redisService as never, rideMetrics as never);
+    const txManager = {
+      async execute<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+        return fn({} as never);
+      },
+    };
+
+    const lifecycle = new LifecycleService(
+      rideRepo as never,
+      {} as never,
+      statusEventRepo as never,
+      {} as never,
+      verifierService,
+      throttle,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      txManager as never,
+      eventPublisher as never,
+      rideMetrics as never,
+      redisService as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    return { lifecycle, rides, users, callsToFindRidePin };
+  }
+
+  it('Customer A + 8274 (Ride A, Driver A) -> SUCCESS', async () => {
+    const world = makeDuplicatePinWorld();
+    const result = await world.lifecycle.startRide('ride-A', 'drv-A', '8274');
+    assert.equal(result.status, 'IN_PROGRESS');
+    assert.equal(world.rides.get('ride-A')?.status, 'IN_PROGRESS');
+    assert.deepEqual(world.callsToFindRidePin, ['cust-A']);
+  });
+
+  it('Customer B + 8274 (Ride B, Driver B) -> SUCCESS', async () => {
+    const world = makeDuplicatePinWorld();
+    const result = await world.lifecycle.startRide('ride-B', 'drv-B', '8274');
+    assert.equal(result.status, 'IN_PROGRESS');
+    assert.equal(world.rides.get('ride-B')?.status, 'IN_PROGRESS');
+    assert.deepEqual(world.callsToFindRidePin, ['cust-B']);
+  });
+
+  it('Driver A -> Ride B (Driver A not assigned to Ride B) -> DENIED', async () => {
+    const world = makeDuplicatePinWorld();
+    await assert.rejects(
+      () => world.lifecycle.startRide('ride-B', 'drv-A', '8274'),
+      (err: unknown) => err instanceof RideDriverMismatchError,
+    );
+    assert.equal(world.rides.get('ride-B')?.status, 'DRIVER_ARRIVED');
+  });
+
+  it('Driver B -> Ride A (Driver B not assigned to Ride A) -> DENIED', async () => {
+    const world = makeDuplicatePinWorld();
+    await assert.rejects(
+      () => world.lifecycle.startRide('ride-A', 'drv-B', '8274'),
+      (err: unknown) => err instanceof RideDriverMismatchError,
+    );
+    assert.equal(world.rides.get('ride-A')?.status, 'DRIVER_ARRIVED');
+  });
+
+  it('Wrong PIN for Customer A (Driver A submits 3916) -> DENIED, status unchanged', async () => {
+    const world = makeDuplicatePinWorld();
+    await assert.rejects(
+      () => world.lifecycle.startRide('ride-A', 'drv-A', '3916'),
+      (err: unknown) => err instanceof RidePinInvalidError,
+    );
+    assert.equal(world.rides.get('ride-A')?.status, 'DRIVER_ARRIVED');
+  });
+
+  it('Correct PIN for Customer A after wrong PIN attempt -> SUCCESS', async () => {
+    const world = makeDuplicatePinWorld();
+    await assert.rejects(
+      () => world.lifecycle.startRide('ride-A', 'drv-A', '3916'),
+      (err: unknown) => err instanceof RidePinInvalidError,
+    );
+    assert.equal(world.rides.get('ride-A')?.status, 'DRIVER_ARRIVED');
+
+    const result = await world.lifecycle.startRide('ride-A', 'drv-A', '8274');
+    assert.equal(result.status, 'IN_PROGRESS');
+    assert.equal(world.rides.get('ride-A')?.status, 'IN_PROGRESS');
+  });
+
+  it('Same ride concurrent start -> exactly one succeeds, database state remains valid IN_PROGRESS', async () => {
+    const world = makeDuplicatePinWorld();
+    const results = await Promise.allSettled([
+      world.lifecycle.startRide('ride-A', 'drv-A', '8274'),
+      world.lifecycle.startRide('ride-A', 'drv-A', '8274'),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+
+    assert.equal(fulfilled.length, 1);
+    assert.equal(rejected.length, 1);
+    assert.equal(world.rides.get('ride-A')?.status, 'IN_PROGRESS');
   });
 });

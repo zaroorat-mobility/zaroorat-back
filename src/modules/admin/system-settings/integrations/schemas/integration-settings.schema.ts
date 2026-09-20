@@ -39,10 +39,14 @@ export const paymentIntegrationTestSchema = z.object({
 });
 
 export const updateSmsSettingsSchema = z.object({
-  provider: z.enum(['mock', 'msg91']).optional(),
-  msg91AuthKey: z.string().optional(),
-  msg91SenderId: z.string().max(12).optional(),
-  msg91OtpTemplateId: z.string().optional(),
+  provider: z.enum(['mock', 'airtel']).optional(),
+  airtelApiKey: z.string().optional(),
+  airtelUsername: z.string().optional(),
+  airtelPassword: z.string().optional(),
+  airtelCustomerId: z.string().optional(),
+  airtelSenderId: z.string().max(12).optional(),
+  airtelEntityId: z.string().optional(),
+  airtelOtpTemplateId: z.string().optional(),
   timeoutMs: z.number().int().min(1000).max(30_000).optional(),
   expectedVersion: z.number().int().positive().optional(),
 });

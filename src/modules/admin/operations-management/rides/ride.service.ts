@@ -416,17 +416,6 @@ export class AdminRideService {
           orderBy: { sequence: 'asc' },
         },
         cancellation: true,
-        otps: {
-          select: {
-            id: true,
-            purpose: true,
-            verified: true,
-            verifiedAt: true,
-            attempts: true,
-            expiresAt: true,
-            createdAt: true,
-          },
-        },
         receipt: true,
         payments: {
           orderBy: { createdAt: 'desc' },

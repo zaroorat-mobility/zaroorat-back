@@ -28,7 +28,7 @@ const SECRETS = {
   refreshToken: 'refresh-abcdef',
   token: 'bearer-abcdef',
   authorization: 'Bearer abcdef',
-  authKey: 'msg91-secret-key',
+  authKey: 'airtel-secret-key',
   password: 'hunter2',
   body: 'Zaroorat: 123456 is your verification code.',
 };
@@ -79,7 +79,7 @@ describe('log redaction (REDACT_PATHS)', () => {
       {
         code: 'RATE_LIMITED',
         challengeId: '0199a0b1-0000-7000-8000-000000000001',
-        provider: 'msg91',
+        provider: 'airtel',
         requestId: 'req-7',
         recipient: '+9198765•••10',
         status: 503,
@@ -90,7 +90,7 @@ describe('log redaction (REDACT_PATHS)', () => {
     const line = lines[0] as Record<string, unknown>;
     assert.equal(line.code, 'RATE_LIMITED', 'domain error codes must stay readable');
     assert.equal(line.challengeId, '0199a0b1-0000-7000-8000-000000000001');
-    assert.equal(line.provider, 'msg91');
+    assert.equal(line.provider, 'airtel');
     assert.equal(line.requestId, 'req-7');
     assert.equal(line.status, 503);
     assert.equal(line.recipient, '+9198765•••10', 'an already-masked number stays legible');

@@ -25,7 +25,7 @@ describe('SMS provider selection (H-5)', () => {
     });
 
     it('still allows a real gateway in development', () => {
-      assert.equal(resolveSmsProviderName('development', 'msg91'), 'msg91');
+      assert.equal(resolveSmsProviderName('development', 'airtel'), 'airtel');
     });
   });
 
@@ -45,15 +45,15 @@ describe('SMS provider selection (H-5)', () => {
     });
 
     it('allows production + a real provider', () => {
-      assert.equal(resolveSmsProviderName('production', 'msg91'), 'msg91');
+      assert.equal(resolveSmsProviderName('production', 'airtel'), 'airtel');
     });
 
     it('allows staging + a real provider', () => {
-      assert.equal(resolveSmsProviderName('staging', 'msg91'), 'msg91');
+      assert.equal(resolveSmsProviderName('staging', 'airtel'), 'airtel');
     });
 
     it('defaults production to a real provider rather than falling back', () => {
-      assert.equal(resolveSmsProviderName('production', undefined), 'msg91');
+      assert.equal(resolveSmsProviderName('production', undefined), 'airtel');
     });
 
     it('names the environment and the provider, so the failure is self-explaining', () => {

@@ -1,13 +1,13 @@
 import { config } from '@config';
 import { MockProvider } from './providers/mock.provider';
-import { Msg91Provider } from '../../integrations/msg91/msg91.client.js';
+import { AirtelProvider } from '../../integrations/airtel/airtel.client.js';
 import { MockPushProvider } from './providers/mock-push.provider';
 import { FcmPushProvider } from '../../integrations/firebase/fcm-push.provider.js';
 import { initFcmApp } from '../../integrations/firebase/fcm-app.js';
 import type { SmsProvider } from './providers/sms.provider';
 import type { PushProvider } from './providers/push.provider';
 import type { DeviceRepository } from '../auth/repositories/device.repository.js';
-export type SmsProviderName = 'mock' | 'msg91';
+export type SmsProviderName = 'mock' | 'airtel';
 export type PushProviderName = 'mock' | 'fcm';
 const NON_DELIVERING_PROVIDERS: readonly SmsProviderName[] = Object.freeze(['mock']);
 const DELIVERY_REQUIRED_ENVIRONMENTS: readonly string[] = Object.freeze(['production', 'staging']);
@@ -34,9 +34,14 @@ export class SmsProviderNotDeliverableError extends Error {
 export interface NotificationConfig {
   smsProvider: SmsProviderName;
   otpTemplateId?: string;
-  msg91: {
-    authKey: string;
+  airtel: {
+    apiKey?: string;
+    username?: string;
+    password?: string;
+    customerId?: string;
     senderId?: string;
+    entityId?: string;
+    apiUrl?: string;
     timeoutMs: number;
   } | null;
   pushProvider: PushProviderName;
@@ -49,7 +54,7 @@ export function resolveSmsProviderName(
   const smsProvider: SmsProviderName = selected
     ? selected
     : DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment)
-      ? 'msg91'
+      ? 'airtel'
       : 'mock';
   if (
     DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment) &&
@@ -105,26 +110,47 @@ export function resolvePushProviderName(
 }
 export function getNotificationConfig(): NotificationConfig {
   const smsProvider = resolveSmsProviderName(config.app.environment, process.env.SMS_PROVIDER);
-  const authKey = process.env.MSG91_AUTH_KEY;
-  const senderId = process.env.MSG91_SENDER_ID;
+  const apiKey = process.env.AIRTEL_API_KEY;
+  const username = process.env.AIRTEL_USERNAME;
+  const password = process.env.AIRTEL_PASSWORD;
+  const customerId = process.env.AIRTEL_CUSTOMER_ID;
+  const senderId = process.env.AIRTEL_SENDER_ID;
+  const entityId = process.env.AIRTEL_ENTITY_ID;
+  const apiUrl = process.env.AIRTEL_API_URL;
   const timeoutMs = Number(process.env.SMS_TIMEOUT_MS ?? 5000);
-  const msg91 = authKey ? { authKey, timeoutMs, ...(senderId ? { senderId } : {}) } : null;
+  const hasAuth = Boolean(
+    (apiKey && apiKey.trim()) || (username && username.trim() && password && password.trim()),
+  );
+  const airtel = hasAuth
+    ? {
+        ...(apiKey ? { apiKey } : {}),
+        ...(username ? { username } : {}),
+        ...(password ? { password } : {}),
+        timeoutMs,
+        ...(apiUrl ? { apiUrl } : {}),
+        ...(customerId ? { customerId } : {}),
+        ...(senderId ? { senderId } : {}),
+        ...(entityId ? { entityId } : {}),
+      }
+    : null;
   const pushProvider = resolvePushProviderName(config.app.environment, process.env.PUSH_PROVIDER);
   return {
     smsProvider,
-    msg91,
+    airtel,
     pushProvider,
-    ...(process.env.MSG91_OTP_TEMPLATE_ID
-      ? { otpTemplateId: process.env.MSG91_OTP_TEMPLATE_ID }
+    ...(process.env.AIRTEL_OTP_TEMPLATE_ID
+      ? { otpTemplateId: process.env.AIRTEL_OTP_TEMPLATE_ID }
       : {}),
   };
 }
 export function createSmsProvider(notificationConfig: NotificationConfig): SmsProvider {
-  if (notificationConfig.smsProvider === 'msg91') {
-    if (!notificationConfig.msg91) {
-      throw new Error('SMS provider "msg91" selected but MSG91_AUTH_KEY is not configured');
+  if (notificationConfig.smsProvider === 'airtel') {
+    if (!notificationConfig.airtel) {
+      throw new Error(
+        'SMS provider "airtel" selected but Airtel credentials (AIRTEL_API_KEY or AIRTEL_USERNAME + AIRTEL_PASSWORD) are not configured',
+      );
     }
-    return new Msg91Provider(notificationConfig.msg91);
+    return new AirtelProvider(notificationConfig.airtel);
   }
   return new MockProvider();
 }

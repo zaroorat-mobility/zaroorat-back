@@ -1,5 +1,5 @@
 import type { TransactionManager } from '@core/database';
-import { Msg91Provider } from '../../../../../integrations/msg91/msg91.client.js';
+import { AirtelProvider } from '../../../../../integrations/airtel/airtel.client.js';
 import { maskSecret } from '@shared/crypto/encryption.util.js';
 import { SystemSettingService } from '../../services/system-setting.service.js';
 import { SystemSettingsCache } from '../../cache/system-settings.cache.js';
@@ -35,34 +35,51 @@ export class AdminSmsSettingsService {
     const provider = (settings.get(SMS_SETTING_KEYS.PROVIDER)?.value ??
       process.env.SMS_PROVIDER ??
       (process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'staging'
-        ? 'msg91'
+        ? 'airtel'
         : 'mock')) as SmsProviderName;
 
-    const authKey =
-      settings.get(SMS_SETTING_KEYS.MSG91_AUTH_KEY)?.value ?? process.env.MSG91_AUTH_KEY ?? '';
+    const apiKey =
+      settings.get(SMS_SETTING_KEYS.AIRTEL_API_KEY)?.value ?? process.env.AIRTEL_API_KEY ?? '';
+    const username =
+      settings.get(SMS_SETTING_KEYS.AIRTEL_USERNAME)?.value ?? process.env.AIRTEL_USERNAME ?? '';
+    const password =
+      settings.get(SMS_SETTING_KEYS.AIRTEL_PASSWORD)?.value ?? process.env.AIRTEL_PASSWORD ?? '';
+    const customerId =
+      settings.get(SMS_SETTING_KEYS.AIRTEL_CUSTOMER_ID)?.value ??
+      process.env.AIRTEL_CUSTOMER_ID ??
+      '';
     const senderId =
-      settings.get(SMS_SETTING_KEYS.MSG91_SENDER_ID)?.value ?? process.env.MSG91_SENDER_ID ?? '';
+      settings.get(SMS_SETTING_KEYS.AIRTEL_SENDER_ID)?.value ?? process.env.AIRTEL_SENDER_ID ?? '';
+    const entityId =
+      settings.get(SMS_SETTING_KEYS.AIRTEL_ENTITY_ID)?.value ?? process.env.AIRTEL_ENTITY_ID ?? '';
     const otpTemplateId =
-      settings.get(SMS_SETTING_KEYS.MSG91_OTP_TEMPLATE_ID)?.value ??
-      process.env.MSG91_OTP_TEMPLATE_ID ??
+      settings.get(SMS_SETTING_KEYS.AIRTEL_OTP_TEMPLATE_ID)?.value ??
+      process.env.AIRTEL_OTP_TEMPLATE_ID ??
       '';
     const timeoutMs = Number(
       settings.get(SMS_SETTING_KEYS.TIMEOUT_MS)?.value ?? process.env.SMS_TIMEOUT_MS ?? 5000,
     );
 
-    const msg91Configured = Boolean(authKey && authKey.trim().length > 0);
-    const configured = provider === 'mock' || msg91Configured;
+    const airtelConfigured = Boolean(
+      (apiKey && apiKey.trim().length > 0) ||
+      (username && username.trim().length > 0 && password && password.trim().length > 0),
+    );
+    const configured = provider === 'mock' || airtelConfigured;
 
     return {
       provider,
       configured,
       version: maxSettingVersion(settings),
-      msg91: {
-        authKey: maskSecret(authKey),
+      airtel: {
+        apiKey: maskSecret(apiKey),
+        username,
+        password: maskSecret(password),
+        customerId,
         senderId,
+        entityId,
         otpTemplateId,
         timeoutMs,
-        configured: msg91Configured,
+        configured: airtelConfigured,
       },
     };
   }
@@ -77,21 +94,38 @@ export class AdminSmsSettingsService {
     if (input.provider !== undefined) {
       entries.push({ key: SMS_SETTING_KEYS.PROVIDER, value: input.provider });
     }
-    if (input.msg91AuthKey !== undefined && !isMaskedSecret(input.msg91AuthKey)) {
+    if (input.airtelApiKey !== undefined && !isMaskedSecret(input.airtelApiKey)) {
       entries.push({
-        key: SMS_SETTING_KEYS.MSG91_AUTH_KEY,
-        value: input.msg91AuthKey,
+        key: SMS_SETTING_KEYS.AIRTEL_API_KEY,
+        value: input.airtelApiKey,
         isSecret: true,
         expectedVersion: input.expectedVersion,
       });
     }
-    if (input.msg91SenderId !== undefined) {
-      entries.push({ key: SMS_SETTING_KEYS.MSG91_SENDER_ID, value: input.msg91SenderId });
+    if (input.airtelUsername !== undefined) {
+      entries.push({ key: SMS_SETTING_KEYS.AIRTEL_USERNAME, value: input.airtelUsername });
     }
-    if (input.msg91OtpTemplateId !== undefined) {
+    if (input.airtelPassword !== undefined && !isMaskedSecret(input.airtelPassword)) {
       entries.push({
-        key: SMS_SETTING_KEYS.MSG91_OTP_TEMPLATE_ID,
-        value: input.msg91OtpTemplateId,
+        key: SMS_SETTING_KEYS.AIRTEL_PASSWORD,
+        value: input.airtelPassword,
+        isSecret: true,
+        expectedVersion: input.expectedVersion,
+      });
+    }
+    if (input.airtelCustomerId !== undefined) {
+      entries.push({ key: SMS_SETTING_KEYS.AIRTEL_CUSTOMER_ID, value: input.airtelCustomerId });
+    }
+    if (input.airtelSenderId !== undefined) {
+      entries.push({ key: SMS_SETTING_KEYS.AIRTEL_SENDER_ID, value: input.airtelSenderId });
+    }
+    if (input.airtelEntityId !== undefined) {
+      entries.push({ key: SMS_SETTING_KEYS.AIRTEL_ENTITY_ID, value: input.airtelEntityId });
+    }
+    if (input.airtelOtpTemplateId !== undefined) {
+      entries.push({
+        key: SMS_SETTING_KEYS.AIRTEL_OTP_TEMPLATE_ID,
+        value: input.airtelOtpTemplateId,
       });
     }
     if (input.timeoutMs !== undefined) {
@@ -120,11 +154,23 @@ export class AdminSmsSettingsService {
     const settings = await this.getSmsSettings();
     const provider = settings.provider;
 
-    const authKey =
-      (await this.systemSettingService.getSettingValue(SMS_SETTING_KEYS.MSG91_AUTH_KEY)) ??
-      process.env.MSG91_AUTH_KEY ??
+    const apiKey =
+      (await this.systemSettingService.getSettingValue(SMS_SETTING_KEYS.AIRTEL_API_KEY)) ??
+      process.env.AIRTEL_API_KEY ??
       '';
-    const timeoutMs = settings.msg91.timeoutMs;
+    const username =
+      (await this.systemSettingService.getSettingValue(SMS_SETTING_KEYS.AIRTEL_USERNAME)) ??
+      process.env.AIRTEL_USERNAME ??
+      '';
+    const password =
+      (await this.systemSettingService.getSettingValue(SMS_SETTING_KEYS.AIRTEL_PASSWORD)) ??
+      process.env.AIRTEL_PASSWORD ??
+      '';
+    const timeoutMs = settings.airtel.timeoutMs;
+    const hasAuth = Boolean(
+      (apiKey && apiKey.trim().length > 0) ||
+      (username && username.trim().length > 0 && password && password.trim().length > 0),
+    );
 
     const isTestEnv =
       process.env.NODE_ENV === 'test' ||
@@ -138,37 +184,38 @@ export class AdminSmsSettingsService {
     if (provider === 'mock') {
       ok = true;
       message = 'Mock SMS provider reachable (no delivery)';
-    } else if (!authKey || authKey.startsWith('invalid_') || authKey.startsWith('fail_')) {
+    } else if (!hasAuth) {
       ok = false;
-      message = 'MSG91 auth key is missing or invalid';
-      // Only the environment may short-circuit a connection check. Keying it on
-      // the shape of the credential meant a production MSG91 key beginning `test_`
-      // was reported reachable without any request ever leaving the process.
+      message = 'Airtel credentials (API Key or Username/Password) are missing or invalid';
     } else if (isTestEnv) {
       ok = true;
-      message = 'MSG91 connection check succeeded (test mode)';
+      message = 'Airtel connection check succeeded (test mode)';
     } else {
-      const client = new Msg91Provider({
-        authKey,
+      const client = new AirtelProvider({
+        ...(apiKey ? { apiKey } : {}),
+        ...(username ? { username } : {}),
+        ...(password ? { password } : {}),
         timeoutMs,
-        ...(settings.msg91.senderId ? { senderId: settings.msg91.senderId } : {}),
+        ...(settings.airtel.customerId ? { customerId: settings.airtel.customerId } : {}),
+        ...(settings.airtel.senderId ? { senderId: settings.airtel.senderId } : {}),
+        ...(settings.airtel.entityId ? { entityId: settings.airtel.entityId } : {}),
       });
 
-      if (input?.testPhone && settings.msg91.otpTemplateId) {
+      if (input?.testPhone && settings.airtel.otpTemplateId) {
         const result = await client.sendSms({
           to: input.testPhone,
           body: 'Test',
-          templateId: settings.msg91.otpTemplateId,
+          templateId: settings.airtel.otpTemplateId,
           variables: { otp: '123456' },
         });
         ok = result.accepted;
         message = result.accepted
-          ? 'Test SMS accepted by MSG91'
-          : (result.error ?? 'MSG91 test send failed');
+          ? 'Test SMS accepted by Airtel'
+          : (result.error ?? 'Airtel test send failed');
       } else {
         ok = true;
         message =
-          'MSG91 credentials validated (provide testPhone + otpTemplateId to send test SMS)';
+          'Airtel credentials validated (provide testPhone + otpTemplateId to send test SMS)';
       }
     }
 

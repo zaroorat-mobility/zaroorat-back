@@ -6,7 +6,7 @@ import type { PushMessage, PushProvider, PushSendResult } from './push.provider'
 /// finding: FCM tokens were collected and stored but never sent anywhere).
 /// This does not reach a device — it makes the call sites real so that a real
 /// provider (FCM, APNs) can be dropped in later behind `createPushProvider`
-/// exactly the way `Msg91Provider` already sits behind `createSmsProvider`,
+/// exactly the way `AirtelProvider` already sits behind `createSmsProvider`,
 /// without touching any of the code that decides *when* to notify.
 export class MockPushProvider implements PushProvider {
   readonly name = 'mock';
