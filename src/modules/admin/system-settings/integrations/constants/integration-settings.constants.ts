@@ -45,9 +45,13 @@ export const PAYMENT_GATEWAY_NAMES = ['mock', 'razorpay', 'stripe'] as const;
 
 export const SMS_SETTING_KEYS = {
   PROVIDER: 'sms.provider',
-  MSG91_AUTH_KEY: 'sms.msg91_auth_key',
-  MSG91_SENDER_ID: 'sms.msg91_sender_id',
-  MSG91_OTP_TEMPLATE_ID: 'sms.msg91_otp_template_id',
+  AIRTEL_API_KEY: 'sms.airtel_api_key',
+  AIRTEL_USERNAME: 'sms.airtel_username',
+  AIRTEL_PASSWORD: 'sms.airtel_password',
+  AIRTEL_CUSTOMER_ID: 'sms.airtel_customer_id',
+  AIRTEL_SENDER_ID: 'sms.airtel_sender_id',
+  AIRTEL_ENTITY_ID: 'sms.airtel_entity_id',
+  AIRTEL_OTP_TEMPLATE_ID: 'sms.airtel_otp_template_id',
   TIMEOUT_MS: 'sms.timeout_ms',
 } as const;
 

@@ -11,6 +11,7 @@ export const QUEUE_NAMES = Object.freeze({
   PAYMENTS_MAINTENANCE: 'payments-maintenance',
   SUBSCRIPTIONS_MAINTENANCE: 'subscriptions-maintenance',
   AUTH_OTP: 'auth-otp',
+  NOTIFICATIONS: 'notifications',
 } as const);
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 export const JOB_NAMES = Object.freeze({
@@ -32,6 +33,7 @@ export const JOB_NAMES = Object.freeze({
   REFERRAL_PENDING_REWARD_SWEEP: 'referral-pending-reward-sweep',
   SUBSCRIPTION_EXPIRY: 'subscription-expiry',
   OTP_SEND: 'otp-send',
+  NOTIFICATION_DELIVERY: 'notification-delivery',
 } as const);
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 export function createQueueConnection(): Redis {
@@ -48,6 +50,12 @@ export const OTP_JOB_OPTIONS: JobsOptions = Object.freeze({
   removeOnComplete: true,
   removeOnFail: { age: 3600 },
 });
+export const NOTIFICATION_JOB_OPTIONS: JobsOptions = Object.freeze({
+  attempts: 4,
+  backoff: { type: 'exponential', delay: 5000 },
+  removeOnComplete: { count: 1000 },
+  removeOnFail: { count: 5000 },
+});
 const open = new Map<QueueName, Queue>();
 function openQueue(name: QueueName, defaultJobOptions: JobsOptions): Queue {
   let queue = open.get(name);
@@ -63,6 +71,9 @@ export function maintenanceQueue(name: QueueName): Queue {
 export function otpQueue(): Queue {
   return openQueue(QUEUE_NAMES.AUTH_OTP, OTP_JOB_OPTIONS);
 }
+export function notificationsQueue(): Queue {
+  return openQueue(QUEUE_NAMES.NOTIFICATIONS, NOTIFICATION_JOB_OPTIONS);
+}
 export function filesMaintenanceQueue(): Queue {
   return maintenanceQueue(QUEUE_NAMES.FILES_MAINTENANCE);
 }
@@ -75,18 +86,24 @@ export function allQueueNames(): QueueName[] {
 
 export function resolveQueue(name: string): Queue | null {
   if (name === QUEUE_NAMES.AUTH_OTP) return otpQueue();
+  if (name === QUEUE_NAMES.NOTIFICATIONS) return notificationsQueue();
   if (!(Object.values(QUEUE_NAMES) as string[]).includes(name)) return null;
   return maintenanceQueue(name as QueueName);
 }
 
 export function allManagedQueues(): Array<{
-  name: QueueName | typeof QUEUE_NAMES.AUTH_OTP;
-  kind: 'maintenance' | 'otp';
+  name: QueueName;
+  kind: 'maintenance' | 'otp' | 'notifications';
 }> {
   return [
     ...Object.values(QUEUE_NAMES).map((name) => ({
       name,
-      kind: name === QUEUE_NAMES.AUTH_OTP ? ('otp' as const) : ('maintenance' as const),
+      kind:
+        name === QUEUE_NAMES.AUTH_OTP
+          ? ('otp' as const)
+          : name === QUEUE_NAMES.NOTIFICATIONS
+            ? ('notifications' as const)
+            : ('maintenance' as const),
     })),
   ];
 }

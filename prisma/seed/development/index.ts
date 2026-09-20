@@ -2117,18 +2117,6 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
       ],
     });
 
-    await prisma.rideOtp.create({
-      data: {
-        rideId,
-        otpHash: 'hashed_otp_4820',
-        purpose: 'START',
-        attempts: 1,
-        verified: true,
-        verifiedAt: startedAt,
-        expiresAt: new Date(startedAt.getTime() + 15 * 60 * 1000),
-      },
-    });
-
     // Update driver location in Srinagar
     await prisma.$executeRawUnsafe(
       `INSERT INTO driver_locations
@@ -2233,17 +2221,6 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
           createdAt: new Date(acceptedAt.getTime() + 1 * 60 * 1000),
         },
       ],
-    });
-
-    await prisma.rideOtp.create({
-      data: {
-        rideId,
-        otpHash: 'hashed_otp_9201',
-        purpose: 'START',
-        attempts: 0,
-        verified: false,
-        expiresAt: new Date(now.getTime() + 30 * 60 * 1000),
-      },
     });
   }
 

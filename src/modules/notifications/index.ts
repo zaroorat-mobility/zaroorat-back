@@ -5,14 +5,18 @@ import {
   createPushProvider,
 } from './notification.config';
 import { NotificationService } from './notification.service';
+import { NotificationRepository } from './repositories/notification.repository.js';
+import { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
 export type { SmsProvider, SmsMessage, SmsSendResult } from './providers/sms.provider';
 export type { PushProvider, PushMessage, PushSendResult } from './providers/push.provider';
 export type { EmailProvider, EmailMessage, EmailSendResult } from './providers/email.provider';
 export { MockProvider } from './providers/mock.provider';
 export { SmtpEmailProvider, type SmtpConfig } from './providers/smtp.provider.js';
-export { Msg91Provider, type Msg91Config } from '../../integrations/msg91/msg91.client.js';
+export { AirtelProvider, type AirtelConfig } from '../../integrations/airtel/airtel.client.js';
 export { MockPushProvider } from './providers/mock-push.provider';
 export { FcmPushProvider } from '../../integrations/firebase/fcm-push.provider.js';
+export { NotificationRepository } from './repositories/notification.repository.js';
+export { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
 export {
   getNotificationConfig,
   createSmsProvider,
@@ -29,6 +33,8 @@ export function registerNotificationModule(container: AwilixContainer): void {
     notificationConfig: asFunction(getNotificationConfig).singleton(),
     smsProvider: asFunction(createSmsProvider).singleton(),
     pushProvider: asFunction(createPushProvider).singleton(),
+    notificationRepository: asClass(NotificationRepository).singleton(),
+    notificationDeliveryJob: asClass(NotificationDeliveryJob).singleton(),
     notificationService: asClass(NotificationService).singleton(),
   });
 }

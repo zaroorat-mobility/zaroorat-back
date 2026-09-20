@@ -49,13 +49,13 @@ describe('OtpDeliveryJob', () => {
   it('records a successful delivery and emits auth.otp.sent', async () => {
     const { job, recorded, published, metricNames } = makeJob({
       accepted: true,
-      provider: 'msg91',
+      provider: 'airtel',
       providerRef: 'req-1',
     });
 
     const result = await job.run(data);
 
-    assert.deepEqual(result, { delivered: true, provider: 'msg91' });
+    assert.deepEqual(result, { delivered: true, provider: 'airtel' });
     assert.equal(recorded[0]?.outcome, 'sent');
     assert.equal(recorded[0]?.options.providerRef, 'req-1');
     assert.equal(published[0]?.type, 'auth.otp.sent');
@@ -65,7 +65,7 @@ describe('OtpDeliveryJob', () => {
   it('throws on a retryable failure so BullMQ schedules another attempt', async () => {
     const { job, recorded, metricNames } = makeJob({
       accepted: false,
-      provider: 'msg91',
+      provider: 'airtel',
       retryable: true,
       error: 'HTTP 503',
     });
@@ -78,14 +78,14 @@ describe('OtpDeliveryJob', () => {
   it('settles a terminal failure without throwing, since a retry cannot help', async () => {
     const { job, recorded } = makeJob({
       accepted: false,
-      provider: 'msg91',
+      provider: 'airtel',
       retryable: false,
       error: 'template rejected',
     });
 
     const result = await job.run(data);
 
-    assert.deepEqual(result, { delivered: false, provider: 'msg91' });
+    assert.deepEqual(result, { delivered: false, provider: 'airtel' });
     assert.equal(recorded[0]?.outcome, 'failed');
     assert.equal(recorded[0]?.options.failureReason, 'template rejected');
   });

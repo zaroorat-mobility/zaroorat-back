@@ -6,6 +6,7 @@ import { PrismaClientProvider } from '@core/database/client/PrismaClientProvider
 import { logger } from '@shared/logger/index.js';
 import { container } from '../core/di.js';
 import { startOtpWorker } from '../jobs/consumers/index.js';
+import { startNotificationWorker } from '../jobs/consumers/notification.consumer.js';
 import { closeQueues } from '../jobs/queues/index.js';
 import { startMaintenanceWorkers } from '../jobs/workers/index.js';
 import { bootstrapDatabase } from './database.bootstrap.js';
@@ -21,7 +22,11 @@ export async function startWorker(): Promise<Worker[]> {
     await bootstrapDatabase();
     await bootstrapRedis();
     await bootstrapQueue();
-    const workers: Worker[] = [...startMaintenanceWorkers(), startOtpWorker()];
+    const workers: Worker[] = [
+      ...startMaintenanceWorkers(),
+      startOtpWorker(),
+      startNotificationWorker(),
+    ];
     const health = await startWorkerHealthServer();
     registerWorkerShutdown(workers, health);
     logger.info(

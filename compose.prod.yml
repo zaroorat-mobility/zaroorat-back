@@ -7,7 +7,7 @@
 # Required:
 #   POSTGRES_PASSWORD  REDIS_PASSWORD  JWT_ACCESS_SECRET  JWT_REFRESH_SECRET
 #   PAYMENT_WEBHOOK_SECRET  STORAGE_BUCKET  STORAGE_QUARANTINE_BUCKET
-#   MSG91_AUTH_KEY  STORAGE_KMS_KEY_ID
+#   AIRTEL_API_KEY  STORAGE_KMS_KEY_ID
 # Optional (defaults shown in the interpolation):
 #   POSTGRES_USER  POSTGRES_DB  API_PORT  IMAGE_TAG
 #
@@ -45,13 +45,13 @@ x-app-env: &app-env
   # load or provider construction if its credentials are absent:
   #   payment.config.ts      -> gateway defaults to 'razorpay', demands a secret
   #   storage.config.ts      -> provider defaults to 's3', demands both buckets
-  #   notification.config.ts -> SMS defaults to 'msg91', demands an auth key
+  #   notification.config.ts -> SMS defaults to 'airtel', demands an API key
   # Verified by running the built image: it exits before Fastify starts.
   PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?required when APP_ENV=production (payment gateway defaults to razorpay)}
   STORAGE_BUCKET: ${STORAGE_BUCKET:?required when APP_ENV=production (storage provider defaults to s3)}
   # Must differ from STORAGE_BUCKET — unscanned uploads land here first.
   STORAGE_QUARANTINE_BUCKET: ${STORAGE_QUARANTINE_BUCKET:?required when APP_ENV=production and must differ from STORAGE_BUCKET}
-  MSG91_AUTH_KEY: ${MSG91_AUTH_KEY:?required when APP_ENV=production (SMS provider defaults to msg91)}
+  AIRTEL_API_KEY: ${AIRTEL_API_KEY:?required when APP_ENV=production (SMS provider defaults to airtel)}
   # ── Pass-through, defaulted ───────────────────────────────────────────
   PAYMENT_DEFAULT_GATEWAY: ${PAYMENT_DEFAULT_GATEWAY:-razorpay}
   RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
@@ -67,9 +67,11 @@ x-app-env: &app-env
   STORAGE_MALWARE_SCANNER: ${STORAGE_MALWARE_SCANNER:-guardduty}
   STORAGE_SSE: ${STORAGE_SSE:-aws:kms}
   STORAGE_KMS_KEY_ID: ${STORAGE_KMS_KEY_ID:?required unless STORAGE_MALWARE_SCANNER=disabled and STORAGE_SSE=AES256}
-  SMS_PROVIDER: ${SMS_PROVIDER:-msg91}
-  MSG91_SENDER_ID: ${MSG91_SENDER_ID:-}
-  MSG91_OTP_TEMPLATE_ID: ${MSG91_OTP_TEMPLATE_ID:-}
+  SMS_PROVIDER: ${SMS_PROVIDER:-airtel}
+  AIRTEL_CUSTOMER_ID: ${AIRTEL_CUSTOMER_ID:-}
+  AIRTEL_SENDER_ID: ${AIRTEL_SENDER_ID:-}
+  AIRTEL_ENTITY_ID: ${AIRTEL_ENTITY_ID:-}
+  AIRTEL_OTP_TEMPLATE_ID: ${AIRTEL_OTP_TEMPLATE_ID:-}
   # Pepper for OTP hashing. Rotating it invalidates every in-flight challenge.
   OTP_PEPPER: ${OTP_PEPPER:-}
   TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}

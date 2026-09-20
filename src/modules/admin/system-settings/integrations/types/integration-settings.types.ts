@@ -5,7 +5,7 @@ export type IntegrationHealthStatus = 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'DOWN
 // Cashfree is deliberately absent: not exposed or selectable for now.
 export type PaymentGatewayName = 'mock' | 'razorpay' | 'stripe';
 export type PaymentEnvironment = 'sandbox' | 'live';
-export type SmsProviderName = 'mock' | 'msg91';
+export type SmsProviderName = 'mock' | 'airtel';
 export type PushProviderName = 'mock';
 export type EmailProviderName = 'smtp';
 
@@ -61,9 +61,13 @@ export interface SmsSettingsView {
   provider: SmsProviderName;
   configured: boolean;
   version: number;
-  msg91: {
-    authKey: string;
+  airtel: {
+    apiKey: string;
+    username: string;
+    password: string;
+    customerId: string;
     senderId: string;
+    entityId: string;
     otpTemplateId: string;
     timeoutMs: number;
     configured: boolean;
@@ -72,9 +76,13 @@ export interface SmsSettingsView {
 
 export interface UpdateSmsSettingsBody {
   provider?: SmsProviderName;
-  msg91AuthKey?: string;
-  msg91SenderId?: string;
-  msg91OtpTemplateId?: string;
+  airtelApiKey?: string;
+  airtelUsername?: string;
+  airtelPassword?: string;
+  airtelCustomerId?: string;
+  airtelSenderId?: string;
+  airtelEntityId?: string;
+  airtelOtpTemplateId?: string;
   timeoutMs?: number;
   expectedVersion?: number;
 }

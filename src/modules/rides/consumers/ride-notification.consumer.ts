@@ -1,25 +1,23 @@
 import { EventBus, type EventEnvelope, type Unsubscribe } from '@core/events';
-import { NotificationService } from '@modules/notifications';
 import { DeviceRepository } from '@modules/auth/repositories/device.repository.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
+import { NotificationRepository } from '@modules/notifications';
+import { resolveNotificationPriority } from '@modules/notifications/policies/notification-priority.policy.js';
+import { notificationsQueue, JOB_NAMES } from '../../../jobs/queues/index.js';
 import { logger } from '@shared/logger/index.js';
 import { RideRepository } from '../repositories/ride.repository.js';
 import { RIDE_EVENT_CATALOG } from '../events/catalog.js';
 import { PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
-/// Every one of these events was already published — none of them had a
-/// consumer. This is the delivery half of the P1 finding "FCM tokens are
-/// collected and never read": it's the first and only reader of them.
-/// Delivery itself still goes through MockPushProvider (see
-/// notification.config.ts) until a real provider is configured — this class
-/// only owns *when* to notify, not *how* the bytes reach a device.
+
 export class RideNotificationConsumer {
   constructor(
     private readonly eventBus: EventBus,
     private readonly rideRepo: RideRepository,
     private readonly driverRepository: DriverRepository,
     private readonly deviceRepository: DeviceRepository,
-    private readonly notificationService: NotificationService,
+    private readonly notificationRepository: NotificationRepository,
   ) {}
+
   register(): Unsubscribe {
     const unsubscribes = [
       this.eventBus.on(RIDE_EVENT_CATALOG.DISPATCH_OFFERED, (e) => this.onDispatchOffered(e)),
@@ -44,17 +42,7 @@ export class RideNotificationConsumer {
         this.onRideEvent(e, 'Trip started', 'Your trip is now in progress.'),
       ),
       this.eventBus.on(RIDE_EVENT_CATALOG.COMPLETED, (e) => this.onCompleted(e)),
-      // The one terminal outcome with no ride behind it: the search ran out of
-      // time. Addressed by `customerId` straight from the payload, because
-      // there is no ride row to resolve a participant from.
       this.eventBus.on(RIDE_EVENT_CATALOG.REQUEST_EXPIRED, (e) => this.onRequestExpired(e)),
-      // Collection outcomes, which land after the ride is already over.
-      //
-      // `payment.ride.collected` only — never `payment.succeeded`. The two are
-      // not interchangeable: `succeeded` is instrument-level (an intent
-      // settled at the provider) and `collected` is obligation-level (a ride's
-      // debt is discharged). A card ride fires both, so subscribing to each
-      // would notify the rider twice for one payment.
       this.eventBus.on(PAYMENT_EVENT_CATALOG.RIDE_COLLECTED, (e) => this.onCollected(e)),
       this.eventBus.on(PAYMENT_EVENT_CATALOG.RIDE_COLLECTION_FAILED, (e) =>
         this.onCollectionFailed(e),
@@ -62,6 +50,7 @@ export class RideNotificationConsumer {
     ];
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }
+
   private async onDispatchOffered(envelope: EventEnvelope): Promise<void> {
     const data = envelope.data as { driverId?: string };
     if (!data.driverId) return;
@@ -72,11 +61,13 @@ export class RideNotificationConsumer {
       envelope,
     );
   }
+
   private async onRideEvent(envelope: EventEnvelope, title: string, body: string): Promise<void> {
     const data = envelope.data as { rideId?: string };
     if (!data.rideId) return;
     await this.pushToRideCustomer(data.rideId, title, body, envelope);
   }
+
   private async onCompleted(envelope: EventEnvelope): Promise<void> {
     const data = envelope.data as { rideId?: string; totalFare?: number };
     if (!data.rideId) return;
@@ -89,6 +80,7 @@ export class RideNotificationConsumer {
       envelope,
     );
   }
+
   private async onRequestExpired(envelope: EventEnvelope): Promise<void> {
     const data = envelope.data as { customerId?: string };
     if (!data.customerId) return;
@@ -103,6 +95,7 @@ export class RideNotificationConsumer {
       logger.warn({ err, customerId: data.customerId }, '[rides] failed to push-notify customer');
     }
   }
+
   private async onCollected(envelope: EventEnvelope): Promise<void> {
     const data = envelope.data as { rideId?: string; amount?: number };
     if (!data.rideId) return;
@@ -115,11 +108,6 @@ export class RideNotificationConsumer {
     );
   }
 
-  /// Only the attempt that gives up is worth a notification.
-  ///
-  /// A rider does not need to hear about each retry of a card the platform is
-  /// going to try again in five minutes; they need to hear when it has stopped
-  /// trying and the ball is in their court.
   private async onCollectionFailed(envelope: EventEnvelope): Promise<void> {
     const data = envelope.data as { rideId?: string; willRetry?: boolean };
     if (!data.rideId || data.willRetry !== false) return;
@@ -131,13 +119,10 @@ export class RideNotificationConsumer {
     );
   }
 
-  /// The de-duplication key. `RideRealtimeConsumer` puts this same outbox event
-  /// id on the socket message for the same domain fact, so a driver whose app
-  /// was backgrounded during an offer — and therefore got both a push and, on
-  /// reconnect, the socket event — can tell they are one thing rather than two.
   private dedupeData(envelope: EventEnvelope): Record<string, string> {
     return { eventId: envelope.eventId, eventType: envelope.type };
   }
+
   private async pushToDriver(
     driverId: string,
     title: string,
@@ -152,6 +137,7 @@ export class RideNotificationConsumer {
       logger.warn({ err, driverId }, '[rides] failed to push-notify driver');
     }
   }
+
   private async pushToRideCustomer(
     rideId: string,
     title: string,
@@ -166,14 +152,57 @@ export class RideNotificationConsumer {
       logger.warn({ err, rideId }, '[rides] failed to push-notify customer');
     }
   }
+
   private async pushToUser(
     userId: string,
     title: string,
     body: string,
     envelope: EventEnvelope,
   ): Promise<void> {
-    const fcmToken = await this.deviceRepository.findLatestFcmToken(userId);
-    if (!fcmToken) return;
-    await this.notificationService.sendPush(fcmToken, title, body, this.dedupeData(envelope));
+    try {
+      const idempotencyKey = `${envelope.eventId}:${envelope.type}:${userId}:PUSH`;
+      const priorityMapping = resolveNotificationPriority(envelope.type);
+      const rideId = (envelope.data as { rideId?: string })?.rideId ?? null;
+
+      const { notification, delivery, isDuplicate } =
+        await this.notificationRepository.createNotificationWithDelivery({
+          userId,
+          category: 'TRANSACTIONAL',
+          priority: priorityMapping.prismaPriority,
+          eventKey: envelope.type,
+          idempotencyKey,
+          title,
+          body,
+          data: this.dedupeData(envelope),
+          referenceType: rideId ? 'RIDE' : null,
+          referenceId: rideId,
+          channel: 'PUSH',
+        });
+
+      if (isDuplicate || !delivery) {
+        logger.info(
+          { idempotencyKey, userId, notificationId: notification.id },
+          '[rides] duplicate event notification skipped',
+        );
+        return;
+      }
+
+      await notificationsQueue().add(
+        JOB_NAMES.NOTIFICATION_DELIVERY,
+        {
+          notificationId: notification.id,
+          deliveryId: delivery.id,
+        },
+        {
+          jobId: notification.id,
+          priority: priorityMapping.bullMqPriority,
+        },
+      );
+    } catch (err) {
+      logger.warn(
+        { err, userId, eventId: envelope.eventId },
+        '[rides] failed to process/enqueue push notification',
+      );
+    }
   }
 }
