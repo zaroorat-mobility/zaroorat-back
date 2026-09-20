@@ -11,7 +11,10 @@ describe('NotificationDeliveryJob', () => {
     fcmToken?: string | null;
     pushResult?: { accepted: boolean; provider: string; providerRef?: string; error?: string };
   }) {
-    const deliveryUpdates: Array<{ id: string; input: unknown }> = [];
+    const deliveryUpdates: Array<{
+      id: string;
+      input: { status?: string; providerMessageId?: string; errorCode?: string };
+    }> = [];
     const notificationUpdates: Array<{ id: string; status: string }> = [];
 
     const notificationRepoStub = {
@@ -33,7 +36,10 @@ describe('NotificationDeliveryJob', () => {
           },
         };
       },
-      async updateDeliveryStatus(id: string, input: Record<string, unknown>) {
+      async updateDeliveryStatus(
+        id: string,
+        input: { status?: string; providerMessageId?: string; errorCode?: string },
+      ) {
         deliveryUpdates.push({ id, input });
         return { id, ...input };
       },
@@ -53,10 +59,16 @@ describe('NotificationDeliveryJob', () => {
 
     let pushCalled = false;
     const pushProviderStub: PushProvider = {
-      name: 'fcm',
+      name: 'mock',
       async sendPush() {
         pushCalled = true;
-        return opts.pushResult ?? { accepted: true, provider: 'fcm', providerRef: 'msg-fcm-999' };
+        return (
+          opts.pushResult ?? {
+            accepted: true,
+            provider: 'mock',
+            providerRef: 'mock-ref-123',
+          }
+        );
       },
     };
 
@@ -65,7 +77,7 @@ describe('NotificationDeliveryJob', () => {
     return { job, deliveryUpdates, notificationUpdates, wasPushCalled: () => pushCalled };
   }
 
-  it('delivers push successfully and updates status to SENT', async () => {
+  it('delivers push notification successfully and marks records SENT', async () => {
     const { job, deliveryUpdates, notificationUpdates, wasPushCalled } = makeStubs({
       pushResult: { accepted: true, provider: 'fcm', providerRef: 'msg-999' },
     });
@@ -78,11 +90,11 @@ describe('NotificationDeliveryJob', () => {
     assert.equal(wasPushCalled(), true);
 
     assert.equal(deliveryUpdates.length, 1);
-    assert.equal(deliveryUpdates[0].input.status, 'SENT');
-    assert.equal(deliveryUpdates[0].input.providerMessageId, 'msg-999');
+    assert.equal(deliveryUpdates[0]!.input.status, 'SENT');
+    assert.equal(deliveryUpdates[0]!.input.providerMessageId, 'msg-999');
 
     assert.equal(notificationUpdates.length, 1);
-    assert.equal(notificationUpdates[0].status, 'SENT');
+    assert.equal(notificationUpdates[0]!.status, 'SENT');
   });
 
   it('skips already terminal delivery (SENT)', async () => {
@@ -105,9 +117,9 @@ describe('NotificationDeliveryJob', () => {
     assert.equal(res.error, 'NO_ACTIVE_DEVICE');
     assert.equal(wasPushCalled(), false);
 
-    assert.equal(deliveryUpdates[0].input.status, 'FAILED');
-    assert.equal(deliveryUpdates[0].input.errorCode, 'NO_ACTIVE_DEVICE');
-    assert.equal(notificationUpdates[0].status, 'FAILED');
+    assert.equal(deliveryUpdates[0]!.input.status, 'FAILED');
+    assert.equal(deliveryUpdates[0]!.input.errorCode, 'NO_ACTIVE_DEVICE');
+    assert.equal(notificationUpdates[0]!.status, 'FAILED');
   });
 
   it('handles permanent invalid token failure without throwing', async () => {
@@ -125,8 +137,8 @@ describe('NotificationDeliveryJob', () => {
     assert.equal(res.error, 'messaging/registration-token-not-registered');
     assert.equal(wasPushCalled(), true);
 
-    assert.equal(deliveryUpdates[0].input.status, 'FAILED');
-    assert.equal(notificationUpdates[0].status, 'FAILED');
+    assert.equal(deliveryUpdates[0]!.input.status, 'FAILED');
+    assert.equal(notificationUpdates[0]!.status, 'FAILED');
   });
 
   it('throws Error on transient failure to trigger BullMQ retry', async () => {
@@ -140,6 +152,6 @@ describe('NotificationDeliveryJob', () => {
     );
 
     assert.equal(wasPushCalled(), true);
-    assert.equal(deliveryUpdates[0].input.errorCode, 'messaging/server-unavailable');
+    assert.equal(deliveryUpdates[0]!.input.errorCode, 'messaging/server-unavailable');
   });
 });

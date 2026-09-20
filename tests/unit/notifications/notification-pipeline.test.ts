@@ -85,22 +85,20 @@ describe('Notification Pipeline & Failure Isolation', () => {
       eventId: 'evt-unique-1',
       type: 'ride.accepted',
       producer: 'rides',
-      aggregateType: 'ride',
-      aggregateId: 'ride-100',
       occurredAt: new Date().toISOString(),
       data: { rideId: 'ride-100' },
-    };
+    } as unknown as EventEnvelope;
 
     // First event processing
-    await handler(envelope);
+    if (handler) await handler(envelope);
     assert.equal(createdNotifications.length, 1);
     assert.equal(
-      createdNotifications[0].idempotencyKey,
+      createdNotifications[0]!.idempotencyKey,
       'evt-unique-1:ride.accepted:cust-100:PUSH',
     );
 
     // Duplicate event re-delivery (same outbox eventId)
-    await handler(envelope);
+    if (handler) await handler(envelope);
     assert.equal(
       createdNotifications.length,
       1,
@@ -116,11 +114,9 @@ describe('Notification Pipeline & Failure Isolation', () => {
       eventId: 'evt-missing-ride',
       type: 'ride.accepted',
       producer: 'rides',
-      aggregateType: 'ride',
-      aggregateId: 'ride-missing',
       occurredAt: new Date().toISOString(),
       data: { rideId: 'ride-missing' },
-    };
+    } as unknown as EventEnvelope;
 
     // Should complete cleanly without throwing error (failure isolation)
     await assert.doesNotReject(async () => {
