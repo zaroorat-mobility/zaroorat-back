@@ -4,6 +4,7 @@ import { Prisma } from '../../../generated/prisma';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { Decimal, type Ride, type RideStatus } from '../types';
 import type { NewRidePaymentMethod } from '../constants/ride.constants.js';
+import { CLIENT_RIDE_INCLUDE } from '../presenters/ride-client.presenter.js';
 export interface CreateRideInput {
   requestId: string;
   customerId: string;
@@ -83,13 +84,8 @@ export class RideRepository {
     const client = tx ?? this.db.client;
     return client.ride.findUnique({
       where: { id },
-      include: {
-        fare: true,
-        cancellation: true,
-        statusEvents: true,
-        driver: { select: { userId: true } },
-      },
-    });
+      include: CLIENT_RIDE_INCLUDE,
+    }) as Promise<Ride | null>;
   }
   async findActiveByCustomer(customerId: string, tx?: TransactionClient): Promise<Ride | null> {
     const client = tx ?? this.db.client;
@@ -129,7 +125,8 @@ export class RideRepository {
       // A user should never have two, but if they somehow do, the one they most
       // recently became part of is the one they are asking about.
       orderBy: { createdAt: 'desc' },
-    });
+      include: CLIENT_RIDE_INCLUDE,
+    }) as Promise<Ride | null>;
   }
   async updateStatus(
     id: string,
