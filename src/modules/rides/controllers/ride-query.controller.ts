@@ -5,6 +5,7 @@ import { RideRepository } from '../repositories/ride.repository.js';
 import { ReceiptService } from '../services/receipt/receipt.service.js';
 import { RideNotFoundError } from '../errors/ride.errors.js';
 import { ridePartyIds } from '../types/ride-party.js';
+import { toClientRideView } from '../presenters/ride-client.presenter.js';
 const LIVE_TRACKING_STATUSES = new Set([
   'ACCEPTED',
   'DRIVER_ARRIVING',
@@ -26,7 +27,7 @@ export class RideQueryController {
   /// in one. One query over both sides needs no such guess.
   async getActive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const activeRide = await this.rideRepo.findActiveForUser(callerId(req));
-    return reply.send({ data: activeRide });
+    return reply.send({ data: toClientRideView(activeRide) });
   }
   async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as {
@@ -35,7 +36,7 @@ export class RideQueryController {
     const ride = await this.rideRepo.findById(id);
     if (!ride) throw new RideNotFoundError(id);
     assertRideParty(req, ridePartyIds(ride));
-    reply.send({ data: ride });
+    reply.send({ data: toClientRideView(ride) });
   }
   async getReceipt(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as {
@@ -62,7 +63,19 @@ export class RideQueryController {
       return;
     }
     const position = await this.geoService.liveDriverPosition(ride.driverId);
-    reply.send({ data: position });
+    if (!position) {
+      reply.send({ data: null });
+      return;
+    }
+    reply.send({
+      data: {
+        lat: position.latitude,
+        lng: position.longitude,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        recordedAt: position.updatedAt ?? null,
+      },
+    });
   }
   async listHistory(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const rides = await this.rideRepo.listCustomerRides(callerId(req));
