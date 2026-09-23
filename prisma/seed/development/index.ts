@@ -430,6 +430,9 @@ async function seedCities(prisma: Prisma) {
   const cities = [
     { code: 'SGR', name: 'Srinagar', state: 'Jammu & Kashmir' },
     { code: 'BLR', name: 'Bengaluru', state: 'Karnataka' },
+    { code: 'PNQ', name: 'Pune', state: 'Maharashtra' },
+    // Admin / live DBs often use PUN; seed both so either code gets coverage.
+    { code: 'PUN', name: 'Pune', state: 'Maharashtra' },
     { code: 'GLOBAL', name: 'All cities (global)', state: null as string | null },
   ];
   for (const city of cities) {
@@ -446,7 +449,7 @@ async function seedCities(prisma: Prisma) {
       },
     });
   }
-  console.log('  -> Seeded cities SGR, BLR, GLOBAL');
+  console.log('  -> Seeded cities SGR, BLR, PNQ, PUN, GLOBAL');
 }
 
 const SGR_BOUNDARY: number[][][] = [
@@ -469,6 +472,17 @@ const BLR_BOUNDARY: number[][][] = [
   ],
 ];
 
+/** Metro Pune — covers Shivajinagar, FC Road, Shaniwar Wada, Hinjewadi edge. */
+const PNQ_BOUNDARY: number[][][] = [
+  [
+    [73.7, 18.4],
+    [74.05, 18.4],
+    [74.05, 18.7],
+    [73.7, 18.7],
+    [73.7, 18.4],
+  ],
+];
+
 async function seedGeographicReference(prisma: Prisma) {
   const india = await prisma.country.upsert({
     where: { code: 'IN' },
@@ -479,6 +493,7 @@ async function seedGeographicReference(prisma: Prisma) {
   const stateSeeds = [
     { code: 'JK', name: 'Jammu & Kashmir' },
     { code: 'KA', name: 'Karnataka' },
+    { code: 'MH', name: 'Maharashtra' },
   ];
   const stateByName = new Map<string, string>();
   for (const s of stateSeeds) {
@@ -493,13 +508,19 @@ async function seedGeographicReference(prisma: Prisma) {
   const cityBoundaries: Record<string, { boundary: number[][][]; center: [number, number] }> = {
     SGR: { boundary: SGR_BOUNDARY, center: [74.85, 34.1] },
     BLR: { boundary: BLR_BOUNDARY, center: [77.5946, 12.9716] },
+    PNQ: { boundary: PNQ_BOUNDARY, center: [73.8567, 18.5204] },
+    PUN: { boundary: PNQ_BOUNDARY, center: [73.8567, 18.5204] },
   };
 
   for (const [code, geo] of Object.entries(cityBoundaries)) {
     const city = await prisma.city.findUnique({ where: { code } });
     if (!city) continue;
     const stateId =
-      code === 'SGR' ? stateByName.get('Jammu & Kashmir') : stateByName.get('Karnataka');
+      code === 'SGR'
+        ? stateByName.get('Jammu & Kashmir')
+        : code === 'PNQ' || code === 'PUN'
+          ? stateByName.get('Maharashtra')
+          : stateByName.get('Karnataka');
     await prisma.city.update({
       where: { id: city.id },
       data: {
@@ -516,108 +537,143 @@ async function seedGeographicReference(prisma: Prisma) {
       WHERE id = ${city.id}::uuid
     `;
   }
-  console.log('  -> Seeded country IN, states, city boundaries for SGR/BLR');
+  console.log('  -> Seeded country IN, states, city boundaries for SGR/BLR/PNQ/PUN');
 }
 
 async function seedServiceZones(prisma: Prisma) {
-  const sgr = await prisma.city.findUnique({ where: { code: 'SGR' } });
-  if (!sgr) return;
-
   const types = await prisma.vehicleType.findMany({ where: { isActive: true } });
 
-  const zones: Array<{
-    code: string;
-    name: string;
-    zoneType: 'SERVICE' | 'AIRPORT' | 'RESTRICTED';
-    coordinates: number[][][];
-    allowsPickup?: boolean;
+  const cityZones: Array<{
+    cityCode: string;
+    zones: Array<{
+      code: string;
+      name: string;
+      zoneType: 'SERVICE' | 'AIRPORT' | 'RESTRICTED';
+      coordinates: number[][][];
+      allowsPickup?: boolean;
+    }>;
   }> = [
     {
-      code: 'SGR_CITYWIDE',
-      name: 'Srinagar Citywide',
-      zoneType: 'SERVICE',
-      coordinates: SGR_BOUNDARY,
-    },
-    {
-      code: 'SGR_AIRPORT',
-      name: 'SGR Airport',
-      zoneType: 'AIRPORT',
-      coordinates: [
-        [
-          [74.76, 34.0],
-          [74.79, 34.0],
-          [74.79, 34.03],
-          [74.76, 34.03],
-          [74.76, 34.0],
-        ],
+      cityCode: 'SGR',
+      zones: [
+        {
+          code: 'SGR_CITYWIDE',
+          name: 'Srinagar Citywide',
+          zoneType: 'SERVICE',
+          coordinates: SGR_BOUNDARY,
+        },
+        {
+          code: 'SGR_AIRPORT',
+          name: 'SGR Airport',
+          zoneType: 'AIRPORT',
+          coordinates: [
+            [
+              [74.76, 34.0],
+              [74.79, 34.0],
+              [74.79, 34.03],
+              [74.76, 34.03],
+              [74.76, 34.0],
+            ],
+          ],
+        },
+        {
+          code: 'SGR_RESTRICTED_DEMO',
+          name: 'Restricted Demo Area',
+          zoneType: 'RESTRICTED',
+          coordinates: [
+            [
+              [74.72, 34.05],
+              [74.74, 34.05],
+              [74.74, 34.07],
+              [74.72, 34.07],
+              [74.72, 34.05],
+            ],
+          ],
+          allowsPickup: false,
+        },
       ],
     },
     {
-      code: 'SGR_RESTRICTED_DEMO',
-      name: 'Restricted Demo Area',
-      zoneType: 'RESTRICTED',
-      coordinates: [
-        [
-          [74.72, 34.05],
-          [74.74, 34.05],
-          [74.74, 34.07],
-          [74.72, 34.07],
-          [74.72, 34.05],
-        ],
+      cityCode: 'PNQ',
+      zones: [
+        {
+          code: 'PNQ_CITYWIDE',
+          name: 'Pune Citywide',
+          zoneType: 'SERVICE',
+          coordinates: PNQ_BOUNDARY,
+        },
       ],
-      allowsPickup: false,
+    },
+    {
+      cityCode: 'PUN',
+      zones: [
+        {
+          code: 'PUN_CITYWIDE',
+          name: 'Pune Citywide',
+          zoneType: 'SERVICE',
+          coordinates: PNQ_BOUNDARY,
+        },
+      ],
     },
   ];
 
-  for (const zone of zones) {
-    const existing = await prisma.serviceZone.findFirst({
-      where: { cityId: sgr.id, code: zone.code },
-    });
-    if (existing) {
-      await prisma.serviceZone.update({
-        where: { id: existing.id },
-        data: {
-          zoneType: zone.zoneType,
-          allowsPickup: zone.allowsPickup ?? true,
-        },
-      });
-      continue;
-    }
+  for (const { cityCode, zones } of cityZones) {
+    const city = await prisma.city.findUnique({ where: { code: cityCode } });
+    if (!city) continue;
 
-    const geoJson = JSON.stringify({ type: 'Polygon', coordinates: zone.coordinates });
-    const rows = await prisma.$queryRaw<Array<{ id: string }>>`
-      INSERT INTO service_zones (
-        id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at
-      )
-      VALUES (
-        gen_random_uuid(),
-        ${sgr.id}::uuid,
-        ${zone.code},
-        ${zone.name},
-        ${zone.zoneType}::"ServiceZoneType",
-        ST_GeomFromGeoJSON(${geoJson}),
-        ${zone.allowsPickup ?? true},
-        true,
-        true,
-        NOW(),
-        NOW()
-      )
-      RETURNING id
-    `;
-    const zoneId = rows[0]?.id;
-    if (zoneId && types.length > 0 && zone.zoneType !== 'RESTRICTED') {
-      for (const vt of types) {
-        await prisma.serviceZoneVehicleType.upsert({
-          where: {
-            serviceZoneId_vehicleTypeId: { serviceZoneId: zoneId, vehicleTypeId: vt.id },
-          },
-          create: { serviceZoneId: zoneId, vehicleTypeId: vt.id },
-          update: {},
-        });
+    for (const zone of zones) {
+      const existing = await prisma.serviceZone.findFirst({
+        where: { cityId: city.id, code: zone.code },
+      });
+      if (existing) {
+        const geoJson = JSON.stringify({ type: 'Polygon', coordinates: zone.coordinates });
+        await prisma.$executeRaw`
+          UPDATE service_zones
+          SET boundary = ST_GeomFromGeoJSON(${geoJson}),
+              zone_type = ${zone.zoneType}::"ServiceZoneType",
+              allows_pickup = ${zone.allowsPickup ?? true},
+              is_active = true,
+              updated_at = NOW()
+          WHERE id = ${existing.id}::uuid
+        `;
+        continue;
+      }
+
+      const geoJson = JSON.stringify({ type: 'Polygon', coordinates: zone.coordinates });
+      const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+        INSERT INTO service_zones (
+          id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at
+        )
+        VALUES (
+          gen_random_uuid(),
+          ${city.id}::uuid,
+          ${zone.code},
+          ${zone.name},
+          ${zone.zoneType}::"ServiceZoneType",
+          ST_GeomFromGeoJSON(${geoJson}),
+          ${zone.allowsPickup ?? true},
+          true,
+          true,
+          NOW(),
+          NOW()
+        )
+        RETURNING id
+      `;
+      const zoneId = rows[0]?.id;
+      if (zoneId && types.length > 0 && zone.zoneType !== 'RESTRICTED') {
+        for (const vt of types) {
+          await prisma.serviceZoneVehicleType.upsert({
+            where: {
+              serviceZoneId_vehicleTypeId: { serviceZoneId: zoneId, vehicleTypeId: vt.id },
+            },
+            create: { serviceZoneId: zoneId, vehicleTypeId: vt.id },
+            update: {},
+          });
+        }
       }
     }
   }
-  console.log('  -> Seeded service zones SGR_CITYWIDE, SGR_AIRPORT, SGR_RESTRICTED_DEMO');
+  console.log('  -> Seeded service zones SGR_*, PNQ_CITYWIDE, PUN_CITYWIDE');
 }
 
 async function seedPricingFixtures(prisma: Prisma) {

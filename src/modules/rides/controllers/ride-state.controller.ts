@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { DatabaseService } from '@core/database';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { RideService } from '../services/ride.service.js';
 import { RideDispatchRepository } from '../repositories/ride-dispatch.repository.js';
@@ -14,6 +15,7 @@ import {
   cancelRideSchema,
 } from '../schemas/ride.schemas.js';
 import { DriverNotFoundError } from '@modules/drivers/errors/driver.errors.js';
+import { toClientOfferView, toClientRideView } from '../presenters/ride-client.presenter.js';
 export class RideStateController {
   constructor(
     private readonly rideService: RideService,
@@ -21,6 +23,7 @@ export class RideStateController {
     private readonly dispatchRepo: RideDispatchRepository,
     private readonly dispatchService: DispatchService,
     private readonly rideRepo: RideRepository,
+    private readonly db: DatabaseService,
   ) {}
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
@@ -31,7 +34,26 @@ export class RideStateController {
   async listOffers(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
     const offers = await this.dispatchRepo.findPendingForDriver(driverId);
-    reply.send({ data: offers });
+    const customerIds = [
+      ...new Set(
+        offers
+          .map((o) => o.request?.customerId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ),
+    ];
+    const profiles =
+      customerIds.length === 0
+        ? []
+        : await this.db.client.userProfile.findMany({
+            where: { userId: { in: customerIds } },
+            select: { userId: true, firstName: true, lastName: true },
+          });
+    const customerById = new Map(
+      profiles.map((p) => [p.userId, { firstName: p.firstName, lastName: p.lastName }]),
+    );
+    reply.send({
+      data: offers.map((offer) => toClientOfferView(offer, customerById)),
+    });
   }
   async accept(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -41,7 +63,11 @@ export class RideStateController {
       driverId,
       vehicleId: body.vehicleId,
     });
-    reply.send({ data: result });
+    // Re-fetch enriched ride so the driver app gets customer name immediately.
+    const enriched = result?.ride?.id ? await this.rideRepo.findById(result.ride.id) : null;
+    reply.send({
+      data: enriched ? { ...result, ride: toClientRideView(enriched) } : result,
+    });
   }
   /// Declining an offer, so the next drivers are asked immediately instead of
   /// a timeout window later. The dispatch id comes from the path; ownership is
