@@ -2,8 +2,15 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
 import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
 import { RideService } from '../services/ride.service.js';
-import { quoteFareSchema, createRideRequestSchema } from '../schemas/ride.schemas.js';
+import {
+  quoteFareSchema,
+  createRideRequestSchema,
+  boostRequestSchema,
+  changeDestinationQuoteSchema,
+  confirmDestinationSchema,
+} from '../schemas/ride.schemas.js';
 import { RIDE_REQUEST_IDEMPOTENCY_TTL_SECONDS } from '../constants/ride.constants.js';
+import { toClientRideRequestView } from '../presenters/ride-client.presenter.js';
 export class RideRequestController {
   constructor(
     private readonly rideService: RideService,
@@ -23,6 +30,15 @@ export class RideRequestController {
       ...(body.dropLng !== undefined ? { dropLng: body.dropLng } : {}),
       ...(body.promoCode !== undefined ? { promoCode: body.promoCode } : {}),
       ...(body.cityCode !== undefined ? { cityCode: body.cityCode } : {}),
+      ...(body.stops !== undefined
+        ? {
+            stops: body.stops.map((s) => ({
+              lat: s.lat,
+              lng: s.lng,
+              ...(s.address !== undefined ? { address: s.address } : {}),
+            })),
+          }
+        : {}),
       ...(userId !== undefined ? { userId } : {}),
     });
     reply.send({ data: quote });
@@ -42,6 +58,20 @@ export class RideRequestController {
         ...(body.dropAddress !== undefined ? { dropAddress: body.dropAddress } : {}),
         ...(body.paymentMethod !== undefined ? { paymentMethod: body.paymentMethod } : {}),
         ...(body.promoCode !== undefined ? { promoCode: body.promoCode } : {}),
+        ...(body.stops !== undefined
+          ? {
+              stops: body.stops.map((s) => ({
+                lat: s.lat,
+                lng: s.lng,
+                ...(s.address !== undefined ? { address: s.address } : {}),
+              })),
+            }
+          : {}),
+        ...(body.passengerName !== undefined ? { passengerName: body.passengerName } : {}),
+        ...(body.passengerPhone !== undefined ? { passengerPhone: body.passengerPhone } : {}),
+        ...(body.pickupNotes !== undefined ? { pickupNotes: body.pickupNotes } : {}),
+        ...(body.scheduledFor !== undefined ? { scheduledFor: body.scheduledFor } : {}),
+        ...(body.boostAmount !== undefined ? { boostAmount: body.boostAmount } : {}),
       });
     // Optional, unlike payments' mandatory Idempotency-Key: a client retrying
     // a timed-out POST /rides/requests with the same key gets back the
@@ -58,10 +88,51 @@ export class RideRequestController {
       : await create();
     reply.send({ data: request });
   }
+  async getActiveRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const request = await this.rideService.request.getActiveRequest(callerId(req));
+    reply.send({ data: toClientRideRequestView(request) });
+  }
+
+  async getRequestById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as { id: string };
+    const request = await this.rideService.request.getRequestForCustomer(id, callerId(req));
+    reply.send({ data: toClientRideRequestView(request) });
+  }
+
   async cancelRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const customerId = callerId(req);
     const { id } = req.params as { id: string };
     const request = await this.rideService.request.cancelRequest(id, customerId);
     reply.send({ data: request });
+  }
+  async boostRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const customerId = callerId(req);
+    const { id } = req.params as { id: string };
+    const body = boostRequestSchema.parse(req.body);
+    const result = await this.rideService.request.boostRequest(id, customerId, body.boostAmount);
+    reply.send({ data: result });
+  }
+  async quoteDestination(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const customerId = callerId(req);
+    const { id } = req.params as { id: string };
+    const body = changeDestinationQuoteSchema.parse(req.body);
+    const quote = await this.rideService.request.quoteDestinationChange(id, customerId, {
+      dropLat: body.dropLat,
+      dropLng: body.dropLng,
+      ...(body.dropAddress !== undefined ? { dropAddress: body.dropAddress } : {}),
+    });
+    reply.send({ data: quote });
+  }
+  async confirmDestination(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const customerId = callerId(req);
+    const { id } = req.params as { id: string };
+    const body = confirmDestinationSchema.parse(req.body);
+    const result = await this.rideService.request.confirmDestinationChange(id, customerId, {
+      dropLat: body.dropLat,
+      dropLng: body.dropLng,
+      ...(body.dropAddress !== undefined ? { dropAddress: body.dropAddress } : {}),
+      ...(body.expectedFare !== undefined ? { expectedFare: body.expectedFare } : {}),
+    });
+    reply.send({ data: result });
   }
 }

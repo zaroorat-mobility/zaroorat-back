@@ -380,6 +380,33 @@ export class PricingService {
     };
   }
 
+  /// A multi-stop journey, priced as the sum of its legs
+  /// (pickup → stop₁ → … → drop). Each leg is a separate directions call so a
+  /// detour through a stop is billed as driven, not as the straight pickup→drop
+  /// route. With only two points this is exactly `estimateTrip`.
+  async estimateRoute(points: ReadonlyArray<{ lat: number; lng: number }>): Promise<TripEstimate> {
+    if (points.length < 2) {
+      throw new Error('A route needs at least a pickup and a drop');
+    }
+    let distanceKm = 0;
+    let durationMin = 0;
+    let source = '';
+    for (let i = 1; i < points.length; i++) {
+      const from = points[i - 1]!;
+      const to = points[i]!;
+      const leg = await this.estimateTrip({
+        pickupLat: from.lat,
+        pickupLng: from.lng,
+        dropLat: to.lat,
+        dropLng: to.lng,
+      });
+      distanceKm += leg.distanceKm;
+      durationMin += leg.durationMin;
+      source ||= leg.source;
+    }
+    return { distanceKm: money(distanceKm), durationMin, source };
+  }
+
   async calculateFareQuote(params: FareCalculationParams): Promise<ItemizedFareResult> {
     const hasDrop = params.dropLat != null && params.dropLng != null;
     if (!hasDrop) {

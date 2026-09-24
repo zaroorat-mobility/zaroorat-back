@@ -1,7 +1,8 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { EventPublisher } from '@core/events';
-import { RideError } from '../../errors/ride.errors.js';
+import { RideCustomerMismatchError, RideError } from '../../errors/ride.errors.js';
+import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 
 export class ScheduledRideNotFoundError extends RideError {
@@ -18,11 +19,115 @@ export class ScheduledRideConflictError extends RideError {
   }
 }
 
+const CUSTOMER_OPEN_STATUSES = ['SCHEDULED', 'OFFERED', 'ACCEPTED'];
+const CUSTOMER_CANCELLED_STATUSES = ['CANCELLED', 'DECLINED'];
+
 export class ScheduledRideService {
   constructor(
     private readonly db: DatabaseService,
     private readonly eventPublisher: EventPublisher,
+    private readonly dispatchRepo: RideDispatchRepository,
   ) {}
+
+  async listForCustomer(customerId: string, options: { includeCancelled?: boolean } = {}) {
+    const statuses = options.includeCancelled
+      ? [...CUSTOMER_OPEN_STATUSES, ...CUSTOMER_CANCELLED_STATUSES]
+      : CUSTOMER_OPEN_STATUSES;
+    const rows = await this.db.client.scheduledRide.findMany({
+      where: { customerId, status: { in: statuses } },
+      include: {
+        request: {
+          select: {
+            id: true,
+            vehicleTypeId: true,
+            pickupAddress: true,
+            pickupLat: true,
+            pickupLng: true,
+            dropAddress: true,
+            dropLat: true,
+            dropLng: true,
+            quotedFare: true,
+            boostAmount: true,
+            paymentMethod: true,
+            passengerName: true,
+            passengerPhone: true,
+            pickupNotes: true,
+            stops: {
+              select: { sequence: true, lat: true, lng: true, address: true },
+              orderBy: { sequence: 'asc' },
+            },
+          },
+        },
+      },
+      orderBy: { scheduledFor: 'asc' },
+      take: 50,
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      requestId: row.requestId,
+      status: row.status,
+      scheduledFor: row.scheduledFor.toISOString(),
+      driverAssigned: row.driverId != null,
+      rideId: row.rideId,
+      vehicleTypeId: row.request.vehicleTypeId,
+      pickupAddress: row.request.pickupAddress,
+      pickupLat: Number(row.request.pickupLat),
+      pickupLng: Number(row.request.pickupLng),
+      dropAddress: row.request.dropAddress,
+      dropLat: row.request.dropLat != null ? Number(row.request.dropLat) : null,
+      dropLng: row.request.dropLng != null ? Number(row.request.dropLng) : null,
+      quotedFare: row.request.quotedFare != null ? Number(row.request.quotedFare) : null,
+      boostAmount: row.request.boostAmount != null ? Number(row.request.boostAmount) : null,
+      paymentMethod: row.request.paymentMethod,
+      passengerName: row.request.passengerName,
+      passengerPhone: row.request.passengerPhone,
+      pickupNotes: row.request.pickupNotes,
+      stops: row.request.stops.map((stop) => ({
+        sequence: stop.sequence,
+        latitude: Number(stop.lat),
+        longitude: Number(stop.lng),
+        address: stop.address,
+      })),
+    }));
+  }
+
+  /// Cancels the booking and the request behind it. The status claim is
+  /// conditional so a driver accepting at the same moment cannot be silently
+  /// overwritten — one of the two gets SCHEDULED_RIDE_CONFLICT.
+  async cancelForCustomer(scheduledId: string, customerId: string) {
+    return this.db.client.$transaction(async (tx) => {
+      const row = await tx.scheduledRide.findUnique({ where: { id: scheduledId } });
+      if (!row) throw new ScheduledRideNotFoundError(scheduledId);
+      if (row.customerId !== customerId) throw new RideCustomerMismatchError(scheduledId);
+      if (!CUSTOMER_OPEN_STATUSES.includes(row.status)) {
+        throw new ScheduledRideConflictError(
+          `Cannot cancel scheduled ride in status ${row.status}`,
+        );
+      }
+      const { count } = await tx.scheduledRide.updateMany({
+        where: { id: scheduledId, status: row.status },
+        data: { status: 'CANCELLED' },
+      });
+      if (count !== 1) {
+        throw new ScheduledRideConflictError('Scheduled ride changed while cancelling');
+      }
+      await tx.rideRequest.updateMany({
+        where: { id: row.requestId, status: { in: ['CREATED', 'SEARCHING'] } },
+        data: { status: 'ABANDONED' },
+      });
+      await this.dispatchRepo.cancelAllPendingForRequest(row.requestId, tx);
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.SCHEDULED_CANCELLED, scheduledId, {
+          scheduledRideId: scheduledId,
+          requestId: row.requestId,
+          customerId,
+          driverId: row.driverId,
+        }),
+        tx,
+      );
+      return { id: scheduledId, status: 'CANCELLED' };
+    });
+  }
 
   async listForDriver(driverId: string) {
     const now = new Date();

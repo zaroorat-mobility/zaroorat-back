@@ -284,6 +284,63 @@ export class PromotionsUnavailableError extends RideError {
   }
 }
 
+export class ScheduledTooSoonError extends RideError {
+  constructor(minLeadMinutes: number) {
+    super(
+      `A scheduled ride must be at least ${minLeadMinutes} minutes from now`,
+      'SCHEDULED_TOO_SOON',
+      422,
+      { minLeadMinutes },
+    );
+    this.name = 'ScheduledTooSoonError';
+  }
+}
+export class RideRequestNotBoostableError extends RideError {
+  constructor(status: string) {
+    super(`Cannot boost a ride request in status ${status}`, 'RIDE_REQUEST_NOT_BOOSTABLE', 409);
+    this.name = 'RideRequestNotBoostableError';
+  }
+}
+export class DestinationChangeNotAllowedError extends RideError {
+  constructor(status: string) {
+    super(
+      `Destination cannot be changed while the ride is ${status}`,
+      'DESTINATION_CHANGE_NOT_ALLOWED',
+      409,
+    );
+    this.name = 'DestinationChangeNotAllowedError';
+  }
+}
+export class DestinationFareChangedError extends RideError {
+  constructor(expectedFare: number, newFare: number) {
+    super(
+      'The fare for this destination has changed; quote it again',
+      'DESTINATION_FARE_CHANGED',
+      409,
+      { expectedFare, newFare },
+    );
+    this.name = 'DestinationFareChangedError';
+  }
+}
+export class SosNotAllowedError extends RideError {
+  constructor(status: string) {
+    super(`SOS cannot be raised on a ride in status ${status}`, 'SOS_NOT_ALLOWED', 409);
+    this.name = 'SosNotAllowedError';
+  }
+}
+export class RideNotShareableError extends RideError {
+  constructor(status: string) {
+    super(`A ride in status ${status} cannot be shared`, 'RIDE_NOT_SHAREABLE', 409);
+    this.name = 'RideNotShareableError';
+  }
+}
+export class ShareLinkNotFoundError extends RideError {
+  constructor() {
+    super('This trip link is invalid or has expired', 'SHARE_LINK_NOT_FOUND', 404);
+    this.name = 'ShareLinkNotFoundError';
+  }
+}
+
 /// D1. A new ride may only be booked as CASH, UPI or CARD. Rides booked before
 /// that rule keep working — this refuses the booking, never the processing of
 /// an existing WALLET ride.

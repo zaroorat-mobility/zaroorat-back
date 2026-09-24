@@ -4,6 +4,7 @@ import { RideQueryController } from './ride-query.controller.js';
 import {
   RideCallController,
   RideChatController,
+  RideSafetyController,
   RideScheduledController,
 } from './ride-comms.controller.js';
 
@@ -15,5 +16,6 @@ export class RideController {
     public readonly chat: RideChatController,
     public readonly call: RideCallController,
     public readonly scheduled: RideScheduledController,
+    public readonly safety: RideSafetyController,
   ) {}
 }

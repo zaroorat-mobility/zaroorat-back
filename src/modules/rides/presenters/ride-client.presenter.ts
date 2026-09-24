@@ -34,9 +34,25 @@ type VehicleInput = {
   vehicleType?: VehicleTypeInput | null;
 };
 
+type RideStopInput = {
+  sequence?: number;
+  stopType?: string;
+  address?: string | null;
+  lat?: unknown;
+  lng?: unknown;
+};
+
+type RideRequestStopInput = {
+  sequence?: number;
+  address?: string | null;
+  lat?: unknown;
+  lng?: unknown;
+};
+
 type RideRequestInput = {
   id?: string;
   customerId?: string;
+  status?: string | null;
   pickupLat?: unknown;
   pickupLng?: unknown;
   dropLat?: unknown;
@@ -44,10 +60,20 @@ type RideRequestInput = {
   pickupAddress?: string | null;
   dropAddress?: string | null;
   quotedFare?: unknown;
+  boostAmount?: unknown;
   paymentMethod?: string | null;
+  promoCode?: string | null;
   estimatedDistanceKm?: unknown;
   estimatedDurationMin?: number | null;
   vehicleTypeId?: string | null;
+  passengerName?: string | null;
+  passengerPhone?: string | null;
+  pickupNotes?: string | null;
+  scheduledFor?: Date | string | null;
+  createdAt?: Date | string | null;
+  expiresAt?: Date | string | null;
+  vehicleType?: VehicleTypeInput | null;
+  stops?: RideRequestStopInput[] | null;
 };
 
 type RideInput = {
@@ -63,6 +89,9 @@ type RideInput = {
   paymentStatus?: string | null;
   pickupAddress?: string | null;
   dropAddress?: string | null;
+  passengerName?: string | null;
+  passengerPhone?: string | null;
+  pickupNotes?: string | null;
   acceptedAt?: Date | string | null;
   arrivedAt?: Date | string | null;
   startedAt?: Date | string | null;
@@ -75,6 +104,7 @@ type RideInput = {
   vehicle?: VehicleInput | null;
   vehicleType?: VehicleTypeInput | null;
   request?: RideRequestInput | null;
+  stops?: RideStopInput[] | null;
 };
 
 type OfferInput = {
@@ -194,13 +224,96 @@ export const CLIENT_RIDE_INCLUDE = {
       pickupAddress: true,
       dropAddress: true,
       quotedFare: true,
+      boostAmount: true,
       paymentMethod: true,
       estimatedDistanceKm: true,
       estimatedDurationMin: true,
       vehicleTypeId: true,
+      passengerName: true,
+      passengerPhone: true,
+      pickupNotes: true,
+      stops: {
+        select: { sequence: true, lat: true, lng: true, address: true },
+        orderBy: { sequence: 'asc' as const },
+      },
     },
   },
+  stops: {
+    select: { sequence: true, stopType: true, address: true },
+    orderBy: { sequence: 'asc' as const },
+  },
 } as const;
+
+function mapStops(stops: RideRequestStopInput[] | RideStopInput[] | null | undefined): Array<{
+  sequence: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  address: string | null;
+  stopType?: string | null;
+}> {
+  if (!stops?.length) return [];
+  return stops.map((stop) => ({
+    sequence: stop.sequence ?? null,
+    latitude: dec((stop as RideRequestStopInput).lat),
+    longitude: dec((stop as RideRequestStopInput).lng),
+    address: stop.address ?? null,
+    ...('stopType' in stop ? { stopType: stop.stopType ?? null } : {}),
+  }));
+}
+
+/** Shared Prisma include for customer-facing pending request reads. */
+export const CLIENT_REQUEST_INCLUDE = {
+  vehicleType: { select: { id: true, name: true, code: true } },
+  stops: {
+    select: { sequence: true, lat: true, lng: true, address: true },
+    orderBy: { sequence: 'asc' as const },
+  },
+} as const;
+
+export function toClientRideRequestView(
+  request: RideRequestInput | null | undefined,
+): Record<string, unknown> | null {
+  if (!request?.id) return null;
+
+  const quotedFare = dec(request.quotedFare);
+  const boostAmount = dec(request.boostAmount);
+  const totalOffered = quotedFare != null ? quotedFare + (boostAmount ?? 0) : null;
+  const vehicleType = request.vehicleType ?? null;
+
+  return {
+    id: request.id,
+    customerId: request.customerId ?? null,
+    status: request.status ?? null,
+    vehicleTypeId: request.vehicleTypeId ?? null,
+    vehicleType: vehicleType
+      ? {
+          id: vehicleType.id,
+          name: vehicleType.name,
+          code: vehicleType.code,
+        }
+      : null,
+    pickupLat: dec(request.pickupLat),
+    pickupLng: dec(request.pickupLng),
+    dropLat: dec(request.dropLat),
+    dropLng: dec(request.dropLng),
+    pickupAddress: request.pickupAddress ?? null,
+    dropAddress: request.dropAddress ?? null,
+    quotedFare,
+    boostAmount,
+    totalOffered,
+    paymentMethod: request.paymentMethod ?? null,
+    promoCode: request.promoCode ?? null,
+    estimatedDistanceKm: dec(request.estimatedDistanceKm),
+    estimatedDurationMin: request.estimatedDurationMin ?? null,
+    passengerName: request.passengerName ?? null,
+    passengerPhone: request.passengerPhone ?? null,
+    pickupNotes: request.pickupNotes ?? null,
+    stops: mapStops(request.stops),
+    createdAt: request.createdAt ?? null,
+    expiresAt: request.expiresAt ?? null,
+    scheduledFor: request.scheduledFor ?? null,
+  };
+}
 
 export function toClientRideView(
   ride: RideInput | null | undefined,
@@ -212,9 +325,13 @@ export function toClientRideView(
   const pickupLng = dec(req?.pickupLng);
   const dropLat = dec(req?.dropLat);
   const dropLng = dec(req?.dropLng);
+  const quotedFare = dec(req?.quotedFare);
+  const boostAmount = dec(req?.boostAmount);
+  const totalOffered = quotedFare != null ? quotedFare + (boostAmount ?? 0) : null;
   const driver = driverDisplayProfile(ride.driver);
   const customer = customerDisplayProfile(ride.customer);
   const vehicleType = ride.vehicleType ?? ride.vehicle?.vehicleType ?? null;
+  const stops = mapStops(req?.stops?.length ? req.stops : undefined);
 
   return {
     id: ride.id,
@@ -233,6 +350,12 @@ export function toClientRideView(
     pickupLng,
     dropLat,
     dropLng,
+    passengerName: ride.passengerName ?? req?.passengerName ?? null,
+    passengerPhone: ride.passengerPhone ?? req?.passengerPhone ?? null,
+    pickupNotes: ride.pickupNotes ?? req?.pickupNotes ?? null,
+    boostAmount,
+    totalOffered,
+    stops,
     acceptedAt: ride.acceptedAt,
     arrivedAt: ride.arrivedAt,
     startedAt: ride.startedAt,
@@ -265,9 +388,15 @@ export function toClientRideView(
           pickupLng,
           dropLat,
           dropLng,
-          quotedFare: dec(req.quotedFare),
+          quotedFare,
+          boostAmount,
+          totalOffered,
           estimatedDistanceKm: dec(req.estimatedDistanceKm),
           estimatedDurationMin: req.estimatedDurationMin ?? null,
+          passengerName: req.passengerName ?? null,
+          passengerPhone: req.passengerPhone ?? null,
+          pickupNotes: req.pickupNotes ?? null,
+          stops: mapStops(req.stops),
           customer,
         }
       : null,
@@ -290,6 +419,9 @@ export function toClientOfferView(
         },
       }
     : null;
+  const quotedFare = dec(req.quotedFare);
+  const boostAmount = dec(req.boostAmount);
+  const totalOffered = quotedFare != null ? quotedFare + (boostAmount ?? 0) : null;
 
   return {
     id: offer.id,
@@ -309,11 +441,17 @@ export function toClientOfferView(
       pickupLng: dec(req.pickupLng),
       dropLat: dec(req.dropLat),
       dropLng: dec(req.dropLng),
-      quotedFare: dec(req.quotedFare),
+      quotedFare,
+      boostAmount,
+      totalOffered,
       paymentMethod: req.paymentMethod,
       estimatedDistanceKm: dec(req.estimatedDistanceKm),
       estimatedDurationMin: req.estimatedDurationMin,
       vehicleTypeId: req.vehicleTypeId,
+      passengerName: req.passengerName ?? null,
+      passengerPhone: req.passengerPhone ?? null,
+      pickupNotes: req.pickupNotes ?? null,
+      stops: mapStops(req.stops),
       customer,
     },
   };
