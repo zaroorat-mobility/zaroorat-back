@@ -234,20 +234,20 @@ model SettlementBatch {
 }
 
 model DriverSettlement {
-  id                String   @id @default(uuid(7)) @db.Uuid
-  driverId          String   @map("driver_id") @db.Uuid
-  periodStart       DateTime @map("period_start") @db.Date
-  periodEnd         DateTime @map("period_end") @db.Date
-  grossEarnings     Decimal  @default(0) @map("gross_earnings") @db.Decimal(12, 2)
-  commission        Decimal  @default(0) @db.Decimal(12, 2)
-  adjustments       Decimal  @default(0) @db.Decimal(12, 2)
-  netPayable        Decimal  @default(0) @map("net_payable") @db.Decimal(12, 2)
+  id                String           @id @default(uuid(7)) @db.Uuid
+  driverId          String           @map("driver_id") @db.Uuid
+  periodStart       DateTime         @map("period_start") @db.Date
+  periodEnd         DateTime         @map("period_end") @db.Date
+  grossEarnings     Decimal          @default(0) @map("gross_earnings") @db.Decimal(12, 2)
+  commission        Decimal          @default(0) @db.Decimal(12, 2)
+  adjustments       Decimal          @default(0) @db.Decimal(12, 2)
+  netPayable        Decimal          @default(0) @map("net_payable") @db.Decimal(12, 2)
   /// Only a COMPLETED DriverPayout covering the full `netPayable` may set
   /// PAID — see `PayoutService.confirmPayout`. Neither the settlement job nor
   /// admin batch completion writes it.
   status            SettlementStatus @default(PENDING)
-  settlementBatchId String?  @map("settlement_batch_id") @db.Uuid
-  createdAt         DateTime @default(now()) @map("created_at")
+  settlementBatchId String?          @map("settlement_batch_id") @db.Uuid
+  createdAt         DateTime         @default(now()) @map("created_at")
 
   driver          Driver           @relation(fields: [driverId], references: [id])
   settlementBatch SettlementBatch? @relation(fields: [settlementBatchId], references: [id])
@@ -291,25 +291,25 @@ model PaymentDispute {
 }
 
 model DriverPayout {
-  id              String    @id @default(uuid(7)) @db.Uuid
-  driverId        String    @map("driver_id") @db.Uuid
-  settlementId    String?   @map("settlement_id") @db.Uuid
-  bankAccountId   String?   @map("bank_account_id") @db.Uuid
-  amount          Decimal      @db.Decimal(12, 2)
-  status          PayoutStatus @default(INITIATED)
+  id                String       @id @default(uuid(7)) @db.Uuid
+  driverId          String       @map("driver_id") @db.Uuid
+  settlementId      String?      @map("settlement_id") @db.Uuid
+  bankAccountId     String?      @map("bank_account_id") @db.Uuid
+  amount            Decimal      @db.Decimal(12, 2)
+  status            PayoutStatus @default(INITIATED)
   /// 'MANUAL' for an externally executed bank transfer — the only kind this
   /// platform performs today. A provider name goes here when a payout rail is
   /// actually integrated.
-  gateway         String?
-  gatewayPayoutId String?      @map("gateway_payout_id")
+  gateway           String?
+  gatewayPayoutId   String?      @map("gateway_payout_id")
   /// The bank's own reference for a manual transfer (UTR/NEFT ref), supplied
   /// by finance at confirmation. This is the audit link between our row and
   /// the money that actually left the platform's bank account.
-  externalReference String?    @map("external_reference")
-  idempotencyKey  String       @unique @map("idempotency_key")
-  failureReason   String?      @map("failure_reason")
-  initiatedAt     DateTime     @default(now()) @map("initiated_at")
-  completedAt     DateTime?    @map("completed_at")
+  externalReference String?      @map("external_reference")
+  idempotencyKey    String       @unique @map("idempotency_key")
+  failureReason     String?      @map("failure_reason")
+  initiatedAt       DateTime     @default(now()) @map("initiated_at")
+  completedAt       DateTime?    @map("completed_at")
 
   driver      Driver             @relation(fields: [driverId], references: [id])
   settlement  DriverSettlement?  @relation(fields: [settlementId], references: [id])

@@ -2,8 +2,13 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
 import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
 import { RideService } from '../services/ride.service.js';
-import { quoteFareSchema, createRideRequestSchema } from '../schemas/ride.schemas.js';
+import {
+  quoteFareSchema,
+  createRideRequestSchema,
+  boostRideRequestSchema,
+} from '../schemas/ride.schemas.js';
 import { RIDE_REQUEST_IDEMPOTENCY_TTL_SECONDS } from '../constants/ride.constants.js';
+import { toClientRequestView } from '../presenters/ride-client.presenter.js';
 export class RideRequestController {
   constructor(
     private readonly rideService: RideService,
@@ -42,6 +47,7 @@ export class RideRequestController {
         ...(body.dropAddress !== undefined ? { dropAddress: body.dropAddress } : {}),
         ...(body.paymentMethod !== undefined ? { paymentMethod: body.paymentMethod } : {}),
         ...(body.promoCode !== undefined ? { promoCode: body.promoCode } : {}),
+        ...(body.boostAmount !== undefined ? { boostAmount: body.boostAmount } : {}),
       });
     // Optional, unlike payments' mandatory Idempotency-Key: a client retrying
     // a timed-out POST /rides/requests with the same key gets back the
@@ -63,5 +69,73 @@ export class RideRequestController {
     const { id } = req.params as { id: string };
     const request = await this.rideService.request.cancelRequest(id, customerId);
     reply.send({ data: request });
+  }
+
+  async getActiveRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const customerId = callerId(req);
+    const request = await this.rideService.request.getActiveRequest(customerId);
+    if (!request) {
+      reply.send({ data: null });
+      return;
+    }
+    const offerStats = await this.rideService.request.getOfferStatsForRequest(request.id);
+    reply.send({ data: toClientRequestView(request, offerStats) });
+  }
+
+  async getRequestById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const customerId = callerId(req);
+    const { id } = req.params as { id: string };
+    const request = await this.rideService.request.getRequestForCustomer(id, customerId);
+    const offerStats = await this.rideService.request.getOfferStatsForRequest(request.id);
+    reply.send({ data: toClientRequestView(request, offerStats) });
+  }
+
+  async boostRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const customerId = callerId(req);
+    const { id } = req.params as { id: string };
+    const body = boostRideRequestSchema.parse(req.body ?? {});
+    const data = await this.rideService.request.boostRequest(id, customerId, body.boostAmount);
+    reply.send({ data });
+  }
+
+  async nearbyDrivers(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = req.query as Record<string, unknown>;
+    const lat = Number(query.lat ?? query.latitude ?? query.pickupLat);
+    const lng = Number(query.lng ?? query.longitude ?? query.pickupLng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      reply.status(400).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'lat and lng query params are required',
+          requestId: req.id,
+        },
+      });
+      return;
+    }
+    const params: {
+      lat: number;
+      lng: number;
+      limit?: number;
+      radiusMeters?: number;
+      vehicleTypeId?: string;
+      vehicleTypeCode?: string;
+    } = { lat, lng };
+    const limitRaw = query.limit != null ? Number(query.limit) : NaN;
+    const radiusRaw =
+      query.radiusMeters != null
+        ? Number(query.radiusMeters)
+        : query.radiusKm != null
+          ? Number(query.radiusKm) * 1000
+          : NaN;
+    if (Number.isFinite(limitRaw)) params.limit = limitRaw;
+    if (Number.isFinite(radiusRaw)) params.radiusMeters = radiusRaw;
+    if (typeof query.vehicleTypeId === 'string' && query.vehicleTypeId.trim()) {
+      params.vehicleTypeId = query.vehicleTypeId.trim();
+    }
+    if (typeof query.vehicleTypeCode === 'string' && query.vehicleTypeCode.trim()) {
+      params.vehicleTypeCode = query.vehicleTypeCode.trim();
+    }
+    const data = await this.rideService.request.findNearbyDrivers(params);
+    reply.send({ data });
   }
 }

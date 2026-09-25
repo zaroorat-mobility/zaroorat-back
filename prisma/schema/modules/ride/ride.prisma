@@ -14,6 +14,8 @@ model RideRequest {
   estimatedDistanceKm  Decimal?                              @map("estimated_distance_km") @db.Decimal(8, 2)
   estimatedDurationMin Int?                                  @map("estimated_duration_min")
   quotedFare           Decimal?                              @map("quoted_fare") @db.Decimal(10, 2)
+  /// Extra ₹ the customer adds while searching. Drivers are shown quoted + boost.
+  boostAmount          Decimal                               @default(0) @map("boost_amount") @db.Decimal(10, 2)
   surgeMultiplier      Decimal                               @default(1.0) @map("surge_multiplier") @db.Decimal(4, 2)
   pricingRuleId        String?                               @map("pricing_rule_id") @db.Uuid
   paymentMethod        String?                               @map("payment_method")

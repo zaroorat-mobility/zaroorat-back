@@ -44,11 +44,20 @@ type RideRequestInput = {
   pickupAddress?: string | null;
   dropAddress?: string | null;
   quotedFare?: unknown;
+  boostAmount?: unknown;
   paymentMethod?: string | null;
   estimatedDistanceKm?: unknown;
   estimatedDurationMin?: number | null;
   vehicleTypeId?: string | null;
 };
+
+function offeredFare(req: RideRequestInput | null | undefined): number | null {
+  if (!req) return null;
+  const base = dec(req.quotedFare);
+  if (base == null) return null;
+  const boost = dec(req.boostAmount) ?? 0;
+  return base + boost;
+}
 
 type RideInput = {
   id: string;
@@ -266,11 +275,72 @@ export function toClientRideView(
           dropLat,
           dropLng,
           quotedFare: dec(req.quotedFare),
+          boostAmount: dec(req.boostAmount) ?? 0,
+          totalOffered: offeredFare(req),
           estimatedDistanceKm: dec(req.estimatedDistanceKm),
           estimatedDurationMin: req.estimatedDurationMin ?? null,
           customer,
         }
       : null,
+  };
+}
+
+/** Shape a RideRequest row for the customer app (active search / resume). */
+export function toClientRequestView(
+  req:
+    | (RideRequestInput & {
+        id: string;
+        status?: string | null;
+        createdAt?: Date | string | null;
+        expiresAt?: Date | string | null;
+        scheduledFor?: Date | string | null;
+      })
+    | null
+    | undefined,
+  offerStats?: {
+    offersSent?: number;
+    offersRejected?: number;
+    driversNotified?: number;
+    driversRejected?: number;
+  } | null,
+): Record<string, unknown> | null {
+  if (!req?.id) return null;
+  const quoted = dec(req.quotedFare);
+  const boost = dec(req.boostAmount) ?? 0;
+  const notified = offerStats?.driversNotified ?? offerStats?.offersSent;
+  const rejected = offerStats?.driversRejected ?? offerStats?.offersRejected;
+  return {
+    id: req.id,
+    customerId: req.customerId ?? null,
+    status: req.status ?? null,
+    vehicleTypeId: req.vehicleTypeId ?? null,
+    pickupLat: dec(req.pickupLat),
+    pickupLng: dec(req.pickupLng),
+    dropLat: dec(req.dropLat),
+    dropLng: dec(req.dropLng),
+    pickupAddress: req.pickupAddress ?? null,
+    dropAddress: req.dropAddress ?? null,
+    quotedFare: quoted,
+    boostAmount: boost,
+    totalOffered: quoted != null ? quoted + boost : null,
+    paymentMethod: req.paymentMethod ?? null,
+    estimatedDistanceKm: dec(req.estimatedDistanceKm),
+    estimatedDurationMin: req.estimatedDurationMin ?? null,
+    createdAt: req.createdAt ?? null,
+    expiresAt: req.expiresAt ?? null,
+    scheduledFor: req.scheduledFor ?? null,
+    ...(notified != null
+      ? {
+          driversNotified: notified,
+          offersSent: notified,
+        }
+      : {}),
+    ...(rejected != null
+      ? {
+          driversRejected: rejected,
+          offersRejected: rejected,
+        }
+      : {}),
   };
 }
 
@@ -309,7 +379,9 @@ export function toClientOfferView(
       pickupLng: dec(req.pickupLng),
       dropLat: dec(req.dropLat),
       dropLng: dec(req.dropLng),
-      quotedFare: dec(req.quotedFare),
+      // Drivers always see the live offered total (base quote + customer boost).
+      quotedFare: offeredFare(req),
+      boostAmount: dec(req.boostAmount) ?? 0,
       paymentMethod: req.paymentMethod,
       estimatedDistanceKm: dec(req.estimatedDistanceKm),
       estimatedDurationMin: req.estimatedDurationMin,

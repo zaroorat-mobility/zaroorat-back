@@ -117,6 +117,45 @@ export class RideDispatchRepository {
     });
     return rows.map((row) => row.driverId);
   }
+
+  /**
+   * Funnel counts for the customer finding-ride screen.
+   * - notified/sent: every captain who received an offer for this request
+   * - rejected: captains who declined or timed out (not CANCELLED-after-match)
+   */
+  async countOfferStatsForRequest(
+    requestId: string,
+    tx?: TransactionClient,
+  ): Promise<{
+    offersSent: number;
+    offersRejected: number;
+    driversNotified: number;
+    driversRejected: number;
+  }> {
+    const client = tx ?? this.db.client;
+    const groups = await client.rideDispatch.groupBy({
+      by: ['response'],
+      where: { requestId },
+      _count: { _all: true },
+    });
+    let sent = 0;
+    let rejected = 0;
+    for (const g of groups) {
+      const n = g._count._all;
+      // CANCELLED means another captain already won — not a customer-facing reject.
+      if (g.response === 'CANCELLED') continue;
+      sent += n;
+      if (g.response === 'REJECTED' || g.response === 'TIMEOUT') {
+        rejected += n;
+      }
+    }
+    return {
+      offersSent: sent,
+      offersRejected: rejected,
+      driversNotified: sent,
+      driversRejected: rejected,
+    };
+  }
   /// Locks one offer row for the duration of the caller's transaction. Reject
   /// and accept both go through this so two responses to the same offer — or a
   /// response racing the timeout job — serialise instead of interleaving.
@@ -197,5 +236,39 @@ export class RideDispatchRepository {
       select: { dispatchRound: true },
     });
     return row?.dispatchRound ?? 0;
+  }
+
+  /// After a fare change, re-open rejected / timed-out offers and refresh any
+  /// still-PENDING ones so captains get the request again at the new price.
+  /// CANCELLED (another driver already won) stays closed.
+  async refreshOffersAfterFareChange(
+    requestId: string,
+    data: { expiresAt: Date; dispatchRound: number },
+    tx?: TransactionClient,
+  ): Promise<Array<{ id: string; driverId: string }>> {
+    const client = tx ?? this.db.client;
+    const rows = await client.rideDispatch.findMany({
+      where: {
+        requestId,
+        response: { in: ['REJECTED', 'TIMEOUT', 'PENDING'] },
+      },
+      select: { id: true, driverId: true },
+    });
+    if (rows.length === 0) return [];
+    await client.rideDispatch.updateMany({
+      where: {
+        requestId,
+        response: { in: ['REJECTED', 'TIMEOUT', 'PENDING'] },
+      },
+      data: {
+        response: 'PENDING',
+        respondedAt: null,
+        rejectReason: null,
+        offeredAt: new Date(),
+        expiresAt: data.expiresAt,
+        dispatchRound: data.dispatchRound,
+      },
+    });
+    return rows;
   }
 }

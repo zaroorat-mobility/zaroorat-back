@@ -15,6 +15,7 @@ export interface CreateRideRequestInput {
   estimatedDistanceKm?: Decimal | null;
   estimatedDurationMin?: number | null;
   quotedFare?: Decimal | null;
+  boostAmount?: Decimal;
   surgeMultiplier?: Decimal;
   /// FR-002. The pricing rule the quote resolved, so completion can bill on it.
   pricingRuleId?: string | null;
@@ -31,12 +32,14 @@ export class RideRequestRepository {
     const client = tx ?? this.db.client;
     const id = randomUUID();
     const hasDrop = input.dropLat != null && input.dropLng != null;
+    const boost = input.boostAmount ?? new Decimal(0);
     await client.$executeRaw`
       INSERT INTO "ride_requests" (
         "id", "customer_id", "vehicle_type_id",
         "pickup_lat", "pickup_lng", "pickup_location", "pickup_address",
         "drop_lat", "drop_lng", "drop_location", "drop_address",
         "estimated_distance_km", "estimated_duration_min", "quoted_fare",
+        "boost_amount",
         "surge_multiplier", "pricing_rule_id", "payment_method", "promo_code",
         "scheduled_for", "status", "created_at", "expires_at",
         "map_provider", "map_config_version"
@@ -54,6 +57,7 @@ export class RideRequestRepository {
         ${input.dropAddress ?? null},
         ${input.estimatedDistanceKm ?? null}, ${input.estimatedDurationMin ?? null},
         ${input.quotedFare ?? null},
+        ${boost},
         ${input.surgeMultiplier ?? new Decimal(1)},
         ${input.pricingRuleId ?? null}::uuid,
         ${input.paymentMethod ?? null}, ${input.promoCode ?? null},
@@ -110,5 +114,22 @@ export class RideRequestRepository {
       data: { status: 'MATCHED' },
     });
     return count === 1;
+  }
+
+  async applyBoost(
+    id: string,
+    boostAmount: Decimal,
+    expiresAt: Date,
+    tx?: TransactionClient,
+  ): Promise<RideRequest> {
+    const client = tx ?? this.db.client;
+    return client.rideRequest.update({
+      where: { id },
+      data: {
+        boostAmount,
+        expiresAt,
+        status: 'SEARCHING',
+      },
+    });
   }
 }
