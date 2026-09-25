@@ -83,3 +83,24 @@ export class NotFoundError extends AuthError {
     super('NOT_FOUND', message);
   }
 }
+/// A push-token registration arrived with no device to attach it to: the request
+/// carried no `deviceId` and the caller's session is not bound to one either.
+///
+/// Rejected rather than accommodated. The previous behaviour created a
+/// `UserDevice` row with a NULL `deviceId`, which `@@unique([userId, deviceId])`
+/// cannot constrain — PostgreSQL permits unlimited NULLs under a unique index — so
+/// every such call minted another unbounded row for the same user, each holding a
+/// push token. Inventing an id here would be worse: a synthetic device identity
+/// that no client can ever present again, and therefore a row that can never be
+/// updated or revoked.
+///
+/// Both shipped mobile clients always send a `deviceId`, so this is unreachable
+/// for them.
+export class DeviceIdRequiredError extends AuthError {
+  constructor(
+    message = 'A deviceId is required to register a push token. Send one in the request body, ' +
+      'or authenticate with a session bound to a device.',
+  ) {
+    super('VALIDATION', message);
+  }
+}

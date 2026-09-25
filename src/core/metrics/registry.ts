@@ -7,6 +7,9 @@ export const SAFE_LABELS: readonly string[] = Object.freeze([
   'scope',
   'result',
   'event_type',
+  // Notification delivery class — CRITICAL / RIDE_OFFER / TRANSACTIONAL /
+  // GENERAL / PROMOTIONAL. A bounded set, unlike the ids it travels beside.
+  'category',
   'queue',
   'job',
   'cancelled_by',

@@ -119,6 +119,15 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     // accept new rides, so this shouldn't lag a paid period's end by much.
     pattern: process.env.SUBSCRIPTION_EXPIRY_CRON ?? '*/5 * * * *',
   },
+  {
+    queue: QUEUE_NAMES.NOTIFICATIONS_MAINTENANCE,
+    name: JOB_NAMES.NOTIFICATION_RECONCILIATION,
+    // Every minute, the finest a cron pattern allows. A notification whose
+    // enqueue failed is only a candidate once it is 30s old, so it is picked up
+    // 30–90s after it was stranded — well inside every non-offer delivery TTL
+    // (shortest: 10 minutes). Each sweep is bounded to 100 notifications.
+    pattern: process.env.NOTIFICATION_RECONCILIATION_CRON ?? '* * * * *',
+  },
 ]);
 export async function registerJobSchedules(): Promise<void> {
   for (const schedule of JOB_SCHEDULES) {

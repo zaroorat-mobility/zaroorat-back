@@ -10,6 +10,7 @@ import type {
   WriteOffReport,
 } from '@modules/payments';
 import type { PendingRewardSweepReport } from '@modules/referrals';
+import type { NotificationReconciliationReport } from '@modules/notifications';
 import { container } from '../../core/di.js';
 import { JOB_NAMES, createQueueConnection, type JobName, type QueueName } from '../queues/index.js';
 import { JOB_SCHEDULES } from '../scheduler/index.js';
@@ -23,6 +24,7 @@ export type MaintenanceResult =
   | CollectionSweepReport
   | WriteOffReport
   | PendingRewardSweepReport
+  | NotificationReconciliationReport
   | number;
 export interface MaintenanceRunner {
   run(now: Date): Promise<MaintenanceResult>;
@@ -52,6 +54,7 @@ export const MAINTENANCE_HANDLERS: Readonly<Record<MaintenanceJobName, string>> 
   [JOB_NAMES.DRIVER_SETTLEMENT]: 'settlementJob',
   [JOB_NAMES.REFERRAL_PENDING_REWARD_SWEEP]: 'referralPendingRewardSweepJob',
   [JOB_NAMES.SUBSCRIPTION_EXPIRY]: 'subscriptionExpiryJob',
+  [JOB_NAMES.NOTIFICATION_RECONCILIATION]: 'notificationReconciliationJob',
 });
 export async function runMaintenanceJob(
   name: string,
