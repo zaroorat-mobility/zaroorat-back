@@ -19,6 +19,14 @@ model RideRequest {
   paymentMethod        String?                               @map("payment_method")
   promoCode            String?                               @map("promo_code")
   scheduledFor         DateTime?                             @map("scheduled_for")
+  /// Booking for someone else. Both set or both null (enforced in the schema
+  /// and by `ride_requests_passenger_pair_check`).
+  passengerName        String?                               @map("passenger_name")
+  passengerPhone       String?                               @map("passenger_phone")
+  pickupNotes          String?                               @map("pickup_notes")
+  /// Rider-offered top-up on the quote, from a fixed allowlist. Paid to the
+  /// driver on top of the metered fare; never part of the fare ceiling.
+  boostAmount          Decimal?                              @map("boost_amount") @db.Decimal(10, 2)
   mapProvider          String?                               @map("map_provider")
   mapConfigVersion     Int?                                  @map("map_config_version")
   status               RideRequestStatus                     @default(CREATED)
@@ -26,16 +34,51 @@ model RideRequest {
   createdAt            DateTime                              @default(now()) @map("created_at")
   expiresAt            DateTime?                             @map("expires_at")
 
-  vehicleType    VehicleType     @relation(fields: [vehicleTypeId], references: [id])
-  pricingRule    PricingRule?    @relation(fields: [pricingRuleId], references: [id])
+  vehicleType    VehicleType       @relation(fields: [vehicleTypeId], references: [id])
+  pricingRule    PricingRule?      @relation(fields: [pricingRuleId], references: [id])
   dispatches     RideDispatch[]
   rides          Ride[]
   scheduledRides ScheduledRide[]
+  stops          RideRequestStop[]
 
   @@index([customerId])
   @@index([status])
   @@index([pricingRuleId])
   @@map("ride_requests")
+}
+
+/// Intermediate stops between pickup and drop, in travel order (1-based).
+/// Copied onto `ride_stops` as INTERMEDIATE rows when a driver accepts.
+model RideRequestStop {
+  id        String                               @id @default(uuid(7)) @db.Uuid
+  requestId String                               @map("request_id") @db.Uuid
+  sequence  Int                                  @db.SmallInt
+  lat       Decimal                              @db.Decimal(10, 7)
+  lng       Decimal                              @db.Decimal(10, 7)
+  location  Unsupported("geography(Point,4326)")
+  address   String?
+  createdAt DateTime                             @default(now()) @map("created_at")
+
+  request RideRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, sequence])
+  @@map("ride_request_stops")
+}
+
+/// Public read-only trip-tracking link a rider hands to someone else.
+model RideShareToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  token     String    @unique
+  rideId    String    @map("ride_id") @db.Uuid
+  createdBy String    @map("created_by") @db.Uuid
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  @@index([rideId])
+  @@map("ride_share_tokens")
 }
 
 model RideDispatch {
@@ -109,6 +152,10 @@ model Ride {
   /// Optional early-end reason when the trip finished short of destination.
   earlyEndReasonCode RideEndReason?                        @map("early_end_reason_code")
   earlyEndReasonText String?                               @map("early_end_reason_text")
+  /// Copied from the request at acceptance.
+  passengerName      String?                               @map("passenger_name")
+  passengerPhone     String?                               @map("passenger_phone")
+  pickupNotes        String?                               @map("pickup_notes")
   createdAt          DateTime                              @default(now()) @map("created_at")
   updatedAt          DateTime                              @updatedAt @map("updated_at")
 
@@ -147,6 +194,7 @@ model Ride {
   safetyIncidents              SafetyIncident[]
   opsNotes                     RideOpsNote[]
   locationPoints               RideLocationPoint[]
+  shareTokens                  RideShareToken[]
 
   @@index([customerId])
   @@index([driverId])

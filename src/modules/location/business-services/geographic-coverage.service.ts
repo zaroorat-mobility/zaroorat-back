@@ -263,6 +263,10 @@ export class GeographicCoverageService {
     return city;
   }
 
+  /// Suburbs sit a few kilometres past a tightly drawn city polygon (Hadapsar,
+  /// Kondhwa, Wakad). 25 km still refuses a different metro.
+  private static readonly DROP_CITY_BUFFER_METERS = 25_000;
+
   async assertDropServiceable(input: DropServiceabilityInput): Promise<void> {
     // BD-10 again. The pickup gate already stood down for this request, so the
     // drop gate must too — otherwise an unconfigured platform quotes a pickup
@@ -270,8 +274,28 @@ export class GeographicCoverageService {
     if (input.cityCode === UNCONFIGURED_COVERAGE_CITY.code) return;
 
     const city = await this.resolveCityAtPoint(input.lat, input.lng);
-    if (!city || city.code !== input.cityCode) {
+    if (city && city.code !== input.cityCode) {
       throw new DropOutsideServiceAreaError();
+    }
+
+    if (!city) {
+      const nearby = await this.databaseService.client.$queryRaw<Array<{ code: string }>>`
+        SELECT code
+        FROM cities
+        WHERE is_active = true
+          AND code = ${input.cityCode}
+          AND boundary IS NOT NULL
+          AND ST_DWithin(
+            boundary::geography,
+            ST_SetSRID(ST_MakePoint(${input.lng}, ${input.lat}), 4326)::geography,
+            ${GeographicCoverageService.DROP_CITY_BUFFER_METERS}
+          )
+        LIMIT 1
+      `;
+      if (nearby.length === 0) {
+        throw new DropOutsideServiceAreaError();
+      }
+      return;
     }
 
     const zones = await this.resolveZonesAtPoint(city.code, input.lat, input.lng);
