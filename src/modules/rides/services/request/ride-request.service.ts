@@ -20,12 +20,19 @@ import {
   RideRequestNotCancellableError,
   IncompleteProfileError,
   RidePinNotConfiguredError,
-  PromotionsUnavailableError,
   WalletRidesNotAcceptedError,
+  ScheduledTooSoonError,
+  RideRequestNotBoostableError,
+  DestinationChangeNotAllowedError,
+  DestinationFareChangedError,
 } from '../../errors/ride.errors.js';
+import { rideConfig } from '@config';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
-import { NEW_RIDE_PAYMENT_METHODS } from '../../constants/ride.constants.js';
+import {
+  NEW_RIDE_PAYMENT_METHODS,
+  DESTINATION_CHANGE_STATUSES,
+} from '../../constants/ride.constants.js';
 import { DebtService } from '@modules/payments/services/debt/debt.service.js';
 import { RiderDebtLimitExceededError } from '@modules/payments/errors/payment.errors.js';
 import {
@@ -34,7 +41,7 @@ import {
   NearbyDriverService,
 } from '@modules/location';
 import { logger } from '@shared/logger/index.js';
-import type { RideRequest } from '../../types';
+import type { Ride, RideRequest } from '../../types';
 import type { ItemizedFareResult } from '@modules/pricing';
 
 export interface QuoteOption {
@@ -69,9 +76,52 @@ export interface RideQuote {
   /// 'no_drivers' = Redis GEO candidate search returned 0 nearby drivers
   /// 'matrix_unavailable' = candidate drivers exist but map matrix API failed
   nearbyDriverEtaStatus: 'ok' | 'no_drivers' | 'matrix_unavailable';
+  stops: Array<{ sequence: number; latitude: number; longitude: number; address: string | null }>;
   options: QuoteOption[];
 }
+export interface RideStopInput {
+  lat: number;
+  lng: number;
+  address?: string;
+}
+export interface BoostResult {
+  requestId: string;
+  quotedFare: number | null;
+  boostAmount: number;
+  totalOffered: number | null;
+}
+export interface DestinationInput {
+  dropLat: number;
+  dropLng: number;
+  dropAddress?: string;
+}
+export interface DestinationQuote {
+  rideId: string;
+  drop: { latitude: number; longitude: number; address: string | null };
+  previousFare: number | null;
+  newFare: number;
+  fareDifference: number | null;
+  estimatedDistanceKm: number;
+  estimatedDurationMin: number;
+  currency: string;
+  fareBreakdown: ItemizedFareResult;
+}
+const DESTINATION_FARE_TOLERANCE = 1;
+function routePoints(
+  pickupLat: number,
+  pickupLng: number,
+  stops: readonly RideStopInput[],
+  dropLat: number,
+  dropLng: number,
+): Array<{ lat: number; lng: number }> {
+  return [
+    { lat: pickupLat, lng: pickupLng },
+    ...stops.map((stop) => ({ lat: stop.lat, lng: stop.lng })),
+    { lat: dropLat, lng: dropLng },
+  ];
+}
 const CANCELLABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
+const BOOSTABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
 export class RideRequestService {
   constructor(
     private readonly requestRepo: RideRequestRepository,
@@ -108,6 +158,7 @@ export class RideRequestService {
     cityCode?: string;
     promoCode?: string;
     userId?: string;
+    stops?: readonly RideStopInput[];
   }): Promise<RideQuote> {
     // The `dropLat == null` guard that used to stand here was a second copy of
     // the one in `calculateFareQuote`, and both threw a bare `Error` that
@@ -119,12 +170,10 @@ export class RideRequestService {
           params.cityId !== undefined ? { cityId: params.cityId } : {},
         );
 
-    const trip = await this.pricingService.estimateTrip({
-      pickupLat: params.pickupLat,
-      pickupLng: params.pickupLng,
-      dropLat: params.dropLat,
-      dropLng: params.dropLng,
-    });
+    const stops = params.stops ?? [];
+    const trip = await this.pricingService.estimateRoute(
+      routePoints(params.pickupLat, params.pickupLng, stops, params.dropLat, params.dropLng),
+    );
 
     // FR-039. Everything that depends on the pickup point rather than on the
     // category is resolved once, before the loop.
@@ -148,6 +197,13 @@ export class RideRequestService {
       await this.geographicCoverageService.assertDropServiceable({
         lat: params.dropLat,
         lng: params.dropLng,
+        cityCode: city.code,
+      });
+    }
+    for (const stop of stops) {
+      await this.geographicCoverageService.assertDropServiceable({
+        lat: stop.lat,
+        lng: stop.lng,
         cityCode: city.code,
       });
     }
@@ -210,6 +266,7 @@ export class RideRequestService {
               surgeMultiplier,
               rateCard,
               discountAmount: promoResult.discountAmount,
+              trip,
             })
           : baseFare;
 
@@ -289,6 +346,12 @@ export class RideRequestService {
       nearbyDriverEtaMin,
       nearbyDriverEtaStatus,
       ...(resolvedCityCode !== undefined ? { cityCode: resolvedCityCode } : {}),
+      stops: stops.map((stop, index) => ({
+        sequence: index + 1,
+        latitude: stop.lat,
+        longitude: stop.lng,
+        address: stop.address ?? null,
+      })),
       options,
     };
   }
@@ -304,13 +367,20 @@ export class RideRequestService {
     paymentMethod?: string;
     promoCode?: string;
     cityCode?: string;
+    stops?: readonly RideStopInput[];
+    passengerName?: string;
+    passengerPhone?: string;
+    pickupNotes?: string;
+    scheduledFor?: Date;
+    boostAmount?: number;
   }): Promise<RideRequest> {
-    // Refused before anything is written, and before the debt and active-ride
-    // checks, because it is a fact about the request itself rather than about
-    // the rider: nothing in this codebase can apply a promotion, so a booking
-    // carrying a code would be billed in full without ever saying so.
-    if (input.promoCode !== undefined && input.promoCode.trim() !== '') {
-      throw new PromotionsUnavailableError();
+    const stops = input.stops ?? [];
+    const scheduledFor = input.scheduledFor ?? null;
+    if (scheduledFor) {
+      const earliest = Date.now() + rideConfig.scheduledMinLeadMinutes * 60 * 1000;
+      if (scheduledFor.getTime() < earliest) {
+        throw new ScheduledTooSoonError(rideConfig.scheduledMinLeadMinutes);
+      }
     }
     // D1. Refused here as well as in the request schema, so a caller that does
     // not go through the HTTP route cannot book a wallet ride either. Nothing
@@ -345,13 +415,17 @@ export class RideRequestService {
     if (debt.blocked) {
       throw new RiderDebtLimitExceededError(debt.outstanding.toFixed(2), debt.limit.toFixed(2));
     }
-    const activeRide = await this.rideRepo.findActiveByCustomer(input.customerId);
-    if (activeRide) {
-      throw new ActiveRideExistsError();
-    }
-    const activeRequest = await this.requestRepo.findActiveByCustomer(input.customerId);
-    if (activeRequest) {
-      throw new ActiveRideExistsError('Customer already has an active ride request');
+    // A scheduled booking is for later, so a ride in progress now does not
+    // conflict with it; the partial unique index excludes it for the same reason.
+    if (!scheduledFor) {
+      const activeRide = await this.rideRepo.findActiveByCustomer(input.customerId);
+      if (activeRide) {
+        throw new ActiveRideExistsError();
+      }
+      const activeRequest = await this.requestRepo.findActiveByCustomer(input.customerId);
+      if (activeRequest) {
+        throw new ActiveRideExistsError('Customer already has an active ride request');
+      }
     }
     // Validates the client-supplied type before anything is written: an
     // unknown id is 404 VEHICLE_TYPE_NOT_FOUND, a retired one is 409
@@ -370,6 +444,13 @@ export class RideRequestService {
       await this.geographicCoverageService.assertDropServiceable({
         lat: input.dropLat,
         lng: input.dropLng,
+        cityCode: city.code,
+      });
+    }
+    for (const stop of stops) {
+      await this.geographicCoverageService.assertDropServiceable({
+        lat: stop.lat,
+        lng: stop.lng,
         cityCode: city.code,
       });
     }
@@ -393,6 +474,12 @@ export class RideRequestService {
       { pickupLat: input.pickupLat, pickupLng: input.pickupLng },
     );
 
+    // Estimated once and shared by both fare passes, so the promo pass cannot
+    // land on a different route (and, with stops, sums every leg).
+    const trip = await this.pricingService.estimateRoute(
+      routePoints(input.pickupLat, input.pickupLng, stops, input.dropLat, input.dropLng),
+    );
+
     const baseFare = await this.pricingService.calculateFareQuote({
       pickupLat: input.pickupLat,
       pickupLng: input.pickupLng,
@@ -402,8 +489,7 @@ export class RideRequestService {
       cityCode: city.code,
       surgeMultiplier,
       rateCard,
-      ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
-      ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
+      trip,
     });
 
     let discountAmount = 0;
@@ -427,8 +513,9 @@ export class RideRequestService {
             surgeMultiplier,
             discountAmount,
             rateCard,
-            ...(input.dropLat !== undefined ? { dropLat: input.dropLat } : {}),
-            ...(input.dropLng !== undefined ? { dropLng: input.dropLng } : {}),
+            trip,
+            dropLat: input.dropLat,
+            dropLng: input.dropLng,
           })
         : baseFare;
 
@@ -444,7 +531,14 @@ export class RideRequestService {
           quotedFare: new Decimal(fareQuote.totalFare),
           surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
           pricingRuleId,
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+          // A scheduled booking must not age out like an instant search does;
+          // RequestExpiryJob only sweeps rows with an `expiresAt`.
+          expiresAt: scheduledFor ? null : new Date(Date.now() + 5 * 60 * 1000),
+          scheduledFor,
+          passengerName: input.passengerName ?? null,
+          passengerPhone: input.passengerPhone ?? null,
+          pickupNotes: input.pickupNotes?.trim() ? input.pickupNotes.trim() : null,
+          boostAmount: input.boostAmount ? new Decimal(input.boostAmount) : null,
         };
         if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
         if (input.dropLat !== undefined) createInput.dropLat = new Decimal(input.dropLat);
@@ -458,7 +552,32 @@ export class RideRequestService {
           createInput.mapConfigVersion = policy.configVersion;
         }
         const request = await this.requestRepo.create(createInput, tx);
+        if (stops.length > 0) {
+          await this.requestRepo.createStops(request.id, stops, tx);
+        }
         this.rideMetrics.requestCreated({ requestId: request.id });
+        // Scheduled: parked for drivers to pick up from the scheduled list.
+        // No `ride.requested`, so nothing dispatches it now.
+        if (scheduledFor) {
+          const scheduled = await tx.scheduledRide.create({
+            data: {
+              requestId: request.id,
+              customerId: input.customerId,
+              scheduledFor,
+              status: 'SCHEDULED',
+            },
+          });
+          await this.eventPublisher.publish(
+            rideEvent(RIDE_EVENT_CATALOG.SCHEDULED_CREATED, scheduled.id, {
+              scheduledRideId: scheduled.id,
+              requestId: request.id,
+              customerId: input.customerId,
+              scheduledFor: scheduledFor.toISOString(),
+            }),
+            tx,
+          );
+          return request;
+        }
         await this.eventPublisher.publish(
           rideEvent(RIDE_EVENT_CATALOG.REQUESTED, input.customerId, {
             requestId: request.id,
@@ -477,6 +596,19 @@ export class RideRequestService {
       throw err;
     }
   }
+  async getActiveRequest(customerId: string): Promise<RideRequest | null> {
+    return this.requestRepo.findActiveDetailByCustomer(customerId);
+  }
+
+  async getRequestForCustomer(requestId: string, customerId: string): Promise<RideRequest> {
+    const request = await this.requestRepo.findByIdWithClientInclude(requestId);
+    if (!request) throw new RideNotFoundError(requestId);
+    if (request.customerId !== customerId) {
+      throw new RideCustomerMismatchError(requestId);
+    }
+    return request;
+  }
+
   /// A request nobody has accepted yet has no `Ride` row, so `LifecycleService`'s
   /// cancel path (which acts on a `Ride`) can't reach it — this is the only
   /// cancel path for that window. Without it a customer's sole recourse was to
@@ -499,5 +631,156 @@ export class RideRequestService {
       );
       return cancelled;
     });
+  }
+  /// Replaces (never accumulates) the rider's boost on a request that is still
+  /// searching. Drivers see `quotedFare + boostAmount` on the offer.
+  async boostRequest(
+    requestId: string,
+    customerId: string,
+    boostAmount: number,
+  ): Promise<BoostResult> {
+    return this.txManager.execute(async (tx) => {
+      const request = await this.requestRepo.lockForUpdate(requestId, tx);
+      if (!request) throw new RideNotFoundError(requestId);
+      if (request.customerId !== customerId) {
+        throw new RideCustomerMismatchError(requestId);
+      }
+      if (!BOOSTABLE_REQUEST_STATUSES.has(request.status)) {
+        throw new RideRequestNotBoostableError(request.status);
+      }
+      const updated = await this.requestRepo.updateBoost(requestId, new Decimal(boostAmount), tx);
+      const quotedFare = updated.quotedFare != null ? Number(updated.quotedFare) : null;
+      const totalOffered = quotedFare != null ? quotedFare + boostAmount : null;
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.REQUEST_BOOSTED, customerId, {
+          requestId,
+          customerId,
+          boostAmount,
+          totalOffered,
+        }),
+        tx,
+      );
+      return { requestId, quotedFare, boostAmount, totalOffered };
+    });
+  }
+  /// Prices the trip as if it had always been going to the new drop: pickup,
+  /// through any stops, to the new point, on the rule and surge it was booked
+  /// on. Read-only; `confirmDestinationChange` re-runs it and applies it.
+  async quoteDestinationChange(
+    rideId: string,
+    customerId: string,
+    drop: DestinationInput,
+  ): Promise<DestinationQuote> {
+    const ride = await this.rideRepo.findById(rideId);
+    if (!ride) throw new RideNotFoundError(rideId);
+    this.assertDestinationChangeable(ride, customerId);
+    return this.priceDestination(ride, drop);
+  }
+  /// `expectedFare`, when sent, must match the reprice to within a rupee so the
+  /// rider is never moved onto a fare they were not shown.
+  async confirmDestinationChange(
+    rideId: string,
+    customerId: string,
+    drop: DestinationInput & { expectedFare?: number },
+  ): Promise<DestinationQuote> {
+    const ride = await this.rideRepo.findById(rideId);
+    if (!ride) throw new RideNotFoundError(rideId);
+    this.assertDestinationChangeable(ride, customerId);
+    // Priced outside the transaction: it makes directions calls, and holding
+    // the ride row lock across the network would stall the driver's own writes.
+    const quote = await this.priceDestination(ride, drop);
+    if (
+      drop.expectedFare !== undefined &&
+      Math.abs(quote.newFare - drop.expectedFare) > DESTINATION_FARE_TOLERANCE
+    ) {
+      throw new DestinationFareChangedError(drop.expectedFare, quote.newFare);
+    }
+    return this.txManager.execute(async (tx) => {
+      const locked = await this.rideRepo.lockForUpdate(rideId, tx);
+      if (!locked) throw new RideNotFoundError(rideId);
+      this.assertDestinationChangeable(locked, customerId);
+      await this.requestRepo.updateDestination(
+        locked.requestId,
+        {
+          dropLat: drop.dropLat,
+          dropLng: drop.dropLng,
+          dropAddress: drop.dropAddress ?? null,
+          estimatedDistanceKm: new Decimal(quote.estimatedDistanceKm),
+          estimatedDurationMin: quote.estimatedDurationMin,
+          quotedFare: new Decimal(quote.newFare),
+        },
+        tx,
+      );
+      await this.rideRepo.updateDrop(
+        rideId,
+        { dropLat: drop.dropLat, dropLng: drop.dropLng, dropAddress: drop.dropAddress ?? null },
+        tx,
+      );
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.DESTINATION_CHANGED, rideId, {
+          rideId,
+          customerId,
+          driverId: locked.driverId,
+          dropLat: drop.dropLat,
+          dropLng: drop.dropLng,
+          dropAddress: drop.dropAddress ?? null,
+          previousFare: quote.previousFare,
+          newFare: quote.newFare,
+        }),
+        tx,
+      );
+      return quote;
+    });
+  }
+  private assertDestinationChangeable(ride: Ride, customerId: string): void {
+    if (ride.customerId !== customerId) throw new RideCustomerMismatchError(ride.id);
+    if (!(DESTINATION_CHANGE_STATUSES as readonly string[]).includes(ride.status)) {
+      throw new DestinationChangeNotAllowedError(ride.status);
+    }
+  }
+  private async priceDestination(ride: Ride, drop: DestinationInput): Promise<DestinationQuote> {
+    const request = await this.requestRepo.findById(ride.requestId);
+    if (!request) throw new RideNotFoundError(ride.requestId);
+    const pickupLat = Number(request.pickupLat);
+    const pickupLng = Number(request.pickupLng);
+    const pickupContext = await this.geographicCoverageService.resolvePickupContext(
+      pickupLat,
+      pickupLng,
+    );
+    await this.geographicCoverageService.assertDropServiceable({
+      lat: drop.dropLat,
+      lng: drop.dropLng,
+      cityCode: pickupContext.city.code,
+    });
+    const stops = (await this.requestRepo.findStops(request.id)).map((stop) => ({
+      lat: Number(stop.lat),
+      lng: Number(stop.lng),
+    }));
+    const trip = await this.pricingService.estimateRoute(
+      routePoints(pickupLat, pickupLng, stops, drop.dropLat, drop.dropLng),
+    );
+    const fare = await this.pricingService.calculateFinalFare({
+      actualDistanceKm: trip.distanceKm,
+      actualDurationMin: trip.durationMin,
+      vehicleTypeId: ride.vehicleTypeId,
+      pricingRuleId: request.pricingRuleId ?? null,
+      surgeMultiplier: Number(request.surgeMultiplier ?? 1),
+    });
+    const previousFare = request.quotedFare != null ? Number(request.quotedFare) : null;
+    return {
+      rideId: ride.id,
+      drop: {
+        latitude: drop.dropLat,
+        longitude: drop.dropLng,
+        address: drop.dropAddress ?? null,
+      },
+      previousFare,
+      newFare: fare.totalFare,
+      fareDifference: previousFare != null ? fare.totalFare - previousFare : null,
+      estimatedDistanceKm: trip.distanceKm,
+      estimatedDurationMin: trip.durationMin,
+      currency: 'INR',
+      fareBreakdown: fare,
+    };
   }
 }

@@ -36,3 +36,19 @@ export const TRIP_DURATION_PLAUSIBILITY_BUFFER_MIN = 15;
 /// booked before this rule still have to be collected and settled.
 export const NEW_RIDE_PAYMENT_METHODS = ['CASH', 'UPI', 'CARD'] as const;
 export type NewRidePaymentMethod = (typeof NEW_RIDE_PAYMENT_METHODS)[number];
+
+/// The only fare boosts a rider may offer, in rupees. A fixed list rather than
+/// a range so the driver app can render them as chips and nobody can send ₹1.
+export const RIDE_BOOST_AMOUNTS = [20, 30, 40, 50] as const;
+export type RideBoostAmount = (typeof RIDE_BOOST_AMOUNTS)[number];
+
+/// Ride states in which the rider may still change where they are going.
+export const DESTINATION_CHANGE_STATUSES = ['DRIVER_ARRIVED', 'IN_PROGRESS'] as const;
+
+/// Ride states in which a trip link or SOS makes sense.
+export const LIVE_RIDE_STATUSES = [
+  'ACCEPTED',
+  'DRIVER_ARRIVING',
+  'DRIVER_ARRIVED',
+  'IN_PROGRESS',
+] as const;

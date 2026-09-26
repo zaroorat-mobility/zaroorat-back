@@ -4,15 +4,6 @@ import { rateLimits } from '@config';
 import { RideController } from '../controllers/ride.controller.js';
 import { handleRideError } from '../schemas/error-response.js';
 
-/// Every `:id` on this router is a UUID that ends up in a `::uuid` cast or a
-/// Prisma `@db.Uuid` lookup. Without this, `POST /rides/offers/not-a-uuid/reject`
-/// reached Postgres, which raised `invalid input syntax for type uuid`, which
-/// surfaced as **500 INTERNAL** — a client mistake reported as a server fault,
-/// and a needless round trip to the database for input that could never match.
-///
-/// A `pattern` rather than `format: 'uuid'` on purpose: core ajv validates
-/// patterns out of the box, whereas `format` silently does nothing unless
-/// `ajv-formats` is registered, and nothing registers it here.
 const uuidParams = {
   type: 'object',
   required: ['id'],
@@ -29,6 +20,7 @@ const byId = { schema: { params: uuidParams } };
 export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<RideController>('rideController');
   fastify.setErrorHandler(handleRideError);
+
   fastify.post('/quote', (req, reply) => controller.request.quote(req, reply));
   fastify.post('/requests', { preHandler: fastify.rateLimit(rateLimits.rideWrite) }, (req, reply) =>
     controller.request.createRequest(req, reply),
@@ -38,6 +30,14 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
     (req, reply) => controller.request.cancelRequest(req, reply),
   );
+  fastify.patch(
+    '/requests/:id/boost',
+    { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.request.boostRequest(req, reply),
+  );
+  fastify.get('/requests/active', (req, reply) => controller.request.getActiveRequest(req, reply));
+  fastify.get('/requests/:id', byId, (req, reply) => controller.request.getRequestById(req, reply));
+
   const driverOnly = { preHandler: fastify.authorize({ requireOperableDriver: true }) };
   const driverOnlyById = { ...byId, ...driverOnly };
   fastify.get('/offers', driverOnly, (req, reply) => controller.state.listOffers(req, reply));
@@ -46,12 +46,19 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
   );
   fastify.post('/accept', driverOnly, (req, reply) => controller.state.accept(req, reply));
 
-  // Scheduled pickup actions before `/:id` so `scheduled` is not captured as an id.
+  fastify.get('/my-scheduled', (req, reply) => controller.scheduled.listMine(req, reply));
+  fastify.post('/scheduled/:id/cancel', byId, (req, reply) =>
+    controller.scheduled.cancelMine(req, reply),
+  );
   fastify.post('/scheduled/:id/accept', driverOnlyById, (req, reply) =>
     controller.scheduled.accept(req, reply),
   );
   fastify.post('/scheduled/:id/decline', driverOnlyById, (req, reply) =>
     controller.scheduled.decline(req, reply),
+  );
+
+  fastify.get('/share/:token', { config: { public: true } }, (req, reply) =>
+    controller.safety.viewShared(req, reply),
   );
 
   fastify.post('/:id/arriving', driverOnlyById, (req, reply) =>
@@ -66,6 +73,27 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/cancel',
     { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
     (req, reply) => controller.state.cancel(req, reply),
+  );
+
+  fastify.post(
+    '/:id/destination/quote',
+    { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.request.quoteDestination(req, reply),
+  );
+  fastify.post(
+    '/:id/destination',
+    { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.request.confirmDestination(req, reply),
+  );
+  fastify.post(
+    '/:id/sos',
+    { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.safety.sos(req, reply),
+  );
+  fastify.post(
+    '/:id/share',
+    { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.safety.share(req, reply),
   );
 
   fastify.get('/active', (req, reply) => controller.query.getActive(req, reply));

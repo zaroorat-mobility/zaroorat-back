@@ -24,6 +24,7 @@ import { registerRidesModule } from '@modules/rides';
 import { registerDriversModule } from '@modules/drivers';
 import { registerVehiclesModule } from '@modules/vehicles';
 import { registerRealtimeModule } from '@modules/realtime';
+import { registerSupportModule } from '@modules/support';
 export const container = createContainer({ injectionMode: InjectionMode.CLASSIC });
 registerDatabaseModule(container);
 registerRedisModule(container);
@@ -51,6 +52,7 @@ registerMatchingModule(container);
 registerRatingModule(container);
 registerAppConfigModule(container);
 registerRidesModule(container);
+registerSupportModule(container);
 // Realtime depends on ride chat for socket `chat.message.send`; register after rides.
 registerRealtimeModule(container);
 container.register({
