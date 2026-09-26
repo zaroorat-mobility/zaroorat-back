@@ -107,9 +107,11 @@ describe('Notification Pipeline & Failure Isolation', () => {
   });
 
   it('isolates notification processing failures without throwing exceptions', async () => {
-    const { consumer } = makeConsumerHarness();
+    const { eventHandlers } = makeConsumerHarness();
 
-    // Trigger onRideEvent with non-existent rideId
+    // Trigger ride.accepted with non-existent rideId. Driven through the
+    // registered handler — the consumer's only entry point — rather than a
+    // private method (F3 S5 moved per-event handling into the planner).
     const envelope: EventEnvelope = {
       eventId: 'evt-missing-ride',
       type: 'ride.accepted',
@@ -118,13 +120,12 @@ describe('Notification Pipeline & Failure Isolation', () => {
       data: { rideId: 'ride-missing' },
     } as unknown as EventEnvelope;
 
+    const handler = eventHandlers.get('ride.accepted');
+    assert.ok(handler, 'Handler for ride.accepted should be registered');
+
     // Should complete cleanly without throwing error (failure isolation)
     await assert.doesNotReject(async () => {
-      await (
-        consumer as unknown as {
-          onRideEvent: (e: EventEnvelope, title: string, body: string) => Promise<void>;
-        }
-      ).onRideEvent(envelope, 'Driver assigned', 'Driver on the way');
+      await handler(envelope);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { logger } from '@shared/logger/index.js';
-import { incrementCounter } from '@core/metrics';
+import { incrementCounter, setGauge } from '@core/metrics';
 
 /// The three counters Phase A needs in order to be verifiable at all.
 ///
@@ -85,4 +85,91 @@ export function notificationReconciliationSettled(fields?: NotificationMetricFie
 /// the sweep early.
 export function notificationReconciliationError(fields?: NotificationMetricFields): void {
   emit('reconciliation_error', fields);
+}
+
+// ── Outbox event reconciliation (F3) ─────────────────────────────────────────
+//
+// `notification_event_reconciliation_*` — distinct from PA-11's
+// `notification_reconciliation_*` above. PA-11 re-enqueues rows that exist; this
+// writes rows that were never created. Comparing `…_reenqueued` with
+// `notification_event_reconciliation_recovered` shows which gap is being covered.
+//
+// Incremented without a log line each, unlike the rest of this file: the sweep
+// reads every notification event every minute, and a line per increment would
+// drown the log. The run report the job logs once per run carries the same
+// totals for anything that reads logs.
+//
+// Labels are bounded sets only, never an id:
+//   event_type  one of the nine reconciled catalog events
+//   category    the delivery class
+//   reason      a fixed code: skip reason, failure reason, expiry kind, reset kind
+//   result      transient | permanent, or a run outcome
+//   scope       the run mode: on | dry-run | off
+
+export type EventReconciliationCounter =
+  /// result: off | lock_held | caught_up | budget | transient_db | queue_unavailable | error
+  | 'runs'
+  | 'run_duration_ms_total'
+  | 'pages'
+  | 'page_duration_ms_total'
+  | 'scanned'
+  | 'eligible'
+  | 'expired'
+  | 'skipped'
+  | 'present'
+  | 'recovered'
+  /// Sum of recovered events' ages at recovery; divide by `recovered` for the mean.
+  | 'recovered_age_seconds_total'
+  | 'would_recover'
+  | 'duplicate'
+  | 'enqueue_failed'
+  | 'failed'
+  /// reason: missing | behind_lookback
+  | 'cursor_reset'
+  /// Events passed over because the cursor had fallen behind the lookback floor.
+  | 'window_skipped';
+
+export type EventReconciliationGauge =
+  /// Seconds since publication of the oldest eligible event not yet reconciled
+  /// (0 once the scan reaches the grace boundary).
+  | 'lag_seconds'
+  /// Published events still inside the grace period, left for a later run.
+  | 'in_grace'
+  | 'last_run_duration_ms'
+  /// Oldest recovered event in the last run, seconds since it was created.
+  | 'recovered_age_seconds_max';
+
+export function notificationEventReconciliationCount(
+  counter: EventReconciliationCounter,
+  fields?: NotificationMetricFields,
+  by = 1,
+): void {
+  incrementCounter(`notification_event_reconciliation_${counter}`, fields, by);
+}
+
+export function notificationEventReconciliationGauge(
+  gauge: EventReconciliationGauge,
+  value: number,
+  fields?: NotificationMetricFields,
+): void {
+  setGauge(`notification_event_reconciliation_${gauge}`, value, fields);
+}
+
+// ── Live path (F3) ───────────────────────────────────────────────────────────
+
+/// A notification the live consumer did not get out: a failed lookup or insert —
+/// the outbox reconciliation's to recover — or a failed enqueue, PA-11's. Labels:
+/// `event_type`, and `category` once the notification was planned.
+///
+/// Never throws. The consumer runs off the outbox relay, and an exception from a
+/// counter would fail a dispatch it must not affect.
+export function notificationLiveFailure(
+  kind: 'lookup_failed' | 'persist_failed' | 'enqueue_failed',
+  fields?: NotificationMetricFields,
+): void {
+  try {
+    emit(`live_${kind}`, fields);
+  } catch {
+    // Observability is best effort; the consumer's outcome must not depend on it.
+  }
 }
