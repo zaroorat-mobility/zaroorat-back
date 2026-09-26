@@ -128,6 +128,20 @@ export const JOB_SCHEDULES: readonly JobSchedule[] = Object.freeze([
     // (shortest: 10 minutes). Each sweep is bounded to 100 notifications.
     pattern: process.env.NOTIFICATION_RECONCILIATION_CRON ?? '* * * * *',
   },
+  {
+    queue: QUEUE_NAMES.NOTIFICATIONS_MAINTENANCE,
+    name: JOB_NAMES.NOTIFICATION_EVENT_RECONCILIATION,
+    // F3 outbox reconciliation: writes the notifications whose event was
+    // published but never produced a row. Every minute; an event is a candidate
+    // 60s after publication. What it does is set by
+    // NOTIFICATION_EVENT_RECONCILIATION_MODE (unset = dry-run, `off` = nothing).
+    //
+    // Rollback: a BullMQ scheduler outlives this entry. Removing it from the
+    // code leaves the scheduler firing a job no handler claims, failing every
+    // minute — also run removeJobScheduler('notification-event-reconciliation')
+    // on notifications-maintenance (docs/14_Operations/02_runbooks.md, RB-09).
+    pattern: process.env.NOTIFICATION_EVENT_RECONCILIATION_CRON ?? '* * * * *',
+  },
 ]);
 export async function registerJobSchedules(): Promise<void> {
   for (const schedule of JOB_SCHEDULES) {
