@@ -121,7 +121,8 @@ services:
     environment:
       <<: *app-env
       WORKER_HEALTH_PORT: 3001
-    # Health server is for probes, not callers — internal only.
+    # Health and metrics server: probes and the Prometheus scrape, not callers —
+    # internal only.
     expose:
       - '3001'
     depends_on:

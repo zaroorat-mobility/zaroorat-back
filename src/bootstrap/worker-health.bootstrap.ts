@@ -1,6 +1,7 @@
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { workerConfig } from '@config/worker/worker.config.js';
 import { runReadinessChecks } from '@core/health/index.js';
+import { collectProcessMetrics, renderMetrics } from '@core/metrics';
 import { logger } from '@shared/logger/index.js';
 let draining = false;
 export function markDraining(): void {
@@ -17,6 +18,21 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 async function handle(path: string, res: ServerResponse): Promise<void> {
   if (path === '/health') {
     return send(res, 200, { status: draining ? 'draining' : 'ok' });
+  }
+  // The worker's counters and gauges — PA-11, delivery, the outbox
+  // reconciliation — live only in this process's registry; the API's /metrics
+  // cannot see them. Same exposition and the same trust model as the API's:
+  // unauthenticated, reachable only on the internal network this port is on.
+  // Served while draining too, so a shutdown stays observable.
+  if (path === '/metrics') {
+    collectProcessMetrics();
+    const body = renderMetrics();
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body),
+    });
+    res.end(body);
+    return;
   }
   if (path === '/ready') {
     if (draining) {

@@ -39,21 +39,21 @@ model NotificationPreference {
 }
 
 model Notification {
-  id            String               @id @default(uuid(7)) @db.Uuid
-  userId        String               @map("user_id") @db.Uuid
-  category      NotificationCategory @default(TRANSACTIONAL)
-  priority      NotificationPriority @default(NORMAL)
-  eventKey      String?              @map("event_key")
-  templateId    String?              @map("template_id") @db.Uuid
-  title         String?
-  body          String?
-  data          Json?
-  status        NotificationStatus   @default(PENDING)
-  idempotencyKey String?             @unique @map("idempotency_key")
-  referenceType String?              @map("reference_type")
-  referenceId   String?              @map("reference_id") @db.Uuid
-  createdAt     DateTime             @default(now()) @map("created_at")
-  readAt        DateTime?            @map("read_at")
+  id             String               @id @default(uuid(7)) @db.Uuid
+  userId         String               @map("user_id") @db.Uuid
+  category       NotificationCategory @default(TRANSACTIONAL)
+  priority       NotificationPriority @default(NORMAL)
+  eventKey       String?              @map("event_key")
+  templateId     String?              @map("template_id") @db.Uuid
+  title          String?
+  body           String?
+  data           Json?
+  status         NotificationStatus   @default(PENDING)
+  idempotencyKey String?              @unique @map("idempotency_key")
+  referenceType  String?              @map("reference_type")
+  referenceId    String?              @map("reference_id") @db.Uuid
+  createdAt      DateTime             @default(now()) @map("created_at")
+  readAt         DateTime?            @map("read_at")
 
   user               User                   @relation(fields: [userId], references: [id])
   template           NotificationTemplate?  @relation(fields: [templateId], references: [id])
@@ -64,6 +64,11 @@ model Notification {
   @@index([userId, createdAt])
   @@index([status])
   @@index([referenceType, referenceId])
+  // Retention. `[userId, createdAt]` serves a user's inbox but cannot serve a
+  // global age scan — its leading column is `user_id`, and the retention sweep
+  // filters on `created_at` alone across every user. Without this the sweep is a
+  // sequential scan plus a top-N sort of the whole table on every batch.
+  @@index([createdAt])
   @@map("notifications")
 }
 
@@ -96,6 +101,11 @@ model NotificationDelivery {
   @@index([templateId])
   @@index([channel, createdAt])
   @@index([status])
+  // Retention, same reason as `notifications`. `[channel, createdAt]` leads on
+  // `channel`, so a `created_at`-only predicate cannot use it without also
+  // constraining the channel — which the sweep does not do, because it prunes
+  // every channel together.
+  @@index([createdAt])
   @@map("notification_deliveries")
 }
 

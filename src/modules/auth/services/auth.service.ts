@@ -1,4 +1,5 @@
 import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
+import { logger } from '@shared/logger/index.js';
 import { EventPublisher } from '@core/events';
 import { TransactionManager } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
@@ -296,11 +297,90 @@ export class AuthService {
       rotate,
     );
   }
+  /// Ends one session and stops that device receiving notifications.
+  ///
+  /// ## Why the cleanup lives here
+  ///
+  /// `AuthService` already holds both `sessionService` and `deviceService`, so it
+  /// is the one place that can coordinate them without `SessionService` growing a
+  /// device dependency it has no other use for (decision D-1). Session bookkeeping
+  /// stays unaware of devices; orchestration stays here.
+  ///
+  /// ## Why the token must go
+  ///
+  /// Nothing cleared `fcmToken` on logout. The row stayed the user's newest
+  /// deliverable device, so notifications kept arriving on a handset whose session
+  /// had ended — and on a shared phone, arriving for whoever logged in next.
+  ///
+  /// ## Ordering, and what may fail
+  ///
+  /// Revocation is the security-critical step and runs unconditionally. The device
+  /// id is resolved *before* it — a cheap read, isolated, and done first so this
+  /// does not depend on the session row surviving revocation. Cleanup runs after
+  /// and cannot fail the logout: a user who asked to be logged out is logged out,
+  /// even if their device row is unreachable. A failure there is logged at error
+  /// level, because a device left holding a live token is a real security residue
+  /// that someone needs to see.
   async logout(sessionId: string): Promise<void> {
+    const deviceId = await this.resolveSessionDevice(sessionId);
+
     await this.sessionService.logout(sessionId);
+
+    if (deviceId) {
+      await this.clearDevicePushToken(() => this.deviceService.clearPushTokenForDevice(deviceId), {
+        sessionId,
+        deviceId,
+      });
+    }
   }
+
+  /// Logout-everywhere, with the same guarantees as `logout`: every session is
+  /// revoked first, then every device this user holds is made undeliverable.
+  /// Cleanup failure never fails the logout.
   async logoutAll(userId: string): Promise<void> {
     await this.sessionService.logoutAll(userId);
+
+    await this.clearDevicePushToken(() => this.deviceService.clearPushTokensForUser(userId), {
+      userId,
+    });
+  }
+
+  /// Best-effort read. Isolated so a lookup failure cannot stand between a user
+  /// and being logged out; the cost of returning null is one uncleaned token,
+  /// which the invalid-token sweep and the next registration both correct.
+  private async resolveSessionDevice(sessionId: string): Promise<string | null> {
+    try {
+      return await this.sessionService.deviceIdFor(sessionId);
+    } catch (err) {
+      logger.error(
+        { err, sessionId },
+        '[auth] could not resolve the session device during logout; push token left in place',
+      );
+      return null;
+    }
+  }
+
+  /// Runs a token-clearing operation without letting it affect the logout.
+  ///
+  /// Logged at error level, not warn: the session is gone but a device may still
+  /// be deliverable, and that residue does not resolve itself until the token is
+  /// rotated, reported invalid by FCM, or claimed by another account.
+  private async clearDevicePushToken(
+    clear: () => Promise<number>,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const cleared = await clear();
+      if (cleared > 0) {
+        logger.info({ ...context, cleared }, '[auth] push token cleared on logout');
+      }
+    } catch (err) {
+      logger.error(
+        { ...context, err },
+        '[auth] logout succeeded but clearing the device push token failed; ' +
+          'the device may still receive notifications until its token is rotated or invalidated',
+      );
+    }
   }
   async listSessions(userId: string): Promise<UserSession[]> {
     return this.sessionService.listSessions(userId);

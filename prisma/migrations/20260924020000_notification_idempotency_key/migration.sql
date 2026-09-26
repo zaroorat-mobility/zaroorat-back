@@ -1,0 +1,42 @@
+-- Adds `notifications.idempotency_key`, which the Prisma schema declares and the
+-- application depends on, but which no migration ever created.
+--
+-- ## Why
+--
+-- Commit c7113a8 added `Notification.idempotencyKey String? @unique` to the
+-- schema and started using it in `NotificationRepository.createNotificationWithDelivery`,
+-- without a migration. `RideNotificationConsumer` always passes a key
+-- (`${eventId}:${type}:${userId}:PUSH` — the event + user + channel idempotency
+-- rule), so on any database built from these migrations every ride notification
+-- insert fails with "column does not exist". The consumer swallows that failure by
+-- design (notification problems must not fail ride or payment work), so the whole
+-- push pipeline was silently dead and no test noticed: unit tests stub the
+-- repository and no integration test inserted a notification.
+--
+-- ## What
+--
+-- Exactly what Prisma generates for that field (`prisma migrate diff` against a
+-- database built from these migrations): a nullable TEXT column and a unique index
+-- with Prisma's default name. Nullable, as the schema declares it: rows written
+-- without a key (none today, but the column is optional in the repository) stay
+-- valid, and PostgreSQL's UNIQUE admits any number of NULLs.
+--
+-- IF NOT EXISTS on both, so a database that already acquired the column and index
+-- some other way (e.g. `prisma db push`) takes this as a no-op.
+--
+-- ## Build strategy
+--
+-- Plain build, not CONCURRENTLY — Prisma runs each migration in a transaction
+-- (see `20260801000000`). The column is new, so every existing row is NULL and the
+-- unique index cannot fail on existing data; its build still holds a lock that
+-- blocks writes to `notifications` for as long as it takes. If the table is large
+-- where this lands, build the index out-of-band first and IF NOT EXISTS makes the
+-- second statement a no-op:
+--
+--   ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "idempotency_key" TEXT;
+--   CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "notifications_idempotency_key_key"
+--     ON "notifications" ("idempotency_key");
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "idempotency_key" TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "notifications_idempotency_key_key"
+  ON "notifications" ("idempotency_key");

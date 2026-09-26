@@ -1,10 +1,11 @@
 import * as admin from 'firebase-admin';
 import { logger } from '@shared/logger/index.js';
-import type {
-  PushMessage,
-  PushProvider,
-  PushSendResult,
-} from '@modules/notifications/providers/push.provider';
+import {
+  PAYLOAD_TOO_LARGE,
+  type PushMessage,
+  type PushProvider,
+  type PushSendResult,
+} from '@modules/notifications/providers/push.provider.js';
 import type { DeviceRepository } from '@modules/auth/repositories/device.repository.js';
 
 /// FCM error codes that definitively mean "this registration token no longer
@@ -32,6 +33,19 @@ const TRANSIENT_FCM_CODES = new Set([
   'messaging/topics-message-rate-exceeded',
 ]);
 
+/// FCM's documented ceiling for a data payload. Checked here, at the boundary
+/// that actually talks to Google, rather than trusting every caller: an
+/// oversized payload is rejected by FCM as `invalid-argument`, which this
+/// provider deliberately classifies as retryable (a malformed request is a bug,
+/// not a dead token) — so without this guard an over-budget payload would burn
+/// the whole retry budget on a request that can never succeed.
+const MAX_DATA_BYTES = 4096;
+
+/// Re-exported for the tests that assert this provider's behaviour. The constant
+/// itself lives on the provider contract, because recognising it as permanent is
+/// every caller's concern, not this implementation's.
+export { PAYLOAD_TOO_LARGE };
+
 export class FcmPushProvider implements PushProvider {
   readonly name = 'fcm';
 
@@ -43,16 +57,45 @@ export class FcmPushProvider implements PushProvider {
   async sendPush(message: PushMessage): Promise<PushSendResult> {
     const tokenSuffix = message.to.slice(-8);
 
+    if (message.data) {
+      const bytes = Buffer.byteLength(JSON.stringify(message.data), 'utf8');
+      if (bytes > MAX_DATA_BYTES) {
+        logger.error(
+          { tokenSuffix, provider: this.name, dataBytes: bytes, limit: MAX_DATA_BYTES },
+          '[FCM] data payload over budget — refusing to send',
+        );
+        return { accepted: false, provider: this.name, error: PAYLOAD_TOO_LARGE };
+      }
+    }
+
     const fcmMessage: admin.messaging.Message = {
       token: message.to,
+      // Always present. Firebase throttles high-priority messages that do not
+      // result in a user-visible notification, so `android.priority: 'high'`
+      // below is only durable while every message carries this block.
       notification: {
         title: message.title,
         body: message.body,
       },
       // Android: override battery-optimisation delivery delay so backgrounded
       // drivers receive dispatch offers immediately.
+      //
+      // `priority` controls *when* FCM delivers. Channel importance controls
+      // *how* Android presents it, and is set by the app when it creates the
+      // channel — so a heads-up ride offer needs both, which is why
+      // `channelId` is addressed per message rather than fixed here.
       android: {
         priority: 'high',
+        ...(message.ttlMs !== undefined ? { ttl: message.ttlMs } : {}),
+        ...(message.collapseKey ? { collapseKey: message.collapseKey } : {}),
+        ...(message.channelId || message.sound
+          ? {
+              notification: {
+                ...(message.channelId ? { channelId: message.channelId } : {}),
+                ...(message.sound ? { sound: message.sound } : {}),
+              },
+            }
+          : {}),
       },
       // APNs (iOS): explicit alert so the notification appears in all app states
       // (foreground, background, killed). 'default' sound plays the system chime.
@@ -72,6 +115,15 @@ export class FcmPushProvider implements PushProvider {
           // High priority (10) delivers immediately rather than at the system's
           // discretion. Required for time-sensitive ride events.
           'apns-priority': '10',
+          // APNs takes an absolute expiry instant in unix seconds, where Android
+          // takes a relative duration. Same intent, different units. An explicit
+          // `expiresAt` wins; it is floored, so APNs never holds a message past it.
+          ...(message.expiresAt
+            ? { 'apns-expiration': String(Math.floor(message.expiresAt.getTime() / 1000)) }
+            : message.ttlMs !== undefined
+              ? { 'apns-expiration': String(Math.floor((Date.now() + message.ttlMs) / 1000)) }
+              : {}),
+          ...(message.collapseKey ? { 'apns-collapse-id': message.collapseKey } : {}),
         },
       },
       ...(message.data ? { data: message.data } : {}),
