@@ -152,10 +152,9 @@ describe('admin dashboard stats (integration)', () => {
       status: 'COMPLETED',
     });
 
-    await db().client.ride.update({
-      where: { id: rideId },
-      data: { completedAt: now },
-    });
+    await db().client.$executeRaw`
+      UPDATE "rides" SET "completed_at" = ${now} WHERE "id" = ${rideId}::uuid
+    `;
 
     await db().client.rideFare.create({
       data: {

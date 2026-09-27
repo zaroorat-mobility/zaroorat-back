@@ -2,7 +2,8 @@ import { DatabaseService } from '@core/database';
 
 export interface DashboardLiveStatsDto {
   activeDrivers: number;
-  activeRiders: number;
+  activeRiders: number; // backward-compatibility alias for inFlightRiders
+  inFlightRiders: number;
   ongoingRides: number;
   pendingVerifications: number;
 }
@@ -54,11 +55,45 @@ export interface RideAggRow {
   gross_ride_value: unknown;
 }
 
+interface InFlightRiderCountRow {
+  count: number | bigint;
+}
+
 export class AdminDashboardService {
   constructor(private readonly db: DatabaseService) {}
 
   private get client() {
     return this.db.client;
+  }
+
+  public async getInFlightRidersCount(): Promise<number> {
+    const rows = await this.client.$queryRaw<InFlightRiderCountRow[]>`
+      SELECT COUNT(DISTINCT customer_id)::int AS count
+      FROM (
+        SELECT r."customer_id"
+        FROM "rides" r
+        WHERE r."status" IN (
+          'ACCEPTED'::"RideStatus",
+          'DRIVER_ARRIVING'::"RideStatus",
+          'DRIVER_ARRIVED'::"RideStatus",
+          'IN_PROGRESS'::"RideStatus"
+        )
+
+        UNION
+
+        SELECT rr."customer_id"
+        FROM "ride_requests" rr
+        WHERE rr."status" IN (
+          'CREATED'::"RideRequestStatus",
+          'SEARCHING'::"RideRequestStatus"
+        )
+        AND (
+          rr."expires_at" IS NULL
+          OR rr."expires_at" > NOW()
+        )
+      ) active_customers
+    `;
+    return Number(rows[0]?.count ?? 0);
   }
 
   async getStats(): Promise<DashboardStatsDto> {
@@ -67,41 +102,30 @@ export class AdminDashboardService {
     const todayMidnightIst = new Date(`${todayIstStr}T00:00:00+05:30`);
     const trendStart = new Date(todayMidnightIst.getTime() - 6 * 24 * 60 * 60 * 1000);
 
-    const [driverStatuses, activeRiders, ongoingRides, pendingVerifications, ledgerRows, rideRows] =
-      await Promise.all([
-        this.client.driverOnlineStatus.groupBy({
-          by: ['status'],
-          _count: { _all: true },
-        }),
-        this.client.user.count({
-          where: {
-            deletedAt: null,
-            status: 'ACTIVE',
-            roleAssignments: {
-              some: {
-                revokedAt: null,
-                OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-                role: { slug: 'customer' },
-              },
-              none: {
-                revokedAt: null,
-                OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-                role: { slug: { notIn: ['customer', 'driver'] } },
-              },
-            },
-          },
-        }),
-        this.client.ride.count({
-          where: {
-            status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
-          },
-        }),
-        this.client.driver.count({
-          where: {
-            verificationStatus: { in: ['PENDING', 'DOCUMENT_REVIEW'] },
-          },
-        }),
-        this.client.$queryRaw<LedgerAggRow[]>`
+    const [
+      driverStatuses,
+      inFlightRiders,
+      ongoingRides,
+      pendingVerifications,
+      ledgerRows,
+      rideRows,
+    ] = await Promise.all([
+      this.client.driverOnlineStatus.groupBy({
+        by: ['status'],
+        _count: { _all: true },
+      }),
+      this.getInFlightRidersCount(),
+      this.client.ride.count({
+        where: {
+          status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+        },
+      }),
+      this.client.driver.count({
+        where: {
+          verificationStatus: { in: ['PENDING', 'DOCUMENT_REVIEW'] },
+        },
+      }),
+      this.client.$queryRaw<LedgerAggRow[]>`
         SELECT
           TO_CHAR(ple."created_at" AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day,
           ple."account" AS account,
@@ -113,7 +137,7 @@ export class AdminDashboardService {
         GROUP BY 1, 2, 3
         ORDER BY 1 ASC
       `,
-        this.client.$queryRaw<RideAggRow[]>`
+      this.client.$queryRaw<RideAggRow[]>`
         SELECT
           TO_CHAR(r."completed_at" AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day,
           COUNT(*)::int AS rides_count,
@@ -125,7 +149,7 @@ export class AdminDashboardService {
         GROUP BY 1
         ORDER BY 1 ASC
       `,
-      ]);
+    ]);
 
     const driverCounts: Record<string, number> = {};
     for (const row of driverStatuses) {
@@ -141,7 +165,8 @@ export class AdminDashboardService {
     return {
       stats: {
         activeDrivers: onlineDrivers,
-        activeRiders,
+        activeRiders: inFlightRiders,
+        inFlightRiders,
         ongoingRides,
         pendingVerifications,
       },
