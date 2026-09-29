@@ -133,6 +133,22 @@ export class RideRequestNotCancellableError extends RideError {
     this.name = 'RideRequestNotCancellableError';
   }
 }
+export class RideRequestNotBoostableError extends RideError {
+  constructor(status: string) {
+    super(
+      `Fare can only be boosted while searching (current status: '${status}')`,
+      'RIDE_REQUEST_NOT_BOOSTABLE',
+      409,
+    );
+    this.name = 'RideRequestNotBoostableError';
+  }
+}
+export class FareBoostInvalidError extends RideError {
+  constructor(message: string) {
+    super(message, 'FARE_BOOST_INVALID', 400);
+    this.name = 'FareBoostInvalidError';
+  }
+}
 export class VehicleMismatchError extends RideError {
   constructor(message: string) {
     super(message, 'VEHICLE_MISMATCH', 403);
@@ -293,12 +309,6 @@ export class ScheduledTooSoonError extends RideError {
       { minLeadMinutes },
     );
     this.name = 'ScheduledTooSoonError';
-  }
-}
-export class RideRequestNotBoostableError extends RideError {
-  constructor(status: string) {
-    super(`Cannot boost a ride request in status ${status}`, 'RIDE_REQUEST_NOT_BOOSTABLE', 409);
-    this.name = 'RideRequestNotBoostableError';
   }
 }
 export class DestinationChangeNotAllowedError extends RideError {

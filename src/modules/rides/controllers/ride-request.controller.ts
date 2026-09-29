@@ -105,6 +105,48 @@ export class RideRequestController {
     const request = await this.rideService.request.cancelRequest(id, customerId);
     reply.send({ data: request });
   }
+
+  async nearbyDrivers(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = req.query as Record<string, unknown>;
+    const lat = Number(query.lat ?? query.latitude ?? query.pickupLat);
+    const lng = Number(query.lng ?? query.longitude ?? query.pickupLng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      reply.status(400).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'lat and lng query params are required',
+          requestId: req.id,
+        },
+      });
+      return;
+    }
+    const params: {
+      lat: number;
+      lng: number;
+      limit?: number;
+      radiusMeters?: number;
+      vehicleTypeId?: string;
+      vehicleTypeCode?: string;
+    } = { lat, lng };
+    const limitRaw = query.limit != null ? Number(query.limit) : NaN;
+    const radiusRaw =
+      query.radiusMeters != null
+        ? Number(query.radiusMeters)
+        : query.radiusKm != null
+          ? Number(query.radiusKm) * 1000
+          : NaN;
+    if (Number.isFinite(limitRaw)) params.limit = limitRaw;
+    if (Number.isFinite(radiusRaw)) params.radiusMeters = radiusRaw;
+    if (typeof query.vehicleTypeId === 'string' && query.vehicleTypeId.trim()) {
+      params.vehicleTypeId = query.vehicleTypeId.trim();
+    }
+    if (typeof query.vehicleTypeCode === 'string' && query.vehicleTypeCode.trim()) {
+      params.vehicleTypeCode = query.vehicleTypeCode.trim();
+    }
+    const data = await this.rideService.request.findNearbyDrivers(params);
+    reply.send({ data });
+  }
+
   async boostRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const customerId = callerId(req);
     const { id } = req.params as { id: string };
@@ -123,6 +165,7 @@ export class RideRequestController {
     });
     reply.send({ data: quote });
   }
+
   async confirmDestination(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const customerId = callerId(req);
     const { id } = req.params as { id: string };

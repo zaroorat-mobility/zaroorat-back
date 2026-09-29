@@ -6,6 +6,9 @@ export const RIDE_EVENT_CATALOG = {
   /// Nobody accepted before the request aged out. The rider's search is over,
   /// and this is the only thing that tells them so.
   REQUEST_EXPIRED: 'ride.request.expired',
+  /// Customer raised the offered fare while still searching — may re-offer to
+  /// drivers who previously passed.
+  REQUEST_BOOSTED: 'ride.request.boosted',
   DISPATCH_OFFERED: 'ride.dispatch.offered',
   DISPATCH_REJECTED: 'ride.dispatch.rejected',
   DISPATCH_EXPIRED: 'ride.dispatch.expired',
@@ -20,7 +23,6 @@ export const RIDE_EVENT_CATALOG = {
   SCHEDULED_REMINDER: 'ride.scheduled.reminder',
   SCHEDULED_CREATED: 'ride.scheduled.created',
   SCHEDULED_CANCELLED: 'ride.scheduled.cancelled',
-  REQUEST_BOOSTED: 'ride.request.boosted',
   DESTINATION_CHANGED: 'ride.destination_changed',
   SOS_TRIGGERED: 'ride.sos.triggered',
 } as const;

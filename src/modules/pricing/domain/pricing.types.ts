@@ -30,6 +30,9 @@ export interface TripEstimate {
   durationMin: number;
   /// Name of the provider that supplied this estimate (e.g. 'ola', 'google', 'mappls', 'haversine').
   source: string;
+  /// Road-following coordinates from the directions provider, when available.
+  path?: Array<{ latitude: number; longitude: number }>;
+  encodedPolyline?: string;
 }
 
 export interface FinalFareParams {

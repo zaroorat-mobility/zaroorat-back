@@ -22,9 +22,13 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.setErrorHandler(handleRideError);
 
   fastify.post('/quote', (req, reply) => controller.request.quote(req, reply));
+  fastify.get('/nearby-drivers', (req, reply) => controller.request.nearbyDrivers(req, reply));
   fastify.post('/requests', { preHandler: fastify.rateLimit(rateLimits.rideWrite) }, (req, reply) =>
     controller.request.createRequest(req, reply),
   );
+  // Static `/requests/active` before `/requests/:id` so `active` is not parsed as an id.
+  fastify.get('/requests/active', (req, reply) => controller.request.getActiveRequest(req, reply));
+  fastify.get('/requests/:id', byId, (req, reply) => controller.request.getRequestById(req, reply));
   fastify.post(
     '/requests/:id/cancel',
     { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },

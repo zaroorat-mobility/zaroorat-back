@@ -18,11 +18,11 @@ import {
   RideNotFoundError,
   RideCustomerMismatchError,
   RideRequestNotCancellableError,
+  RideRequestNotBoostableError,
   IncompleteProfileError,
   RidePinNotConfiguredError,
   WalletRidesNotAcceptedError,
   ScheduledTooSoonError,
-  RideRequestNotBoostableError,
   DestinationChangeNotAllowedError,
   DestinationFareChangedError,
 } from '../../errors/ride.errors.js';
@@ -43,7 +43,8 @@ import {
 import { logger } from '@shared/logger/index.js';
 import type { Ride, RideRequest } from '../../types';
 import type { ItemizedFareResult } from '@modules/pricing';
-
+import { DispatchService } from '../dispatch/dispatch.service.js';
+import { FARE_BOOST_AMOUNTS } from '../../schemas/ride.schemas.js';
 export interface QuoteOption {
   vehicleTypeId: string;
   vehicleTypeCode: string;
@@ -58,6 +59,16 @@ export interface QuoteOption {
   promoDiscountAmount: number;
   promoErrorCode?: string;
   promoErrorMessage?: string;
+}
+
+export interface NearbyDriverSpot {
+  driverId: string;
+  latitude: number;
+  longitude: number;
+  distanceMeters: number;
+  heading?: number | null;
+  vehicleTypeId?: string | null;
+  vehicleTypeCode?: string | null;
 }
 
 export interface RideQuote {
@@ -76,6 +87,10 @@ export interface RideQuote {
   /// 'no_drivers' = Redis GEO candidate search returned 0 nearby drivers
   /// 'matrix_unavailable' = candidate drivers exist but map matrix API failed
   nearbyDriverEtaStatus: 'ok' | 'no_drivers' | 'matrix_unavailable';
+  /// Live nearby drivers around pickup (empty when none are online).
+  nearbyDrivers: NearbyDriverSpot[];
+  /// Road-following polyline for map display (empty when directions had no geometry).
+  routePath: Array<{ latitude: number; longitude: number }>;
   stops: Array<{ sequence: number; latitude: number; longitude: number; address: string | null }>;
   options: QuoteOption[];
 }
@@ -122,6 +137,7 @@ function routePoints(
 }
 const CANCELLABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
 const BOOSTABLE_REQUEST_STATUSES = new Set(['CREATED', 'SEARCHING']);
+
 export class RideRequestService {
   constructor(
     private readonly requestRepo: RideRequestRepository,
@@ -139,6 +155,7 @@ export class RideRequestService {
     private readonly debtService: DebtService,
     private readonly geographicCoverageService: GeographicCoverageService,
     private readonly nearbyDriverService: NearbyDriverService,
+    private readonly dispatchService: DispatchService,
     /// Injected map provider service for driver candidate matrix ETAs
     private readonly mapProviderService?: MapProviderService,
   ) {}
@@ -296,6 +313,7 @@ export class RideRequestService {
     // Clearly distinguishes 'no_drivers' (0 candidates) vs 'matrix_unavailable' (API failure).
     let nearbyDriverEtaMin: number | null = null;
     let nearbyDriverEtaStatus: 'ok' | 'no_drivers' | 'matrix_unavailable' = 'no_drivers';
+    let nearbyDrivers: NearbyDriverSpot[] = [];
 
     try {
       const nearby = await this.nearbyDriverService.find({
@@ -306,29 +324,43 @@ export class RideRequestService {
 
       if (!drivers || drivers.length === 0) {
         nearbyDriverEtaStatus = 'no_drivers';
-      } else if (this.mapProviderService) {
-        const origins = drivers.map((d) => ({
+      } else {
+        nearbyDrivers = drivers.map((d) => ({
+          driverId: d.driverId,
           latitude: d.latitude,
           longitude: d.longitude,
+          distanceMeters: d.distanceMeters,
+          heading: d.heading ?? d.bearing ?? null,
+          vehicleTypeId: d.vehicleTypeId ?? null,
+          vehicleTypeCode: d.vehicleTypeCode ?? null,
         }));
-        const destination = [{ latitude: params.pickupLat, longitude: params.pickupLng }];
+        if (this.mapProviderService) {
+          const origins = drivers.map((d) => ({
+            latitude: d.latitude,
+            longitude: d.longitude,
+          }));
+          const destination = [{ latitude: params.pickupLat, longitude: params.pickupLng }];
 
-        const matrixResult = await this.mapProviderService.getDistanceMatrix(origins, destination);
+          const matrixResult = await this.mapProviderService.getDistanceMatrix(
+            origins,
+            destination,
+          );
 
-        if (matrixResult.status === 'ok' && matrixResult.cells.length > 0) {
-          const etaSeconds = matrixResult.cells
-            .map((row) => row[0])
-            .filter((cell): cell is NonNullable<typeof cell> => !!cell && cell.status === 'OK')
-            .map((cell) => cell.durationSeconds);
+          if (matrixResult.status === 'ok' && matrixResult.cells.length > 0) {
+            const etaSeconds = matrixResult.cells
+              .map((row) => row[0])
+              .filter((cell): cell is NonNullable<typeof cell> => !!cell && cell.status === 'OK')
+              .map((cell) => cell.durationSeconds);
 
-          if (etaSeconds.length > 0) {
-            nearbyDriverEtaMin = Math.ceil(Math.min(...etaSeconds) / 60);
-            nearbyDriverEtaStatus = 'ok';
+            if (etaSeconds.length > 0) {
+              nearbyDriverEtaMin = Math.ceil(Math.min(...etaSeconds) / 60);
+              nearbyDriverEtaStatus = 'ok';
+            } else {
+              nearbyDriverEtaStatus = 'matrix_unavailable';
+            }
           } else {
             nearbyDriverEtaStatus = 'matrix_unavailable';
           }
-        } else {
-          nearbyDriverEtaStatus = 'matrix_unavailable';
         }
       }
     } catch (err) {
@@ -345,6 +377,8 @@ export class RideRequestService {
       currency: 'INR',
       nearbyDriverEtaMin,
       nearbyDriverEtaStatus,
+      nearbyDrivers,
+      routePath: trip.path ?? [],
       ...(resolvedCityCode !== undefined ? { cityCode: resolvedCityCode } : {}),
       stops: stops.map((stop, index) => ({
         sequence: index + 1,
@@ -354,6 +388,61 @@ export class RideRequestService {
       })),
       options,
     };
+  }
+
+  /// Live nearby driver positions for the customer map (no mock/fallback spots).
+  /// Expands search radius in steps until drivers of the requested category are found.
+  async findNearbyDrivers(params: {
+    lat: number;
+    lng: number;
+    limit?: number;
+    radiusMeters?: number;
+    vehicleTypeId?: string;
+    vehicleTypeCode?: string;
+  }): Promise<{ drivers: NearbyDriverSpot[]; searchRadiusMeters: number }> {
+    const limit = params.limit ?? 10;
+    const maxRadius = Math.min(
+      params.radiusMeters ?? 10_000,
+      // Cap at geo max via service assert; keep steps below typical max (15km).
+      12_000,
+    );
+    const steps = [2_000, 5_000, 8_000, 12_000].filter((r) => r <= maxRadius);
+    if (steps.length === 0 || steps[steps.length - 1] !== maxRadius) {
+      steps.push(maxRadius);
+    }
+
+    const vehicleFilter = {
+      ...(params.vehicleTypeId ? { vehicleTypeId: params.vehicleTypeId } : {}),
+      ...(params.vehicleTypeCode ? { vehicleTypeCode: params.vehicleTypeCode } : {}),
+    };
+
+    let usedRadius = steps[0] ?? 2_000;
+    for (const radiusMeters of steps) {
+      usedRadius = radiusMeters;
+      const nearby = await this.nearbyDriverService.find({
+        origin: { latitude: params.lat, longitude: params.lng },
+        limit,
+        radiusMeters,
+        ...vehicleFilter,
+      });
+      if (!('drivers' in nearby) || nearby.drivers.length === 0) {
+        continue;
+      }
+      return {
+        searchRadiusMeters: usedRadius,
+        drivers: nearby.drivers.map((d) => ({
+          driverId: d.driverId,
+          latitude: d.latitude,
+          longitude: d.longitude,
+          distanceMeters: d.distanceMeters,
+          heading: d.heading ?? d.bearing ?? null,
+          vehicleTypeId: d.vehicleTypeId ?? null,
+          vehicleTypeCode: d.vehicleTypeCode ?? null,
+        })),
+      };
+    }
+
+    return { drivers: [], searchRadiusMeters: usedRadius };
   }
   async createRequest(input: {
     customerId: string;
@@ -529,6 +618,12 @@ export class RideRequestService {
           estimatedDistanceKm: new Decimal(fareQuote.estimatedDistanceKm),
           estimatedDurationMin: fareQuote.estimatedDurationMin,
           quotedFare: new Decimal(fareQuote.totalFare),
+          boostAmount: new Decimal(
+            input.boostAmount != null &&
+              (FARE_BOOST_AMOUNTS as readonly number[]).includes(input.boostAmount)
+              ? input.boostAmount
+              : 0,
+          ),
           surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
           pricingRuleId,
           // A scheduled booking must not age out like an instant search does;
@@ -538,7 +633,6 @@ export class RideRequestService {
           passengerName: input.passengerName ?? null,
           passengerPhone: input.passengerPhone ?? null,
           pickupNotes: input.pickupNotes?.trim() ? input.pickupNotes.trim() : null,
-          boostAmount: input.boostAmount ? new Decimal(input.boostAmount) : null,
         };
         if (input.pickupAddress !== undefined) createInput.pickupAddress = input.pickupAddress;
         if (input.dropLat !== undefined) createInput.dropLat = new Decimal(input.dropLat);
@@ -632,6 +726,18 @@ export class RideRequestService {
       return cancelled;
     });
   }
+
+  async getOfferStatsForRequest(requestId: string): Promise<{
+    offersSent: number;
+    offersRejected: number;
+    driversNotified: number;
+    driversRejected: number;
+  }> {
+    return this.dispatchRepo.countOfferStatsForRequest(requestId);
+  }
+
+  /// Adjust the offered fare while still searching. Re-shares the request with
+  /// captains who previously saw it (passed, timed out, or still holding).
   /// Replaces (never accumulates) the rider's boost on a request that is still
   /// searching. Drivers see `quotedFare + boostAmount` on the offer.
   async boostRequest(

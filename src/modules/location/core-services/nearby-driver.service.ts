@@ -35,11 +35,31 @@ export class NearbyDriverService {
     );
     const limit = search.limit ?? geoConfig.maxCandidates;
     const freshAfter = new Date(Date.now() - geoConfig.candidateStalenessSeconds * 1000);
+    const vehicleFilter = {
+      ...(search.vehicleTypeId ? { vehicleTypeId: search.vehicleTypeId } : {}),
+      ...(search.vehicleTypeCode ? { vehicleTypeCode: search.vehicleTypeCode } : {}),
+    };
+    const hasVehicleFilter = !!(search.vehicleTypeId || search.vehicleTypeCode);
     this.geoMetrics.nearbyRequested({ scope: 'nearby_drivers' });
     const lookup = await this.candidatesFromLiveStore(origin, radiusMeters);
     if (lookup.available && lookup.driverIds.length === 0) {
-      this.geoMetrics.noLiveCandidates({ result: 'no_live_candidates' });
-      return { outcome: 'no-live-candidates' };
+      // Live H3 index is healthy but empty for these cells. Still check PostGIS
+      // for recently recorded positions — Redis cell membership can lag a write
+      // or miss a driver who sits just outside the H3 ring while inside the radius.
+      const freshDrivers = await this.postgisProvider.findNearbyDrivers({
+        origin,
+        radiusMeters,
+        freshAfter,
+        limit,
+        ...vehicleFilter,
+      });
+      if (freshDrivers.length === 0) {
+        this.geoMetrics.noLiveCandidates({ result: 'no_live_candidates' });
+        return { outcome: 'no-live-candidates' };
+      }
+      this.geoMetrics.nearbyCandidates(freshDrivers.length, { result: 'degraded' });
+      this.geoMetrics.postgisFallback({ reason: 'live_index_empty' });
+      return { outcome: 'degraded', drivers: freshDrivers };
     }
     const drivers = await this.postgisProvider.findNearbyDrivers({
       origin,
@@ -47,7 +67,24 @@ export class NearbyDriverService {
       freshAfter,
       limit,
       ...(lookup.available ? { driverIds: lookup.driverIds } : {}),
+      ...vehicleFilter,
     });
+    // Live index may contain other categories only. If we filtered by vehicle type
+    // and got nothing, widen to PostGIS without the Redis id allow-list.
+    if (drivers.length === 0 && hasVehicleFilter && lookup.available) {
+      const freshDrivers = await this.postgisProvider.findNearbyDrivers({
+        origin,
+        radiusMeters,
+        freshAfter,
+        limit,
+        ...vehicleFilter,
+      });
+      if (freshDrivers.length > 0) {
+        this.geoMetrics.nearbyCandidates(freshDrivers.length, { result: 'degraded' });
+        this.geoMetrics.postgisFallback({ reason: 'vehicle_type_mismatch_in_live_index' });
+        return { outcome: 'degraded', drivers: freshDrivers };
+      }
+    }
     this.geoMetrics.nearbyCandidates(drivers.length, {
       result: lookup.available ? 'ok' : 'degraded',
     });
