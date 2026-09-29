@@ -23,7 +23,6 @@ export const RIDE_EVENT_CATALOG = {
   SCHEDULED_REMINDER: 'ride.scheduled.reminder',
   SCHEDULED_CREATED: 'ride.scheduled.created',
   SCHEDULED_CANCELLED: 'ride.scheduled.cancelled',
-  REQUEST_BOOSTED: 'ride.request.boosted',
   DESTINATION_CHANGED: 'ride.destination_changed',
   SOS_TRIGGERED: 'ride.sos.triggered',
 } as const;

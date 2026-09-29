@@ -39,7 +39,6 @@ export interface CreateRideRequestInput {
   passengerName?: string | null;
   passengerPhone?: string | null;
   pickupNotes?: string | null;
-  boostAmount?: Decimal | null;
 }
 export interface RideRequestStopInput {
   lat: number;

@@ -311,12 +311,6 @@ export class ScheduledTooSoonError extends RideError {
     this.name = 'ScheduledTooSoonError';
   }
 }
-export class RideRequestNotBoostableError extends RideError {
-  constructor(status: string) {
-    super(`Cannot boost a ride request in status ${status}`, 'RIDE_REQUEST_NOT_BOOSTABLE', 409);
-    this.name = 'RideRequestNotBoostableError';
-  }
-}
 export class DestinationChangeNotAllowedError extends RideError {
   constructor(status: string) {
     super(
