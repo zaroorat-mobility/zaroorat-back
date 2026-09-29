@@ -18,6 +18,12 @@ export const RedisKeys = {
   rateLimit: (scope: string, id: string): string => `ratelimit:${scope}:${id}`,
   idempotency: (operation: IdempotencyOperation, key: string): string => `idem:${operation}:${key}`,
   lock: (resource: string): string => `lock:${resource}`,
+  /// Where the outbox notification reconciliation stopped. Holds a timestamp and
+  /// an outbox row id only — never event payload. Dry runs keep their own.
+  notificationEventReconciliationCursor: (mode: 'on' | 'dry-run'): string =>
+    mode === 'on'
+      ? 'notification:event-reconciliation:cursor'
+      : 'notification:event-reconciliation:cursor:dry-run',
   tripDistance: (driverId: string): string => `ride:distance:${driverId}`,
 } as const;
 export type RedisKeys = typeof RedisKeys;

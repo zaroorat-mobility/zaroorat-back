@@ -18,6 +18,7 @@ import {
   RideService,
   RidePinThrottle,
   RidePinVerificationService,
+  RideSafetyService,
 } from './services/index.js';
 import { ScheduledRideService } from './services/scheduled/index.js';
 import { RideChatService } from './services/chat/index.js';
@@ -30,8 +31,14 @@ import {
   RideChatController,
   RideCallController,
   RideScheduledController,
+  RideSafetyController,
 } from './controllers/index.js';
-import { DispatchTimeoutJob, RequestExpiryJob, ScheduledRideReminderJob } from './jobs/index.js';
+import {
+  DispatchTimeoutJob,
+  NotificationEventReconciliationJob,
+  RequestExpiryJob,
+  ScheduledRideReminderJob,
+} from './jobs/index.js';
 import {
   RideRequestedConsumer,
   RideNotificationConsumer,
@@ -69,6 +76,7 @@ export function registerRidesModule(container: AwilixContainer): void {
     lifecycleService: asClass(LifecycleService).singleton(),
     receiptService: asClass(ReceiptService).singleton(),
     scheduledRideService: asClass(ScheduledRideService).singleton(),
+    rideSafetyService: asClass(RideSafetyService).singleton(),
     rideChatService: asClass(RideChatService).singleton(),
     callProvider: asFunction(createCallProvider).singleton(),
     rideCallService: asClass(RideCallService).singleton(),
@@ -88,6 +96,7 @@ export function registerRidesModule(container: AwilixContainer): void {
     rideChatController: asClass(RideChatController).singleton(),
     rideCallController: asClass(RideCallController).singleton(),
     rideScheduledController: asClass(RideScheduledController).singleton(),
+    rideSafetyController: asClass(RideSafetyController).singleton(),
     rideController: asClass(RideController)
       .singleton()
       .inject((c) => ({
@@ -97,10 +106,12 @@ export function registerRidesModule(container: AwilixContainer): void {
         chat: c.resolve('rideChatController'),
         call: c.resolve('rideCallController'),
         scheduled: c.resolve('rideScheduledController'),
+        safety: c.resolve('rideSafetyController'),
       })),
     dispatchTimeoutJob: asClass(DispatchTimeoutJob).singleton(),
     requestExpiryJob: asClass(RequestExpiryJob).singleton(),
     scheduledRideReminderJob: asClass(ScheduledRideReminderJob).singleton(),
+    notificationEventReconciliationJob: asClass(NotificationEventReconciliationJob).singleton(),
     rideRequestedConsumer: asClass(RideRequestedConsumer).singleton(),
     rideNotificationConsumer: asClass(RideNotificationConsumer).singleton(),
     rideRealtimeConsumer: asClass(RideRealtimeConsumer).singleton(),

@@ -4,6 +4,7 @@ import { NotificationDeliveryJob } from '../../../src/modules/notifications/jobs
 import type { NotificationRepository } from '../../../src/modules/notifications/repositories/notification.repository.js';
 import type { DeviceRepository } from '../../../src/modules/auth/repositories/device.repository.js';
 import type { PushProvider } from '../../../src/modules/notifications/providers/push.provider.js';
+import { deliveryFakes } from './helpers/delivery-fakes.js';
 
 describe('NotificationDeliveryJob', () => {
   function makeStubs(opts: {
@@ -11,51 +12,41 @@ describe('NotificationDeliveryJob', () => {
     fcmToken?: string | null;
     pushResult?: { accepted: boolean; provider: string; providerRef?: string; error?: string };
   }) {
+    // The repositories are the shared in-memory doubles (see helpers/delivery-fakes):
+    // the job now plans, claims and finalizes per device instead of reading one
+    // latest token. The scenarios and assertions below are unchanged.
     const deliveryUpdates: Array<{
       id: string;
       input: { status?: string; providerMessageId?: string; errorCode?: string };
     }> = [];
-    const notificationUpdates: Array<{ id: string; status: string }> = [];
-
-    const notificationRepoStub = {
-      async findDeliveryById(id: string) {
-        if (id !== 'del-123') return null;
-        return {
+    const fakes = deliveryFakes({
+      onDeliveryUpdate: (id, input) => deliveryUpdates.push({ id, input }),
+      notification: {
+        id: 'notif-123',
+        userId: 'usr-123',
+        title: 'Test Title',
+        body: 'Test Body',
+        data: { eventId: 'evt-1' },
+        status: 'QUEUED',
+      },
+      deliveries: [
+        {
           id: 'del-123',
           notificationId: 'notif-123',
-          channel: 'PUSH' as const,
-          status: (opts.deliveryStatus ?? 'QUEUED') as unknown as 'QUEUED' | 'SENT' | 'FAILED',
+          channel: 'PUSH',
+          deviceId: null,
+          status: opts.deliveryStatus ?? 'QUEUED',
           attempts: 0,
-          notification: {
-            id: 'notif-123',
-            userId: 'usr-123',
-            title: 'Test Title',
-            body: 'Test Body',
-            data: { eventId: 'evt-1' },
-            status: 'QUEUED' as unknown as 'QUEUED' | 'SENT' | 'FAILED',
-          },
-        };
-      },
-      async updateDeliveryStatus(
-        id: string,
-        input: { status?: string; providerMessageId?: string; errorCode?: string },
-      ) {
-        deliveryUpdates.push({ id, input });
-        return { id, ...input };
-      },
-      async updateNotificationStatus(id: string, status: string) {
-        notificationUpdates.push({ id, status });
-        return { id, status };
-      },
-    } as unknown as NotificationRepository;
-
-    const deviceRepoStub = {
-      async findLatestFcmToken(userId: string) {
-        if (userId === 'usr-123')
-          return opts.fcmToken !== undefined ? opts.fcmToken : 'valid_fcm_token_123';
-        return null;
-      },
-    } as unknown as DeviceRepository;
+        },
+      ],
+      devices:
+        opts.fcmToken === null
+          ? []
+          : [{ id: 'device-1', fcmToken: opts.fcmToken ?? 'valid_fcm_token_123' }],
+    });
+    const notificationUpdates = fakes.notificationUpdates;
+    const notificationRepoStub = fakes.notificationRepository as NotificationRepository;
+    const deviceRepoStub = fakes.deviceRepository as DeviceRepository;
 
     let pushCalled = false;
     const pushProviderStub: PushProvider = {

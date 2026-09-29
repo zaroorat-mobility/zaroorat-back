@@ -4,6 +4,7 @@ import type { OtpPurpose } from '@core/database/types';
 import type { OtpConfig } from '@config/otp/otp.config';
 import { logger } from '@shared/logger/index.js';
 import { uuidV7 } from '@shared/crypto';
+import { isUuid } from '@shared/validation/index.js';
 import { NotificationService } from '@modules/notifications';
 import type { OtpDeliveryJobData } from '@/jobs/producers/index.js';
 import { authEvent } from '../../events';
@@ -23,10 +24,6 @@ import { OtpHasher } from './otp.hasher';
 import { OtpValidator } from './otp.validator';
 import { OtpRateLimiter } from './otp.rate-limiter';
 import { OtpMetrics } from '../../metrics';
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function isUuid(value: string | null | undefined): value is string {
-  return typeof value === 'string' && UUID_PATTERN.test(value);
-}
 export interface SendOtpInput {
   phoneNumber: string;
   purpose: OtpPurpose;

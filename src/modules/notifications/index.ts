@@ -7,6 +7,7 @@ import {
 import { NotificationService } from './notification.service';
 import { NotificationRepository } from './repositories/notification.repository.js';
 import { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
+import { NotificationReconciliationJob } from './jobs/notification-reconciliation.job.js';
 export type { SmsProvider, SmsMessage, SmsSendResult } from './providers/sms.provider';
 export type { PushProvider, PushMessage, PushSendResult } from './providers/push.provider';
 export type { EmailProvider, EmailMessage, EmailSendResult } from './providers/email.provider';
@@ -17,6 +18,15 @@ export { MockPushProvider } from './providers/mock-push.provider';
 export { FcmPushProvider } from '../../integrations/firebase/fcm-push.provider.js';
 export { NotificationRepository } from './repositories/notification.repository.js';
 export { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
+export {
+  NotificationReconciliationJob,
+  type NotificationReconciliationReport,
+} from './jobs/notification-reconciliation.job.js';
+export {
+  notificationCreated,
+  notificationEnqueueFailed,
+  notificationNoActiveDevice,
+} from './metrics/notification.metrics.js';
 export {
   getNotificationConfig,
   createSmsProvider,
@@ -35,6 +45,7 @@ export function registerNotificationModule(container: AwilixContainer): void {
     pushProvider: asFunction(createPushProvider).singleton(),
     notificationRepository: asClass(NotificationRepository).singleton(),
     notificationDeliveryJob: asClass(NotificationDeliveryJob).singleton(),
+    notificationReconciliationJob: asClass(NotificationReconciliationJob).singleton(),
     notificationService: asClass(NotificationService).singleton(),
   });
 }

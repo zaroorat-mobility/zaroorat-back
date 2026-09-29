@@ -53,6 +53,10 @@ consumes. This doc fixes the **contracts**; error _bodies_ are 05, event _schema
 }
 ```
 
+`device.deviceId` is the client-generated, stable per-install identifier (≤128 chars, e.g.
+`dev_<base36>_<random>`), not a native OS id. On verify it becomes `user_devices.device_id`; see
+§2.7.
+
 **Response `200`** (uniform)
 
 ```json
@@ -229,6 +233,38 @@ already-revoked session is a no-op).
 > else's session or device exists is an enumeration oracle. Note the status is `400 VALIDATION`,
 > **not** the `404 NOT_FOUND` the USER module uses for the same shape (user doc 04 §2.1). Both are
 > enumeration-safe; the divergence is real and worth settling in one direction.
+
+### 2.7 `POST /api/v1/auth/me/device/push-token` — register / rotate the FCM token
+
+**Request**
+
+```json
+{ "fcmToken": "<FCM registration token>", "deviceId": "dev_lz3k1a_4f9x2c7q" }
+```
+
+**Response `200`**
+
+```json
+{ "data": { "deviceId": "<uuid>", "fcmToken": "<FCM registration token>" } }
+```
+
+> **The two `deviceId`s are different identifiers.**
+>
+> - **Request `deviceId`** = the client-generated, stable per-install id — the same value sent as
+>   `device.deviceId` on OTP send/verify, stored in `user_devices.device_id`. Optional: omitted, the
+>   session's device is used. A `user_devices.id` UUID is also accepted.
+> - **Response `data.deviceId`** = the server-side `user_devices.id` UUID of the row that now holds
+>   the token.
+
+- **Resolution:** a UUID-shaped value is first tried as the caller's own `user_devices.id`; then the
+  value is looked up as the caller's client id. Non-UUID values never reach the UUID lookup.
+- **Session linking:** if no row has the client id and the session's device row has
+  `device_id = NULL` (a login that sent no `device`), that row takes the client id and the token —
+  no second row is created, so logout still clears it. A session row that already has a client id
+  is never overwritten; an unknown client id then gets a new row.
+- Only the caller's rows are ever matched; another account's row id or client id resolves to a
+  new row for the caller, never to theirs.
+- The token is released from every other account that held it, atomically with the claim.
 
 ---
 

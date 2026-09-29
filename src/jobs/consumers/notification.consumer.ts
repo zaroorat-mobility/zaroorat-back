@@ -43,7 +43,7 @@ export function startNotificationWorker(): Worker<
 
     if (job && made >= attempts) {
       void resolveJob()
-        .markExhausted(job.data.deliveryId, job.data.notificationId, err.message)
+        .markExhausted(job.data.notificationId, err.message)
         .catch((recordErr: unknown) => {
           logger.error(
             { err: recordErr, jobId: job.id },

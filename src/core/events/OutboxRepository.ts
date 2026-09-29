@@ -21,6 +21,14 @@ export interface OutboxStats {
   dead: number;
   oldestPendingAgeMs: number;
 }
+export interface PublishedOutboxEvent {
+  id: string;
+  eventId: string;
+  eventType: string;
+  payload: unknown;
+  createdAt: Date;
+  publishedAt: Date;
+}
 export class OutboxRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
     super(databaseService);
@@ -133,6 +141,53 @@ export class OutboxRepository extends BaseRepository {
       )
     `;
     return deleted;
+  }
+  /// PUBLISHED events of the given types, published in [after, before), oldest
+  /// first, continuing strictly after `after` (keyset on `(publishedAt, id)`, so
+  /// a batch sharing one `publishedAt` is paged without skipping or repeating).
+  /// Read-only; served by `outbox_events_status_published_at_idx`.
+  async findPublishedPage(input: {
+    after: { publishedAt: Date; id: string };
+    before: Date;
+    eventTypes: readonly string[];
+    limit: number;
+  }): Promise<PublishedOutboxEvent[]> {
+    const rows = await this.client.outboxEvent.findMany({
+      where: {
+        status: 'PUBLISHED',
+        eventType: { in: [...input.eventTypes] },
+        publishedAt: { gte: input.after.publishedAt, lt: input.before },
+        OR: [{ publishedAt: { gt: input.after.publishedAt } }, { id: { gt: input.after.id } }],
+      },
+      orderBy: [{ publishedAt: 'asc' }, { id: 'asc' }],
+      take: input.limit,
+      select: {
+        id: true,
+        eventId: true,
+        eventType: true,
+        payload: true,
+        createdAt: true,
+        publishedAt: true,
+      },
+    });
+    // The `publishedAt` range excludes NULL, so every row has one.
+    return rows.map((row) => ({ ...row, publishedAt: row.publishedAt! }));
+  }
+  /// How many PUBLISHED events of the given types were published in
+  /// [from, before) — `before` omitted means no upper bound. Read-only, for
+  /// observability; served by the same index as `findPublishedPage`.
+  async countPublished(input: {
+    from: Date;
+    before?: Date;
+    eventTypes: readonly string[];
+  }): Promise<number> {
+    return this.client.outboxEvent.count({
+      where: {
+        status: 'PUBLISHED',
+        eventType: { in: [...input.eventTypes] },
+        publishedAt: { gte: input.from, ...(input.before ? { lt: input.before } : {}) },
+      },
+    });
   }
   async stats(now: Date = new Date()): Promise<OutboxStats> {
     const [pending, dead, oldest] = await Promise.all([

@@ -76,7 +76,16 @@ export class RideDispatchRepository {
         // RIDE_REQUEST_ALREADY_MATCHED.
         request: { status: { in: ['CREATED', 'SEARCHING'] } },
       },
-      include: { request: true },
+      include: {
+        request: {
+          include: {
+            stops: {
+              select: { sequence: true, lat: true, lng: true, address: true },
+              orderBy: { sequence: 'asc' },
+            },
+          },
+        },
+      },
       orderBy: { offeredAt: 'desc' },
     });
   }

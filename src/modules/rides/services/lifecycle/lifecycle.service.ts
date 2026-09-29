@@ -442,9 +442,25 @@ export class LifecycleService {
           mapConfigVersion: request.mapConfigVersion,
           driverPaymentModel,
           commissionAmount,
+          passengerName: request.passengerName,
+          passengerPhone: request.passengerPhone,
+          pickupNotes: request.pickupNotes,
         },
         tx,
       );
+      const requestStops = await this.requestRepo.findStops(request.id, tx);
+      if (requestStops.length > 0) {
+        await this.rideRepo.createIntermediateStops(
+          ride.id,
+          requestStops.map((stop) => ({
+            lat: Number(stop.lat),
+            lng: Number(stop.lng),
+            address: stop.address,
+            sequence: stop.sequence,
+          })),
+          tx,
+        );
+      }
       await this.dispatchRepo.resolveOffers(request.id, data.driverId, tx);
       await this.driverStatusRepository.updateStatus(data.driverId, 'ON_TRIP', {}, tx);
       await this.statusEventRepo.record(
@@ -782,9 +798,13 @@ export class LifecycleService {
       // bounding it. A request with no recorded quote — rows written before the
       // column existed — bills uncapped, as it did before.
       const quotedFare = request?.quotedFare != null ? Number(request.quotedFare) : null;
+      const boostAmount =
+        request?.boostAmount != null && Number.isFinite(Number(request.boostAmount))
+          ? Number(request.boostAmount)
+          : 0;
       const fareCeiling =
         quotedFare != null && Number.isFinite(quotedFare) && quotedFare > 0
-          ? quotedFare * (1 + pricingConfig.maxFareIncreaseOverQuotePct / 100)
+          ? (quotedFare + boostAmount) * (1 + pricingConfig.maxFareIncreaseOverQuotePct / 100)
           : null;
 
       const itemizedFare = await this.pricingService.calculateFinalFare({
@@ -799,10 +819,12 @@ export class LifecycleService {
       });
       if (fareCeiling != null && itemizedFare.totalFare >= fareCeiling) {
         logger.info(
-          { rideId, quotedFare, fareCeiling, totalFare: itemizedFare.totalFare },
+          { rideId, quotedFare, boostAmount, fareCeiling, totalFare: itemizedFare.totalFare },
           '[rides] final fare capped at the quoted ceiling',
         );
       }
+      const totalWithBoost = itemizedFare.totalFare + boostAmount;
+      const driverEarningWithBoost = itemizedFare.driverEarning + boostAmount;
       // BD-5, extended to the whole "the customer paid the driver directly"
       // family. The customer's ride fare is never a platform transaction —
       // CASH, CARD and UPI all mean the driver already has the money in hand,
@@ -850,8 +872,9 @@ export class LifecycleService {
           discountAmount: new Decimal(itemizedFare.discountAmount),
           taxAmount: new Decimal(itemizedFare.taxAmount),
           platformFee: new Decimal(itemizedFare.platformFee),
-          totalFare: new Decimal(itemizedFare.totalFare),
-          driverEarning: new Decimal(itemizedFare.driverEarning),
+          tipAmount: new Decimal(boostAmount),
+          totalFare: new Decimal(totalWithBoost),
+          driverEarning: new Decimal(driverEarningWithBoost),
           platformCommission: new Decimal(itemizedFare.platformCommission),
         },
         tx,

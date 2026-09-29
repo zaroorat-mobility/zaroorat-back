@@ -31,6 +31,9 @@ export interface CreateRideInput {
   /// COMMISSION-model rides only, determined once at acceptance (spec.md
   /// FR-013b). Null for SUBSCRIPTION-model rides.
   commissionAmount?: Decimal | null;
+  passengerName?: string | null;
+  passengerPhone?: string | null;
+  pickupNotes?: string | null;
 }
 export class RideRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -58,6 +61,7 @@ export class RideRepository {
         "drop_location", "drop_address", "accepted_at",
         "wait_time_min", "is_scheduled", "map_provider", "map_config_version",
         "driver_payment_model", "commission_amount",
+        "passenger_name", "passenger_phone", "pickup_notes",
         "created_at", "updated_at"
       ) VALUES (
         ${id}::uuid, ${rideCode}, ${input.requestId}::uuid, ${input.customerId}::uuid,
@@ -75,11 +79,38 @@ export class RideRepository {
         0, ${input.isScheduled ?? false},
         ${input.mapProvider ?? null}, ${input.mapConfigVersion ?? null},
         ${input.driverPaymentModel ?? null}, ${input.commissionAmount ?? null},
+        ${input.passengerName ?? null}, ${input.passengerPhone ?? null}, ${input.pickupNotes ?? null},
         now(), now()
       )
     `;
     return client.ride.findUniqueOrThrow({ where: { id } });
   }
+
+  /// Copies intermediate stops from the request onto the ride. PostGIS
+  /// `location` is written via raw SQL the same way request stops are.
+  async createIntermediateStops(
+    rideId: string,
+    stops: readonly { lat: number; lng: number; address?: string | null; sequence?: number }[],
+    tx?: TransactionClient,
+  ): Promise<void> {
+    if (stops.length === 0) return;
+    const client = tx ?? this.db.client;
+    for (const [index, stop] of stops.entries()) {
+      const sequence = stop.sequence ?? index + 1;
+      await client.$executeRaw`
+        INSERT INTO "ride_stops" (
+          "id", "ride_id", "sequence", "stop_type", "location", "address"
+        ) VALUES (
+          ${randomUUID()}::uuid, ${rideId}::uuid, ${sequence},
+          'INTERMEDIATE',
+          ST_SetSRID(ST_MakePoint(${stop.lng}, ${stop.lat}), 4326)::geography,
+          ${stop.address ?? null}
+        )
+        ON CONFLICT ("ride_id", "sequence") DO NOTHING
+      `;
+    }
+  }
+
   async findById(id: string, tx?: TransactionClient): Promise<Ride | null> {
     const client = tx ?? this.db.client;
     return client.ride.findUnique({
@@ -225,6 +256,21 @@ export class RideRepository {
       data: { paymentStatus },
     });
     return count === 1;
+  }
+  /// Raw because `drop_location` is a PostGIS column Prisma cannot write.
+  async updateDrop(
+    id: string,
+    input: { dropLat: number; dropLng: number; dropAddress: string | null },
+    tx?: TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.db.client;
+    await client.$executeRaw`
+      UPDATE "rides" SET
+        "drop_location" = ST_SetSRID(ST_MakePoint(${input.dropLng}, ${input.dropLat}), 4326)::geography,
+        "drop_address" = ${input.dropAddress},
+        "updated_at" = now()
+      WHERE "id" = ${id}::uuid
+    `;
   }
   async listCustomerRides(customerId: string, limit = 20, tx?: TransactionClient): Promise<Ride[]> {
     const client = tx ?? this.db.client;

@@ -9,7 +9,12 @@ export interface DashboardLiveStatsDto {
 
 export interface DashboardEarningStatDto {
   date: string;
-  earnings: number;
+  platformRevenue: number;
+  earnings: number; // backward-compatibility alias for platformRevenue
+  rideCommission: number;
+  subscriptionRevenue: number;
+  platformFees: number;
+  grossRideValue: number;
   ridesCount: number;
 }
 
@@ -18,7 +23,36 @@ export interface DashboardStatsDto {
   earningTrend: DashboardEarningStatDto[];
 }
 
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+const REPORTING_TIME_ZONE = 'Asia/Kolkata';
+
+export function formatIstDate(d: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: REPORTING_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+export function formatIstWeekday(d: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: REPORTING_TIME_ZONE,
+    weekday: 'short',
+  }).format(d);
+}
+
+export interface LedgerAggRow {
+  day: string;
+  account: string;
+  direction: string;
+  total: unknown;
+}
+
+export interface RideAggRow {
+  day: string;
+  rides_count: number | bigint;
+  gross_ride_value: unknown;
+}
 
 export class AdminDashboardService {
   constructor(private readonly db: DatabaseService) {}
@@ -29,11 +63,11 @@ export class AdminDashboardService {
 
   async getStats(): Promise<DashboardStatsDto> {
     const now = new Date();
-    const trendStart = new Date(now);
-    trendStart.setDate(trendStart.getDate() - 6);
-    trendStart.setHours(0, 0, 0, 0);
+    const todayIstStr = formatIstDate(now);
+    const todayMidnightIst = new Date(`${todayIstStr}T00:00:00+05:30`);
+    const trendStart = new Date(todayMidnightIst.getTime() - 6 * 24 * 60 * 60 * 1000);
 
-    const [driverStatuses, activeRiders, ongoingRides, pendingVerifications, completedRides] =
+    const [driverStatuses, activeRiders, ongoingRides, pendingVerifications, ledgerRows, rideRows] =
       await Promise.all([
         this.client.driverOnlineStatus.groupBy({
           by: ['status'],
@@ -67,16 +101,30 @@ export class AdminDashboardService {
             verificationStatus: { in: ['PENDING', 'DOCUMENT_REVIEW'] },
           },
         }),
-        this.client.ride.findMany({
-          where: {
-            status: 'COMPLETED',
-            completedAt: { gte: trendStart },
-          },
-          select: {
-            completedAt: true,
-            fare: { select: { totalFare: true } },
-          },
-        }),
+        this.client.$queryRaw<LedgerAggRow[]>`
+        SELECT
+          TO_CHAR(ple."created_at" AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day,
+          ple."account" AS account,
+          ple."direction" AS direction,
+          COALESCE(SUM(ple."amount"), 0) AS total
+        FROM "payment_ledger_entries" ple
+        WHERE ple."account" IN ('PLATFORM_COMMISSION', 'SUBSCRIPTION_REVENUE', 'PLATFORM_FEE')
+          AND ple."created_at" >= ${trendStart}
+        GROUP BY 1, 2, 3
+        ORDER BY 1 ASC
+      `,
+        this.client.$queryRaw<RideAggRow[]>`
+        SELECT
+          TO_CHAR(r."completed_at" AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day,
+          COUNT(*)::int AS rides_count,
+          COALESCE(SUM(f."total_fare"), 0) AS gross_ride_value
+        FROM "rides" r
+        LEFT JOIN "ride_fares" f ON f."ride_id" = r."id"
+        WHERE r."status" = 'COMPLETED'::"RideStatus"
+          AND r."completed_at" >= ${trendStart}
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `,
       ]);
 
     const driverCounts: Record<string, number> = {};
@@ -97,38 +145,95 @@ export class AdminDashboardService {
         ongoingRides,
         pendingVerifications,
       },
-      earningTrend: this.buildEarningTrend(trendStart, completedRides),
+      earningTrend: this.buildEarningTrend(trendStart, ledgerRows, rideRows),
     };
   }
 
-  private buildEarningTrend(
+  public buildEarningTrend(
     start: Date,
-    rides: Array<{ completedAt: Date | null; fare: { totalFare: unknown } | null }>,
+    ledgerRows: LedgerAggRow[],
+    rideRows: RideAggRow[],
   ): DashboardEarningStatDto[] {
-    const buckets = new Map<string, { earnings: number; ridesCount: number }>();
+    const buckets = new Map<
+      string,
+      {
+        date: string;
+        dateKey: string;
+        platformRevenue: number;
+        rideCommission: number;
+        subscriptionRevenue: number;
+        platformFees: number;
+        grossRideValue: number;
+        ridesCount: number;
+      }
+    >();
 
     for (let i = 0; i < 7; i++) {
-      const day = new Date(start);
-      day.setDate(start.getDate() + i);
-      const key = day.toISOString().slice(0, 10);
-      buckets.set(key, { earnings: 0, ridesCount: 0 });
+      const dayTime = new Date(start.getTime() + i * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000);
+      const dateKey = formatIstDate(dayTime);
+      const weekday = formatIstWeekday(dayTime);
+      buckets.set(dateKey, {
+        date: weekday,
+        dateKey,
+        platformRevenue: 0,
+        rideCommission: 0,
+        subscriptionRevenue: 0,
+        platformFees: 0,
+        grossRideValue: 0,
+        ridesCount: 0,
+      });
     }
 
-    for (const ride of rides) {
-      if (!ride.completedAt) continue;
-      const key = ride.completedAt.toISOString().slice(0, 10);
-      const bucket = buckets.get(key);
+    for (const row of ledgerRows) {
+      const bucket = buckets.get(row.day);
       if (!bucket) continue;
-      bucket.ridesCount += 1;
-      bucket.earnings += ride.fare?.totalFare ? Number(ride.fare.totalFare) : 0;
+      const amount = Number(row.total);
+      if (row.account === 'PLATFORM_COMMISSION') {
+        if (row.direction === 'CREDIT') {
+          bucket.rideCommission += amount;
+        } else if (row.direction === 'DEBIT') {
+          bucket.rideCommission -= amount;
+        }
+      } else if (row.account === 'SUBSCRIPTION_REVENUE') {
+        if (row.direction === 'CREDIT') {
+          bucket.subscriptionRevenue += amount;
+        } else if (row.direction === 'DEBIT') {
+          bucket.subscriptionRevenue -= amount;
+        }
+      } else if (row.account === 'PLATFORM_FEE') {
+        if (row.direction === 'CREDIT') {
+          bucket.platformFees += amount;
+        } else if (row.direction === 'DEBIT') {
+          bucket.platformFees -= amount;
+        }
+      }
     }
 
-    return Array.from(buckets.entries()).map(([key, value]) => {
-      const date = new Date(`${key}T00:00:00.000Z`);
+    for (const row of rideRows) {
+      const bucket = buckets.get(row.day);
+      if (!bucket) continue;
+      bucket.ridesCount = Number(row.rides_count);
+      bucket.grossRideValue = Math.round(Number(row.gross_ride_value) * 100) / 100;
+    }
+
+    return Array.from(buckets.values()).map((b) => {
+      const netCommission = Math.round(b.rideCommission * 100) / 100;
+      const netSubscription = Math.round(b.subscriptionRevenue * 100) / 100;
+      const netFees = Math.round(b.platformFees * 100) / 100;
+      const netRevenue = Math.max(
+        0,
+        Math.round((netCommission + netSubscription + netFees) * 100) / 100,
+      );
+
       return {
-        date: DAY_LABELS[date.getUTCDay()] ?? key,
-        earnings: Math.round(value.earnings),
-        ridesCount: value.ridesCount,
+        date: b.date,
+        platformRevenue: netRevenue,
+        earnings: netRevenue, // backward-compatibility alias for platformRevenue
+        rideCommission: Math.max(0, netCommission),
+        subscriptionRevenue: Math.max(0, netSubscription),
+        platformFees: Math.max(0, netFees),
+        grossRideValue: Math.max(0, b.grossRideValue),
+        ridesCount: b.ridesCount,
       };
     });
   }

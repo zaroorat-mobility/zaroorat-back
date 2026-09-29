@@ -14,6 +14,11 @@ export interface RideConfig {
   distanceMaxAccuracyMeters: number;
   cancellationGraceMinutes: number;
   defaultCancellationFee: number;
+  /// Earliest a scheduled pickup may be booked, measured from now.
+  scheduledMinLeadMinutes: number;
+  /// Public trip-tracking link: `${shareBaseUrl}/${token}`.
+  shareBaseUrl: string;
+  shareTokenTtlHours: number;
 }
 
 export const rideConfig: RideConfig = Object.freeze({
@@ -33,4 +38,10 @@ export const rideConfig: RideConfig = Object.freeze({
   cancellationGraceMinutes: numericEnv('RIDE_CANCELLATION_GRACE_MIN', 2, { min: 0 }),
 
   defaultCancellationFee: numericEnv('RIDE_DEFAULT_CANCELLATION_FEE', 50, { min: 0 }),
+  scheduledMinLeadMinutes: numericEnv('RIDE_SCHEDULED_MIN_LEAD_MIN', 30, { min: 0 }),
+  shareBaseUrl: (process.env.RIDE_SHARE_BASE_URL ?? 'https://zaroorat.app/track').replace(
+    /\/+$/,
+    '',
+  ),
+  shareTokenTtlHours: numericEnv('RIDE_SHARE_TOKEN_TTL_HOURS', 12, { min: 1 }),
 });

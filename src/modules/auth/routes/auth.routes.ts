@@ -209,7 +209,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         summary: 'Refresh device FCM push token',
         description:
           'Updates the Firebase Cloud Messaging token for the caller’s current device ' +
-          '(or a named deviceId). Used by mobile clients when the OS rotates the token.',
+          '(or a named deviceId). Used by mobile clients when the OS rotates the token. ' +
+          'Request deviceId is the client-generated stable per-install id (a user_devices.id ' +
+          'UUID is also accepted); response data.deviceId is the server-side user_devices.id UUID.',
         security: [{ bearerAuth: [] }],
         body: {
           type: 'object',

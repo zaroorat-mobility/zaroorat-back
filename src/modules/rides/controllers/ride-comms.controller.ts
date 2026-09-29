@@ -9,6 +9,8 @@ import { uuidV7 } from '@shared/crypto';
 import { ScheduledRideService } from '../services/scheduled/scheduled-ride.service.js';
 import { RideChatService } from '../services/chat/ride-chat.service.js';
 import { RideCallService } from '../services/call/ride-call.service.js';
+import { RideSafetyService } from '../services/safety/ride-safety.service.js';
+import { triggerSosSchema } from '../schemas/ride.schemas.js';
 
 const sendMessageSchema = z.object({
   content: z.string().trim().min(1).max(2000),
@@ -81,5 +83,53 @@ export class RideScheduledController {
     const { id } = req.params as { id: string };
     const data = await this.scheduledRideService.decline(id, driverId);
     reply.send({ data });
+  }
+
+  async listMine(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = (req.query ?? {}) as { includeCancelled?: string };
+    const includeCancelled = query.includeCancelled === 'true' || query.includeCancelled === '1';
+    const data = await this.scheduledRideService.listForCustomer(callerId(req), {
+      includeCancelled,
+    });
+    reply.send({ data });
+  }
+
+  async cancelMine(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as { id: string };
+    const data = await this.scheduledRideService.cancelForCustomer(id, callerId(req));
+    reply.send({ data });
+  }
+}
+
+export class RideSafetyController {
+  constructor(private readonly rideSafetyService: RideSafetyService) {}
+
+  async sos(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as { id: string };
+    const body = triggerSosSchema.parse(req.body ?? {});
+    const data = await this.rideSafetyService.triggerSos(id, callerId(req), {
+      ...(body.latitude !== undefined ? { latitude: body.latitude } : {}),
+      ...(body.longitude !== undefined ? { longitude: body.longitude } : {}),
+      ...(body.locationAddress !== undefined ? { locationAddress: body.locationAddress } : {}),
+      ...(body.description !== undefined ? { description: body.description } : {}),
+    });
+    reply.status(data.alreadyOpen ? 200 : 201).send({ data });
+  }
+
+  async share(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as { id: string };
+    const result = await this.rideSafetyService.createShareLink(id, callerId(req));
+    reply.send({
+      data: {
+        ...result,
+        shareUrl: result.url,
+      },
+    });
+  }
+
+  async viewShared(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { token } = req.params as { token: string };
+    const data = await this.rideSafetyService.getSharedRide(token);
+    reply.header('Cache-Control', 'no-store').send({ data });
   }
 }

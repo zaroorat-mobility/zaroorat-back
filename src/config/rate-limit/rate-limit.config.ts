@@ -43,6 +43,12 @@ export const rateLimits = Object.freeze({
     windowSeconds: Number(process.env.RL_RIDE_WRITE_WINDOW ?? 3600),
     keyBy: 'user',
   }),
+  supportWrite: Object.freeze<RateLimitOptions>({
+    scope: 'rl:support-write',
+    limit: Number(process.env.RL_SUPPORT_WRITE_LIMIT ?? 60),
+    windowSeconds: Number(process.env.RL_SUPPORT_WRITE_WINDOW ?? 3600),
+    keyBy: 'user',
+  }),
   driverLocation: Object.freeze<RateLimitOptions>({
     scope: 'rl:driver-location',
     limit: Number(process.env.RL_DRIVER_LOCATION_LIMIT ?? 120),
