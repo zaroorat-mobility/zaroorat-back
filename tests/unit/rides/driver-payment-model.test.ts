@@ -219,6 +219,11 @@ function makeWorld() {
     ledgerService as never,
     driverStatusRepository as never,
     driverRepository as never,
+    {
+      async getLocation() {
+        return null;
+      },
+    } as never,
     vehicleRepository as never,
     vehicleAssignmentRepository as never,
     vehicleEligibilityService,

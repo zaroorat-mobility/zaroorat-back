@@ -390,6 +390,7 @@ describe('Duplicate Ride PIN Customer-Binding & Concurrency Integration Test', (
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
       txManager as never,
       eventPublisher as never,
       rideMetrics as never,
