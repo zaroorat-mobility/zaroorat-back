@@ -5,6 +5,12 @@ export interface RideConfig {
 
   dispatchBatchSize: number;
   requestExpiryMinutes: number;
+  /// Driver must be within this distance of pickup to mark arrived.
+  pickupGeofenceMeters: number;
+  /// Driver must be within this distance of drop to complete (unless early-end reason).
+  dropGeofenceMeters: number;
+  /// Fire a one-shot "driver nearby" push when the driver is this close to pickup.
+  driverNearbyMeters: number;
   /// A location hop shorter than this is GPS jitter, not travel, and must not
   /// accrue billable distance while a car sits at lights. Distinct from
   /// `driverConfig.locationNoiseFloorMeters`, which decides when a hop is big
@@ -33,6 +39,9 @@ export const rideConfig: RideConfig = Object.freeze({
     integer: true,
   }),
   requestExpiryMinutes: numericEnv('RIDE_REQUEST_EXPIRY_MIN', 5, { min: 1 }),
+  pickupGeofenceMeters: numericEnv('RIDE_PICKUP_GEOFENCE_M', 300, { min: 50 }),
+  dropGeofenceMeters: numericEnv('RIDE_DROP_GEOFENCE_M', 300, { min: 50 }),
+  driverNearbyMeters: numericEnv('RIDE_DRIVER_NEARBY_M', 500, { min: 50 }),
   distanceNoiseFloorMeters: numericEnv('RIDE_DISTANCE_NOISE_FLOOR_M', 20, { min: 0 }),
   distanceMaxAccuracyMeters: numericEnv('RIDE_DISTANCE_MAX_ACCURACY_M', 50, { min: 1 }),
   cancellationGraceMinutes: numericEnv('RIDE_CANCELLATION_GRACE_MIN', 2, { min: 0 }),

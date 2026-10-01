@@ -351,6 +351,19 @@ export class ShareLinkNotFoundError extends RideError {
   }
 }
 
+/// Driver tried to mark arrived / complete while still too far from the target.
+export class DriverNotAtLocationError extends RideError {
+  constructor(target: 'pickup' | 'drop', distanceMeters: number, requiredMeters: number) {
+    super(
+      `You must be within ${requiredMeters}m of the ${target} to continue (currently ${Math.round(distanceMeters)}m away)`,
+      'DRIVER_NOT_AT_LOCATION',
+      422,
+      { target, distanceMeters: Math.round(distanceMeters), requiredMeters },
+    );
+    this.name = 'DriverNotAtLocationError';
+  }
+}
+
 /// D1. A new ride may only be booked as CASH, UPI or CARD. Rides booked before
 /// that rule keep working — this refuses the booking, never the processing of
 /// an existing WALLET ride.

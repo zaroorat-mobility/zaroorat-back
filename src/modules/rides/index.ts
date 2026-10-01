@@ -41,6 +41,7 @@ import {
 } from './jobs/index.js';
 import {
   RideRequestedConsumer,
+  RideRequestBoostedConsumer,
   RideNotificationConsumer,
   RideRealtimeConsumer,
 } from './consumers/index.js';
@@ -113,6 +114,7 @@ export function registerRidesModule(container: AwilixContainer): void {
     scheduledRideReminderJob: asClass(ScheduledRideReminderJob).singleton(),
     notificationEventReconciliationJob: asClass(NotificationEventReconciliationJob).singleton(),
     rideRequestedConsumer: asClass(RideRequestedConsumer).singleton(),
+    rideRequestBoostedConsumer: asClass(RideRequestBoostedConsumer).singleton(),
     rideNotificationConsumer: asClass(RideNotificationConsumer).singleton(),
     rideRealtimeConsumer: asClass(RideRealtimeConsumer).singleton(),
     rideRepo: aliasTo('rideRepository'),

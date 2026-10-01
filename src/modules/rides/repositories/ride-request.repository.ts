@@ -70,7 +70,7 @@ export class RideRequestRepository {
         "surge_multiplier", "pricing_rule_id", "payment_method", "promo_code",
         "scheduled_for", "status", "created_at", "expires_at",
         "map_provider", "map_config_version",
-        "passenger_name", "passenger_phone", "pickup_notes", "boost_amount"
+        "passenger_name", "passenger_phone", "pickup_notes"
       ) VALUES (
         ${id}::uuid, ${input.customerId}::uuid, ${input.vehicleTypeId}::uuid,
         ${input.pickupLat}, ${input.pickupLng},
@@ -93,7 +93,7 @@ export class RideRequestRepository {
         now(), ${input.expiresAt ?? null},
         ${input.mapProvider ?? null}, ${input.mapConfigVersion ?? null},
         ${input.passengerName ?? null}, ${input.passengerPhone ?? null},
-        ${input.pickupNotes ?? null}, ${input.boostAmount ?? null}
+        ${input.pickupNotes ?? null}
       )
     `;
     return client.rideRequest.findUniqueOrThrow({ where: { id } });

@@ -25,5 +25,7 @@ export const RedisKeys = {
       ? 'notification:event-reconciliation:cursor'
       : 'notification:event-reconciliation:cursor:dry-run',
   tripDistance: (driverId: string): string => `ride:distance:${driverId}`,
+  /// One-shot flag so "driver nearby" push fires at most once per ride.
+  driverNearbySent: (rideId: string): string => `ride:nearby-sent:${rideId}`,
 } as const;
 export type RedisKeys = typeof RedisKeys;

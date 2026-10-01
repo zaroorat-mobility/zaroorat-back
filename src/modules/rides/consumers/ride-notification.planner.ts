@@ -29,6 +29,7 @@ export const NOTIFICATION_CONTRACT_VERSION = '1';
 export const NOTIFICATION_EVENT_TYPES = [
   RIDE_EVENT_CATALOG.DISPATCH_OFFERED,
   RIDE_EVENT_CATALOG.ACCEPTED,
+  RIDE_EVENT_CATALOG.DRIVER_NEARBY,
   RIDE_EVENT_CATALOG.DRIVER_ARRIVING,
   RIDE_EVENT_CATALOG.DRIVER_ARRIVED,
   RIDE_EVENT_CATALOG.STARTED,
@@ -147,6 +148,13 @@ export async function planNotifications(
         lookups,
         'Driver assigned',
         'Your driver is on the way to your pickup location.',
+      );
+    case RIDE_EVENT_CATALOG.DRIVER_NEARBY:
+      return toRideCustomerOf(
+        envelope,
+        lookups,
+        'Driver is nearby',
+        'Your driver is almost at the pickup point.',
       );
     case RIDE_EVENT_CATALOG.DRIVER_ARRIVING:
       return toRideCustomerOf(
