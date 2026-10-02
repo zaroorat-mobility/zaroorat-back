@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { callerId } from '@core/auth';
+import { auditActor } from '../audit/index.js';
 import { AdminMonitoringService } from './monitoring.service.js';
 import { ackAlertParamsSchema, listErrorsQuerySchema } from './monitoring.schemas.js';
 
@@ -25,7 +25,7 @@ export class AdminMonitoringController {
 
   async ackAlert(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = ackAlertParamsSchema.parse(req.params);
-    await this.adminMonitoringService.ackAlert(id, callerId(req));
+    await this.adminMonitoringService.ackAlert(id, auditActor(req));
     reply.status(204).send();
   }
 }

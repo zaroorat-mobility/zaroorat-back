@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { auditActor } from '../audit/index.js';
 import { AdminFinanceService } from './finance.service.js';
 import {
   approveRefundBodySchema,
@@ -160,7 +161,11 @@ export class AdminFinanceController {
   async generateSettlement(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = generateSettlementBodySchema.parse(req.body);
     reply.status(201).send({
-      data: await this.adminFinanceService.generateSettlement(body, callerId(req), actorName(req)),
+      data: await this.adminFinanceService.generateSettlement(
+        body,
+        auditActor(req),
+        actorName(req),
+      ),
     });
   }
 

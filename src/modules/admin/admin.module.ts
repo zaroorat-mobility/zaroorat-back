@@ -85,7 +85,11 @@ import {
   AdminSafetyController,
   AdminSafetyService,
 } from './operations-management/index.js';
-import { AdminDashboardController, AdminDashboardService } from './dashboard/index.js';
+import {
+  AdminDashboardController,
+  AdminDashboardService,
+  DashboardRealtimeConsumer,
+} from './dashboard/index.js';
 import {
   communicationsManagementRoutes,
   AdminCommunicationsController,
@@ -207,6 +211,7 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminSafetyController: asClass(AdminSafetyController).singleton(),
     adminDashboardService: asClass(AdminDashboardService).singleton(),
     adminDashboardController: asClass(AdminDashboardController).singleton(),
+    dashboardRealtimeConsumer: asClass(DashboardRealtimeConsumer).singleton(),
     adminMonitoringService: asClass(AdminMonitoringService).singleton(),
     adminMonitoringController: asClass(AdminMonitoringController).singleton(),
     adminSecurityService: asClass(AdminSecurityService).singleton(),

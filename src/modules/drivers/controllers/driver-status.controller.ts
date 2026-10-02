@@ -1,5 +1,4 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { callerId } from '@core/auth';
 import { DriverService } from '../services/driver.service.js';
 import { DriverRepository } from '../repositories/driver.repository.js';
 import { heartbeatSchema } from '../schemas/driver.schemas.js';
@@ -34,19 +33,5 @@ export class DriverStatusController {
     if (body.networkType !== undefined) hbParams.networkType = body.networkType;
     await this.driverService.status.recordHeartbeat(driverId, hbParams);
     reply.send({ data: { success: true, timestamp: new Date().toISOString() } });
-  }
-  async suspend(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as {
-      id: string;
-    };
-    const { isSuspended } = req.body as {
-      isSuspended: boolean;
-    };
-    await this.driverService.status.setSuspended(id, isSuspended);
-    req.log.warn(
-      { driverId: id, isSuspended, actorUserId: callerId(req) },
-      '[drivers] suspension state changed by operator',
-    );
-    reply.send({ data: { success: true } });
   }
 }

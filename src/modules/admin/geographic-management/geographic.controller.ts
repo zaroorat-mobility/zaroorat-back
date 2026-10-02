@@ -9,6 +9,8 @@ import {
   listCitiesQuerySchema,
   listServiceZonesQuerySchema,
   listStatesQuerySchema,
+  reconcileApplyBodySchema,
+  reconcilePreviewQuerySchema,
   serviceZoneIdParamSchema,
   stateIdParamSchema,
   updateCityBodySchema,
@@ -28,6 +30,7 @@ export class AdminGeographicController {
     const query = listStatesQuerySchema.parse(req.query);
     const result = await this.adminGeographicService.listStates({
       ...(query.countryCode !== undefined ? { countryCode: query.countryCode } : {}),
+      ...(query.divisionType !== undefined ? { divisionType: query.divisionType } : {}),
       activeOnly: query.activeOnly,
     });
     reply.send(result);
@@ -43,6 +46,32 @@ export class AdminGeographicController {
     const { id } = stateIdParamSchema.parse(req.params);
     const body = updateStateBodySchema.parse(req.body ?? {});
     const data = await this.adminGeographicService.updateState(id, body, callerId(req));
+    reply.send({ data });
+  }
+
+  async reconcilePreview(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const payload = (req.body ?? req.query ?? {}) as Record<string, unknown>;
+    const parsed = reconcilePreviewQuerySchema.parse(payload);
+    const data = await this.adminGeographicService.reconcileStates(
+      {
+        countryCode: parsed.countryCode,
+        mode: 'PREVIEW',
+      },
+      callerId(req),
+    );
+    reply.send({ data });
+  }
+
+  async reconcileApply(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = reconcileApplyBodySchema.parse(req.body);
+    const data = await this.adminGeographicService.reconcileStates(
+      {
+        countryCode: body.countryCode,
+        mode: 'APPLY',
+        ...(body.expectedVersion !== undefined ? { expectedVersion: body.expectedVersion } : {}),
+      },
+      callerId(req),
+    );
     reply.send({ data });
   }
 

@@ -12,7 +12,8 @@ import { RedisKeys } from '../../src/core/cache/keys.js';
 import type { RedisService } from '../../src/core/cache/RedisService.js';
 import { ConnectionError } from '../../src/core/database/errors/DatabaseError.js';
 import { resetMetrics, snapshotMetrics } from '../../src/core/metrics/index.js';
-import type { EventBus, EventEnvelope } from '../../src/core/events';
+import { EventBus, OutboxRelay, type EventEnvelope } from '../../src/core/events';
+import type { OutboxMetrics, OutboxRepository } from '../../src/core/events';
 import { notificationsQueue } from '../../src/jobs/queues/index.js';
 import type { NotificationRepository } from '../../src/modules/notifications/repositories/notification.repository.js';
 import type { DeviceRepository } from '../../src/modules/auth/repositories/device.repository.js';
@@ -310,5 +311,70 @@ describe('F3 go-live kit · audit SQL and fault probe (PostgreSQL + Redis)', () 
       0,
       'the audit is clean',
     );
+  });
+
+  // The link the test above takes for granted: a failed insert, driven through
+  // the real relay, still leaves the event PUBLISHED — not retried, not
+  // dead-lettered — which is the only state F3 reads.
+  it('through the real relay, a failed insert still publishes the event, and F3 recovers it', async () => {
+    const bus = new EventBus();
+    new RideNotificationConsumer(
+      bus,
+      container.resolve<RideRepository>('rideRepository'),
+      container.resolve<DriverRepository>('driverRepository'),
+      container.resolve<DeviceRepository>('deviceRepository'),
+      repo(),
+    ).register();
+    const relay = new OutboxRelay(
+      container.resolve<OutboxRepository>('outboxRepository'),
+      bus,
+      container.resolve<OutboxMetrics>('outboxMetrics'),
+    );
+    const eventId = randomUUID();
+    const envelope: EventEnvelope = {
+      eventId,
+      type: 'ride.started',
+      version: 1,
+      envelopeVersion: 1,
+      occurredAt: new Date().toISOString(),
+      producer: 'rides',
+      subject: { userId: null },
+      correlation: { requestId: null, sessionId: null },
+      data: { rideId: world.rideId, driverId: world.driverId },
+    };
+
+    try {
+      await db().client.$executeRawUnsafe(probeStatement('INJECT'));
+      await container.resolve<OutboxRepository>('outboxRepository').enqueue({
+        eventId,
+        aggregateType: 'ride',
+        aggregateId: world.rideId,
+        eventType: 'ride.started',
+        payload: envelope,
+      });
+      const tick = await relay.processBatch();
+      assert.deepEqual(
+        { published: tick.published, retried: tick.retried, deadLettered: tick.deadLettered },
+        { published: 1, retried: 0, deadLettered: 0 },
+        'the swallowed failure does not fail the dispatch',
+      );
+    } finally {
+      await db().client.$executeRawUnsafe(probeStatement('REMOVE'));
+    }
+
+    const row = await db().client.outboxEvent.findUniqueOrThrow({ where: { eventId } });
+    assert.equal(row.status, 'PUBLISHED');
+    assert.equal(row.retries, 0);
+    assert.equal(await db().client.notification.count(), 0, 'nothing was written');
+
+    // Past the grace period, as the scheduled run would see it.
+    const on = await reconciler().run(new Date(Date.now() + 2 * MINUTE), { mode: 'on' });
+    assert.equal(on.recovered, 1);
+    // Rescan from the floor: the idempotency key, not the cursor, stops a repeat.
+    await redis().provider.client.del(RedisKeys.notificationEventReconciliationCursor('on'));
+    const again = await reconciler().run(new Date(Date.now() + 3 * MINUTE), { mode: 'on' });
+    assert.equal(again.present, 1);
+    assert.equal(again.recovered, 0, 'a second run writes nothing');
+    assert.equal(await db().client.notification.count(), 1, 'exactly one notification');
   });
 });

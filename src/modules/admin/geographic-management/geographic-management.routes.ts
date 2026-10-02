@@ -33,6 +33,12 @@ export async function geographicManagementRoutes(fastify: FastifyInstance): Prom
   fastify.get('/countries', canRead, (req, reply) => controller.listCountries(req, reply));
   fastify.get('/states', canRead, (req, reply) => controller.listStates(req, reply));
   fastify.post('/states', canWrite, (req, reply) => controller.createState(req, reply));
+  fastify.post('/states/reconcile/preview', canWrite, (req, reply) =>
+    controller.reconcilePreview(req, reply),
+  );
+  fastify.post('/states/reconcile/apply', canWrite, (req, reply) =>
+    controller.reconcileApply(req, reply),
+  );
   fastify.patch('/states/:id', canWrite, (req, reply) => controller.updateState(req, reply));
 
   fastify.get('/cities', canRead, (req, reply) => controller.listCities(req, reply));

@@ -7,9 +7,11 @@
 # Required:
 #   POSTGRES_PASSWORD  REDIS_PASSWORD  JWT_ACCESS_SECRET  JWT_REFRESH_SECRET
 #   PAYMENT_WEBHOOK_SECRET  STORAGE_BUCKET  STORAGE_QUARANTINE_BUCKET
-#   AIRTEL_API_KEY  STORAGE_KMS_KEY_ID
+#   AIRTEL_API_KEY  STORAGE_KMS_KEY_ID  FIREBASE_SERVICE_ACCOUNT_JSON
+#   APP_DB_PASSWORD  (runtime DB login the API/worker use; docs/15_Security/database-roles.md)
 # Optional (defaults shown in the interpolation):
-#   POSTGRES_USER  POSTGRES_DB  API_PORT  IMAGE_TAG
+#   POSTGRES_USER  POSTGRES_DB  API_PORT  IMAGE_TAG  APP_DB_USER
+#   TRUSTED_PROXIES  TRUSTED_PROXY_HOPS  (proxy topology; default trusts none)
 #
 # Migrations are a DEPLOYMENT step, never a container start-up step — running
 # them per replica would race N ways on every scale-up. See `make migrate-prod`.
@@ -32,7 +34,11 @@ x-app-env: &app-env
   NODE_ENV: production
   # Through PgBouncer, not straight at Postgres. See the `pgbouncer` service for
   # the connection arithmetic; `migrate` deliberately still goes direct.
-  DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@pgbouncer:6432/${POSTGRES_DB:-zaroorat}
+  # The API and worker connect as the runtime login, never as the schema owner: the owner
+  # can disable or drop the audit triggers and truncate audit tables. The login is a member
+  # of zaroorat_app_runtime (migration 20261002130100) and is created by the `db-roles`
+  # one-shot below. See docs/15_Security/database-roles.md.
+  DATABASE_URL: postgresql://${APP_DB_USER:-zaroorat_app}:${APP_DB_PASSWORD:?APP_DB_PASSWORD is required (runtime DB login, see docs/15_Security/database-roles.md)}@pgbouncer:6432/${POSTGRES_DB:-zaroorat}
   REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required (min 32 chars)}
   JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required (min 32 chars)}
@@ -72,9 +78,21 @@ x-app-env: &app-env
   AIRTEL_SENDER_ID: ${AIRTEL_SENDER_ID:-}
   AIRTEL_ENTITY_ID: ${AIRTEL_ENTITY_ID:-}
   AIRTEL_OTP_TEMPLATE_ID: ${AIRTEL_OTP_TEMPLATE_ID:-}
+  # ── Push (FCM) ────────────────────────────────────────────────────────
+  # Production refuses any other push provider (resolvePushProviderName), and a
+  # single host has no Application Default Credentials, so the service-account
+  # JSON is required. Without them every ride and payment push fails.
+  PUSH_PROVIDER: fcm
+  FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:?required when APP_ENV=production (push provider is fcm)}
   # Pepper for OTP hashing. Rotating it invalidates every in-flight challenge.
   OTP_PEPPER: ${OTP_PEPPER:-}
-  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+  # Which peers' X-Forwarded-For to believe (src/app/trust-proxy.ts). This file publishes
+  # the API port directly and runs no proxy, so the default trusts none: a client cannot
+  # choose the IP its audit rows record. Behind a reverse proxy or load balancer, set
+  # TRUSTED_PROXIES to its address/CIDR (preferred) or TRUSTED_PROXY_HOPS to the hop count —
+  # otherwise every client shares the proxy's IP for rate limiting.
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
 
 services:
   # Profile-gated, so `up` never triggers it. Run explicitly, once, before
@@ -91,6 +109,38 @@ services:
       APP_ENV: production
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-zaroorat}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  # Profile-gated like `migrate`, and run right after it:
+  #   docker compose -f compose.prod.yml run --rm migrate
+  #   docker compose -f compose.prod.yml run --rm db-roles
+  # Creates (or rotates) the runtime LOGIN as the owner. Idempotent.
+  db-roles:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    profiles: ['migrate']
+    # Both passwords travel as environment, never as arguments, so neither shows in a
+    # process list; the script reads APP_DB_PASSWORD itself (\getenv).
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+    volumes:
+      - ./scripts/db:/scripts:ro
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - ${POSTGRES_USER:-zaroorat}
+      - -d
+      - ${POSTGRES_DB:-zaroorat}
+      - -v
+      - app_user=${APP_DB_USER:-zaroorat_app}
+      - -f
+      - /scripts/create-app-login.sql
     depends_on:
       postgres:
         condition: service_healthy
@@ -175,8 +225,10 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: '5432'
-      DB_USER: ${POSTGRES_USER:-zaroorat}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      # pgbouncer authenticates clients and the server connection as this one user, so it
+      # is the runtime login — the owner is reached only directly, by migrate/db-roles.
+      DB_USER: ${APP_DB_USER:-zaroorat_app}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
       DB_NAME: ${POSTGRES_DB:-zaroorat}
       # The image listens on 5432 unless told otherwise, which would have
       # silently not matched the :6432 in DATABASE_URL above.
@@ -196,7 +248,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 6432 -U ${POSTGRES_USER:-zaroorat}']
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 6432 -U ${APP_DB_USER:-zaroorat_app}']
       interval: 10s
       timeout: 5s
       retries: 10

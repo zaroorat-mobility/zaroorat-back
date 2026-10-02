@@ -1,4 +1,5 @@
 import type { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { FeatureFlagStatus } from '../../../../../generated/prisma/index.js';
 import { FEATURE_FLAG_SEED } from '../constants/platform-settings.constants.js';
 
@@ -40,13 +41,14 @@ export class FeatureFlagService {
     return this.client.featureFlag.findMany({ orderBy: { key: 'asc' } });
   }
 
+  /// Inside the caller's transaction, which owns the row lock and the audit row.
   async updateFlag(
-    key: string,
+    id: string,
     input: { status?: FeatureFlagStatus; rolloutPercentage?: number; isActive?: boolean },
+    tx: TransactionClient,
   ) {
-    await this.ensureSeeded();
-    return this.client.featureFlag.update({
-      where: { key },
+    return tx.featureFlag.update({
+      where: { id },
       data: {
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.rolloutPercentage !== undefined

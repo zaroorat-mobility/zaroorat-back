@@ -21,9 +21,10 @@ import { uuidV7 } from '@shared/crypto';
 import { z } from 'zod';
 
 /// The principal is stashed on the socket by the handshake middleware and read
-/// back by every handler. It is never re-derived from client input.
+/// back by every handler. It is never re-derived from client input. It lives on
+/// `data` because that is what `fetchSockets()` exposes, on every instance.
 interface AuthedSocket extends Socket {
-  principal?: SocketPrincipal;
+  data: { principal?: SocketPrincipal };
 }
 
 function ack(callback: unknown, response: Record<string, unknown>): void {
@@ -58,6 +59,10 @@ export class RealtimeGateway {
     return this.io !== null;
   }
 
+  get connectionCount(): number {
+    return this.io?.engine?.clientsCount ?? 0;
+  }
+
   /// Binds to the HTTP server Fastify already listens on, so sockets and the
   /// REST API share one port, one TLS terminator and one CORS story.
   attach(httpServer: HttpServer): void {
@@ -85,7 +90,7 @@ export class RealtimeGateway {
       this.socketAuthService
         .authenticate(socket.handshake)
         .then((principal) => {
-          socket.principal = principal;
+          socket.data.principal = principal;
           next();
         })
         .catch((err: unknown) => {
@@ -119,15 +124,17 @@ export class RealtimeGateway {
   }
 
   private async onConnection(socket: AuthedSocket): Promise<void> {
-    const principal = socket.principal;
+    const principal = socket.data.principal;
     if (!principal) {
       socket.disconnect(true);
       return;
     }
     // Identity rooms are joined by the server from ids it resolved itself. The
-    // client is told which rooms it got; it does not get to ask for them.
+    // client is told which rooms it got; it does not get to ask for them. The
+    // session room is not reported: it exists only so revoking the session can
+    // reach this socket.
     const identityRooms = this.roomAuthorizationService.identityRooms(principal);
-    await socket.join(identityRooms);
+    await socket.join([...identityRooms, room.session(principal.sid)]);
 
     socket.emit(SOCKET_EVENT.READY, {
       userId: principal.userId,
@@ -140,21 +147,30 @@ export class RealtimeGateway {
       resync: { rides: '/api/v1/rides/active', offers: '/api/v1/rides/offers' },
     });
 
-    socket.on(CLIENT_COMMAND.JOIN_RIDE, (payload: unknown, callback: unknown) => {
-      void this.onJoinRide(socket, principal, payload, callback);
-    });
-    socket.on(CLIENT_COMMAND.LEAVE_RIDE, (payload: unknown, callback: unknown) => {
-      void this.onLeaveRide(socket, payload, callback);
-    });
-    socket.on(CLIENT_COMMAND.LOCATION_UPDATE, (payload: unknown, callback: unknown) => {
-      void this.onLocationUpdate(socket, principal, payload, callback);
-    });
-    socket.on(CLIENT_COMMAND.CHAT_MESSAGE_SEND, (payload: unknown, callback: unknown) => {
-      void this.onChatSend(socket, principal, payload, callback);
-    });
-    socket.on(CLIENT_COMMAND.CHAT_TYPING, (payload: unknown, callback: unknown) => {
-      void this.onChatTyping(socket, principal, payload, callback);
-    });
+    // Every command is re-authorised before it runs (see `reauthorize`).
+    const command = (
+      event: string,
+      handler: (payload: unknown, callback: unknown) => Promise<void>,
+    ): void => {
+      socket.on(event, (payload: unknown, callback: unknown) => {
+        void this.reauthorize(socket, principal, callback).then((ok) =>
+          ok ? handler(payload, callback) : undefined,
+        );
+      });
+    };
+    command(CLIENT_COMMAND.JOIN_RIDE, (p, cb) => this.onJoinRide(socket, principal, p, cb));
+    command(CLIENT_COMMAND.LEAVE_RIDE, (p, cb) => this.onLeaveRide(socket, p, cb));
+    command(CLIENT_COMMAND.LOCATION_UPDATE, (p, cb) =>
+      this.onLocationUpdate(socket, principal, p, cb),
+    );
+    command(CLIENT_COMMAND.CHAT_MESSAGE_SEND, (p, cb) => this.onChatSend(socket, principal, p, cb));
+    command(CLIENT_COMMAND.CHAT_TYPING, (p, cb) => this.onChatTyping(socket, principal, p, cb));
+    command(CLIENT_COMMAND.DASHBOARD_SUBSCRIBE, (_p, cb) =>
+      this.onDashboardSubscribe(socket, principal, cb),
+    );
+    command(CLIENT_COMMAND.DASHBOARD_UNSUBSCRIBE, (_p, cb) =>
+      this.onDashboardUnsubscribe(socket, cb),
+    );
     socket.on('disconnect', () => {
       // socket.io leaves every room for us; the only thing it cannot know about
       // is the per-driver throttle state.
@@ -300,6 +316,37 @@ export class RealtimeGateway {
     }
   }
 
+  /// Dashboard rooms are re-derived from the database on every subscribe, and
+  /// again for every member when a role's permissions change
+  /// (`reauthorizeDashboardRooms`). The rooms carry hints only; the data itself
+  /// is still read through the permission-checked REST API.
+  private async onDashboardSubscribe(
+    socket: AuthedSocket,
+    principal: SocketPrincipal,
+    callback: unknown,
+  ): Promise<void> {
+    // Replace, never add: membership from an earlier subscribe must not
+    // survive a permission that has since been revoked.
+    await this.leaveDashboardRooms(socket);
+    try {
+      const rooms = await this.roomAuthorizationService.dashboardRooms(principal);
+      await socket.join(rooms);
+      ack(callback, { ok: true, rooms });
+    } catch (err) {
+      this.failFrom(socket, callback, err);
+    }
+  }
+
+  private async onDashboardUnsubscribe(socket: AuthedSocket, callback: unknown): Promise<void> {
+    await this.leaveDashboardRooms(socket);
+    ack(callback, { ok: true });
+  }
+
+  private async leaveDashboardRooms(socket: AuthedSocket): Promise<void> {
+    await socket.leave(room.opsDashboard());
+    await socket.leave(room.financeDashboard());
+  }
+
   private failFrom(socket: AuthedSocket, callback: unknown, err: unknown): void {
     if (err instanceof RealtimeError) {
       return this.fail(socket, callback, err.code, err.message);
@@ -316,8 +363,28 @@ export class RealtimeGateway {
     this.fail(socket, callback, 'REALTIME_ERROR', 'An unexpected realtime error occurred');
   }
 
+  /// Runs before every command. A principal that is no longer true — session
+  /// revoked, token epoch retired, driver no longer operable — ends the socket,
+  /// and a reconnect authenticates from scratch. A store that cannot answer
+  /// refuses the command but keeps the socket, as HTTP answers 503 rather than
+  /// logging out: nothing privileged runs, and an outage is not a mass disconnect.
+  private async reauthorize(
+    socket: AuthedSocket,
+    principal: SocketPrincipal,
+    callback: unknown,
+  ): Promise<boolean> {
+    try {
+      await this.socketAuthService.revalidate(principal);
+      return true;
+    } catch (err) {
+      this.failFrom(socket, callback, err);
+      if (err instanceof SocketUnauthenticatedError) socket.disconnect(true);
+      return false;
+    }
+  }
+
   /// A bad command is answered and logged; it never tears the socket down. Only
-  /// a failed handshake refuses a connection.
+  /// a failed handshake, or a failed re-authorisation, ends a connection.
   private fail(socket: AuthedSocket, callback: unknown, code: string, message: string): void {
     ack(callback, { ok: false, error: { code, message } });
     socket.emit(SOCKET_EVENT.ERROR, { code, message });
@@ -340,6 +407,38 @@ export class RealtimeGateway {
     const name = room.ride(rideId);
     const sockets = await this.io.in(name).fetchSockets();
     for (const member of sockets) await member.leave(name);
+  }
+
+  /// Server-initiated disconnect of every socket in the rooms, on every instance
+  /// (the Redis adapter relays it). For when what authenticated those sockets has
+  /// been revoked; a client that reconnects is authenticated from scratch.
+  disconnectRooms(roomNames: string | string[]): void {
+    this.io?.in(roomNames).disconnectSockets(true);
+  }
+
+  /// A role's permissions changed. Tokens carry no permissions, so the sockets
+  /// stay authenticated; the only socket privilege permissions grant is dashboard
+  /// room membership, decided at subscribe time. Each member's rooms are decided
+  /// again now, as a re-subscribe would, and every room no longer granted is
+  /// left. A lookup that fails leaves both (fail closed; a re-subscribe restores).
+  async reauthorizeDashboardRooms(): Promise<void> {
+    if (!this.io) return;
+    const dashboardRooms = [room.opsDashboard(), room.financeDashboard()];
+    const members = await this.io.in(dashboardRooms).fetchSockets();
+    for (const member of members) {
+      const principal = (member.data as AuthedSocket['data']).principal;
+      const granted = principal
+        ? await this.roomAuthorizationService.dashboardRooms(principal).catch((err: unknown) => {
+            if (!(err instanceof RealtimeError)) {
+              logger.warn({ err }, '[realtime] dashboard re-authorisation failed; rooms revoked');
+            }
+            return [];
+          })
+        : [];
+      for (const name of dashboardRooms) {
+        if (member.rooms.has(name) && !granted.includes(name)) await member.leave(name);
+      }
+    }
   }
 
   async close(): Promise<void> {

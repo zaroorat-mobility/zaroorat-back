@@ -41,6 +41,16 @@ export const SOCKET_EVENT = {
 
   /// Server → ride room. New chat message on an active ride conversation.
   CHAT_MESSAGE_NEW: 'chat.message.new',
+
+  /// Server → admin dashboard rooms. Invalidation hints: each names the fact
+  /// that changed (ids and statuses only — never money, PII or coordinates) so
+  /// the dashboard knows which permission-checked REST query to re-read.
+  DASHBOARD_RIDE_CHANGED: 'dashboard.ride.changed',
+  DASHBOARD_RIDE_REQUEST_CHANGED: 'dashboard.ride_request.changed',
+  DASHBOARD_DRIVER_STATUS_CHANGED: 'dashboard.driver.status_changed',
+  DASHBOARD_DRIVER_REGISTRATION_CHANGED: 'dashboard.driver.registration_changed',
+  /// Finance room only, and carries no data at all: "the ledger moved".
+  DASHBOARD_FINANCIALS_CHANGED: 'dashboard.financials.changed',
 } as const;
 
 /// Client → server.
@@ -52,6 +62,10 @@ export const CLIENT_COMMAND = {
   CHAT_MESSAGE_SEND: 'chat.message.send',
   /// Client → server. Ephemeral typing indicator for the ride room.
   CHAT_TYPING: 'chat.typing',
+  /// Client → server. Join the admin dashboard rooms the caller's permissions
+  /// allow; the server decides which, from the database, on every call.
+  DASHBOARD_SUBSCRIBE: 'dashboard.subscribe',
+  DASHBOARD_UNSUBSCRIBE: 'dashboard.unsubscribe',
 } as const;
 
 export type SocketEventName = (typeof SOCKET_EVENT)[keyof typeof SOCKET_EVENT];
@@ -83,4 +97,11 @@ export const room = {
   user: (userId: string): string => `user:${userId}`,
   driver: (driverId: string): string => `driver:${driverId}`,
   ride: (rideId: string): string => `ride:${rideId}`,
+  /// Every socket opened with a session's token, so revoking the session can end
+  /// them. Joined by the server at connect; never reported to or requested by a client.
+  session: (sessionId: string): string => `session:${sessionId}`,
+  /// Admin dashboard: operational hints (operations:read) and financial hints
+  /// (finance:read) are separate rooms so neither permission implies the other.
+  opsDashboard: (): string => 'dashboard:ops',
+  financeDashboard: (): string => 'dashboard:finance',
 } as const;

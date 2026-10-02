@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { auditActor } from '../audit/index.js';
 import { DocumentComplianceService } from './document-compliance.service.js';
 import {
   complianceDriverParamSchema,
@@ -46,7 +47,7 @@ export class DocumentComplianceController {
       data: await this.documentComplianceService.reviewDocument(
         documentId,
         body.status,
-        callerId(req),
+        auditActor(req),
         body.rejectionReason,
       ),
     });

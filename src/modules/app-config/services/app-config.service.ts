@@ -1,3 +1,4 @@
+import type { TransactionClient } from '@core/database/TransactionManager.js';
 import type { AppClient, AppColorScheme, Prisma } from '../../../generated/prisma/index.js';
 import { otpConfig } from '@config/otp/otp.config.js';
 import { geoConfig } from '@config/geo/geo.config.js';
@@ -170,23 +171,26 @@ export class AppConfigService {
     private readonly platformConfigResolver?: PlatformConfigResolver,
   ) {}
 
-  async getVersion(): Promise<number> {
-    const raw = await this.systemSettingService.getSettingValue(APP_CONFIG_VERSION_KEY);
+  async getVersion(tx?: TransactionClient): Promise<number> {
+    const raw = await this.systemSettingService.getSettingValue(APP_CONFIG_VERSION_KEY, tx);
     if (raw === null || raw === undefined || raw === '') return 1;
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
   }
 
-  async bumpVersion(updatedBy?: string | null): Promise<number> {
-    const current = await this.getVersion();
+  async bumpVersion(updatedBy?: string | null, tx?: TransactionClient): Promise<number> {
+    const current = await this.getVersion(tx);
     const next = current + 1;
-    await this.systemSettingService.setSetting({
-      key: APP_CONFIG_VERSION_KEY,
-      value: String(next),
-      category: 'app_config',
-      description: 'Public app-config bundle version (ETag / cache bust)',
-      updatedBy: updatedBy ?? null,
-    });
+    await this.systemSettingService.setSetting(
+      {
+        key: APP_CONFIG_VERSION_KEY,
+        value: String(next),
+        category: 'app_config',
+        description: 'Public app-config bundle version (ETag / cache bust)',
+        updatedBy: updatedBy ?? null,
+      },
+      tx,
+    );
     return next;
   }
 
@@ -264,18 +268,22 @@ export class AppConfigService {
     scheme: ColorSchemeSlug,
     defaultTokens?: Prisma.InputJsonValue,
     defaultComponents?: Prisma.InputJsonValue,
+    tx?: TransactionClient,
   ) {
     const tokens =
       defaultTokens ?? (scheme === 'dark' ? DEFAULT_THEME_TOKENS_DARK : DEFAULT_THEME_TOKENS_LIGHT);
     const components = defaultComponents ?? DEFAULT_THEME_COMPONENTS;
-    return this.appConfigRepository.upsertTheme({
-      appKey: toAppClient(app),
-      colorScheme: toColorScheme(scheme),
-      tokens: tokens as Prisma.InputJsonValue,
-      components: components as Prisma.InputJsonValue,
-      isDefault: true,
-      isActive: true,
-    });
+    return this.appConfigRepository.upsertTheme(
+      {
+        appKey: toAppClient(app),
+        colorScheme: toColorScheme(scheme),
+        tokens: tokens as Prisma.InputJsonValue,
+        components: components as Prisma.InputJsonValue,
+        isDefault: true,
+        isActive: true,
+      },
+      tx,
+    );
   }
 
   private async loadFeatureFlags(): Promise<Record<string, boolean>> {

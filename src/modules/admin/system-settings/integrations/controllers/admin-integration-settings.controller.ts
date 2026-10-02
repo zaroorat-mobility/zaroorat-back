@@ -1,5 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { errorEnvelope } from '@core/errors/envelope.js';
+import { DatabaseService } from '@core/database';
+import { errorEnvelope, rethrowServerFault } from '@core/errors/envelope.js';
+import { auditActor, auditExternalAction } from '../../../audit/index.js';
 import { logger } from '@shared/logger/index.js';
 import { AdminMapSettingsService } from '../../map/services/admin-map-settings.service.js';
 import { AdminPaymentSettingsService } from '../services/admin-payment-settings.service.js';
@@ -20,7 +22,20 @@ import type { PaymentIntegrationTestInput } from '../services/admin-payment-sett
 import type { UpdateSmsSettingsBody } from '../types/integration-settings.types.js';
 import type { UpdatePushSettingsBody } from '../types/integration-settings.types.js';
 import type { UpdateEmailSettingsBody } from '../types/integration-settings.types.js';
-import type { IntegrationTestInput } from '../types/integration-settings.types.js';
+import type {
+  IntegrationTestInput,
+  IntegrationTestResult,
+} from '../types/integration-settings.types.js';
+
+/// Enough of a recipient to tell which one was messaged, not enough to reuse it.
+function maskRecipient(input: { testPhone?: string; testEmail?: string }): string | null {
+  if (input.testPhone) return `***${input.testPhone.slice(-4)}`;
+  if (input.testEmail) {
+    const [local = '', domain = ''] = input.testEmail.split('@');
+    return `${local.slice(0, 1)}***@${domain}`;
+  }
+  return null;
+}
 
 export class AdminIntegrationSettingsController {
   constructor(
@@ -30,6 +45,7 @@ export class AdminIntegrationSettingsController {
     private readonly adminEmailSettingsService: AdminEmailSettingsService,
     private readonly adminMapSettingsService: AdminMapSettingsService,
     private readonly integrationHealthService: IntegrationHealthService,
+    private readonly databaseService: DatabaseService,
   ) {}
 
   async getPaymentSettings(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -52,6 +68,7 @@ export class AdminIntegrationSettingsController {
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -69,8 +86,13 @@ export class AdminIntegrationSettingsController {
       const body = paymentIntegrationTestSchema.parse(
         req.body ?? {},
       ) as PaymentIntegrationTestInput;
-      reply.send({ data: await this.adminPaymentSettingsService.testPayment(body) });
+      reply.send({
+        data: await this.audited(req, 'payment', {}, () =>
+          this.adminPaymentSettingsService.testPayment(body),
+        ),
+      });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -114,6 +136,7 @@ export class AdminIntegrationSettingsController {
       const data = await this.adminSmsSettingsService.updateSmsSettings(body, req.auth?.userId);
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -129,8 +152,13 @@ export class AdminIntegrationSettingsController {
   async testSms(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = integrationTestSchema.parse(req.body ?? {}) as IntegrationTestInput;
-      reply.send({ data: await this.adminSmsSettingsService.testSms(body) });
+      reply.send({
+        data: await this.audited(req, 'sms', body, () =>
+          this.adminSmsSettingsService.testSms(body),
+        ),
+      });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -160,6 +188,7 @@ export class AdminIntegrationSettingsController {
       const data = await this.adminPushSettingsService.updatePushSettings(body, req.auth?.userId);
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -175,8 +204,13 @@ export class AdminIntegrationSettingsController {
   async testPush(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = integrationTestSchema.parse(req.body ?? {}) as IntegrationTestInput;
-      reply.send({ data: await this.adminPushSettingsService.testPush(body) });
+      reply.send({
+        data: await this.audited(req, 'push', body, () =>
+          this.adminPushSettingsService.testPush(body),
+        ),
+      });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -206,6 +240,7 @@ export class AdminIntegrationSettingsController {
       const data = await this.adminEmailSettingsService.updateEmailSettings(body, req.auth?.userId);
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -221,8 +256,13 @@ export class AdminIntegrationSettingsController {
   async testEmail(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = integrationTestSchema.parse(req.body ?? {}) as IntegrationTestInput;
-      reply.send({ data: await this.adminEmailSettingsService.testEmail(body) });
+      reply.send({
+        data: await this.audited(req, 'email', body, () =>
+          this.adminEmailSettingsService.testEmail(body),
+        ),
+      });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -277,5 +317,40 @@ export class AdminIntegrationSettingsController {
         .status(500)
         .send(errorEnvelope('INTERNAL_ERROR', 'Failed to fetch map client config', req.id));
     }
+  }
+
+  /// Integration tests reach the real provider: SMS and email send to the recipient the
+  /// operator types, and the payment test creates a gateway order. Kept enabled — finance
+  /// and ops need them after rotating credentials — behind `settings:write`, and audited
+  /// as an external action: REQUESTED before the provider is called, then SUCCESS or
+  /// FAILED as the provider answered. The row carries the integration, provider, outcome
+  /// and a masked recipient; never the message, the provider's text (which can echo the
+  /// address), credentials, or the full phone number or email.
+  private audited(
+    req: FastifyRequest,
+    integration: 'payment' | 'sms' | 'push' | 'email',
+    input: { testPhone?: string; testEmail?: string },
+    run: () => Promise<IntegrationTestResult>,
+  ): Promise<IntegrationTestResult> {
+    return auditExternalAction(
+      this.databaseService.client,
+      {
+        ...auditActor(req),
+        action: 'CREATE',
+        entityType: 'integration_test',
+        summary: `${integration} integration test`,
+        before: { integration, recipient: maskRecipient(input) },
+      },
+      run,
+      (result) => ({
+        outcome: result.ok ? 'SUCCESS' : 'FAILED',
+        after: {
+          integration: result.integration,
+          provider: result.provider,
+          ok: result.ok,
+          responseTimeMs: result.responseTimeMs,
+        },
+      }),
+    );
   }
 }

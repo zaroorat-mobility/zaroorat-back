@@ -8,12 +8,14 @@ import type { SocketPrincipal } from '../../../src/modules/realtime/socket-auth.
 const DRIVER: SocketPrincipal = {
   userId: 'user_drv',
   sid: 's',
+  epoch: 1,
   roles: ['driver'],
   driverId: 'drv_1',
 };
 const CUSTOMER: SocketPrincipal = {
   userId: 'user_c',
   sid: 's',
+  epoch: 1,
   roles: ['customer'],
   driverId: null,
 };

@@ -1,12 +1,21 @@
 import { sessionConfig } from '@config/session/session.config.js';
 import { DatabaseService } from '@core/database';
-import { TransactionManager } from '@core/database/TransactionManager';
+import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager';
+import { EventPublisher } from '@core/events';
 import { SessionService } from '@modules/auth/services/session/session.service.js';
+import { authEvent } from '@modules/auth/events/catalog.js';
 import { isStaffRoleSlug, STAFF_ROLE_SLUGS } from '@modules/auth/constants/auth.constants.js';
 import { SystemSettingService } from '../system-settings/services/system-setting.service.js';
-import { recordAdminAction } from '../audit/index.js';
+import type { EpochService } from '@modules/auth/services/token/epoch.service.js';
+import { logger } from '@shared/logger/index.js';
+import {
+  lockForAudit,
+  lockForAuditKey,
+  recordAdminAction,
+  type AuditActor,
+} from '../audit/index.js';
 import type { AuditAction } from '../../../generated/prisma/index.js';
-import { AdminSessionNotFoundError } from './security.errors.js';
+import { AdminSessionNotFoundError, ForceLogoutIncompleteError } from './security.errors.js';
 import type { SecurityPolicyDto } from './security.schemas.js';
 
 const SECURITY_POLICY_KEY = 'security.policy';
@@ -57,12 +66,23 @@ export interface SecurityEventDto {
   createdAt: string;
 }
 
+export interface ForceLogoutResult {
+  revokedCount: number;
+  accountsLoggedOut: number;
+  /// PENDING: every account was logged out and audited, but some post-commit epoch bumps
+  /// failed. Their committed outbox events complete them when relayed.
+  cacheInvalidation: 'COMPLETE' | 'PENDING';
+  cacheInvalidationPending: string[];
+}
+
 export class AdminSecurityService {
   constructor(
     private readonly db: DatabaseService,
     private readonly sessionService: SessionService,
     private readonly systemSettingService: SystemSettingService,
     private readonly transactionManager: TransactionManager,
+    private readonly epochService: EpochService,
+    private readonly eventPublisher: EventPublisher,
   ) {}
 
   private get client() {
@@ -112,46 +132,70 @@ export class AdminSecurityService {
     };
   }
 
-  async revokeSession(sessionId: string, actorId: string): Promise<void> {
-    const adminSession = await this.client.adminSession.findUnique({ where: { id: sessionId } });
-    if (!adminSession) throw new AdminSessionNotFoundError();
+  /// The admin session, its paired user session (with that session's refresh tokens) and
+  /// the audit row commit together; only the Redis denylist entry follows commit. It used
+  /// to revoke the user session in a second transaction after the audited one, so a
+  /// failure there left a row saying the session was revoked while its refresh token
+  /// still worked. Revoking an already-revoked session changes and logs nothing.
+  async revokeSession(sessionId: string, actor: AuditActor): Promise<void> {
+    const revokedUserSession = await this.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'admin_sessions', sessionId);
+      const adminSession = await tx.adminSession.findUnique({ where: { id: sessionId } });
+      if (!adminSession) throw new AdminSessionNotFoundError();
 
-    const userSession = await this.client.userSession.findFirst({
-      where: {
-        userId: adminSession.userId,
-        loginMethod: { startsWith: 'admin_' },
-        createdAt: {
-          gte: new Date(adminSession.startedAt.getTime() - 5000),
-          lte: new Date(adminSession.startedAt.getTime() + 5000),
+      const userSession = await tx.userSession.findFirst({
+        where: {
+          userId: adminSession.userId,
+          loginMethod: { startsWith: 'admin_' },
+          createdAt: {
+            gte: new Date(adminSession.startedAt.getTime() - 5000),
+            lte: new Date(adminSession.startedAt.getTime() + 5000),
+          },
+          revokedAt: null,
         },
-        revokedAt: null,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+        orderBy: { createdAt: 'desc' },
+      });
 
-    await this.transactionManager.execute(async (tx) => {
-      if (!adminSession.revokedAt) {
+      const alreadyRevoked = adminSession.revokedAt !== null;
+      if (!alreadyRevoked) {
         await tx.adminSession.update({
           where: { id: sessionId },
           data: { revokedAt: new Date() },
         });
       }
+      const userSessionRevoked = userSession
+        ? await this.sessionService.revokeInTransaction(userSession.id, 'logout', tx)
+        : false;
+      if (alreadyRevoked && !userSessionRevoked) return null;
 
       await recordAdminAction(tx, {
-        actorId,
+        ...actor,
         action: 'LOGOUT',
         entityType: 'admin_session',
         entityId: sessionId,
         summary: 'Admin session revoked',
+        before: { revoked: alreadyRevoked },
+        after: { revoked: true, userSessionRevoked, userId: adminSession.userId },
+        result: 'SUCCESS',
       });
+      return userSessionRevoked && userSession ? userSession.id : null;
     });
 
-    if (userSession) {
-      await this.sessionService.revokeForUser(adminSession.userId, userSession.id);
-    }
+    if (revokedUserSession) await this.sessionService.afterRevoke(revokedUserSession, 'logout');
   }
 
-  async forceLogoutAll(actorId: string, userId?: string): Promise<{ revokedCount: number }> {
+  /// One transaction per staff account: its sessions, refresh tokens, admin sessions, its
+  /// audit row and an `account.sessions.force_revoked` outbox event commit together, so an
+  /// audit row exists exactly for the accounts that were logged out.
+  ///
+  /// Two kinds of failure, kept apart:
+  /// - The transaction fails (database, or the in-transaction epoch bump): that account is
+  ///   unchanged and unlogged. The loop still logs out everyone else, then the request
+  ///   fails — a partial run is never reported as complete.
+  /// - The transaction commits but the post-commit epoch bump fails: the account IS logged
+  ///   out and audited. It is reported as `cacheInvalidation: 'PENDING'`, not as a failure;
+  ///   the committed outbox event bumps the epoch again when relayed, which completes it.
+  async forceLogoutAll(actor: AuditActor, userId?: string): Promise<ForceLogoutResult> {
     const now = new Date();
     const staffUsers = userId
       ? [{ id: userId }]
@@ -170,36 +214,97 @@ export class AdminSecurityService {
         });
 
     let revokedCount = 0;
+    let accountsLoggedOut = 0;
+    const failed: string[] = [];
+    const cachePending: string[] = [];
     for (const user of staffUsers) {
-      const roles = await this.client.userRoleAssignment.findMany({
+      let revoked: number | null;
+      try {
+        revoked = await this.forceLogoutUser(user.id, actor, now, userId === undefined);
+      } catch (err) {
+        logger.error(
+          { err, userId: user.id },
+          '[admin-security] force logout rolled back for account',
+        );
+        failed.push(user.id);
+        continue;
+      }
+      if (revoked === null) continue;
+      revokedCount += revoked;
+      accountsLoggedOut += 1;
+      try {
+        await this.epochService.bump(user.id);
+      } catch (err) {
+        logger.warn(
+          { err, userId: user.id },
+          '[admin-security] force logout committed; epoch bump pending reconciliation via outbox',
+        );
+        cachePending.push(user.id);
+      }
+    }
+    if (failed.length > 0) {
+      throw new ForceLogoutIncompleteError(accountsLoggedOut, failed.length);
+    }
+    return {
+      revokedCount,
+      accountsLoggedOut,
+      cacheInvalidation: cachePending.length > 0 ? 'PENDING' : 'COMPLETE',
+      cacheInvalidationPending: cachePending,
+    };
+  }
+
+  /// Null when the account is not staff: nothing is changed and nothing is logged. Throws
+  /// only when the transaction rolled back; the post-commit epoch bump is the caller's.
+  ///
+  /// The epoch is bumped inside the transaction, as staff removal does, so a revocation
+  /// store that cannot be written aborts this account's change rather than leaving its
+  /// access tokens valid.
+  private async forceLogoutUser(
+    userId: string,
+    actor: AuditActor,
+    now: Date,
+    allStaff: boolean,
+  ): Promise<number | null> {
+    return this.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'users', userId);
+      const roles = await tx.userRoleAssignment.findMany({
         where: {
-          userId: user.id,
+          userId,
           revokedAt: null,
           OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
         },
         include: { role: { select: { slug: true } } },
       });
-      const isStaff = roles.some((r) => isStaffRoleSlug(r.role.slug));
-      if (!isStaff) continue;
+      if (!roles.some((r) => isStaffRoleSlug(r.role.slug))) return null;
 
-      await this.sessionService.logoutAll(user.id, 'admin_force_logout');
-      const result = await this.client.adminSession.updateMany({
-        where: { userId: user.id, revokedAt: null },
+      const sessionsRevoked = await this.sessionService.revokeAllInTransaction(
+        userId,
+        'admin_force_logout',
+        tx,
+      );
+      const { count: adminSessionsRevoked } = await tx.adminSession.updateMany({
+        where: { userId, revokedAt: null },
         data: { revokedAt: now },
       });
-      revokedCount += result.count;
-    }
-
-    await recordAdminAction(this.client, {
-      actorId,
-      action: 'LOGOUT',
-      entityType: 'admin_session',
-      summary: userId
-        ? `Force logout for user ${userId} (${revokedCount} sessions)`
-        : `Force logout for all admin users (${revokedCount} sessions)`,
+      await this.eventPublisher.publish(
+        authEvent('account.sessions.force_revoked', {
+          subjectUserId: userId,
+          data: { userId, reason: 'admin_force_logout' },
+        }),
+        tx,
+      );
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'LOGOUT',
+        entityType: 'staff_user',
+        entityId: userId,
+        summary: allStaff ? 'Force logout (all staff accounts)' : 'Force logout',
+        after: { sessionsRevoked, adminSessionsRevoked, tokensInvalidated: true },
+        result: 'SUCCESS',
+      });
+      await this.epochService.bump(userId);
+      return adminSessionsRevoked;
     });
-
-    return { revokedCount };
   }
 
   async listLoginHistory(input: {
@@ -279,8 +384,8 @@ export class AdminSecurityService {
     };
   }
 
-  async getPolicy(): Promise<SecurityPolicyDto> {
-    const raw = await this.systemSettingService.getSettingValue(SECURITY_POLICY_KEY);
+  async getPolicy(tx?: TransactionClient): Promise<SecurityPolicyDto> {
+    const raw = await this.systemSettingService.getSettingValue(SECURITY_POLICY_KEY, tx);
     if (!raw) return { ...DEFAULT_POLICY };
     try {
       const parsed = JSON.parse(raw) as Partial<SecurityPolicyDto>;
@@ -290,17 +395,22 @@ export class AdminSecurityService {
     }
   }
 
+  /// The policy is one JSON value merged with each patch, so the read, the merge, the write
+  /// and the audit row share one transaction behind a lock. Without it two concurrent
+  /// patches each merged into the same stale read, the second silently undoing the first,
+  /// and both rows recorded a `before` that was no longer true.
   async updatePolicy(
     input: Partial<SecurityPolicyDto>,
-    actorId: string,
+    actor: AuditActor,
   ): Promise<SecurityPolicyDto> {
     const patch = Object.fromEntries(
       Object.entries(input).filter(([, value]) => value !== undefined),
     ) as Partial<SecurityPolicyDto>;
-    const before = await this.getPolicy();
-    const after = { ...before, ...patch };
 
-    await this.transactionManager.execute(async (tx) => {
+    return this.transactionManager.execute(async (tx) => {
+      await lockForAuditKey(tx, `settings:${SECURITY_POLICY_CATEGORY}`);
+      const before = await this.getPolicy(tx);
+      const after = { ...before, ...patch };
       await this.systemSettingService.setSetting(
         {
           key: SECURITY_POLICY_KEY,
@@ -311,15 +421,15 @@ export class AdminSecurityService {
         tx,
       );
       await recordAdminAction(tx, {
-        actorId,
+        ...actor,
         action: 'UPDATE',
         entityType: 'security_policy',
         summary: 'Security policy updated',
         before,
         after,
+        result: 'SUCCESS',
       });
+      return after;
     });
-
-    return after;
   }
 }

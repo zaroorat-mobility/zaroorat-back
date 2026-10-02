@@ -137,7 +137,10 @@ export class SessionService {
     await this.afterRevoke(sessionId, reason);
     return true;
   }
-  private async revokeInTransaction(
+  /// Revokes one session and its refresh tokens inside the caller's transaction, so an
+  /// admin revocation commits with its audit row. The caller runs `afterRevoke` after
+  /// commit. False when the session was already revoked.
+  async revokeInTransaction(
     sessionId: string,
     reason: string,
     tx: TransactionClient,
@@ -157,7 +160,9 @@ export class SessionService {
     );
     return true;
   }
-  private async afterRevoke(sessionId: string, reason: string): Promise<void> {
+  /// Post-commit half of a revocation: the Redis denylist entry that retires the session's
+  /// live access token now rather than at expiry.
+  async afterRevoke(sessionId: string, reason: string): Promise<void> {
     await this.redisService.sidBlacklist.revoke(sessionId, this.sessionConfig.denylistTtlSeconds);
     if (reason === 'cap_evicted') this.sessionMetrics.capEvicted({ reason });
     this.sessionMetrics.revoked({ reason });

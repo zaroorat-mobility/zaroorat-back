@@ -1,4 +1,5 @@
 import { BaseRepository, DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import type { Permission } from '@core/database/types';
 export class PermissionRepository extends BaseRepository {
   constructor(databaseService: DatabaseService) {
@@ -36,29 +37,33 @@ export class PermissionRepository extends BaseRepository {
     return this.client.permission.findMany({ orderBy: [{ resource: 'asc' }, { code: 'asc' }] });
   }
 
-  async listCodesForRole(roleId: string): Promise<string[]> {
-    const rows = await this.client.rolePermission.findMany({
+  async listCodesForRole(roleId: string, tx?: TransactionClient): Promise<string[]> {
+    const rows = await (tx ?? this.client).rolePermission.findMany({
       where: { roleId, effect: 'ALLOW' },
       select: { permission: { select: { code: true } } },
     });
     return rows.map((row) => row.permission.code);
   }
 
-  async replaceRoleCodes(roleId: string, codes: string[]): Promise<void> {
-    const permissions = await this.client.permission.findMany({
-      where: { code: { in: codes } },
-      select: { id: true, code: true },
-    });
-    await this.client.$transaction(async (tx) => {
-      await tx.rolePermission.deleteMany({ where: { roleId } });
+  /// Replaces a role's grants. With `tx`, the replacement joins the caller's transaction
+  /// (so an audit row can commit or roll back with it); without, it runs in its own.
+  async replaceRoleCodes(roleId: string, codes: string[], tx?: TransactionClient): Promise<void> {
+    const replace = async (db: TransactionClient) => {
+      const permissions = await db.permission.findMany({
+        where: { code: { in: codes } },
+        select: { id: true, code: true },
+      });
+      await db.rolePermission.deleteMany({ where: { roleId } });
       if (permissions.length === 0) return;
-      await tx.rolePermission.createMany({
+      await db.rolePermission.createMany({
         data: permissions.map((permission) => ({
           roleId,
           permissionId: permission.id,
           effect: 'ALLOW',
         })),
       });
-    });
+    };
+    if (tx) return replace(tx);
+    await this.client.$transaction(replace);
   }
 }

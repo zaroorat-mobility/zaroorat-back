@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { Prisma } from '../../../../generated/prisma/index.js';
 import {
   CampaignNotFoundError,
@@ -153,7 +155,7 @@ export class AdminCouponService {
     return this.toBatchDto(row);
   }
 
-  async createBatch(body: CreateCouponBatchBody): Promise<CouponBatchDto> {
+  async createBatch(body: CreateCouponBatchBody, actor: AuditActor): Promise<CouponBatchDto> {
     const promotion = await this.databaseService.client.promotion.findUnique({
       where: { id: body.promotionId },
     });
@@ -166,78 +168,108 @@ export class AdminCouponService {
       if (!campaign) throw new CampaignNotFoundError();
     }
 
-    const batch = await this.databaseService.client.couponBatch.create({
-      data: {
-        promotionId: body.promotionId,
-        campaignId: body.campaignId ?? null,
-        name: body.name ?? null,
-        prefix: body.prefix?.trim().toUpperCase() ?? null,
-        totalCount: body.totalCount,
-        generatedCount: 0,
-        perUserLimit: body.perUserLimit ?? 1,
-        expiresAt: body.expiresAt ?? null,
-        isActive: body.isActive ?? true,
-      },
-      include: { promotion: true },
+    // The batch, its first coupons and the audit row are one change.
+    const batchId = await this.databaseService.transactionManager.execute(async (tx) => {
+      const batch = await tx.couponBatch.create({
+        data: {
+          promotionId: body.promotionId,
+          campaignId: body.campaignId ?? null,
+          name: body.name ?? null,
+          prefix: body.prefix?.trim().toUpperCase() ?? null,
+          totalCount: body.totalCount,
+          generatedCount: 0,
+          perUserLimit: body.perUserLimit ?? 1,
+          expiresAt: body.expiresAt ?? null,
+          isActive: body.isActive ?? true,
+        },
+      });
+      const generatedCount =
+        body.generateNow !== false ? await this.mint(tx, batch, batch.totalCount) : 0;
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'coupon_batch',
+        entityId: batch.id,
+        summary: `Coupon batch created with ${generatedCount} coupons`,
+        after: { ...batch, generatedCount },
+        result: 'SUCCESS',
+      });
+      return batch.id;
     });
-
-    if (body.generateNow !== false) {
-      await this.generateCoupons(batch.id, { count: body.totalCount });
-      return this.getBatch(batch.id);
-    }
-
-    return this.toBatchDto(batch);
+    return this.getBatch(batchId);
   }
 
-  async generateCoupons(batchId: string, body: GenerateCouponsBody): Promise<CouponBatchDto> {
-    const batch = await this.databaseService.client.couponBatch.findUnique({
-      where: { id: batchId },
-    });
-    if (!batch) throw new CouponBatchNotFoundError();
-
-    // FR-019. `remaining || body.count` collapsed to `body.count` the moment the
-    // batch was exhausted, because 0 is falsy — so the guard read
-    // `Math.min(count, count)` and generation became unlimited. Line 221 then
-    // raised `totalCount` to match, erasing the evidence that a cap had ever
-    // been exceeded. Repeated POSTs to /generate minted unbounded coupons
-    // against a promotion.
-    const remaining = Math.max(0, batch.totalCount - batch.generatedCount);
-    if (remaining === 0) {
-      throw new CouponBatchExhaustedError(
-        `Batch has already generated all ${batch.totalCount} of its coupons`,
-      );
-    }
-    const toCreate = Math.min(body.count, remaining);
-    const prefix = (batch.prefix ?? 'CPN').toUpperCase();
-    const codes: string[] = [];
-
-    for (let i = 0; i < toCreate; i++) {
-      codes.push(`${prefix}${randomSuffix(8)}`);
-    }
-
+  async generateCoupons(
+    batchId: string,
+    body: GenerateCouponsBody,
+    actor: AuditActor,
+  ): Promise<CouponBatchDto> {
     await this.databaseService.transactionManager.execute(async (tx) => {
-      await tx.coupon.createMany({
-        data: codes.map((code) => ({
-          batchId,
-          code,
-          status: 'ACTIVE' as const,
-          expiresAt: batch.expiresAt,
-        })),
-        skipDuplicates: true,
-      });
-      const generated = await tx.coupon.count({ where: { batchId } });
-      await tx.couponBatch.update({
-        where: { id: batchId },
-        data: {
-          generatedCount: generated,
-          // `totalCount` is the cap an operator set, not a running tally. Raising
-          // it to match whatever was generated made the cap unenforceable and
-          // hid that it had been breached.
-        },
+      // Locked, so two concurrent requests cannot both read the same `remaining` and
+      // mint past the cap, nor log the same starting count.
+      await lockForAudit(tx, 'coupon_batches', batchId);
+      const batch = await tx.couponBatch.findUnique({ where: { id: batchId } });
+      if (!batch) throw new CouponBatchNotFoundError();
+
+      // FR-019. `remaining || body.count` collapsed to `body.count` the moment the
+      // batch was exhausted, because 0 is falsy — so the guard read
+      // `Math.min(count, count)` and generation became unlimited. Repeated POSTs to
+      // /generate minted unbounded coupons against a promotion.
+      const remaining = Math.max(0, batch.totalCount - batch.generatedCount);
+      if (remaining === 0) {
+        throw new CouponBatchExhaustedError(
+          `Batch has already generated all ${batch.totalCount} of its coupons`,
+        );
+      }
+      const generatedCount = await this.mint(tx, batch, Math.min(body.count, remaining));
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'coupon_batch',
+        entityId: batchId,
+        summary: `${generatedCount - batch.generatedCount} coupons generated`,
+        before: { generatedCount: batch.generatedCount, totalCount: batch.totalCount },
+        after: { generatedCount, totalCount: batch.totalCount },
+        result: 'SUCCESS',
       });
     });
 
     return this.getBatch(batchId);
+  }
+
+  /// Returns the batch's new generated count. The codes themselves are redeemable
+  /// value and never go into an audit row — only the counts do.
+  private async mint(
+    tx: TransactionClient,
+    batch: { id: string; prefix: string | null; expiresAt: Date | null },
+    count: number,
+  ): Promise<number> {
+    const prefix = (batch.prefix ?? 'CPN').toUpperCase();
+    const codes: string[] = [];
+    for (let i = 0; i < count; i++) {
+      codes.push(`${prefix}${randomSuffix(8)}`);
+    }
+
+    await tx.coupon.createMany({
+      data: codes.map((code) => ({
+        batchId: batch.id,
+        code,
+        status: 'ACTIVE' as const,
+        expiresAt: batch.expiresAt,
+      })),
+      skipDuplicates: true,
+    });
+    const generated = await tx.coupon.count({ where: { batchId: batch.id } });
+    await tx.couponBatch.update({
+      where: { id: batch.id },
+      data: {
+        generatedCount: generated,
+        // `totalCount` is the cap an operator set, not a running tally. Raising
+        // it to match whatever was generated made the cap unenforceable and
+        // hid that it had been breached.
+      },
+    });
+    return generated;
   }
 
   async listCoupons(query: ListCouponsQuery): Promise<{
@@ -270,25 +302,39 @@ export class AdminCouponService {
     };
   }
 
-  async activateBatch(id: string): Promise<CouponBatchDto> {
-    const existing = await this.databaseService.client.couponBatch.findUnique({ where: { id } });
-    if (!existing) throw new CouponBatchNotFoundError();
-    const row = await this.databaseService.client.couponBatch.update({
-      where: { id },
-      data: { isActive: true },
-      include: { promotion: true },
-    });
-    return this.toBatchDto(row);
+  async activateBatch(id: string, actor: AuditActor): Promise<CouponBatchDto> {
+    return this.setBatchActive(id, true, actor);
   }
 
-  async deactivateBatch(id: string): Promise<CouponBatchDto> {
-    const existing = await this.databaseService.client.couponBatch.findUnique({ where: { id } });
-    if (!existing) throw new CouponBatchNotFoundError();
-    const row = await this.databaseService.client.couponBatch.update({
-      where: { id },
-      data: { isActive: false },
-      include: { promotion: true },
+  async deactivateBatch(id: string, actor: AuditActor): Promise<CouponBatchDto> {
+    return this.setBatchActive(id, false, actor);
+  }
+
+  private async setBatchActive(
+    id: string,
+    isActive: boolean,
+    actor: AuditActor,
+  ): Promise<CouponBatchDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'coupon_batches', id);
+      const existing = await tx.couponBatch.findUnique({ where: { id } });
+      if (!existing) throw new CouponBatchNotFoundError();
+      const row = await tx.couponBatch.update({
+        where: { id },
+        data: { isActive },
+        include: { promotion: true },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'coupon_batch',
+        entityId: id,
+        summary: `Coupon batch ${isActive ? 'activated' : 'deactivated'}`,
+        before: { isActive: existing.isActive },
+        after: { isActive: row.isActive },
+        result: 'SUCCESS',
+      });
+      return this.toBatchDto(row);
     });
-    return this.toBatchDto(row);
   }
 }

@@ -59,6 +59,12 @@ describe('assertOwnerOrStaff', () => {
     );
   });
 
+  it('permits system_admin as staff', () => {
+    assert.doesNotThrow(() =>
+      assertOwnerOrStaff(req({ userId: 'super', roles: ['system_admin'] }), 'user-1'),
+    );
+  });
+
   it('refuses when the record has no owner, rather than defaulting open', () => {
     for (const owner of [null, undefined, '']) {
       assert.throws(
@@ -101,6 +107,12 @@ describe('assertRideParty', () => {
 
   it('permits staff', () => {
     assert.doesNotThrow(() => assertRideParty(req({ userId: 'ops', roles: ['admin'] }), ride));
+  });
+
+  it('permits system_admin as staff', () => {
+    assert.doesNotThrow(() =>
+      assertRideParty(req({ userId: 'super', roles: ['system_admin'] }), ride),
+    );
   });
 });
 

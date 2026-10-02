@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { auditActor } from '../../audit/index.js';
 import { AdminRideService } from './ride.service.js';
 import {
   addRideNoteBodySchema,
@@ -81,8 +82,7 @@ export class AdminRideController {
   async cancelRide(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = rideIdParamSchema.parse(req.params);
     const body = cancelRideBodySchema.parse(req.body);
-    const actorId = callerId(req);
-    const data = await this.adminRideService.cancelRide(id, body, actorId);
+    const data = await this.adminRideService.cancelRide(id, body, auditActor(req));
     reply.send({ data });
   }
 

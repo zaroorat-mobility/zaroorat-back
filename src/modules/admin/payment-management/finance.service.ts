@@ -4,7 +4,7 @@ import { Prisma, type SettlementStatus } from '../../../generated/prisma/index.j
 import { Decimal } from '@modules/payments/types/index.js';
 import { RefundService } from '@modules/payments/services/refund/refund.service.js';
 import { SettlementService } from '@modules/payments/services/settlement/settlement.service.js';
-import { recordAdminAction } from '../audit/index.js';
+import { lockForAuditKey, recordAdminAction, type AuditActor } from '../audit/index.js';
 import { FinanceConflictError, FinanceNotFoundError } from './finance.errors.js';
 import type {
   CreateDisputeBody,
@@ -852,7 +852,19 @@ export class AdminFinanceService {
     return batch.drivers;
   }
 
-  async generateSettlement(body: GenerateSettlementBody, actorId: string, actorName?: string) {
+  /// Two consistency boundaries, both closed:
+  ///
+  /// - Each driver's settlement row, wallet credit and audit row commit together
+  ///   (`SettlementService.calculateSettlement` with the actor), so no credit exists
+  ///   without its record. Nothing here calls a provider; it is all ledger.
+  /// - If any driver's settlement rolled back, no batch is made: the request fails and a
+  ///   retry settles only who is missing (per-driver settlement is idempotent on its
+  ///   unique key), so nobody is credited twice and the batch, once made, is complete.
+  ///
+  /// The batch is created under an advisory lock and re-checked inside it, so concurrent
+  /// requests for one period produce one batch and one audit row — and batch numbers,
+  /// derived from a count, cannot collide.
+  async generateSettlement(body: GenerateSettlementBody, actor: AuditActor, actorName?: string) {
     if (body.periodEnd < body.periodStart) {
       throw new FinanceConflictError('periodEnd must be on or after periodStart');
     }
@@ -863,57 +875,62 @@ export class AdminFinanceService {
     });
     if (existing) return this.toBatchDto(existing as BatchRow);
 
-    await this.settlementService.calculateSettlementsForPeriod(body.periodStart, body.periodEnd);
-
-    const settlements = await this.client.driverSettlement.findMany({
-      where: { periodStart: body.periodStart, periodEnd: body.periodEnd },
-      include: {
-        driver: {
-          include: {
-            profile: true,
-            wallet: true,
-            user: { include: { profile: true } },
-          },
-        },
-      },
-    });
-
-    const actor = actorLabel(actorName);
-    const now = new Date();
-    const count = await this.client.settlementBatch.count();
-    const batchNumber = `SET-${now.getFullYear()}-${1000 + count + 1}`;
-
-    let totalGross = new Decimal(0);
-    let totalCommission = new Decimal(0);
-    let totalRefundAdj = new Decimal(0);
-    let totalBonuses = new Decimal(0);
-    let totalNet = new Decimal(0);
-
-    for (const s of settlements) {
-      totalGross = totalGross.add(s.grossEarnings);
-      totalCommission = totalCommission.add(s.commission);
-      totalNet = totalNet.add(s.netPayable);
-      if (s.adjustments.lt(0)) totalRefundAdj = totalRefundAdj.add(s.adjustments.abs());
-      if (s.adjustments.gt(0)) totalBonuses = totalBonuses.add(s.adjustments);
+    const { failed } = await this.settlementService.calculateSettlementsForPeriod(
+      body.periodStart,
+      body.periodEnd,
+      actor,
+    );
+    if (failed.length > 0) {
+      throw new FinanceConflictError(
+        `Settlement incomplete: ${failed.length} driver(s) could not be settled, so no batch was created. Retry to finish — drivers already settled are not settled again.`,
+      );
     }
 
-    const timeline: TimelineEvent[] = [
-      {
-        action: 'Settlement Generated',
-        actor,
-        timestamp: now.toISOString(),
-        notes: `Period: ${isoDate(body.periodStart)} → ${isoDate(body.periodEnd)}. ${settlements.length} drivers, ₹${totalNet.toFixed(2)} net payable.`,
-      },
-    ];
+    const label = actorLabel(actorName);
+    const batch = await this.db.transactionManager.execute(async (tx) => {
+      await lockForAuditKey(tx, 'settlement_batches');
+      const already = await tx.settlementBatch.findFirst({
+        where: { periodStart: body.periodStart, periodEnd: body.periodEnd },
+        include: this.batchInclude,
+      });
+      if (already) return already;
 
-    const batch = await this.client.$transaction(async (tx) => {
+      const settlements = await tx.driverSettlement.findMany({
+        where: { periodStart: body.periodStart, periodEnd: body.periodEnd },
+      });
+      const now = new Date();
+      const count = await tx.settlementBatch.count();
+      const batchNumber = `SET-${now.getFullYear()}-${1000 + count + 1}`;
+
+      let totalGross = new Decimal(0);
+      let totalCommission = new Decimal(0);
+      let totalRefundAdj = new Decimal(0);
+      let totalBonuses = new Decimal(0);
+      let totalNet = new Decimal(0);
+      for (const s of settlements) {
+        totalGross = totalGross.add(s.grossEarnings);
+        totalCommission = totalCommission.add(s.commission);
+        totalNet = totalNet.add(s.netPayable);
+        if (s.adjustments.lt(0)) totalRefundAdj = totalRefundAdj.add(s.adjustments.abs());
+        if (s.adjustments.gt(0)) totalBonuses = totalBonuses.add(s.adjustments);
+      }
+
+      const timeline: TimelineEvent[] = [
+        {
+          action: 'Settlement Generated',
+          actor: label,
+          timestamp: now.toISOString(),
+          notes: `Period: ${isoDate(body.periodStart)} → ${isoDate(body.periodEnd)}. ${settlements.length} drivers, ₹${totalNet.toFixed(2)} net payable.`,
+        },
+      ];
+
       const created = await tx.settlementBatch.create({
         data: {
           batchNumber,
           periodStart: body.periodStart,
           periodEnd: body.periodEnd,
           status: 'draft',
-          generatedBy: actor,
+          generatedBy: label,
           totalDrivers: settlements.length,
           totalGrossAmount: totalGross,
           totalCommission,
@@ -933,16 +950,19 @@ export class AdminFinanceService {
       }
 
       await recordAdminAction(tx, {
-        actorId,
+        ...actor,
         action: 'CREATE',
         entityType: 'settlement',
         entityId: created.id,
         summary: `Generated settlement batch ${batchNumber}`,
         after: {
           batchNumber,
+          periodStart: isoDate(body.periodStart),
+          periodEnd: isoDate(body.periodEnd),
           totalDrivers: settlements.length,
-          totalNetPayable: totalNet.toNumber(),
+          totalNetPayable: totalNet.toFixed(2),
         },
+        result: 'SUCCESS',
       });
 
       return tx.settlementBatch.findUniqueOrThrow({

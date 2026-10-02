@@ -2,7 +2,7 @@ import { DatabaseService } from '@core/database';
 import type { DriverService } from '@modules/drivers/services/driver.service.js';
 import type { VerificationStatus } from '../../../generated/prisma/index.js';
 import { SystemSettingService } from '../system-settings/services/system-setting.service.js';
-import { recordAdminAction } from '../audit/index.js';
+import { recordAdminAction, type AuditActor } from '../audit/index.js';
 import { FinanceNotFoundError } from './finance.errors.js';
 import {
   expiryStatus,
@@ -266,7 +266,7 @@ export class DocumentComplianceService {
   async reviewDocument(
     documentId: string,
     status: VerificationStatus,
-    reviewerId: string,
+    actor: AuditActor,
     rejectionReason?: string,
   ) {
     const doc = await this.client.driverDocument.findUnique({ where: { id: documentId } });
@@ -276,7 +276,7 @@ export class DocumentComplianceService {
       documentId,
       doc.driverId,
       status,
-      reviewerId,
+      actor,
       rejectionReason,
     );
 

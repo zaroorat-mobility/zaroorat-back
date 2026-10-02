@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
 import { DriverService } from '../services/driver.service.js';
 import { DriverRepository } from '../repositories/driver.repository.js';
-import { updateDriverProfileSchema, reviewVerificationSchema } from '../schemas/driver.schemas.js';
+import { updateDriverProfileSchema } from '../schemas/driver.schemas.js';
 import { actingDriverId } from './driver-identity.js';
 import { DriverNotFoundError } from '../errors/driver.errors.js';
 
@@ -52,27 +52,5 @@ export class DriverOnboardingController {
     );
 
     reply.send({ data: profile });
-  }
-
-  async reviewVerification(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as {
-      id: string;
-    };
-    const approvedBy = callerId(req);
-    const body = reviewVerificationSchema.parse(req.body);
-
-    const driver = await this.driverService.onboarding.reviewDriverVerification(
-      id,
-      body.status,
-      approvedBy,
-      body.rejectionReason,
-    );
-
-    req.log.warn(
-      { driverId: id, status: body.status, reviewerUserId: approvedBy },
-      '[drivers] verification decision recorded',
-    );
-
-    reply.send({ data: driver });
   }
 }

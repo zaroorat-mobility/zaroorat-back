@@ -441,6 +441,11 @@ enum ServiceZoneType {
   RESTRICTED
 }
 
+enum StateDivisionType {
+  STATE
+  UNION_TERRITORY
+}
+
 enum RideServiceType {
   INSTANT
   SCHEDULED

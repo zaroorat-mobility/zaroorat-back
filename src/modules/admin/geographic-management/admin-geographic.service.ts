@@ -1,9 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { DatabaseService } from '@core/database';
 import type { ProviderClient } from '@core/database/index.js';
 import { uuidV7 } from '@shared/crypto';
 import { recordAdminAction } from '../audit/index.js';
 import { Prisma } from '../../../generated/prisma/index.js';
-import type { ServiceZoneType } from '../../../generated/prisma/index.js';
+import type { ServiceZoneType, StateDivisionType } from '../../../generated/prisma/index.js';
 import {
   assertValidPolygon,
   assertZoneWithinCity,
@@ -60,7 +62,92 @@ export interface StateDto {
   countryCode: string;
   code: string;
   name: string;
+  nativeName: string | null;
+  divisionType: StateDivisionType;
+  lgdCode: number | null;
+  isoCode: string | null;
+  censusCode: string | null;
   isActive: boolean;
+}
+
+export interface CanonicalStateRecord {
+  lgdCode: number;
+  code: string;
+  name: string;
+  nativeName?: string | null;
+  divisionType: StateDivisionType;
+  isoCode: string;
+  censusCode?: string | null;
+}
+
+export interface CanonicalDataset {
+  metadata: {
+    source: string;
+    sourceUrl: string;
+    standard: string;
+    version: string;
+    retrievedAt: string;
+    countryCode: string;
+    totalRecords: number;
+    breakdown: {
+      states: number;
+      unionTerritories: number;
+    };
+  };
+  records: CanonicalStateRecord[];
+}
+
+export type ReconcileActionType = 'CREATE' | 'UPDATE' | 'NO_OP' | 'EXTRA_IN_DB';
+
+export interface ReconcileDiffItem {
+  code: string;
+  name: string;
+  action: ReconcileActionType;
+  reason?: string;
+  stateId?: string;
+  changes?: Record<string, { before: unknown; after: unknown }>;
+  affectedCities?: number;
+  canonical?: CanonicalStateRecord;
+}
+
+export interface ReconcileResultDto {
+  countryCode: string;
+  canonicalSource: {
+    authority: string;
+    version: string;
+    publishedDate: string;
+    totalStates: number;
+    totalUnionTerritories: number;
+    totalRecords: number;
+  };
+  mode: 'PREVIEW' | 'APPLY';
+  applied: boolean;
+  summary: {
+    canonicalTotal: number;
+    dbTotal: number;
+    toCreate: number;
+    toUpdate: number;
+    unchanged: number;
+    extraInDb: number;
+    affectedCities: number;
+  };
+  details: ReconcileDiffItem[];
+}
+
+function loadIndiaLgdDataset(): CanonicalDataset {
+  const candidatePaths = [
+    path.resolve(process.cwd(), 'prisma/seed/reference/india-states-lgd.json'),
+    path.resolve(__dirname, '../../../../prisma/seed/reference/india-states-lgd.json'),
+    path.resolve(__dirname, '../../../prisma/seed/reference/india-states-lgd.json'),
+  ];
+  for (const candidate of candidatePaths) {
+    if (fs.existsSync(candidate)) {
+      return JSON.parse(fs.readFileSync(candidate, 'utf-8')) as CanonicalDataset;
+    }
+  }
+  throw new GeographicValidationError(
+    'Canonical India LGD reference dataset file (india-states-lgd.json) not found',
+  );
 }
 
 export interface CityListDto {
@@ -122,12 +209,14 @@ export class AdminGeographicService {
 
   async listStates(options?: {
     countryCode?: string;
+    divisionType?: StateDivisionType;
     activeOnly?: boolean;
   }): Promise<{ data: StateDto[] }> {
     const rows = await this.databaseService.client.state.findMany({
       where: {
         ...(options?.activeOnly ? { isActive: true } : {}),
         ...(options?.countryCode ? { country: { code: options.countryCode } } : {}),
+        ...(options?.divisionType ? { divisionType: options.divisionType } : {}),
       },
       include: { country: true },
       orderBy: { name: 'asc' },
@@ -138,6 +227,11 @@ export class AdminGeographicService {
         countryCode: r.country.code,
         code: r.code,
         name: r.name,
+        nativeName: r.nativeName,
+        divisionType: r.divisionType,
+        lgdCode: r.lgdCode,
+        isoCode: r.isoCode,
+        censusCode: r.censusCode,
         isActive: r.isActive,
       })),
     };
@@ -149,34 +243,120 @@ export class AdminGeographicService {
     });
     if (!country) throw new GeographicValidationError(`Country ${body.countryCode} not found`);
 
-    const created = await this.databaseService.transactionManager.execute(async (tx) => {
-      const row = await tx.state.create({
-        data: {
+    const codeUpper = body.code.toUpperCase();
+
+    // If the state already exists in the canonical catalog (e.g. seeded as inactive), activate it
+    const existing = await this.databaseService.client.state.findUnique({
+      where: {
+        countryId_code: {
           countryId: country.id,
-          code: body.code.toUpperCase(),
-          name: body.name,
-          isActive: body.isActive ?? true,
+          code: codeUpper,
         },
-        include: { country: true },
-      });
-      const dto: StateDto = {
-        id: row.id,
-        countryCode: row.country.code,
-        code: row.code,
-        name: row.name,
-        isActive: row.isActive,
-      };
-      await recordAdminAction(tx, {
-        actorId,
-        action: 'CREATE',
-        entityType: 'state',
-        entityId: row.id,
-        summary: `Created state ${row.code}`,
-        after: dto,
-      });
-      return dto;
+      },
+      include: { country: true },
     });
-    return created;
+
+    if (existing) {
+      const before: StateDto = {
+        id: existing.id,
+        countryCode: existing.country.code,
+        code: existing.code,
+        name: existing.name,
+        nativeName: existing.nativeName,
+        divisionType: existing.divisionType,
+        lgdCode: existing.lgdCode,
+        isoCode: existing.isoCode,
+        censusCode: existing.censusCode,
+        isActive: existing.isActive,
+      };
+
+      return this.databaseService.transactionManager.execute(async (tx) => {
+        const row = await tx.state.update({
+          where: { id: existing.id },
+          data: {
+            isActive: body.isActive ?? true,
+            ...(body.name ? { name: body.name } : {}),
+            ...(body.nativeName !== undefined ? { nativeName: body.nativeName } : {}),
+            ...(body.divisionType ? { divisionType: body.divisionType } : {}),
+            ...(body.lgdCode !== undefined ? { lgdCode: body.lgdCode } : {}),
+            ...(body.isoCode !== undefined ? { isoCode: body.isoCode } : {}),
+            ...(body.censusCode !== undefined ? { censusCode: body.censusCode } : {}),
+          },
+          include: { country: true },
+        });
+        const dto: StateDto = {
+          id: row.id,
+          countryCode: row.country.code,
+          code: row.code,
+          name: row.name,
+          nativeName: row.nativeName,
+          divisionType: row.divisionType,
+          lgdCode: row.lgdCode,
+          isoCode: row.isoCode,
+          censusCode: row.censusCode,
+          isActive: row.isActive,
+        };
+        await recordAdminAction(tx, {
+          actorId,
+          action: 'UPDATE',
+          entityType: 'state',
+          entityId: row.id,
+          summary: `Activated state ${row.code}`,
+          before,
+          after: dto,
+        });
+        return dto;
+      });
+    }
+
+    try {
+      const created = await this.databaseService.transactionManager.execute(async (tx) => {
+        const row = await tx.state.create({
+          data: {
+            countryId: country.id,
+            code: codeUpper,
+            name: body.name,
+            nativeName: body.nativeName ?? null,
+            divisionType: body.divisionType ?? 'STATE',
+            lgdCode: body.lgdCode ?? null,
+            isoCode: body.isoCode ?? null,
+            censusCode: body.censusCode ?? null,
+            isActive: body.isActive ?? true,
+          },
+          include: { country: true },
+        });
+        const dto: StateDto = {
+          id: row.id,
+          countryCode: row.country.code,
+          code: row.code,
+          name: row.name,
+          nativeName: row.nativeName,
+          divisionType: row.divisionType,
+          lgdCode: row.lgdCode,
+          isoCode: row.isoCode,
+          censusCode: row.censusCode,
+          isActive: row.isActive,
+        };
+        await recordAdminAction(tx, {
+          actorId,
+          action: 'CREATE',
+          entityType: 'state',
+          entityId: row.id,
+          summary: `Created state ${row.code}`,
+          after: dto,
+        });
+        return dto;
+      });
+      return created;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const target = (err.meta?.target as string[]) || [];
+        throw new GeographicConflictError(
+          `A state with this ${target.join(', ') || 'code, name, or LGD code'} already exists in country ${body.countryCode}`,
+        );
+      }
+      throw err;
+    }
   }
 
   async updateState(id: string, body: UpdateStateBody, actorId?: string): Promise<StateDto> {
@@ -186,41 +366,313 @@ export class AdminGeographicService {
     });
     if (!existing) throw new StateNotFoundError();
 
+    if (body.isActive === false && existing.isActive) {
+      const activeCityCount = await this.databaseService.client.city.count({
+        where: { stateId: id, isActive: true },
+      });
+      if (activeCityCount > 0) {
+        throw new GeographicConflictError(
+          `Cannot deactivate state "${existing.name}" because it still has ${activeCityCount} active city/cities. Deactivate or reassign them first.`,
+        );
+      }
+    }
+
     const before: StateDto = {
       id: existing.id,
       countryCode: existing.country.code,
       code: existing.code,
       name: existing.name,
+      nativeName: existing.nativeName,
+      divisionType: existing.divisionType,
+      lgdCode: existing.lgdCode,
+      isoCode: existing.isoCode,
+      censusCode: existing.censusCode,
       isActive: existing.isActive,
     };
 
-    return this.databaseService.transactionManager.execute(async (tx) => {
-      const updated = await tx.state.update({
-        where: { id },
-        data: {
-          ...(body.name !== undefined ? { name: body.name } : {}),
-          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
-        },
-        include: { country: true },
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        const updated = await tx.state.update({
+          where: { id },
+          data: {
+            ...(body.name !== undefined ? { name: body.name } : {}),
+            ...(body.nativeName !== undefined ? { nativeName: body.nativeName } : {}),
+            ...(body.divisionType !== undefined ? { divisionType: body.divisionType } : {}),
+            ...(body.lgdCode !== undefined ? { lgdCode: body.lgdCode } : {}),
+            ...(body.isoCode !== undefined ? { isoCode: body.isoCode } : {}),
+            ...(body.censusCode !== undefined ? { censusCode: body.censusCode } : {}),
+            ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+          },
+          include: { country: true },
+        });
+
+        if (body.name && body.name !== existing.name) {
+          await tx.city.updateMany({
+            where: { stateId: id },
+            data: { state: body.name },
+          });
+        }
+
+        const after: StateDto = {
+          id: updated.id,
+          countryCode: updated.country.code,
+          code: updated.code,
+          name: updated.name,
+          nativeName: updated.nativeName,
+          divisionType: updated.divisionType,
+          lgdCode: updated.lgdCode,
+          isoCode: updated.isoCode,
+          censusCode: updated.censusCode,
+          isActive: updated.isActive,
+        };
+        await recordAdminAction(tx, {
+          actorId,
+          action: 'UPDATE',
+          entityType: 'state',
+          entityId: id,
+          summary: `Updated state ${after.code}`,
+          before,
+          after,
+        });
+        return after;
       });
-      const after: StateDto = {
-        id: updated.id,
-        countryCode: updated.country.code,
-        code: updated.code,
-        name: updated.name,
-        isActive: updated.isActive,
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const target = (err.meta?.target as string[]) || [];
+        throw new GeographicConflictError(
+          `A state with this ${target.join(', ') || 'code, name, or LGD code'} already exists in this country`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  async reconcileStates(
+    options: {
+      countryCode: string;
+      mode: 'PREVIEW' | 'APPLY';
+      expectedVersion?: string | undefined;
+    },
+    actorId?: string,
+  ): Promise<ReconcileResultDto> {
+    const country = await this.databaseService.client.country.findUnique({
+      where: { code: options.countryCode },
+    });
+    if (!country) {
+      throw new GeographicValidationError(`Country ${options.countryCode} not found`);
+    }
+
+    if (options.countryCode !== 'IN') {
+      throw new GeographicValidationError(
+        `Canonical reference dataset is currently only available for country IN`,
+      );
+    }
+
+    const canonicalData = loadIndiaLgdDataset();
+    if (options.expectedVersion && options.expectedVersion !== canonicalData.metadata.version) {
+      throw new GeographicValidationError(
+        `Version mismatch: dataset version is "${canonicalData.metadata.version}", but expectedVersion was "${options.expectedVersion}"`,
+      );
+    }
+
+    const dbStates = await this.databaseService.client.state.findMany({
+      where: { countryId: country.id },
+      include: {
+        _count: {
+          select: { cities: true },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    const dbStateByCode = new Map<string, (typeof dbStates)[0]>();
+    for (const s of dbStates) {
+      dbStateByCode.set(s.code.toUpperCase(), s);
+    }
+
+    const canonicalCodeSet = new Set<string>();
+    const details: ReconcileDiffItem[] = [];
+
+    let toCreate = 0;
+    let toUpdate = 0;
+    let unchanged = 0;
+    let affectedCitiesTotal = 0;
+
+    for (const canonical of canonicalData.records) {
+      canonicalCodeSet.add(canonical.code.toUpperCase());
+      const existing = dbStateByCode.get(canonical.code.toUpperCase());
+
+      if (!existing) {
+        toCreate++;
+        details.push({
+          code: canonical.code,
+          name: canonical.name,
+          action: 'CREATE',
+          reason: 'Official state/UT missing from database',
+          canonical,
+        });
+        continue;
+      }
+
+      // Check differences
+      const changes: Record<string, { before: unknown; after: unknown }> = {};
+      if (existing.name !== canonical.name) {
+        changes.name = { before: existing.name, after: canonical.name };
+      }
+      if ((existing.nativeName ?? null) !== (canonical.nativeName ?? null)) {
+        changes.nativeName = {
+          before: existing.nativeName ?? null,
+          after: canonical.nativeName ?? null,
+        };
+      }
+      if (existing.divisionType !== canonical.divisionType) {
+        changes.divisionType = {
+          before: existing.divisionType,
+          after: canonical.divisionType,
+        };
+      }
+      if (existing.lgdCode !== canonical.lgdCode) {
+        changes.lgdCode = { before: existing.lgdCode, after: canonical.lgdCode };
+      }
+      if ((existing.isoCode ?? null) !== (canonical.isoCode ?? null)) {
+        changes.isoCode = { before: existing.isoCode ?? null, after: canonical.isoCode ?? null };
+      }
+      if ((existing.censusCode ?? null) !== (canonical.censusCode ?? null)) {
+        changes.censusCode = {
+          before: existing.censusCode ?? null,
+          after: canonical.censusCode ?? null,
+        };
+      }
+
+      if (Object.keys(changes).length > 0) {
+        toUpdate++;
+        const affectedCities = changes.name ? existing._count.cities : 0;
+        affectedCitiesTotal += affectedCities;
+        details.push({
+          code: canonical.code,
+          name: canonical.name,
+          action: 'UPDATE',
+          stateId: existing.id,
+          changes,
+          affectedCities,
+          canonical,
+        });
+      } else {
+        unchanged++;
+        details.push({
+          code: canonical.code,
+          name: canonical.name,
+          action: 'NO_OP',
+          stateId: existing.id,
+        });
+      }
+    }
+
+    // Check for extra states in DB not in canonical
+    let extraInDb = 0;
+    for (const existing of dbStates) {
+      if (!canonicalCodeSet.has(existing.code.toUpperCase())) {
+        extraInDb++;
+        details.push({
+          code: existing.code,
+          name: existing.name,
+          action: 'EXTRA_IN_DB',
+          stateId: existing.id,
+          reason: 'State exists in database but is not present in official GoI canonical reference',
+          affectedCities: existing._count.cities,
+        });
+      }
+    }
+
+    const summary = {
+      canonicalTotal: canonicalData.records.length,
+      dbTotal: dbStates.length,
+      toCreate,
+      toUpdate,
+      unchanged,
+      extraInDb,
+      affectedCities: affectedCitiesTotal,
+    };
+
+    const canonicalSource = {
+      authority: canonicalData.metadata.source,
+      version: canonicalData.metadata.version,
+      publishedDate: canonicalData.metadata.retrievedAt,
+      totalStates: canonicalData.metadata.breakdown.states,
+      totalUnionTerritories: canonicalData.metadata.breakdown.unionTerritories,
+      totalRecords: canonicalData.metadata.totalRecords,
+    };
+
+    if (options.mode === 'PREVIEW') {
+      return {
+        countryCode: options.countryCode,
+        canonicalSource,
+        mode: 'PREVIEW',
+        applied: false,
+        summary,
+        details,
       };
+    }
+
+    // APPLY MODE
+    await this.databaseService.transactionManager.execute(async (tx) => {
+      for (const item of details) {
+        if (item.action === 'CREATE' && item.canonical) {
+          await tx.state.create({
+            data: {
+              countryId: country.id,
+              code: item.canonical.code,
+              name: item.canonical.name,
+              nativeName: item.canonical.nativeName ?? null,
+              divisionType: item.canonical.divisionType,
+              lgdCode: item.canonical.lgdCode,
+              isoCode: item.canonical.isoCode,
+              censusCode: item.canonical.censusCode ?? null,
+              isActive: true,
+            },
+          });
+        } else if (item.action === 'UPDATE' && item.stateId && item.canonical) {
+          await tx.state.update({
+            where: { id: item.stateId },
+            data: {
+              name: item.canonical.name,
+              nativeName: item.canonical.nativeName ?? null,
+              divisionType: item.canonical.divisionType,
+              lgdCode: item.canonical.lgdCode,
+              isoCode: item.canonical.isoCode,
+              censusCode: item.canonical.censusCode ?? null,
+            },
+          });
+          if (item.changes?.name) {
+            await tx.city.updateMany({
+              where: { stateId: item.stateId },
+              data: { state: item.canonical.name },
+            });
+          }
+        }
+      }
+
       await recordAdminAction(tx, {
         actorId,
         action: 'UPDATE',
-        entityType: 'state',
-        entityId: id,
-        summary: `Updated state ${after.code}`,
-        before,
-        after,
+        entityType: 'state_reconciliation',
+        entityId: country.id,
+        summary: `Reconciled states for ${country.code}: created ${summary.toCreate}, updated ${summary.toUpdate}`,
+        after: {
+          summary,
+          version: canonicalData.metadata.version,
+        },
       });
-      return after;
     });
+
+    return {
+      countryCode: options.countryCode,
+      canonicalSource,
+      mode: 'APPLY',
+      applied: true,
+      summary,
+      details,
+    };
   }
 
   async listCities(options: {

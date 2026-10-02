@@ -342,7 +342,16 @@ export class AdminTicketService {
         entityType: 'support_ticket',
         entityId: ticket.id,
         summary: `Created support ticket ${ticket.ticketNumber}: ${ticket.subject}`,
-        after: ticket,
+        // The customer's description stays on the ticket and its first message.
+        after: {
+          ticketNumber: ticket.ticketNumber,
+          userId: ticket.userId,
+          categoryId: ticket.categoryId,
+          rideId: ticket.rideId,
+          priority: ticket.priority,
+          channel: ticket.channel,
+          status: ticket.status,
+        },
       });
 
       return ticket;

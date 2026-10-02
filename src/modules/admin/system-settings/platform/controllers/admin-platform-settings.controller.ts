@@ -1,3 +1,4 @@
+import { auditActor } from '../../../audit/index.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AdminPlatformSettingsService } from '../services/admin-platform-settings.service.js';
 import {
@@ -8,7 +9,7 @@ import {
   updateFeatureFlagsSchema,
   updateMaintenanceSettingsSchema,
 } from '../schemas/platform-settings.schema.js';
-import { errorEnvelope } from '@core/errors/envelope.js';
+import { errorEnvelope, rethrowServerFault } from '@core/errors/envelope.js';
 import { logger } from '@shared/logger/index.js';
 
 export class AdminPlatformSettingsController {
@@ -34,6 +35,7 @@ export class AdminPlatformSettingsController {
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -65,6 +67,7 @@ export class AdminPlatformSettingsController {
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -96,6 +99,7 @@ export class AdminPlatformSettingsController {
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -127,6 +131,7 @@ export class AdminPlatformSettingsController {
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -154,10 +159,11 @@ export class AdminPlatformSettingsController {
       const body = updateFeatureFlagsSchema.parse(req.body);
       const data = await this.adminPlatformSettingsService.updateFeatureFlags(
         body,
-        req.auth?.userId,
+        auditActor(req),
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -185,10 +191,11 @@ export class AdminPlatformSettingsController {
       const body = updateMaintenanceSettingsSchema.parse(req.body);
       const data = await this.adminPlatformSettingsService.updateMaintenanceSettings(
         body,
-        req.auth?.userId,
+        auditActor(req),
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(

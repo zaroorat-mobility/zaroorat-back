@@ -8,9 +8,11 @@ const pointSchema = z.object({
 });
 
 export const serviceZoneTypeSchema = z.enum(['SERVICE', 'AIRPORT', 'RESTRICTED']);
+export const stateDivisionTypeSchema = z.enum(['STATE', 'UNION_TERRITORY']);
 
 export const listStatesQuerySchema = z.object({
   countryCode: z.string().trim().min(1).max(10).optional(),
+  divisionType: stateDivisionTypeSchema.optional(),
   activeOnly: z.coerce.boolean().optional().default(false),
 });
 
@@ -45,12 +47,32 @@ export const createStateBodySchema = z.object({
   countryCode: z.string().trim().min(1).max(10).default('IN'),
   code: z.string().trim().min(1).max(10),
   name: z.string().trim().min(1).max(120),
+  nativeName: z.string().trim().max(150).optional().nullable(),
+  divisionType: stateDivisionTypeSchema.default('STATE'),
+  lgdCode: z.number().int().positive().optional().nullable(),
+  isoCode: z.string().trim().max(6).optional().nullable(),
+  censusCode: z.string().trim().max(4).optional().nullable(),
   isActive: z.boolean().optional().default(true),
 });
 
 export const updateStateBodySchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  nativeName: z.string().trim().max(150).optional().nullable(),
+  divisionType: stateDivisionTypeSchema.optional(),
+  lgdCode: z.number().int().positive().optional().nullable(),
+  isoCode: z.string().trim().max(6).optional().nullable(),
+  censusCode: z.string().trim().max(4).optional().nullable(),
   isActive: z.boolean().optional(),
+});
+
+export const reconcilePreviewQuerySchema = z.object({
+  countryCode: z.string().trim().min(1).max(10).default('IN'),
+});
+
+export const reconcileApplyBodySchema = z.object({
+  countryCode: z.string().trim().min(1).max(10).default('IN'),
+  confirm: z.literal(true),
+  expectedVersion: z.string().trim().min(1).optional(),
 });
 
 export const listServiceZonesQuerySchema = z.object({
@@ -85,5 +107,7 @@ export type CreateCityBody = z.infer<typeof createCityBodySchema>;
 export type UpdateCityBody = z.infer<typeof updateCityBodySchema>;
 export type CreateStateBody = z.infer<typeof createStateBodySchema>;
 export type UpdateStateBody = z.infer<typeof updateStateBodySchema>;
+export type ReconcilePreviewQuery = z.infer<typeof reconcilePreviewQuerySchema>;
+export type ReconcileApplyBody = z.infer<typeof reconcileApplyBodySchema>;
 export type CreateServiceZoneBody = z.infer<typeof createServiceZoneBodySchema>;
 export type UpdateServiceZoneBody = z.infer<typeof updateServiceZoneBodySchema>;

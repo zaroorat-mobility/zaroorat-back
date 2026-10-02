@@ -1,7 +1,9 @@
 import { DatabaseService } from '@core/database';
 import type { UserStatus } from '@core/database/types';
 import { SessionService } from '@modules/auth/services/session/session.service.js';
+import type { EpochService } from '@modules/auth/services/token/epoch.service.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
+import { recordAdminAction, type AuditActor } from '../audit/index.js';
 import { RiderConflictError, RiderNotFoundError } from './rider.errors.js';
 import type { ListRidersQuery, RiderStatusDto } from './rider.schemas.js';
 
@@ -140,6 +142,7 @@ export class AdminRiderService {
     private readonly databaseService: DatabaseService,
     private readonly userRepository: UserRepository,
     private readonly sessionService: SessionService,
+    private readonly epochService: EpochService,
   ) {}
 
   async list(query: ListRidersQuery): Promise<{
@@ -286,55 +289,60 @@ export class AdminRiderService {
     };
   }
 
-  async suspend(id: string, actorId: string, notes?: string): Promise<RiderDetailsDto> {
-    return this.setStatus(id, 'SUSPENDED', actorId, 'Rider Account Suspended', notes, 'suspension');
+  async suspend(id: string, actor: AuditActor, notes?: string): Promise<RiderDetailsDto> {
+    return this.setStatus(id, 'SUSPENDED', actor, 'Rider Account Suspended', notes, 'suspension');
   }
 
-  async block(id: string, actorId: string, notes?: string): Promise<RiderDetailsDto> {
-    return this.setStatus(id, 'DEACTIVATED', actorId, 'Rider Account Blocked', notes, 'blocked');
+  async block(id: string, actor: AuditActor, notes?: string): Promise<RiderDetailsDto> {
+    return this.setStatus(id, 'DEACTIVATED', actor, 'Rider Account Blocked', notes, 'blocked');
   }
 
-  async activate(id: string, actorId: string, notes?: string): Promise<RiderDetailsDto> {
-    return this.setStatus(id, 'ACTIVE', actorId, 'Rider Account Activated', notes);
+  async activate(id: string, actor: AuditActor, notes?: string): Promise<RiderDetailsDto> {
+    return this.setStatus(id, 'ACTIVE', actor, 'Rider Account Activated', notes);
   }
 
+  /// Status, session revocation and audit row commit together. The user row is locked
+  /// before its status is read, so concurrent requests cannot both log one transition.
   private async setStatus(
     id: string,
     status: UserStatus,
-    actorId: string,
+    actor: AuditActor,
     summary: string,
     notes?: string,
     logoutReason?: string,
   ): Promise<RiderDetailsDto> {
-    const row = await this.findRiderRow(id);
-    if (!row) throw new RiderNotFoundError();
-
-    const current = toRiderStatus(row.status);
+    if (!(await this.findRiderRow(id))) throw new RiderNotFoundError();
     const next = toRiderStatus(status);
-    if (current === next) {
-      throw new RiderConflictError(`Rider is already ${current}`);
-    }
 
-    await this.userRepository.updateStatus(id, status);
-    if (logoutReason) {
-      await this.sessionService.logoutAll(id, logoutReason);
-    }
+    await this.databaseService.transactionManager.execute(async (tx) => {
+      await this.userRepository.lockForUpdate(id, tx);
+      const row = await tx.user.findUniqueOrThrow({ where: { id }, select: { status: true } });
+      const current = toRiderStatus(row.status);
+      if (current === next) {
+        throw new RiderConflictError(`Rider is already ${current}`);
+      }
 
-    await this.databaseService.client.adminActivityLog.create({
-      data: {
-        actorId,
+      await this.userRepository.updateStatus(id, status, tx);
+      const sessionsRevoked = logoutReason
+        ? await this.sessionService.revokeAllInTransaction(id, logoutReason, tx)
+        : 0;
+
+      await recordAdminAction(tx, {
+        ...actor,
         action: 'UPDATE',
         entityType: 'rider',
         entityId: id,
         summary,
-        metadata: {
-          fromStatus: current,
-          toStatus: next,
-          ...(notes ? { notes } : {}),
-        },
-      },
+        notes,
+        before: { status: current, userStatus: row.status },
+        after: { status: next, userStatus: status, sessionsRevoked },
+        result: 'SUCCESS',
+      });
     });
 
+    // After commit, as `SessionService.logoutAll` does: retires the access tokens the
+    // revoked sessions issued.
+    if (logoutReason) await this.epochService.bump(id);
     return this.getById(id);
   }
 

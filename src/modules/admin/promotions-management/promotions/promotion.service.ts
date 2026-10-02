@@ -1,5 +1,6 @@
 import { DatabaseService } from '@core/database';
 import { Prisma } from '../../../../generated/prisma/index.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { generateUniqueCode } from '../shared/code.util.js';
 import { PromotionConflictError, PromotionNotFoundError } from '../promotions.errors.js';
 import type { CreatePromotionBody, ListPromotionsQuery, UpdatePromotionBody } from '../schemas.js';
@@ -122,7 +123,7 @@ export class AdminPromotionService {
     return this.toDto(row);
   }
 
-  async create(body: CreatePromotionBody): Promise<PromotionDto> {
+  async create(body: CreatePromotionBody, actor: AuditActor): Promise<PromotionDto> {
     let code = body.code?.trim().toUpperCase();
     if (!code) {
       code = generateUniqueCode(body.title, 'PROMO');
@@ -142,74 +143,96 @@ export class AdminPromotionService {
       if (!vt) throw new PromotionConflictError('Vehicle type was not found');
     }
 
-    const row = await this.databaseService.client.promotion.create({
-      data: {
-        code,
-        title: body.title ?? null,
-        description: body.description ?? null,
-        discountType: normalizeDiscountType(body.discountType),
-        discountValue: body.discountValue,
-        maxDiscount: body.maxDiscount ?? null,
-        minFare: body.minFare ?? 0,
-        applicableCity: body.applicableCity ?? null,
-        applicableVehicleType: body.applicableVehicleTypeId ?? null,
-        firstRideOnly: body.firstRideOnly ?? false,
-        usageLimitTotal: body.usageLimitTotal ?? null,
-        usageLimitPerUser: body.usageLimitPerUser ?? 1,
-        validFrom: body.validFrom,
-        validTo: body.validTo,
-        isActive: body.isActive ?? true,
-      },
-    });
-    return this.toDto(row);
-  }
-
-  async update(id: string, body: UpdatePromotionBody): Promise<PromotionDto> {
-    const existing = await this.databaseService.client.promotion.findUnique({ where: { id } });
-    if (!existing) throw new PromotionNotFoundError();
-
-    if (body.code) {
-      const code = body.code.trim().toUpperCase();
-      const clash = await this.databaseService.client.promotion.findFirst({
-        where: { code, id: { not: id } },
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      const row = await tx.promotion.create({
+        data: {
+          code,
+          title: body.title ?? null,
+          description: body.description ?? null,
+          discountType: normalizeDiscountType(body.discountType),
+          discountValue: body.discountValue,
+          maxDiscount: body.maxDiscount ?? null,
+          minFare: body.minFare ?? 0,
+          applicableCity: body.applicableCity ?? null,
+          applicableVehicleType: body.applicableVehicleTypeId ?? null,
+          firstRideOnly: body.firstRideOnly ?? false,
+          usageLimitTotal: body.usageLimitTotal ?? null,
+          usageLimitPerUser: body.usageLimitPerUser ?? 1,
+          validFrom: body.validFrom,
+          validTo: body.validTo,
+          isActive: body.isActive ?? true,
+        },
       });
-      if (clash) throw new PromotionConflictError(`Promotion code "${code}" already exists`);
-    }
-
-    const row = await this.databaseService.client.promotion.update({
-      where: { id },
-      data: {
-        ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
-        ...(body.title !== undefined ? { title: body.title } : {}),
-        ...(body.description !== undefined ? { description: body.description } : {}),
-        ...(body.discountType !== undefined
-          ? { discountType: normalizeDiscountType(body.discountType) }
-          : {}),
-        ...(body.discountValue !== undefined ? { discountValue: body.discountValue } : {}),
-        ...(body.maxDiscount !== undefined ? { maxDiscount: body.maxDiscount } : {}),
-        ...(body.minFare !== undefined ? { minFare: body.minFare } : {}),
-        ...(body.applicableCity !== undefined ? { applicableCity: body.applicableCity } : {}),
-        ...(body.applicableVehicleTypeId !== undefined
-          ? { applicableVehicleType: body.applicableVehicleTypeId }
-          : {}),
-        ...(body.firstRideOnly !== undefined ? { firstRideOnly: body.firstRideOnly } : {}),
-        ...(body.usageLimitTotal !== undefined ? { usageLimitTotal: body.usageLimitTotal } : {}),
-        ...(body.usageLimitPerUser !== undefined
-          ? { usageLimitPerUser: body.usageLimitPerUser }
-          : {}),
-        ...(body.validFrom !== undefined ? { validFrom: body.validFrom } : {}),
-        ...(body.validTo !== undefined ? { validTo: body.validTo } : {}),
-        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
-      },
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'promotion',
+        entityId: row.id,
+        summary: `Promotion ${row.code} created`,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
     });
-    return this.toDto(row);
   }
 
-  async activate(id: string): Promise<PromotionDto> {
-    return this.update(id, { isActive: true });
+  async update(id: string, body: UpdatePromotionBody, actor: AuditActor): Promise<PromotionDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'promotions', id);
+      const existing = await tx.promotion.findUnique({ where: { id } });
+      if (!existing) throw new PromotionNotFoundError();
+
+      if (body.code) {
+        const code = body.code.trim().toUpperCase();
+        const clash = await tx.promotion.findFirst({ where: { code, id: { not: id } } });
+        if (clash) throw new PromotionConflictError(`Promotion code "${code}" already exists`);
+      }
+
+      const row = await tx.promotion.update({
+        where: { id },
+        data: {
+          ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.description !== undefined ? { description: body.description } : {}),
+          ...(body.discountType !== undefined
+            ? { discountType: normalizeDiscountType(body.discountType) }
+            : {}),
+          ...(body.discountValue !== undefined ? { discountValue: body.discountValue } : {}),
+          ...(body.maxDiscount !== undefined ? { maxDiscount: body.maxDiscount } : {}),
+          ...(body.minFare !== undefined ? { minFare: body.minFare } : {}),
+          ...(body.applicableCity !== undefined ? { applicableCity: body.applicableCity } : {}),
+          ...(body.applicableVehicleTypeId !== undefined
+            ? { applicableVehicleType: body.applicableVehicleTypeId }
+            : {}),
+          ...(body.firstRideOnly !== undefined ? { firstRideOnly: body.firstRideOnly } : {}),
+          ...(body.usageLimitTotal !== undefined ? { usageLimitTotal: body.usageLimitTotal } : {}),
+          ...(body.usageLimitPerUser !== undefined
+            ? { usageLimitPerUser: body.usageLimitPerUser }
+            : {}),
+          ...(body.validFrom !== undefined ? { validFrom: body.validFrom } : {}),
+          ...(body.validTo !== undefined ? { validTo: body.validTo } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'promotion',
+        entityId: id,
+        summary: `Promotion ${row.code} updated`,
+        before: existing,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
+    });
   }
 
-  async deactivate(id: string): Promise<PromotionDto> {
-    return this.update(id, { isActive: false });
+  async activate(id: string, actor: AuditActor): Promise<PromotionDto> {
+    return this.update(id, { isActive: true }, actor);
+  }
+
+  async deactivate(id: string, actor: AuditActor): Promise<PromotionDto> {
+    return this.update(id, { isActive: false }, actor);
   }
 }

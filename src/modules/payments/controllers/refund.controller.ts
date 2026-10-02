@@ -4,6 +4,7 @@ import { Decimal } from '../types/index.js';
 import { PaymentService } from '../services/payment.service.js';
 import type { RefundStaffScope } from '../services/refund/refund.service.js';
 import { processRefundSchema } from '../schemas/payment.schemas.js';
+import { auditActor } from '@modules/admin/audit/index.js';
 export class RefundController {
   constructor(private readonly paymentService: PaymentService) {}
   async processRefund(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -29,6 +30,9 @@ export class RefundController {
           amount: new Decimal(body.amount),
           idempotencyKey: idempotencyKey as string,
           staffScope,
+          // Staff act on someone else's money: their refund is an admin action. The
+          // actor is the authenticated caller — the body has no field that could name one.
+          ...(staffScope !== 'NONE' ? { actor: auditActor(req) } : {}),
           ...(body.reason !== undefined ? { reason: body.reason } : {}),
         });
         return {

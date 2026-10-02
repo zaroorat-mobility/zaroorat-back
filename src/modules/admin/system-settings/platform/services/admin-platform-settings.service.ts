@@ -1,11 +1,17 @@
 import type { DatabaseService, TransactionManager } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import { container } from '@core/di';
 import { geoConfig } from '@config/geo/geo.config.js';
 import { otpConfig } from '@config/otp/otp.config.js';
 import { rideConfig } from '@config/ride/ride.config.js';
 import { driverConfig } from '@config/driver/driver.config.js';
 import { vehicleConfig } from '@config/vehicle/vehicle.config.js';
-import { recordAdminAction } from '../../../audit/index.js';
+import {
+  lockForAudit,
+  lockForAuditKey,
+  recordAdminAction,
+  type AuditActor,
+} from '../../../audit/index.js';
 import { SystemSettingService } from '../../services/system-setting.service.js';
 import { SystemSettingsCache } from '../../cache/system-settings.cache.js';
 import { PlatformConfigResolver } from './platform-config-resolver.service.js';
@@ -43,6 +49,20 @@ function withSource<T>(
     return { value: parser(dbValue), source: 'database' };
   }
   return { value: defaultValue, source: 'default' };
+}
+
+function flagState(flag: {
+  key: string;
+  status: string;
+  rolloutPercentage: number;
+  isActive: boolean;
+}) {
+  return {
+    key: flag.key,
+    status: flag.status,
+    rolloutPercentage: flag.rolloutPercentage,
+    isActive: flag.isActive,
+  };
 }
 
 export class AdminPlatformSettingsService {
@@ -304,26 +324,48 @@ export class AdminPlatformSettingsService {
     }));
   }
 
-  async updateFeatureFlags(body: UpdateFeatureFlagsBody, actorId?: string) {
-    for (const flag of body.flags) {
-      await this.featureFlagService.updateFlag(flag.key, {
-        ...(flag.status !== undefined ? { status: flag.status } : {}),
-        ...(flag.rolloutPercentage !== undefined
-          ? { rolloutPercentage: flag.rolloutPercentage }
-          : {}),
-        ...(flag.isActive !== undefined ? { isActive: flag.isActive } : {}),
-      });
-    }
-    if (actorId) {
-      await recordAdminAction(this.client, {
-        actorId,
-        action: 'UPDATE',
-        entityType: 'feature_flags',
-        summary: `Updated ${body.flags.length} feature flag(s)`,
-        after: body.flags,
-      });
-    }
-    await this.invalidatePublicAppConfig(actorId);
+  /// Every flag in the request, and one audit row per flag it changes, commit together: an
+  /// unknown key or a failed audit write leaves every flag as it was. Flags are locked in
+  /// key order — code-unit order, not `localeCompare`, so every replica sorts alike — and
+  /// two overlapping requests queue instead of deadlocking; each row's `before` is the
+  /// value its write replaced. A flag the request would not change is neither written nor
+  /// logged.
+  async updateFeatureFlags(body: UpdateFeatureFlagsBody, actor: AuditActor) {
+    await this.featureFlagService.ensureSeeded();
+    const flags = [...body.flags].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    await this.txManager.execute(async (tx) => {
+      for (const flag of flags) {
+        const target = await tx.featureFlag.findUnique({ where: { key: flag.key } });
+        if (!target) throw new Error(`Unknown feature flag '${flag.key}'`);
+        await lockForAudit(tx, 'feature_flags', target.id);
+        const before = await tx.featureFlag.findUniqueOrThrow({ where: { id: target.id } });
+        const changes = {
+          ...(flag.status !== undefined && flag.status !== before.status
+            ? { status: flag.status }
+            : {}),
+          ...(flag.rolloutPercentage !== undefined &&
+          flag.rolloutPercentage !== before.rolloutPercentage
+            ? { rolloutPercentage: flag.rolloutPercentage }
+            : {}),
+          ...(flag.isActive !== undefined && flag.isActive !== before.isActive
+            ? { isActive: flag.isActive }
+            : {}),
+        };
+        if (Object.keys(changes).length === 0) continue;
+        const after = await this.featureFlagService.updateFlag(target.id, changes, tx);
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'UPDATE',
+          entityType: 'feature_flag',
+          entityId: after.id,
+          summary: `Feature flag ${after.key} updated`,
+          before: flagState(before),
+          after: flagState(after),
+          result: 'SUCCESS',
+        });
+      }
+    });
+    await this.invalidatePublicAppConfig(actor.actorId);
     return this.getFeatureFlags();
   }
 
@@ -348,38 +390,97 @@ export class AdminPlatformSettingsService {
     };
   }
 
-  async updateMaintenanceSettings(body: UpdateMaintenanceSettingsBody, actorId?: string) {
-    await this.saveSettings(
-      MAINTENANCE_SETTINGS_CATEGORY,
-      [
-        {
-          key: MAINTENANCE_SETTING_KEYS.ENABLED,
-          value: body.enabled !== undefined ? String(body.enabled) : undefined,
-        },
-        { key: MAINTENANCE_SETTING_KEYS.MESSAGE, value: body.message },
-        {
-          key: MAINTENANCE_SETTING_KEYS.ALLOW_ADMIN_ACCESS,
-          value: body.allowAdminAccess !== undefined ? String(body.allowAdminAccess) : undefined,
-        },
-      ],
-      actorId,
-      'maintenance_settings',
-    );
+  /// Maintenance can take the platform offline, so the settings, any scheduled window
+  /// and one audit row with the real before/after commit together — a failed audit
+  /// write leaves maintenance exactly as it was. Writers queue on the category lock, so
+  /// each row's `before` is the state its write replaced.
+  async updateMaintenanceSettings(body: UpdateMaintenanceSettingsBody, actor: AuditActor) {
+    const entries = [
+      {
+        key: MAINTENANCE_SETTING_KEYS.ENABLED,
+        value: body.enabled !== undefined ? String(body.enabled) : undefined,
+      },
+      { key: MAINTENANCE_SETTING_KEYS.MESSAGE, value: body.message },
+      {
+        key: MAINTENANCE_SETTING_KEYS.ALLOW_ADMIN_ACCESS,
+        value: body.allowAdminAccess !== undefined ? String(body.allowAdminAccess) : undefined,
+      },
+    ];
 
-    if (body.schedule) {
-      await this.client.maintenanceWindow.create({
-        data: {
-          title: body.schedule.title,
-          description: body.schedule.description ?? null,
-          startsAt: new Date(body.schedule.startsAt),
-          endsAt: new Date(body.schedule.endsAt),
-          affectedServices: body.schedule.affectedServices ?? ['api'],
-          isActive: true,
+    await this.txManager.execute(async (tx) => {
+      await lockForAuditKey(tx, `settings:${MAINTENANCE_SETTINGS_CATEGORY}`);
+      const before = await this.maintenanceState(tx);
+      for (const entry of entries) {
+        if (entry.value === undefined) continue;
+        await this.systemSettingService.setSetting(
+          {
+            key: entry.key,
+            value: entry.value,
+            category: MAINTENANCE_SETTINGS_CATEGORY,
+            updatedBy: actor.actorId,
+          },
+          tx,
+        );
+      }
+      const window = body.schedule
+        ? await tx.maintenanceWindow.create({
+            data: {
+              title: body.schedule.title,
+              description: body.schedule.description ?? null,
+              startsAt: new Date(body.schedule.startsAt),
+              endsAt: new Date(body.schedule.endsAt),
+              affectedServices: body.schedule.affectedServices ?? ['api'],
+              isActive: true,
+            },
+          })
+        : null;
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'maintenance_settings',
+        summary: window
+          ? `Maintenance settings updated; window scheduled ${window.startsAt.toISOString()} → ${window.endsAt.toISOString()}`
+          : 'Maintenance settings updated',
+        before,
+        after: {
+          ...(await this.maintenanceState(tx)),
+          ...(window
+            ? {
+                scheduledWindow: {
+                  id: window.id,
+                  title: window.title,
+                  startsAt: window.startsAt,
+                  endsAt: window.endsAt,
+                  affectedServices: window.affectedServices,
+                },
+              }
+            : {}),
         },
+        result: 'SUCCESS',
       });
-    }
+    });
 
+    await this.systemSettingsCache.invalidateCategory(MAINTENANCE_SETTINGS_CATEGORY);
+    await this.invalidatePublicAppConfig(actor.actorId);
     return this.getMaintenanceSettings();
+  }
+
+  /// The stored maintenance keys and the count of windows still to come, read inside the
+  /// caller's transaction.
+  private async maintenanceState(tx: TransactionClient) {
+    const rows = await tx.systemSetting.findMany({
+      where: { category: MAINTENANCE_SETTINGS_CATEGORY },
+      select: { key: true, value: true },
+    });
+    const value = (key: string) => rows.find((r) => r.key === key)?.value ?? null;
+    return {
+      enabled: value(MAINTENANCE_SETTING_KEYS.ENABLED),
+      message: value(MAINTENANCE_SETTING_KEYS.MESSAGE),
+      allowAdminAccess: value(MAINTENANCE_SETTING_KEYS.ALLOW_ADMIN_ACCESS),
+      upcomingWindows: await tx.maintenanceWindow.count({
+        where: { isActive: true, endsAt: { gte: new Date() } },
+      }),
+    };
   }
 
   async isMaintenanceActive(): Promise<{
@@ -415,17 +516,15 @@ export class AdminPlatformSettingsService {
           tx,
         );
       }
-      if (actorId) {
-        await recordAdminAction(tx, {
-          actorId,
-          action: 'UPDATE',
-          entityType,
-          summary: `Updated ${entityType.replace('_', ' ')}`,
-          after: Object.fromEntries(
-            entries.filter((e) => e.value !== undefined).map((e) => [e.key, e.value]),
-          ),
-        });
-      }
+      await recordAdminAction(tx, {
+        actorId,
+        action: 'UPDATE',
+        entityType,
+        summary: `Updated ${entityType.replace('_', ' ')}`,
+        after: Object.fromEntries(
+          entries.filter((e) => e.value !== undefined).map((e) => [e.key, e.value]),
+        ),
+      });
     });
     await this.systemSettingsCache.invalidateCategory(category);
     await this.invalidatePublicAppConfig(actorId);

@@ -1,5 +1,6 @@
 import { Decimal } from '../types/index.js';
 import { TransactionManager } from '@core/database';
+import { recordAdminAction, type AuditActor } from '@modules/admin/audit/index.js';
 import { IntentService } from '@modules/payments/services/intent/intent.service.js';
 import { IdempotencyKeyRequiredError } from '@modules/payments/errors/payment.errors.js';
 import { SubscriptionPlanRepository } from '../repositories/subscription-plan.repository.js';
@@ -27,6 +28,33 @@ export class SubscriptionService {
     private readonly txManager: TransactionManager,
     private readonly driverRepository: DriverRepository,
   ) {}
+
+  /// Finance sets what a driver pays to work. Plans are create-only — no path edits a
+  /// plan's price — so the audit is the CREATE, committed with the row.
+  async createPlan(
+    input: { name: string; billingPeriod: string; price: Decimal; currency?: string },
+    actor: AuditActor,
+  ): Promise<SubscriptionPlan> {
+    return this.txManager.execute(async (tx) => {
+      const plan = await this.subscriptionPlanRepository.create(input, tx);
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'subscription_plan',
+        entityId: plan.id,
+        summary: `Subscription plan ${plan.name} created at ${plan.price.toFixed(2)} ${plan.currency} ${plan.billingPeriod}`,
+        after: {
+          name: plan.name,
+          billingPeriod: plan.billingPeriod,
+          price: plan.price.toFixed(2),
+          currency: plan.currency,
+          status: plan.status,
+        },
+        result: 'SUCCESS',
+      });
+      return plan;
+    });
+  }
 
   async listActivePlans(): Promise<SubscriptionPlan[]> {
     return this.subscriptionPlanRepository.listActive();

@@ -66,38 +66,52 @@ export async function resetState(): Promise<void> {
   // a run's rows are still there for the next one — which turns any assertion
   // that counts reconciliation rows into a count of every run since the table
   // was created.
-  await db().client.$executeRawUnsafe(
-    'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
-      '"account_deletion_requests", ' +
-      '"files", "otp_verifications", "outbox_events", "vehicle_types", ' +
-      '"vehicles", "vehicle_assignments", "vehicle_documents", ' +
-      '"payment_ledger_entries", "gateway_events", ' +
-      // The comment above already claimed `wallet_reconciliations` was here.
-      // It was not, so every run's rows were still present for the next one and
-      // `payment-reconciliation`'s "the driver wallet is scanned" counted every
-      // run since the table was created — green on a virgin database and red
-      // ever after, which is the same defect this list was extended for twice
-      // before.
-      '"wallet_reconciliations", ' +
-      '"promotions", "promotion_redemptions", "promo_campaigns", "audience_segments", ' +
-      '"campaign_targets", "coupon_batches", "coupons", "promo_banners", ' +
-      '"referral_programs", "referral_codes", "referrals", "referral_rewards", ' +
-      '"referral_milestones", "referral_milestone_achievements", "referral_fraud_flags", ' +
-      '"billing_invoices", "invoice_templates", ' +
-      // The comment above claimed `surge_zones` was already here. It was not,
-      // and neither were `cities` or `service_zones` — so every city, zone and
-      // surge polygon a test drew survived into every later test in the run.
-      // That is not merely accumulation: a leaked city boundary decides whether
-      // the pickup gate enforces or stands down (FR-048/BD-10), and a leaked
-      // zone decides which rate card prices the ride. Three tests in
-      // `zone-fare-parity` failed on exactly that before this line existed.
-      // `states` and `countries` belong here for the same reason: nothing reset
-      // them, so `admin-geographic`'s "creates a new state" passed on a virgin
-      // database and failed with a unique violation on every run after — a test
-      // that can only be green once is not a test.
-      '"surge_zones", "service_zones", "cities", "states", "countries", ' +
-      '"notification_templates", "notification_deliveries", "admin_broadcasts", "notifications" ' +
-      'RESTART IDENTITY CASCADE',
+  // The audit tables refuse TRUNCATE (migration 20261002130100), and TRUNCATE "users"
+  // CASCADE reaches them through the actor foreign key. The reset opts out for its own
+  // transaction only — SET LOCAL ends with it, and the override is a setting the runtime
+  // role has no TRUNCATE privilege to use anyway.
+  await db().client.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL zaroorat.allow_audit_truncate = 'on'");
+      await tx.$executeRawUnsafe(
+        'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
+          '"account_deletion_requests", ' +
+          '"files", "otp_verifications", "outbox_events", "vehicle_types", ' +
+          '"vehicles", "vehicle_assignments", "vehicle_documents", ' +
+          '"payment_ledger_entries", "gateway_events", ' +
+          // The comment above already claimed `wallet_reconciliations` was here.
+          // It was not, so every run's rows were still present for the next one and
+          // `payment-reconciliation`'s "the driver wallet is scanned" counted every
+          // run since the table was created — green on a virgin database and red
+          // ever after, which is the same defect this list was extended for twice
+          // before.
+          '"wallet_reconciliations", ' +
+          '"promotions", "promotion_redemptions", "promo_campaigns", "audience_segments", ' +
+          '"campaign_targets", "coupon_batches", "coupons", "promo_banners", ' +
+          '"referral_programs", "referral_codes", "referrals", "referral_rewards", ' +
+          '"referral_milestones", "referral_milestone_achievements", "referral_fraud_flags", ' +
+          '"billing_invoices", "invoice_templates", ' +
+          // Not reached by "users" CASCADE either: a batch from one test answered the next
+          // test's generate for the same period, and the batch-number sequence kept growing
+          // across runs.
+          '"settlement_batches", ' +
+          // The comment above claimed `surge_zones` was already here. It was not,
+          // and neither were `cities` or `service_zones` — so every city, zone and
+          // surge polygon a test drew survived into every later test in the run.
+          // That is not merely accumulation: a leaked city boundary decides whether
+          // the pickup gate enforces or stands down (FR-048/BD-10), and a leaked
+          // zone decides which rate card prices the ride. Three tests in
+          // `zone-fare-parity` failed on exactly that before this line existed.
+          // `states` and `countries` belong here for the same reason: nothing reset
+          // them, so `admin-geographic`'s "creates a new state" passed on a virgin
+          // database and failed with a unique violation on every run after — a test
+          // that can only be green once is not a test.
+          '"surge_zones", "service_zones", "cities", "states", "countries", ' +
+          '"notification_templates", "notification_deliveries", "admin_broadcasts", "notifications" ' +
+          'RESTART IDENTITY CASCADE',
+      );
+    },
+    { timeout: 60_000 },
   );
   // Vehicle types are reference data, like the RBAC roles — except `roles` is
   // not in the TRUNCATE list and `vehicle_types` has to be, because tests create

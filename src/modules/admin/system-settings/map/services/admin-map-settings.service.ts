@@ -13,6 +13,7 @@ import {
 } from '../constants/map-settings.constants.js';
 import { resolveMapCredential } from '../../../../../integrations/mappls/mappls-credentials.util.js';
 import { maxSettingVersion } from '../../integrations/utils/integration-settings.util.js';
+import { MissingAuditActorError } from '../../../audit/index.js';
 import { providerCapabilities } from '@modules/location/business-services/map-policy-resolver.js';
 import type {
   MapProviderName,
@@ -280,6 +281,9 @@ export class AdminMapSettingsService {
     input: UpdateMapSettingsBody,
     actorId?: string,
   ): Promise<MapSettingsView> {
+    // Same rule as `recordAdminAction`: this path writes its audit row directly, so it
+    // checks for the actor itself rather than recording a change to nobody.
+    if (!actorId) throw new MissingAuditActorError('SystemSetting');
     const current = await this.getMapSettings();
     MapSettingsValidator.validateUpdateInput(input, current);
 
@@ -391,7 +395,7 @@ export class AdminMapSettingsService {
       if (changes.length > 0) {
         const log = await tx.adminActivityLog.create({
           data: {
-            actorId: actorId ?? null,
+            actorId,
             action: 'UPDATE',
             entityType: 'SystemSetting',
             entityId: null,

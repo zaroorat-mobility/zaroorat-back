@@ -22,6 +22,7 @@ import {
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '../../events/catalog.js';
 import { PaymentMetrics } from '../../metrics/payment.metrics.js';
 import type { Refund } from '../../types';
+import { recordAdminAction, type AuditActor } from '@modules/admin/audit/index.js';
 
 /// The only payments that can be refunded, and each reverses its OWN original
 /// collection — never another purpose's accounts:
@@ -83,6 +84,10 @@ export class RefundService {
   /// `POST /payments/refunds`. Validation, the refund row and the reservation
   /// commit together — a refused request leaves nothing behind — and only
   /// then is the provider asked.
+  ///
+  /// `actor` is the authenticated staff member when one is asking. Their audit row
+  /// commits with the refund row and records the request — status PROCESSING, never
+  /// the provider's outcome, which arrives later and is not theirs to claim.
   async processRefund(data: {
     transactionId: string;
     userId: string;
@@ -90,6 +95,7 @@ export class RefundService {
     reason?: string;
     idempotencyKey: string;
     staffScope?: RefundStaffScope;
+    actor?: AuditActor;
   }): Promise<Refund> {
     if (!data.amount.isFinite() || data.amount.lte(0)) {
       throw new RefundNotAllowedError('Refund amount must be strictly greater than zero');
@@ -119,7 +125,32 @@ export class RefundService {
           },
           tx,
         );
-        return this.reserveInTx(refund, txn, purpose, tx);
+        const processing = await this.reserveInTx(refund, txn, purpose, tx);
+        if (data.actor) {
+          await recordAdminAction(tx, {
+            ...data.actor,
+            action: 'CREATE',
+            entityType: 'refund',
+            entityId: refund.id,
+            summary: `Refund of ${data.amount.toFixed(2)} requested on transaction ${txn.id}`,
+            before: {
+              transactionId: txn.id,
+              transactionStatus: txn.status,
+              capturedAmount: txn.amount.toString(),
+            },
+            after: {
+              status: processing.status,
+              transactionId: txn.id,
+              amount: data.amount.toString(),
+              reason: data.reason ?? null,
+              purpose,
+              payerUserId: txn.userId,
+              staffScope: data.staffScope ?? 'NONE',
+            },
+            result: 'SUCCESS',
+          });
+        }
+        return processing;
       });
     } catch (err) {
       if (isUniqueViolation(err)) {

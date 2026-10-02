@@ -17,7 +17,6 @@ import {
   VehicleController,
   VehicleTypeController,
   VehicleDocumentController,
-  VehicleVerificationController,
 } from './controllers/index.js';
 export * from './controllers/index.js';
 export * from './routes/index.js';
@@ -40,7 +39,6 @@ export function registerVehiclesModule(container: AwilixContainer): void {
     vehicleController: asClass(VehicleController).singleton(),
     vehicleTypeController: asClass(VehicleTypeController).singleton(),
     vehicleDocumentController: asClass(VehicleDocumentController).singleton(),
-    vehicleVerificationController: asClass(VehicleVerificationController).singleton(),
     vehicleRepo: aliasTo('vehicleRepository'),
     assignmentRepo: aliasTo('vehicleAssignmentRepository'),
     txManager: aliasTo('transactionManager'),

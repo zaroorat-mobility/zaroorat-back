@@ -180,4 +180,44 @@ describe('Socket handshake authentication', () => {
       assert.equal(principal.driverId, null);
     });
   });
+
+  describe('revalidate: the checks again, for a socket already open', () => {
+    const PRINCIPAL = { userId: 'user_1', sid: 'sess_1', epoch: 1, roles: ['driver'] };
+    const code = (expected: string) => (err: unknown) =>
+      (err as { code?: string }).code === expected;
+
+    it('passes while the epoch, session and driver identity still hold', async () => {
+      await makeService().revalidate({ ...PRINCIPAL, driverId: 'drv_1' });
+    });
+
+    it('refuses a retired epoch, a revoked session, or a driver no longer operable', async () => {
+      const driver = { ...PRINCIPAL, driverId: 'drv_1' };
+      for (const service of [
+        makeService({ epoch: 2 }),
+        makeService({ revoked: true }),
+        makeService({ operable: false }),
+      ]) {
+        await assert.rejects(() => service.revalidate(driver), code('SOCKET_UNAUTHENTICATED'));
+      }
+    });
+
+    it('does not ask about operability for a principal holding no driver identity', async () => {
+      await makeService({ operable: false }).revalidate({ ...PRINCIPAL, driverId: null });
+    });
+
+    it('refuses with SERVICE_UNAVAILABLE when a store cannot answer', async () => {
+      const service = makeService({
+        verify: () => {
+          throw new Error('unused');
+        },
+      });
+      (service as unknown as { epochService: { current: () => Promise<number> } }).epochService = {
+        current: () => Promise.reject(new Error('redis down')),
+      };
+      await assert.rejects(
+        () => service.revalidate({ ...PRINCIPAL, driverId: null }),
+        code('SERVICE_UNAVAILABLE'),
+      );
+    });
+  });
 });

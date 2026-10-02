@@ -7,6 +7,7 @@ import { container } from '../../src/core/di.js';
 import type { TransactionManager } from '../../src/core/database/TransactionManager.js';
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
 import { grantRole, makeBankAccount, makeDriver, makeSettlement } from './helpers/fixtures.js';
+import { auditRows } from './helpers/audit.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import type { SettlementWalletRepository } from '../../src/modules/payments/repositories/settlement-wallet.repository.js';
 
@@ -324,6 +325,8 @@ describe('payout concurrency and reservations (integration, real HTTP)', () => {
       assert.deepEqual(results.map((r) => r.statusCode).sort(), [200, 409, 409]);
       assert.deepEqual(await wallet(driverId), { balance: 300, locked: 0 });
       assert.equal(await withdrawals(driverId), 1);
+      const updates = (await auditRows('driver_payout', id)).filter((r) => r.action === 'UPDATE');
+      assert.equal(updates.length, 1, 'the refused confirmations log nothing');
       await assertReservationInvariant(driverId);
     });
 
@@ -343,6 +346,12 @@ describe('payout concurrency and reservations (integration, real HTTP)', () => {
       assertNoServerError([confirmed, failed]);
       assert.deepEqual([confirmed.statusCode, failed.statusCode].sort(), [200, 409]);
       const row = await db().client.driverPayout.findUniqueOrThrow({ where: { id } });
+      const updates = (await auditRows('driver_payout', id)).filter((r) => r.action === 'UPDATE');
+      assert.equal(updates.length, 1, 'only the winning outcome is logged');
+      assert.equal(
+        (updates[0]!.metadata as { after: { status: string } }).after.status,
+        row.status,
+      );
       if (row.status === 'COMPLETED') {
         assert.deepEqual(await wallet(driverId), { balance: 600, locked: 0 });
         assert.equal(await withdrawals(driverId), 1);
@@ -397,6 +406,11 @@ describe('payout concurrency and reservations (integration, real HTTP)', () => {
         );
       }
       assert.equal(await db().client.driverPayout.count({ where: { driverId } }), 1);
+      assert.equal(
+        (await auditRows('driver_payout')).length,
+        1,
+        'the losers rolled back with their audit rows; replays wrote none',
+      );
       assert.deepEqual(await wallet(driverId), { balance: 1000, locked: 250 });
       await assertReservationInvariant(driverId);
     });

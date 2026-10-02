@@ -1,4 +1,6 @@
 import { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import {
   CancellationPolicyConflictError,
   CancellationPolicyNotFoundError,
@@ -127,7 +129,10 @@ export class AdminCancellationService {
     return this.toDto(row);
   }
 
-  async create(body: CreateCancellationPolicyBody): Promise<CancellationPolicyDto> {
+  async create(
+    body: CreateCancellationPolicyBody,
+    actor: AuditActor,
+  ): Promise<CancellationPolicyDto> {
     const cancelledBy = ACTOR_MAP[body.actor] ?? 'RIDER';
     const minStatus = SCENARIO_MAP[body.scenario] ?? 'AFTER_ASSIGNMENT';
     const feeType = FEE_MAP[body.chargeType] ?? 'FLAT';
@@ -137,126 +142,182 @@ export class AdminCancellationService {
       : null;
     const cityCode = body.cityCode ?? null;
 
-    if (isActive) {
-      await this.databaseService.client.cancellationPolicy.updateMany({
-        where: {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      if (isActive) {
+        await this.retireOverlapping(
+          tx,
+          { cancelledBy, minStatus, cityCode, vehicleTypeId },
+          actor,
+        );
+      }
+      const created = await tx.cancellationPolicy.create({
+        data: {
           cancelledBy,
           minStatus,
+          feeType,
+          feeAmount: body.chargeAmount,
+          freeCancelWindowSec: body.freeCancelWindowSec ?? 120,
           cityCode,
           vehicleTypeId,
-          isActive: true,
+          isActive,
         },
-        data: { isActive: false },
       });
-    }
-
-    const created = await this.databaseService.client.cancellationPolicy.create({
-      data: {
-        cancelledBy,
-        minStatus,
-        feeType,
-        feeAmount: body.chargeAmount,
-        freeCancelWindowSec: body.freeCancelWindowSec ?? 120,
-        cityCode,
-        vehicleTypeId,
-        isActive,
-      },
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'cancellation_policy',
+        entityId: created.id,
+        summary: 'Cancellation policy created',
+        after: created,
+        result: 'SUCCESS',
+      });
+      return this.toDto(created);
     });
-    return this.toDto(created);
   }
 
-  async update(id: string, body: UpdateCancellationPolicyBody): Promise<CancellationPolicyDto> {
-    const existing = await this.databaseService.client.cancellationPolicy.findUnique({
-      where: { id },
-    });
-    if (!existing) throw new CancellationPolicyNotFoundError();
+  async update(
+    id: string,
+    body: UpdateCancellationPolicyBody,
+    actor: AuditActor,
+  ): Promise<CancellationPolicyDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      const existing = await this.lockExisting(tx, id);
+      const cancelledBy = body.actor
+        ? (ACTOR_MAP[body.actor] ?? existing.cancelledBy)
+        : existing.cancelledBy;
+      const minStatus = body.scenario
+        ? (SCENARIO_MAP[body.scenario] ?? existing.minStatus)
+        : existing.minStatus;
+      const feeType = body.chargeType
+        ? (FEE_MAP[body.chargeType] ?? existing.feeType)
+        : existing.feeType;
+      const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
+      const nextVehicleTypeId =
+        body.vehicleType !== undefined
+          ? body.vehicleType
+            ? (await this.resolveVehicleType(body.vehicleType)).id
+            : null
+          : existing.vehicleTypeId;
+      const cityCode = body.cityCode !== undefined ? body.cityCode : existing.cityCode;
 
-    const cancelledBy = body.actor
-      ? (ACTOR_MAP[body.actor] ?? existing.cancelledBy)
-      : existing.cancelledBy;
-    const minStatus = body.scenario
-      ? (SCENARIO_MAP[body.scenario] ?? existing.minStatus)
-      : existing.minStatus;
-    const feeType = body.chargeType
-      ? (FEE_MAP[body.chargeType] ?? existing.feeType)
-      : existing.feeType;
-    const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
-    const vehicleTypeId =
-      body.vehicleType !== undefined
-        ? body.vehicleType
-          ? (await this.resolveVehicleType(body.vehicleType)).id
-          : null
-        : existing.vehicleTypeId;
-    const cityCode = body.cityCode !== undefined ? body.cityCode : existing.cityCode;
+      if (isActive) {
+        await this.retireOverlapping(
+          tx,
+          { cancelledBy, minStatus, cityCode, vehicleTypeId: nextVehicleTypeId },
+          actor,
+          id,
+        );
+      }
 
-    if (isActive) {
-      await this.databaseService.client.cancellationPolicy.updateMany({
-        where: {
+      const updated = await tx.cancellationPolicy.update({
+        where: { id },
+        data: {
           cancelledBy,
           minStatus,
+          feeType,
+          feeAmount: body.chargeAmount ?? existing.feeAmount,
+          freeCancelWindowSec: body.freeCancelWindowSec ?? existing.freeCancelWindowSec,
           cityCode,
-          vehicleTypeId,
-          isActive: true,
-          NOT: { id },
+          vehicleTypeId: nextVehicleTypeId,
+          isActive,
         },
-        data: { isActive: false },
       });
-    }
-
-    const updated = await this.databaseService.client.cancellationPolicy.update({
-      where: { id },
-      data: {
-        cancelledBy,
-        minStatus,
-        feeType,
-        feeAmount: body.chargeAmount ?? existing.feeAmount,
-        freeCancelWindowSec: body.freeCancelWindowSec ?? existing.freeCancelWindowSec,
-        cityCode,
-        vehicleTypeId,
-        isActive,
-      },
+      await this.audit(tx, actor, existing, updated, 'Cancellation policy updated');
+      return this.toDto(updated);
     });
-    return this.toDto(updated);
   }
 
-  async activate(id: string): Promise<CancellationPolicyDto> {
-    const existing = await this.databaseService.client.cancellationPolicy.findUnique({
-      where: { id },
+  async activate(id: string, actor: AuditActor): Promise<CancellationPolicyDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      const existing = await this.lockExisting(tx, id);
+      await this.retireOverlapping(tx, existing, actor, id);
+      const updated = await tx.cancellationPolicy.update({
+        where: { id },
+        data: { isActive: true },
+      });
+      await this.audit(tx, actor, existing, updated, 'Cancellation policy activated');
+      return this.toDto(updated);
     });
-    if (!existing) throw new CancellationPolicyNotFoundError();
+  }
 
-    await this.databaseService.client.cancellationPolicy.updateMany({
+  async deactivate(id: string, actor: AuditActor): Promise<CancellationPolicyDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      const existing = await this.lockExisting(tx, id);
+      const updated = await tx.cancellationPolicy.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      await this.audit(tx, actor, existing, updated, 'Cancellation policy deactivated');
+      return this.toDto(updated);
+    });
+  }
+
+  async remove(id: string, actor: AuditActor): Promise<void> {
+    await this.deactivate(id, actor);
+  }
+
+  private async lockExisting(tx: TransactionClient, id: string) {
+    await lockForAudit(tx, 'cancellation_policies', id);
+    const existing = await tx.cancellationPolicy.findUnique({ where: { id } });
+    if (!existing) throw new CancellationPolicyNotFoundError();
+    return existing;
+  }
+
+  private async audit(
+    tx: TransactionClient,
+    actor: AuditActor,
+    before: { id: string },
+    after: unknown,
+    summary: string,
+  ): Promise<void> {
+    await recordAdminAction(tx, {
+      ...actor,
+      action: 'UPDATE',
+      entityType: 'cancellation_policy',
+      entityId: before.id,
+      summary,
+      before,
+      after,
+      result: 'SUCCESS',
+    });
+  }
+
+  /// One active policy per (actor, scenario, city, vehicle type). The policies this
+  /// retires are changed too, so each gets its own audit row in the same transaction.
+  private async retireOverlapping(
+    tx: TransactionClient,
+    scope: {
+      cancelledBy: string;
+      minStatus: string | null;
+      cityCode: string | null;
+      vehicleTypeId: string | null;
+    },
+    actor: AuditActor,
+    exceptId?: string,
+  ): Promise<void> {
+    const retired = await tx.cancellationPolicy.findMany({
       where: {
-        cancelledBy: existing.cancelledBy,
-        minStatus: existing.minStatus,
-        cityCode: existing.cityCode,
-        vehicleTypeId: existing.vehicleTypeId,
+        cancelledBy: scope.cancelledBy,
+        minStatus: scope.minStatus,
+        cityCode: scope.cityCode,
+        vehicleTypeId: scope.vehicleTypeId,
         isActive: true,
+        ...(exceptId !== undefined ? { NOT: { id: exceptId } } : {}),
       },
-      data: { isActive: false },
     });
-
-    const updated = await this.databaseService.client.cancellationPolicy.update({
-      where: { id },
-      data: { isActive: true },
-    });
-    return this.toDto(updated);
-  }
-
-  async deactivate(id: string): Promise<CancellationPolicyDto> {
-    const existing = await this.databaseService.client.cancellationPolicy.findUnique({
-      where: { id },
-    });
-    if (!existing) throw new CancellationPolicyNotFoundError();
-    const updated = await this.databaseService.client.cancellationPolicy.update({
-      where: { id },
-      data: { isActive: false },
-    });
-    return this.toDto(updated);
-  }
-
-  async remove(id: string): Promise<void> {
-    await this.deactivate(id);
+    for (const policy of retired) {
+      const updated = await tx.cancellationPolicy.update({
+        where: { id: policy.id },
+        data: { isActive: false },
+      });
+      await this.audit(
+        tx,
+        actor,
+        policy,
+        updated,
+        'Cancellation policy deactivated: superseded by another active policy',
+      );
+    }
   }
 
   private async resolveVehicleType(raw: string) {

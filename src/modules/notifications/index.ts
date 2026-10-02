@@ -1,4 +1,5 @@
-import { asClass, asFunction, AwilixContainer } from 'awilix';
+import { asClass, asFunction, asValue, AwilixContainer } from 'awilix';
+import type { PushProvider } from './providers/push.provider';
 import {
   getNotificationConfig,
   createSmsProvider,
@@ -43,6 +44,8 @@ export function registerNotificationModule(container: AwilixContainer): void {
     notificationConfig: asFunction(getNotificationConfig).singleton(),
     smsProvider: asFunction(createSmsProvider).singleton(),
     pushProvider: asFunction(createPushProvider).singleton(),
+    // NotificationService's lazy handle on the push provider (see there).
+    resolvePushProvider: asValue(() => container.resolve<PushProvider>('pushProvider')),
     notificationRepository: asClass(NotificationRepository).singleton(),
     notificationDeliveryJob: asClass(NotificationDeliveryJob).singleton(),
     notificationReconciliationJob: asClass(NotificationReconciliationJob).singleton(),

@@ -15,6 +15,12 @@ import {
   type LoggedInUser,
 } from './helpers/harness.js';
 import { grantRole, makeDriver, makeSubscriptionPlan } from './helpers/fixtures.js';
+import {
+  allowAuditWrites,
+  auditRows,
+  refuseAuditWrites,
+  SPOOFED_ACTOR_ID,
+} from './helpers/audit.js';
 import { fundWallet } from './helpers/ride-flow.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 import { mockGatewayControl } from '../../src/modules/payments/services/gateway/mock.gateway.js';
@@ -53,6 +59,7 @@ describe('refund lifecycle (integration, real HTTP)', () => {
   });
   afterEach(async () => {
     mockGatewayControl.reset();
+    await allowAuditWrites();
     await resetState();
   });
 
@@ -472,6 +479,124 @@ describe('refund lifecycle (integration, real HTTP)', () => {
       const done = await post(`/api/v1/admin/finance/refunds/${id}/mark-completed`);
       assert.equal(done.statusCode, 200, done.payload);
       assert.equal(await customerBalance(customer.userId), 400);
+    });
+  });
+
+  // ─── staff refunds are admin actions ─────────────────────────────────────
+  describe('staff refund audit (FR-035)', () => {
+    function staffRefund(
+      user: LoggedInUser,
+      transactionId: string,
+      amount: number,
+      key = randomUUID(),
+    ) {
+      return app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/refunds',
+        headers: { ...user.authHeader, 'idempotency-key': key },
+        // `actorId` is what a client would send to claim someone else's action.
+        payload: { transactionId, amount, reason: 'Duplicate recharge', actorId: SPOOFED_ACTOR_ID },
+      });
+    }
+
+    it('records exactly one CREATE row naming the authenticated staff member', async () => {
+      const { user, driverId } = await commissionDriver(0);
+      await rechargeCommission(user, 500);
+      const txn = await lastTransaction(user.userId, 'DRIVER_COMMISSION_RECHARGE');
+      const finance = await loginWithRole(FINANCE, 'finance');
+      const key = randomUUID();
+
+      const first = await staffRefund(finance, txn.id, 500, key);
+      const replay = await staffRefund(finance, txn.id, 500, key);
+
+      assert.equal(first.statusCode, 200, first.payload);
+      assert.equal(replay.json().data.id, first.json().data.id);
+      const refundId = first.json().data.id as string;
+      assert.ok(await db().client.refund.findUnique({ where: { id: refundId } }));
+      assert.equal(await commissionBalance(driverId), 0);
+
+      const rows = await auditRows('refund', refundId);
+      assert.equal(rows.length, 1, 'a replayed key writes no second row');
+      const row = rows[0]!;
+      assert.equal(row.action, 'CREATE');
+      assert.equal(row.actorId, finance.userId, 'the authenticated caller, never the body');
+      const metadata = row.metadata as {
+        before: Record<string, unknown>;
+        after: Record<string, unknown>;
+      };
+      assert.equal(metadata.after.transactionId, txn.id);
+      assert.equal(metadata.after.amount, '500');
+      assert.equal(metadata.after.reason, 'Duplicate recharge');
+      assert.equal(metadata.after.status, 'PROCESSING', 'the request, not a provider outcome');
+      assert.equal(metadata.after.payerUserId, user.userId);
+      assert.equal(metadata.before.transactionId, txn.id);
+      assert.doesNotMatch(JSON.stringify(row.metadata), /password|secret|token|cipher/i);
+    });
+
+    it('does not log a customer refunding their own top-up as an admin action', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+      await fundWallet(app, customer, 500);
+      const txn = await lastTransaction(customer.userId, 'CUSTOMER_WALLET_TOPUP');
+
+      const response = await refund(customer, txn.id, 100);
+
+      assert.equal(response.statusCode, 200, response.payload);
+      assert.equal(await db().client.adminActivityLog.count(), 0);
+    });
+
+    it('refuses callers without the scope: no refund, no audit row', async () => {
+      const { user } = await commissionDriver();
+      await rechargeCommission(user, 500);
+      const txn = await lastTransaction(user.userId, 'DRIVER_COMMISSION_RECHARGE');
+      const support = await loginWithRole(SUPPORT, 'support');
+      const stranger = await loginAs(app, CUSTOMER);
+
+      for (const caller of [user, support, stranger]) {
+        assert.equal((await staffRefund(caller, txn.id, 500)).statusCode, 422);
+      }
+      assert.equal(await db().client.refund.count(), 0);
+      assert.equal(await db().client.adminActivityLog.count(), 0);
+    });
+
+    it('rolls back the refund and its reservation when the audit row cannot be written', async () => {
+      const { user, driverId } = await commissionDriver(0);
+      await rechargeCommission(user, 500);
+      const txn = await lastTransaction(user.userId, 'DRIVER_COMMISSION_RECHARGE');
+      const finance = await loginWithRole(FINANCE, 'finance');
+      await refuseAuditWrites('refund');
+
+      const response = await staffRefund(finance, txn.id, 500);
+
+      assert.ok(response.statusCode >= 500, `${response.statusCode} ${response.payload}`);
+      assert.equal(await db().client.refund.count(), 0);
+      assert.equal(await commissionBalance(driverId), 500, 'the reservation rolled back too');
+      assert.equal(mockGatewayControl.createRefundCalls.length, 0, 'the provider is never asked');
+      assert.equal((await auditRows('refund')).length, 0);
+    });
+
+    it('never records a provider refusal as a successful refund', async () => {
+      const customer = await loginAs(app, CUSTOMER);
+      await fundWallet(app, customer, 500);
+      const txn = await lastTransaction(customer.userId, 'CUSTOMER_WALLET_TOPUP');
+      const support = await loginWithRole(SUPPORT, 'support');
+      mockGatewayControl.refundMode = 'REJECT';
+
+      const response = await staffRefund(support, txn.id, 100);
+
+      assert.equal(response.statusCode, 200, response.payload);
+      const refundId = response.json().data.id as string;
+      assert.equal(
+        (await db().client.refund.findUniqueOrThrow({ where: { id: refundId } })).status,
+        'FAILED',
+      );
+      const rows = await auditRows('refund', refundId);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]!.actorId, support.userId);
+      assert.equal(
+        (rows[0]!.metadata as { after: { status: string } }).after.status,
+        'PROCESSING',
+        'the row records what the staff member asked for, never SUCCEEDED',
+      );
     });
   });
 });

@@ -1,5 +1,7 @@
 import { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import { Prisma, type ReferralProgramAudience } from '../../../../generated/prisma/index.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { generateUniqueCode } from '../code/code.util.js';
 import {
   ReferralProgramConflictError,
@@ -215,7 +217,7 @@ export class AdminReferralProgramService {
     return this.toDto(row);
   }
 
-  async create(body: CreateProgramBody): Promise<ProgramDto> {
+  async create(body: CreateProgramBody, actor: AuditActor): Promise<ProgramDto> {
     const audience = body.audience ?? 'RIDER';
     const rewardWallet = body.rewardWallet ?? (audience === 'DRIVER' ? 'DRIVER' : undefined);
     const qualifyingEvent =
@@ -247,103 +249,123 @@ export class AdminReferralProgramService {
     // every additional active program for an audience was another payout to the
     // same referee. Mirrors the rule-exclusivity `AdminFareService` already
     // applies to pricing rules.
-    if (body.isActive ?? true) {
-      await this.deactivateOtherProgramsFor(audience);
-    }
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      if (body.isActive ?? true) {
+        await this.deactivateOtherProgramsFor(tx, audience, actor);
+      }
 
-    const row = await this.databaseService.client.referralProgram.create({
-      data: {
-        code,
-        name: body.name ?? null,
-        audience,
-        referrerReward: body.referrerReward ?? 0,
-        refereeReward: body.refereeReward ?? 0,
-        rewardType: body.rewardType ?? 'WALLET',
-        // Omitted for RIDER, so the column keeps its database default.
-        ...(rewardWallet !== undefined ? { rewardWallet } : {}),
-        qualifyingEvent,
-        qualifyingThreshold: body.qualifyingThreshold ?? 1,
-        maxReferralsPerUser: body.maxReferralsPerUser ?? null,
-        qualificationWindowDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
-        rewardExpiryDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
-        validFrom: body.validFrom,
-        validTo: body.validTo,
-        isActive: body.isActive ?? true,
-      },
-      include: this.include,
+      const row = await tx.referralProgram.create({
+        data: {
+          code,
+          name: body.name ?? null,
+          audience,
+          referrerReward: body.referrerReward ?? 0,
+          refereeReward: body.refereeReward ?? 0,
+          rewardType: body.rewardType ?? 'WALLET',
+          // Omitted for RIDER, so the column keeps its database default.
+          ...(rewardWallet !== undefined ? { rewardWallet } : {}),
+          qualifyingEvent,
+          qualifyingThreshold: body.qualifyingThreshold ?? 1,
+          maxReferralsPerUser: body.maxReferralsPerUser ?? null,
+          qualificationWindowDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
+          rewardExpiryDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
+          validFrom: body.validFrom,
+          validTo: body.validTo,
+          isActive: body.isActive ?? true,
+        },
+        include: this.include,
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'referral_program',
+        entityId: row.id,
+        summary: `Referral program ${row.code} created`,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
     });
-    return this.toDto(row);
   }
 
-  async update(id: string, body: UpdateProgramBody): Promise<ProgramDto> {
-    const existing = await this.databaseService.client.referralProgram.findUnique({
-      where: { id },
-    });
-    if (!existing) throw new ReferralProgramNotFoundError();
+  async update(id: string, body: UpdateProgramBody, actor: AuditActor): Promise<ProgramDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'referral_programs', id);
+      const existing = await tx.referralProgram.findUnique({ where: { id } });
+      if (!existing) throw new ReferralProgramNotFoundError();
 
-    const audience = body.audience ?? existing.audience;
-    // A RIDER row's stored wallet is the retired default, not a selection, so
-    // only a wallet sent in this request counts against it.
-    const rewardWallet =
-      audience === 'DRIVER' ? (body.rewardWallet ?? existing.rewardWallet) : body.rewardWallet;
-    const qualifyingEvent = body.qualifyingEvent ?? existing.qualifyingEvent;
-    assertProgramConfig({
-      audience,
-      qualifyingEvent,
-      rewardWallet,
-      referrerReward: body.referrerReward ?? toNum(existing.referrerReward) ?? 0,
-      refereeReward: body.refereeReward ?? toNum(existing.refereeReward) ?? 0,
-      isActive: body.isActive ?? existing.isActive,
-    });
-
-    if (body.code) {
-      const code = body.code.trim().toUpperCase();
-      const clash = await this.databaseService.client.referralProgram.findFirst({
-        where: { code, id: { not: id } },
+      const audience = body.audience ?? existing.audience;
+      // A RIDER row's stored wallet is the retired default, not a selection, so
+      // only a wallet sent in this request counts against it.
+      const rewardWallet =
+        audience === 'DRIVER' ? (body.rewardWallet ?? existing.rewardWallet) : body.rewardWallet;
+      const qualifyingEvent = body.qualifyingEvent ?? existing.qualifyingEvent;
+      assertProgramConfig({
+        audience,
+        qualifyingEvent,
+        rewardWallet,
+        referrerReward: body.referrerReward ?? toNum(existing.referrerReward) ?? 0,
+        refereeReward: body.refereeReward ?? toNum(existing.refereeReward) ?? 0,
+        isActive: body.isActive ?? existing.isActive,
       });
-      if (clash) throw new ReferralProgramConflictError(`Program code "${code}" already exists`);
-    }
 
-    const willBeActive = body.isActive ?? existing.isActive;
-    if (willBeActive) {
-      await this.deactivateOtherProgramsFor(audience, id);
-    }
+      if (body.code) {
+        const code = body.code.trim().toUpperCase();
+        const clash = await tx.referralProgram.findFirst({ where: { code, id: { not: id } } });
+        if (clash) throw new ReferralProgramConflictError(`Program code "${code}" already exists`);
+      }
 
-    const row = await this.databaseService.client.referralProgram.update({
-      where: { id },
-      data: {
-        ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.audience !== undefined ? { audience: body.audience } : {}),
-        ...(body.referrerReward !== undefined ? { referrerReward: body.referrerReward } : {}),
-        ...(body.refereeReward !== undefined ? { refereeReward: body.refereeReward } : {}),
-        ...(body.rewardType !== undefined ? { rewardType: body.rewardType } : {}),
-        ...(body.rewardWallet !== undefined ? { rewardWallet: body.rewardWallet } : {}),
-        ...(body.qualifyingEvent !== undefined ? { qualifyingEvent: body.qualifyingEvent } : {}),
-        ...(body.qualifyingThreshold !== undefined
-          ? { qualifyingThreshold: body.qualifyingThreshold }
-          : {}),
-        ...(body.maxReferralsPerUser !== undefined
-          ? { maxReferralsPerUser: body.maxReferralsPerUser }
-          : {}),
-        ...(body.qualificationWindowDays !== undefined
-          ? {
-              qualificationWindowDays: body.qualificationWindowDays,
-              rewardExpiryDays: body.qualificationWindowDays,
-            }
-          : body.rewardExpiryDays !== undefined
-            ? {
-                qualificationWindowDays: body.rewardExpiryDays,
-                rewardExpiryDays: body.rewardExpiryDays,
-              }
+      const willBeActive = body.isActive ?? existing.isActive;
+      if (willBeActive) {
+        await this.deactivateOtherProgramsFor(tx, audience, actor, id);
+      }
+
+      const row = await tx.referralProgram.update({
+        where: { id },
+        data: {
+          ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.audience !== undefined ? { audience: body.audience } : {}),
+          ...(body.referrerReward !== undefined ? { referrerReward: body.referrerReward } : {}),
+          ...(body.refereeReward !== undefined ? { refereeReward: body.refereeReward } : {}),
+          ...(body.rewardType !== undefined ? { rewardType: body.rewardType } : {}),
+          ...(body.rewardWallet !== undefined ? { rewardWallet: body.rewardWallet } : {}),
+          ...(body.qualifyingEvent !== undefined ? { qualifyingEvent: body.qualifyingEvent } : {}),
+          ...(body.qualifyingThreshold !== undefined
+            ? { qualifyingThreshold: body.qualifyingThreshold }
             : {}),
-        ...(body.validFrom !== undefined ? { validFrom: body.validFrom } : {}),
-        ...(body.validTo !== undefined ? { validTo: body.validTo } : {}),
-        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
-      },
-      include: this.include,
+          ...(body.maxReferralsPerUser !== undefined
+            ? { maxReferralsPerUser: body.maxReferralsPerUser }
+            : {}),
+          ...(body.qualificationWindowDays !== undefined
+            ? {
+                qualificationWindowDays: body.qualificationWindowDays,
+                rewardExpiryDays: body.qualificationWindowDays,
+              }
+            : body.rewardExpiryDays !== undefined
+              ? {
+                  qualificationWindowDays: body.rewardExpiryDays,
+                  rewardExpiryDays: body.rewardExpiryDays,
+                }
+              : {}),
+          ...(body.validFrom !== undefined ? { validFrom: body.validFrom } : {}),
+          ...(body.validTo !== undefined ? { validTo: body.validTo } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        },
+        include: this.include,
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'referral_program',
+        entityId: id,
+        summary: `Referral program ${row.code} updated`,
+        before: existing,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
     });
-    return this.toDto(row);
   }
 
   /// Retires whatever else is currently live for this audience. Deliberately not
@@ -351,30 +373,55 @@ export class AdminReferralProgramService {
   /// is_active AND audience = X" as a plain unique, and a partial unique index on
   /// (audience) WHERE is_active would make the handover a two-statement dance
   /// that can fail between them. The write path is the single place programs are
-  /// activated, so enforcing it here keeps the transition atomic.
+  /// activated, and it runs in the activating change's transaction, so the handover
+  /// is atomic. Each program retired here gets its own audit row: its history would
+  /// otherwise show it active forever.
   private async deactivateOtherProgramsFor(
+    tx: TransactionClient,
     audience: ReferralProgramAudience,
+    actor: AuditActor,
     exceptId?: string,
   ): Promise<void> {
-    await this.databaseService.client.referralProgram.updateMany({
+    const retired = await tx.referralProgram.findMany({
       where: {
         audience,
         isActive: true,
         ...(exceptId !== undefined ? { NOT: { id: exceptId } } : {}),
       },
+      select: { id: true, code: true },
+    });
+    if (retired.length === 0) return;
+    await tx.referralProgram.updateMany({
+      where: { id: { in: retired.map((p) => p.id) } },
       data: { isActive: false },
     });
+    for (const program of retired) {
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'referral_program',
+        entityId: program.id,
+        summary: `Referral program ${program.code} deactivated: another ${audience} program was activated`,
+        before: { isActive: true },
+        after: { isActive: false },
+        result: 'SUCCESS',
+      });
+    }
   }
 
-  async activate(id: string): Promise<ProgramDto> {
-    return this.update(id, { isActive: true });
+  async activate(id: string, actor: AuditActor): Promise<ProgramDto> {
+    return this.update(id, { isActive: true }, actor);
   }
 
-  async deactivate(id: string): Promise<ProgramDto> {
-    return this.update(id, { isActive: false });
+  async deactivate(id: string, actor: AuditActor): Promise<ProgramDto> {
+    return this.update(id, { isActive: false }, actor);
   }
 
-  async addMilestone(programId: string, body: CreateMilestoneBody): Promise<MilestoneDto> {
+  async addMilestone(
+    programId: string,
+    body: CreateMilestoneBody,
+    actor: AuditActor,
+  ): Promise<MilestoneDto> {
     const program = await this.databaseService.client.referralProgram.findUnique({
       where: { id: programId },
     });
@@ -384,50 +431,78 @@ export class AdminReferralProgramService {
       isActive: body.isActive ?? true,
     });
 
-    const row = await this.databaseService.client.referralMilestone.create({
-      data: {
-        programId,
-        name: body.name,
-        requiredReferrals: body.requiredReferrals,
-        bonusAmount: body.bonusAmount,
-        rewardType: body.rewardType ?? 'WALLET',
-        isActive: body.isActive ?? true,
-      },
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      const row = await tx.referralMilestone.create({
+        data: {
+          programId,
+          name: body.name,
+          requiredReferrals: body.requiredReferrals,
+          bonusAmount: body.bonusAmount,
+          rewardType: body.rewardType ?? 'WALLET',
+          isActive: body.isActive ?? true,
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'referral_milestone',
+        entityId: row.id,
+        summary: `Referral milestone ${row.name} added to program ${program.code}`,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toMilestoneDto(row);
     });
-    return this.toMilestoneDto(row);
   }
 
-  async updateMilestone(id: string, body: UpdateMilestoneBody): Promise<MilestoneDto> {
-    const existing = await this.databaseService.client.referralMilestone.findUnique({
-      where: { id },
-      include: { program: { select: { audience: true } } },
-    });
-    if (!existing) throw new ReferralMilestoneNotFoundError();
-    assertMilestoneConfig(existing.program.audience, {
-      bonusAmount: body.bonusAmount ?? toNum(existing.bonusAmount) ?? 0,
-      isActive: body.isActive ?? existing.isActive,
-    });
+  async updateMilestone(
+    id: string,
+    body: UpdateMilestoneBody,
+    actor: AuditActor,
+  ): Promise<MilestoneDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'referral_milestones', id);
+      const existing = await tx.referralMilestone.findUnique({
+        where: { id },
+        include: { program: { select: { audience: true } } },
+      });
+      if (!existing) throw new ReferralMilestoneNotFoundError();
+      assertMilestoneConfig(existing.program.audience, {
+        bonusAmount: body.bonusAmount ?? toNum(existing.bonusAmount) ?? 0,
+        isActive: body.isActive ?? existing.isActive,
+      });
 
-    const row = await this.databaseService.client.referralMilestone.update({
-      where: { id },
-      data: {
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.requiredReferrals !== undefined
-          ? { requiredReferrals: body.requiredReferrals }
-          : {}),
-        ...(body.bonusAmount !== undefined ? { bonusAmount: body.bonusAmount } : {}),
-        ...(body.rewardType !== undefined ? { rewardType: body.rewardType } : {}),
-        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
-      },
+      const row = await tx.referralMilestone.update({
+        where: { id },
+        data: {
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.requiredReferrals !== undefined
+            ? { requiredReferrals: body.requiredReferrals }
+            : {}),
+          ...(body.bonusAmount !== undefined ? { bonusAmount: body.bonusAmount } : {}),
+          ...(body.rewardType !== undefined ? { rewardType: body.rewardType } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'referral_milestone',
+        entityId: id,
+        summary: `Referral milestone ${row.name} updated`,
+        before: { ...existing, program: undefined },
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toMilestoneDto(row);
     });
-    return this.toMilestoneDto(row);
   }
 
-  async deactivateMilestone(id: string): Promise<MilestoneDto> {
-    return this.updateMilestone(id, { isActive: false });
+  async deactivateMilestone(id: string, actor: AuditActor): Promise<MilestoneDto> {
+    return this.updateMilestone(id, { isActive: false }, actor);
   }
 
-  async activateMilestone(id: string): Promise<MilestoneDto> {
-    return this.updateMilestone(id, { isActive: true });
+  async activateMilestone(id: string, actor: AuditActor): Promise<MilestoneDto> {
+    return this.updateMilestone(id, { isActive: true }, actor);
   }
 }

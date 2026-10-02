@@ -43,7 +43,7 @@ export class VehicleDocumentController {
   /// `authorizedDriverId` in the drivers module.
   async list(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as { id: string };
-    if (!callerHasRole(req, 'admin', 'support')) {
+    if (!callerHasRole(req, 'system_admin', 'admin', 'support')) {
       await this.vehicleDocumentService.assertManageable(id, await this.actingDriverId(req));
     }
     reply.send({ data: await this.vehicleDocumentService.listDocuments(id) });

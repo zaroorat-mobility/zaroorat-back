@@ -113,9 +113,17 @@ env:
   NODE_ENV: production
   HOST: 0.0.0.0
   LOG_LEVEL: info
+  # Staging and production both refuse any other push provider
+  # (resolvePushProviderName). The credential is in existingSecret.
+  PUSH_PROVIDER: fcm
+  # One hop: ingress-nginx in front of the pods. This was the app's implicit default;
+  # it is now declared, because the app trusts no X-Forwarded-For unless told to.
+  # Prefer TRUSTED_PROXIES set to the ingress controller's pod CIDR once known — then a
+  # request that reaches a pod some other way cannot claim an IP.
+  TRUSTED_PROXY_HOPS: '1'
 
-# DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are read
-# from this pre-existing Secret. It is created by the platform secret store,
+# DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET and
+# FIREBASE_SERVICE_ACCOUNT_JSON are read from this pre-existing Secret. It is created by the platform secret store,
 # never by this chart and never committed (docs/04_Architecture/05_deployment-architecture.md "Network & security zones").
 existingSecret: zaroorat-backend-secrets
 

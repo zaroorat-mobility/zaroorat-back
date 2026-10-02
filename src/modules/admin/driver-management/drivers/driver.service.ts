@@ -3,7 +3,9 @@ import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type { UserStatus } from '@core/database/types';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { SessionService } from '@modules/auth/services/session/session.service.js';
+import type { EpochService } from '@modules/auth/services/token/epoch.service.js';
 import { DriverService } from '@modules/drivers/services/driver.service.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { AdminDriverConflictError, AdminDriverNotFoundError } from '../driver.errors.js';
 import type { ListDriversQuery } from './driver.schemas.js';
 
@@ -173,6 +175,7 @@ export class AdminDriverService {
     private readonly driverService: DriverService,
     private readonly userRepository: UserRepository,
     private readonly sessionService: SessionService,
+    private readonly epochService: EpochService,
   ) {}
 
   async list(query: ListDriversQuery): Promise<{
@@ -349,98 +352,101 @@ export class AdminDriverService {
     };
   }
 
-  async suspend(id: string, actorId: string, notes?: string): Promise<DriverDetailsDto> {
-    return this.setModerationState(id, 'suspended', actorId, 'Driver Account Suspended', notes);
+  async suspend(id: string, actor: AuditActor, notes?: string): Promise<DriverDetailsDto> {
+    return this.setModerationState(id, 'suspended', actor, 'Driver Account Suspended', notes);
   }
 
-  async block(id: string, actorId: string, notes?: string): Promise<DriverDetailsDto> {
-    return this.setModerationState(id, 'blocked', actorId, 'Driver Account Blocked', notes);
+  async block(id: string, actor: AuditActor, notes?: string): Promise<DriverDetailsDto> {
+    return this.setModerationState(id, 'blocked', actor, 'Driver Account Blocked', notes);
   }
 
-  async activate(id: string, actorId: string, notes?: string): Promise<DriverDetailsDto> {
-    return this.setModerationState(id, 'active', actorId, 'Driver Account Activated', notes);
+  async activate(id: string, actor: AuditActor, notes?: string): Promise<DriverDetailsDto> {
+    return this.setModerationState(id, 'active', actor, 'Driver Account Activated', notes);
   }
 
-  async setSuspendedState(
-    id: string,
-    isSuspended: boolean,
-    actorId: string,
-    notes?: string,
-  ): Promise<DriverDetailsDto> {
-    return this.setModerationState(
-      id,
-      isSuspended ? 'suspended' : 'active',
-      actorId,
-      isSuspended ? 'Driver Account Suspended' : 'Driver Account Activated',
-      notes,
-    );
-  }
-
+  /// The driver flag, the account status, the session revocation and the audit row
+  /// commit together or not at all. The driver row is locked before its state is read,
+  /// so two concurrent requests cannot both pass the "already suspended" check and log
+  /// the same transition twice.
   private async setModerationState(
     id: string,
     next: 'suspended' | 'blocked' | 'active',
-    actorId: string,
+    actor: AuditActor,
     summary: string,
     notes?: string,
   ): Promise<DriverDetailsDto> {
-    const row = await this.findDriverRow(id);
-    if (!row) throw new AdminDriverNotFoundError();
-
-    const current = toDriverStatus(
-      row.isSuspended,
-      row.user.status,
-      row.verificationStatus,
-      row.onlineStatus?.status,
-    );
-    const currentGate =
-      current === 'blocked'
-        ? 'blocked'
-        : row.isSuspended || current === 'suspended'
-          ? 'suspended'
-          : 'active';
-
-    if (currentGate === next) {
-      throw new AdminDriverConflictError(`Driver is already ${next}`);
-    }
-    if (next === 'suspended' && currentGate === 'blocked') {
-      throw new AdminDriverConflictError('Driver is already blocked');
-    }
-
     const shouldSuspend = next !== 'active';
-    if (row.isSuspended !== shouldSuspend) {
-      await this.driverService.status.setSuspended(id, shouldSuspend);
-    }
+    const userId = await this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'drivers', id);
+      const row = await tx.driver.findFirst({
+        where: { id, deletedAt: null },
+        include: { user: true, onlineStatus: true },
+      });
+      if (!row) throw new AdminDriverNotFoundError();
 
-    const nextUserStatus: UserStatus =
-      next === 'blocked' ? 'DEACTIVATED' : next === 'suspended' ? 'SUSPENDED' : 'ACTIVE';
-    if (row.user.status !== nextUserStatus) {
-      await this.userRepository.updateStatus(row.userId, nextUserStatus);
-    }
-
-    if (shouldSuspend) {
-      await this.sessionService.logoutAll(
-        row.userId,
-        next === 'blocked' ? 'blocked' : 'suspension',
+      const current = toDriverStatus(
+        row.isSuspended,
+        row.user.status,
+        row.verificationStatus,
+        row.onlineStatus?.status,
       );
-    }
+      const currentGate =
+        current === 'blocked'
+          ? 'blocked'
+          : row.isSuspended || current === 'suspended'
+            ? 'suspended'
+            : 'active';
 
-    await this.databaseService.client.adminActivityLog.create({
-      data: {
-        actorId,
+      if (currentGate === next) {
+        throw new AdminDriverConflictError(`Driver is already ${next}`);
+      }
+      if (next === 'suspended' && currentGate === 'blocked') {
+        throw new AdminDriverConflictError('Driver is already blocked');
+      }
+
+      if (row.isSuspended !== shouldSuspend) {
+        await this.driverService.status.setSuspendedInTransaction(id, shouldSuspend, tx);
+      }
+
+      const nextUserStatus: UserStatus =
+        next === 'blocked' ? 'DEACTIVATED' : next === 'suspended' ? 'SUSPENDED' : 'ACTIVE';
+      if (row.user.status !== nextUserStatus) {
+        await this.userRepository.updateStatus(row.userId, nextUserStatus, tx);
+      }
+
+      const sessionsRevoked = shouldSuspend
+        ? await this.sessionService.revokeAllInTransaction(
+            row.userId,
+            next === 'blocked' ? 'blocked' : 'suspension',
+            tx,
+          )
+        : 0;
+
+      await recordAdminAction(tx, {
+        ...actor,
         action: 'UPDATE',
         entityType: 'driver',
         entityId: id,
         summary,
-        metadata: {
-          fromStatus: currentGate,
-          toStatus: next,
+        notes,
+        before: { status: currentGate, isSuspended: row.isSuspended, userStatus: row.user.status },
+        after: {
+          status: next,
           isSuspended: shouldSuspend,
           userStatus: nextUserStatus,
-          ...(notes ? { notes } : {}),
+          sessionsRevoked,
         },
-      },
+        result: 'SUCCESS',
+      });
+      return row.userId;
     });
 
+    // After commit, as `SessionService.logoutAll` does: retires the access tokens the
+    // revoked sessions issued, and drops the driver from the dispatch geo index.
+    if (shouldSuspend) {
+      await this.epochService.bump(userId);
+      await this.driverService.status.forgetPosition(id);
+    }
     return this.getById(id);
   }
 

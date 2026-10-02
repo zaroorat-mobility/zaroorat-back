@@ -137,42 +137,53 @@ export class StatusService {
     this.driverMetrics.heartbeatReceived({ driverId });
   }
   async setSuspended(driverId: string, isSuspended: boolean): Promise<void> {
-    await this.txManager.execute(async (tx) => {
-      await this.driverRepo.lockForUpdate(driverId, tx);
-      await this.driverRepo.setSuspended(driverId, isSuspended, tx);
-      if (isSuspended) {
-        const currentStatus = await this.statusRepo.getStatus(driverId, tx);
-        if (currentStatus && currentStatus.status !== 'OFFLINE') {
-          if (currentStatus.status === 'ON_TRIP') {
-            // Force offline path is blocked on trip; still mark suspended and
-            // leave trip status — eligibility gates will refuse new offers.
-          } else {
-            const activeShift = await this.shiftRepo.findActiveShift(driverId, tx);
-            if (activeShift) {
-              await this.shiftRepo.endShift(activeShift.id, tx);
-            }
-            await this.driverRepo.updateAvailability(driverId, false, tx);
-            await this.statusRepo.updateStatus(driverId, 'OFFLINE', { currentShiftId: null }, tx);
-            this.driverMetrics.driverOffline({ driverId, reason: 'ADMIN_SUSPENSION' });
-            await this.eventPublisher.publish(
-              driverEvent(DRIVER_EVENT_CATALOG.STATUS_CHANGED, driverId, {
-                driverId,
-                status: 'OFFLINE',
-                reason: 'ADMIN_SUSPENSION',
-              }),
-              tx,
-            );
-          }
-        }
-        this.driverMetrics.driverSuspended({ driverId });
-        await this.eventPublisher.publish(
-          driverEvent(DRIVER_EVENT_CATALOG.SUSPENDED, driverId, { driverId }),
-          tx,
-        );
-      }
-    });
+    await this.txManager.execute((tx) => this.setSuspendedInTransaction(driverId, isSuspended, tx));
+    if (isSuspended) await this.forgetPosition(driverId);
+  }
+
+  /// `setSuspended` inside the caller's transaction, so the change commits or rolls back
+  /// with whatever else the caller writes (its audit row). The caller calls
+  /// `forgetPosition` after commit: a rolled-back suspension must not drop the driver.
+  async setSuspendedInTransaction(
+    driverId: string,
+    isSuspended: boolean,
+    tx: TransactionClient,
+  ): Promise<void> {
+    await this.driverRepo.lockForUpdate(driverId, tx);
+    await this.driverRepo.setSuspended(driverId, isSuspended, tx);
     if (isSuspended) {
-      await this.geoService.forgetDriverPosition(driverId);
+      const currentStatus = await this.statusRepo.getStatus(driverId, tx);
+      if (currentStatus && currentStatus.status !== 'OFFLINE') {
+        if (currentStatus.status === 'ON_TRIP') {
+          // Force offline path is blocked on trip; still mark suspended and
+          // leave trip status — eligibility gates will refuse new offers.
+        } else {
+          const activeShift = await this.shiftRepo.findActiveShift(driverId, tx);
+          if (activeShift) {
+            await this.shiftRepo.endShift(activeShift.id, tx);
+          }
+          await this.driverRepo.updateAvailability(driverId, false, tx);
+          await this.statusRepo.updateStatus(driverId, 'OFFLINE', { currentShiftId: null }, tx);
+          this.driverMetrics.driverOffline({ driverId, reason: 'ADMIN_SUSPENSION' });
+          await this.eventPublisher.publish(
+            driverEvent(DRIVER_EVENT_CATALOG.STATUS_CHANGED, driverId, {
+              driverId,
+              status: 'OFFLINE',
+              reason: 'ADMIN_SUSPENSION',
+            }),
+            tx,
+          );
+        }
+      }
+      this.driverMetrics.driverSuspended({ driverId });
+      await this.eventPublisher.publish(
+        driverEvent(DRIVER_EVENT_CATALOG.SUSPENDED, driverId, { driverId }),
+        tx,
+      );
     }
+  }
+
+  async forgetPosition(driverId: string): Promise<void> {
+    await this.geoService.forgetDriverPosition(driverId);
   }
 }

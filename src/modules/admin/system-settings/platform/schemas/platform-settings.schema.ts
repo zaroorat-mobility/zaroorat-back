@@ -44,7 +44,13 @@ export const updateFeatureFlagSchema = z.object({
 });
 
 export const updateFeatureFlagsSchema = z.object({
-  flags: z.array(updateFeatureFlagSchema).min(1),
+  flags: z
+    .array(updateFeatureFlagSchema)
+    .min(1)
+    // A flag named twice has no single intended value.
+    .refine((flags) => new Set(flags.map((f) => f.key)).size === flags.length, {
+      message: 'Each feature flag may appear only once per request',
+    }),
 });
 
 export const updateMaintenanceSettingsSchema = z.object({

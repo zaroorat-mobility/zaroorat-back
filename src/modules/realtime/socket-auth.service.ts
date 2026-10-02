@@ -3,7 +3,7 @@ import { JwtService } from '@modules/auth/services/token/jwt.service.js';
 import { EpochService } from '@modules/auth/services/token/epoch.service.js';
 import { DriverAccessRepository } from '@modules/auth/repositories/driver-access.repository.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
-import { SocketUnauthenticatedError } from './realtime.errors.js';
+import { RealtimeError, SocketUnauthenticatedError } from './realtime.errors.js';
 
 /// Who the server decided is on the other end of a socket. Every field is
 /// derived from the signed token or from the database — nothing here is ever
@@ -11,6 +11,8 @@ import { SocketUnauthenticatedError } from './realtime.errors.js';
 export interface SocketPrincipal {
   userId: string;
   sid: string;
+  /// The token's epoch, kept so `revalidate` can tell when it has been retired.
+  epoch: number;
   roles: string[];
   /// Set only for a driver who is currently *operable* (verified, not suspended,
   /// not soft-deleted) — the same predicate `authorize({requireOperableDriver})`
@@ -88,9 +90,33 @@ export class SocketAuthService {
     return {
       userId: claims.sub,
       sid: claims.sid,
+      epoch: claims.epoch,
       roles: claims.roles,
       driverId: await this.resolveOperableDriverId(claims.sub, claims.roles),
     };
+  }
+
+  /// The handshake checks again, for a socket that is already open: a socket
+  /// outlives the moment its token was checked, so a role change, logout or
+  /// suspension since then must stop its next command exactly as it stops the
+  /// next HTTP request. Run before every command, so a revocation still takes
+  /// effect when the event that would have disconnected the socket is late or
+  /// never relayed. A driver identity is held only while the driver is operable.
+  ///
+  /// Throws `SocketUnauthenticatedError` when the principal is no longer true, and
+  /// a `SERVICE_UNAVAILABLE` error when the stores cannot answer — both refuse.
+  async revalidate(principal: SocketPrincipal): Promise<void> {
+    let valid: boolean;
+    try {
+      valid =
+        principal.epoch === (await this.epochService.current(principal.userId)) &&
+        !(await this.redisService.sidBlacklist.isRevoked(principal.sid)) &&
+        (principal.driverId === null ||
+          (await this.driverAccessRepository.isOperableDriver(principal.userId)));
+    } catch {
+      throw new RealtimeError('Authentication is temporarily unavailable', 'SERVICE_UNAVAILABLE');
+    }
+    if (!valid) throw new SocketUnauthenticatedError('This session is no longer authorised');
   }
 
   private async resolveOperableDriverId(userId: string, roles: string[]): Promise<string | null> {

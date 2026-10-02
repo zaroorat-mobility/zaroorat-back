@@ -22,3 +22,8 @@ import dotenv from 'dotenv';
 process.env.APP_ENV = 'test';
 process.env.NODE_ENV = 'test';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.test'), override: true });
+
+// Opt-in isolation, so one run cannot TRUNCATE or FLUSHDB another run's state.
+// `resetState()` still refuses any database whose name does not mark it as a test one.
+if (process.env.TEST_DATABASE_URL) process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+if (process.env.TEST_REDIS_URL) process.env.REDIS_URL = process.env.TEST_REDIS_URL;
