@@ -31,8 +31,9 @@ export class RatingController {
     const ride = await this.rideRepo.findById(id);
     const ratedBy = ride && rideParty(actorId, ride) === 'DRIVER' ? 'DRIVER' : 'CUSTOMER';
 
-    const rating = await this.ratingService.getRating(id, ratedBy, actorId);
-    reply.send({ data: rating });
+    const { given, received } = await this.ratingService.getRating(id, ratedBy, actorId);
+    // Nested under `data` so API clients that unwrap `{ data }` keep both sides.
+    reply.send({ data: { given, received } });
   }
 
   async submitRating(req: FastifyRequest, reply: FastifyReply): Promise<void> {

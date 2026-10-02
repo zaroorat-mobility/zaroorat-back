@@ -8,6 +8,7 @@ import { NotificationService } from './notification.service';
 import { NotificationRepository } from './repositories/notification.repository.js';
 import { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
 import { NotificationReconciliationJob } from './jobs/notification-reconciliation.job.js';
+import { registerNotificationInbox } from './inbox.js';
 export type { SmsProvider, SmsMessage, SmsSendResult } from './providers/sms.provider';
 export type { PushProvider, PushMessage, PushSendResult } from './providers/push.provider';
 export type { EmailProvider, EmailMessage, EmailSendResult } from './providers/email.provider';
@@ -38,6 +39,12 @@ export {
   type PushProviderName,
 } from './notification.config';
 export { NotificationService, type SendSmsOptions } from './notification.service';
+export {
+  registerNotificationInbox,
+  notificationInboxRoutes,
+  NotificationInboxService,
+  NotificationInboxController,
+} from './inbox.js';
 export function registerNotificationModule(container: AwilixContainer): void {
   container.register({
     notificationConfig: asFunction(getNotificationConfig).singleton(),
@@ -48,4 +55,5 @@ export function registerNotificationModule(container: AwilixContainer): void {
     notificationReconciliationJob: asClass(NotificationReconciliationJob).singleton(),
     notificationService: asClass(NotificationService).singleton(),
   });
+  registerNotificationInbox(container);
 }

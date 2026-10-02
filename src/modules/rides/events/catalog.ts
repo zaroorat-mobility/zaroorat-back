@@ -13,6 +13,7 @@ export const RIDE_EVENT_CATALOG = {
   DISPATCH_REJECTED: 'ride.dispatch.rejected',
   DISPATCH_EXPIRED: 'ride.dispatch.expired',
   ACCEPTED: 'ride.accepted',
+  DRIVER_NEARBY: 'ride.driver_nearby',
   DRIVER_ARRIVING: 'ride.driver_arriving',
   DRIVER_ARRIVED: 'ride.driver_arrived',
   STARTED: 'ride.started',

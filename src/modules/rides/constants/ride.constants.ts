@@ -39,7 +39,8 @@ export type NewRidePaymentMethod = (typeof NEW_RIDE_PAYMENT_METHODS)[number];
 
 /// The only fare boosts a rider may offer, in rupees. A fixed list rather than
 /// a range so the driver app can render them as chips and nobody can send ₹1.
-export const RIDE_BOOST_AMOUNTS = [20, 30, 40, 50] as const;
+/// Negative = offer below quote; 0 = keep quote; positive = bump.
+export const RIDE_BOOST_AMOUNTS = [-10, 0, 20, 30, 40, 50, 60] as const;
 export type RideBoostAmount = (typeof RIDE_BOOST_AMOUNTS)[number];
 
 /// Ride states in which the rider may still change where they are going.
@@ -51,4 +52,18 @@ export const LIVE_RIDE_STATUSES = [
   'DRIVER_ARRIVING',
   'DRIVER_ARRIVED',
   'IN_PROGRESS',
+] as const;
+
+/// Cancel reasons offered to drivers (and customers) when ending a booking.
+export const RIDE_CANCEL_REASONS = [
+  { code: 'RIDER_NO_SHOW', label: 'Rider did not show up', actor: 'DRIVER' },
+  { code: 'WRONG_LOCATION', label: 'Wrong pickup / drop location', actor: 'BOTH' },
+  { code: 'RIDER_REQUESTED', label: 'Rider asked to cancel', actor: 'DRIVER' },
+  { code: 'VEHICLE_ISSUE', label: 'Vehicle issue', actor: 'DRIVER' },
+  { code: 'SAFETY_CONCERN', label: 'Safety concern', actor: 'BOTH' },
+  { code: 'WAIT_TOO_LONG', label: 'Waited too long', actor: 'BOTH' },
+  { code: 'CHANGED_PLANS', label: 'Changed plans', actor: 'CUSTOMER' },
+  { code: 'BOOKED_BY_MISTAKE', label: 'Booked by mistake', actor: 'CUSTOMER' },
+  { code: 'DRIVER_TOO_FAR', label: 'Driver too far away', actor: 'CUSTOMER' },
+  { code: 'OTHER', label: 'Other', actor: 'BOTH' },
 ] as const;

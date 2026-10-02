@@ -4,6 +4,7 @@ import { GeoService } from '@modules/location';
 import { RideRepository } from '../repositories/ride.repository.js';
 import { ReceiptService } from '../services/receipt/receipt.service.js';
 import { RideNotFoundError } from '../errors/ride.errors.js';
+import { RIDE_CANCEL_REASONS } from '../constants/ride.constants.js';
 import { ridePartyIds } from '../types/ride-party.js';
 import { toClientRideView } from '../presenters/ride-client.presenter.js';
 const LIVE_TRACKING_STATUSES = new Set([
@@ -28,6 +29,17 @@ export class RideQueryController {
   async getActive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const activeRide = await this.rideRepo.findActiveForUser(callerId(req));
     return reply.send({ data: toClientRideView(activeRide) });
+  }
+
+  /// Static list of cancel reasons. Filtered by optional `?actor=DRIVER|CUSTOMER`.
+  async listCancelReasons(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { actor } = (req.query ?? {}) as { actor?: string };
+    const normalized = actor?.toUpperCase();
+    const reasons = RIDE_CANCEL_REASONS.filter((r) => {
+      if (!normalized) return true;
+      return r.actor === 'BOTH' || r.actor === normalized;
+    }).map(({ code, label }) => ({ code, label }));
+    reply.send({ data: reasons });
   }
   async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as {

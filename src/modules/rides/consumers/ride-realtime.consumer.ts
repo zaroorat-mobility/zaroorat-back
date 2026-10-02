@@ -19,6 +19,7 @@ import { PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
 /// should still be admitted to its room streaming a position into it.
 const RIDE_EVENTS: Record<string, { socketEvent: SocketEventName; terminal?: boolean }> = {
   [RIDE_EVENT_CATALOG.ACCEPTED]: { socketEvent: SOCKET_EVENT.DRIVER_ASSIGNED },
+  [RIDE_EVENT_CATALOG.DRIVER_NEARBY]: { socketEvent: SOCKET_EVENT.DRIVER_NEARBY },
   [RIDE_EVENT_CATALOG.DRIVER_ARRIVING]: { socketEvent: SOCKET_EVENT.DRIVER_ARRIVING },
   [RIDE_EVENT_CATALOG.DRIVER_ARRIVED]: { socketEvent: SOCKET_EVENT.DRIVER_ARRIVED },
   [RIDE_EVENT_CATALOG.STARTED]: { socketEvent: SOCKET_EVENT.RIDE_STARTED },

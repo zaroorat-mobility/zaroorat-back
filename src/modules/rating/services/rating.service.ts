@@ -23,7 +23,7 @@ export class RatingService {
     rideId: string,
     ratedBy: RatedByRole,
     actorId: string,
-  ): Promise<RideRating | null> {
+  ): Promise<{ given: RideRating | null; received: RideRating | null }> {
     const ride = await this.rideRepo.findById(rideId);
     if (!ride) throw new RideNotFoundError(rideId);
     if (ratedBy === 'CUSTOMER' && ride.customerId !== actorId) {
@@ -32,7 +32,12 @@ export class RatingService {
     if (ratedBy === 'DRIVER' && ridePartyIds(ride).driverUserId !== actorId) {
       throw new RideDriverMismatchError(rideId);
     }
-    return this.ratingRepo.findByRideAndRater(rideId, ratedBy);
+    const otherSide: RatedByRole = ratedBy === 'DRIVER' ? 'CUSTOMER' : 'DRIVER';
+    const [given, received] = await Promise.all([
+      this.ratingRepo.findByRideAndRater(rideId, ratedBy),
+      this.ratingRepo.findByRideAndRater(rideId, otherSide),
+    ]);
+    return { given, received };
   }
 
   async submitRating(

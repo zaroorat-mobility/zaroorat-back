@@ -628,7 +628,9 @@ export class RideRequestService {
           pricingRuleId,
           // A scheduled booking must not age out like an instant search does;
           // RequestExpiryJob only sweeps rows with an `expiresAt`.
-          expiresAt: scheduledFor ? null : new Date(Date.now() + 5 * 60 * 1000),
+          expiresAt: scheduledFor
+            ? null
+            : new Date(Date.now() + rideConfig.requestExpiryMinutes * 60 * 1000),
           scheduledFor,
           passengerName: input.passengerName ?? null,
           passengerPhone: input.passengerPhone ?? null,
@@ -740,6 +742,7 @@ export class RideRequestService {
   /// captains who previously saw it (passed, timed out, or still holding).
   /// Replaces (never accumulates) the rider's boost on a request that is still
   /// searching. Drivers see `quotedFare + boostAmount` on the offer.
+  /// Also resets `expiresAt` so the search window restarts from the boost.
   async boostRequest(
     requestId: string,
     customerId: string,
@@ -754,9 +757,16 @@ export class RideRequestService {
       if (!BOOSTABLE_REQUEST_STATUSES.has(request.status)) {
         throw new RideRequestNotBoostableError(request.status);
       }
-      const updated = await this.requestRepo.updateBoost(requestId, new Decimal(boostAmount), tx);
+      const expiresAt = new Date(Date.now() + rideConfig.requestExpiryMinutes * 60 * 1000);
+      const updated = await this.requestRepo.applyBoost(
+        requestId,
+        new Decimal(boostAmount),
+        expiresAt,
+        tx,
+      );
       const quotedFare = updated.quotedFare != null ? Number(updated.quotedFare) : null;
-      const totalOffered = quotedFare != null ? quotedFare + boostAmount : null;
+      // Negative boosts are intentional (−10); never let the offered total go below 0.
+      const totalOffered = quotedFare != null ? Math.max(0, quotedFare + boostAmount) : null;
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.REQUEST_BOOSTED, customerId, {
           requestId,

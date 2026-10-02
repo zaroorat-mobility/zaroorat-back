@@ -418,6 +418,114 @@ export class NotificationRepository extends BaseRepository {
       data: { status },
     });
   }
+
+  /// User-facing inbox: newest first, cursor = previous page's last id.
+  async listForUser(
+    userId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<{ items: Notification[]; nextCursor: string | null }> {
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
+    const rows = await this.client.notification.findMany({
+      where: {
+        userId,
+        ...(options.cursor
+          ? {
+              createdAt: {
+                lt:
+                  (
+                    await this.client.notification.findUnique({
+                      where: { id: options.cursor },
+                      select: { createdAt: true },
+                    })
+                  )?.createdAt ?? new Date(0),
+              },
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      select: {
+        id: true,
+        userId: true,
+        category: true,
+        priority: true,
+        eventKey: true,
+        title: true,
+        body: true,
+        data: true,
+        status: true,
+        referenceType: true,
+        referenceId: true,
+        createdAt: true,
+        readAt: true,
+        templateId: true,
+        idempotencyKey: true,
+      },
+    });
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      items: items as Notification[],
+      nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
+    };
+  }
+
+  async markRead(userId: string, notificationId: string): Promise<Notification | null> {
+    const existing = await this.client.notification.findFirst({
+      where: { id: notificationId, userId },
+    });
+    if (!existing) return null;
+    if (existing.readAt) return existing;
+    return this.client.notification.update({
+      where: { id: notificationId },
+      data: { readAt: new Date(), status: 'READ' },
+    });
+  }
+
+  async markAllRead(userId: string): Promise<number> {
+    const result = await this.client.notification.updateMany({
+      where: { userId, readAt: null },
+      data: { readAt: new Date(), status: 'READ' },
+    });
+    return result.count;
+  }
+
+  async listPreferences(userId: string) {
+    return this.client.notificationPreference.findMany({
+      where: { userId },
+      orderBy: [{ category: 'asc' }, { channel: 'asc' }],
+    });
+  }
+
+  async upsertPreference(
+    userId: string,
+    category: NotificationCategory,
+    channel: NotificationChannel,
+    enabled: boolean,
+  ) {
+    return this.client.notificationPreference.upsert({
+      where: {
+        userId_category_channel: { userId, category, channel },
+      },
+      create: { userId, category, channel, enabled },
+      update: { enabled },
+    });
+  }
+
+  async isCategoryEnabled(
+    userId: string,
+    category: NotificationCategory,
+    channel: NotificationChannel = 'PUSH',
+  ): Promise<boolean> {
+    // SAFETY and TRANSACTIONAL (ride-critical) cannot be disabled.
+    if (category === 'SAFETY' || category === 'TRANSACTIONAL') return true;
+    const pref = await this.client.notificationPreference.findUnique({
+      where: {
+        userId_category_channel: { userId, category, channel },
+      },
+    });
+    return pref?.enabled ?? true;
+  }
 }
 
 export type PushDeliveryWithDevice = NotificationDelivery & {

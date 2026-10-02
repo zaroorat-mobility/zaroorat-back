@@ -135,7 +135,14 @@ export class RideRepository {
         status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
       },
       include: {
-        request: { select: { dropLat: true, dropLng: true } },
+        request: {
+          select: {
+            pickupLat: true,
+            pickupLng: true,
+            dropLat: true,
+            dropLng: true,
+          },
+        },
       },
     });
   }
