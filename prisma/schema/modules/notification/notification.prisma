@@ -181,9 +181,13 @@ model AdminBroadcast {
   totalRecipients Int                  @default(0) @map("total_recipients")
   failureReason   String?              @map("failure_reason")
   createdBy       String?              @map("created_by") @db.Uuid
+  /// The client's Idempotency-Key for a scheduled broadcast. Unique per creator, so a
+  /// retried or concurrent duplicate submission resolves to the one row it created.
+  idempotencyKey  String?              @map("idempotency_key")
   createdAt       DateTime             @default(now()) @map("created_at")
   updatedAt       DateTime             @updatedAt @map("updated_at")
 
+  @@unique([createdBy, idempotencyKey])
   @@index([status, scheduledAt])
   @@index([channel, createdAt])
   @@map("admin_broadcasts")

@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { auditActor } from '../../audit/index.js';
 import { AdminInvoiceService } from './invoice.service.js';
 import {
   createInvoiceTemplateBodySchema,
@@ -30,26 +31,26 @@ export class AdminInvoiceController {
 
   async createTemplate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createInvoiceTemplateBodySchema.parse(req.body);
-    const data = await this.adminInvoiceService.createTemplate(body);
+    const data = await this.adminInvoiceService.createTemplate(body, auditActor(req));
     reply.status(201).send({ data });
   }
 
   async updateTemplate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = invoiceTemplateIdParamSchema.parse(req.params);
     const body = updateInvoiceTemplateBodySchema.parse(req.body ?? {});
-    const data = await this.adminInvoiceService.updateTemplate(id, body);
+    const data = await this.adminInvoiceService.updateTemplate(id, body, auditActor(req));
     reply.send({ data });
   }
 
   async deleteTemplate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = invoiceTemplateIdParamSchema.parse(req.params);
-    await this.adminInvoiceService.deleteTemplate(id);
+    await this.adminInvoiceService.deleteTemplate(id, auditActor(req));
     reply.send({ success: true });
   }
 
   async setDefaultTemplate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = invoiceTemplateIdParamSchema.parse(req.params);
-    const data = await this.adminInvoiceService.setDefaultTemplate(id);
+    const data = await this.adminInvoiceService.setDefaultTemplate(id, auditActor(req));
     reply.send({ data });
   }
 }

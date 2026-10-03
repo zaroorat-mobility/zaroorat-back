@@ -44,7 +44,6 @@ export interface NotificationConfig {
     apiUrl?: string;
     timeoutMs: number;
   } | null;
-  pushProvider: PushProviderName;
 }
 export function resolveSmsProviderName(
   environment: string,
@@ -133,11 +132,12 @@ export function getNotificationConfig(): NotificationConfig {
         ...(entityId ? { entityId } : {}),
       }
     : null;
-  const pushProvider = resolvePushProviderName(config.app.environment, process.env.PUSH_PROVIDER);
+  // Push is deliberately not resolved here. SMS (OTP, login) reads this config,
+  // and a push misconfiguration must fail push — never OTP. createPushProvider
+  // resolves PUSH_PROVIDER itself.
   return {
     smsProvider,
     airtel,
-    pushProvider,
     ...(process.env.AIRTEL_OTP_TEMPLATE_ID
       ? { otpTemplateId: process.env.AIRTEL_OTP_TEMPLATE_ID }
       : {}),
@@ -154,11 +154,10 @@ export function createSmsProvider(notificationConfig: NotificationConfig): SmsPr
   }
   return new MockProvider();
 }
-export function createPushProvider(
-  notificationConfig: NotificationConfig,
-  deviceRepository: DeviceRepository,
-): PushProvider {
-  if (notificationConfig.pushProvider === 'fcm') {
+/// Still fail-closed: a delivery-required environment without PUSH_PROVIDER=fcm
+/// throws PushProviderNotDeliverableError here — for push, and only for push.
+export function createPushProvider(deviceRepository: DeviceRepository): PushProvider {
+  if (resolvePushProviderName(config.app.environment, process.env.PUSH_PROVIDER) === 'fcm') {
     return new FcmPushProvider(initFcmApp(), deviceRepository);
   }
   return new MockPushProvider();

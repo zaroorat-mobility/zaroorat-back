@@ -327,6 +327,7 @@ describe('driver payout authorization (integration, real HTTP)', () => {
 
       assert.equal(response.statusCode, 401, response.payload);
       assert.equal(await paidTotal(driverId), 0);
+      assert.equal(await db().client.adminActivityLog.count(), 0);
     });
 
     it('refuses a customer', async () => {
@@ -341,6 +342,8 @@ describe('driver payout authorization (integration, real HTTP)', () => {
       });
       assert.equal(response.statusCode, 403, response.payload);
       assert.equal(await paidTotal(driverId), 0);
+      assert.equal(await db().client.driverPayout.count(), 0);
+      assert.equal(await db().client.adminActivityLog.count(), 0, 'a refused request logs nothing');
     });
 
     it('refuses the driver being paid', async () => {
@@ -355,6 +358,8 @@ describe('driver payout authorization (integration, real HTTP)', () => {
       });
       assert.equal(response.statusCode, 403, response.payload);
       assert.equal(await paidTotal(driverId), 0);
+      assert.equal(await db().client.driverPayout.count(), 0);
+      assert.equal(await db().client.adminActivityLog.count(), 0, 'a refused request logs nothing');
     });
 
     it('allows an admin as well as finance', async () => {

@@ -1,4 +1,6 @@
 import { TransactionManager } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
+import { lockForAudit, recordAdminAction, type AuditActor } from '@modules/admin/audit/index.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { VehicleRepository } from '../repositories/vehicle.repository.js';
 import { VehicleDocumentRepository } from '../repositories/vehicle-document.repository.js';
@@ -35,49 +37,76 @@ export class VehicleVerificationService {
     return { vehicle, documents };
   }
 
-  private async assertNotSelfReview(vehicle: Vehicle, reviewerUserId: string): Promise<void> {
+  private async assertNotSelfReview(
+    vehicle: Vehicle,
+    reviewerUserId: string,
+    tx: TransactionClient,
+  ): Promise<void> {
     if (!vehicle.currentDriverId) return;
-    const driver = await this.driverRepository.findById(vehicle.currentDriverId);
+    const driver = await this.driverRepository.findById(vehicle.currentDriverId, tx);
     if (driver?.userId === reviewerUserId) throw new SelfVehicleReviewForbiddenError();
   }
 
+  /// The decision and its audit row commit together, under a lock on the document row
+  /// taken before its status is read: two concurrent reviews cannot both pass the "already
+  /// in this status" check and log twice. A repeated decision changes and logs nothing.
+  /// The row carries the document's type and statuses — never its number, file or URL.
   async reviewDocument(
     vehicleId: string,
     documentId: string,
     status: VerificationStatus,
-    reviewerUserId: string,
+    actor: AuditActor,
     rejectionReason?: string,
   ): Promise<VehicleDocument> {
-    const vehicle = await this.vehicleRepository.findById(vehicleId);
-    if (!vehicle) throw new VehicleNotFoundError(vehicleId);
-    await this.assertNotSelfReview(vehicle, reviewerUserId);
+    return this.txManager.execute(async (tx) => {
+      const vehicle = await this.vehicleRepository.findById(vehicleId, tx);
+      if (!vehicle) throw new VehicleNotFoundError(vehicleId);
+      await this.assertNotSelfReview(vehicle, actor.actorId, tx);
 
-    const document = await this.vehicleDocumentRepository.findById(documentId);
-    if (!document) throw new VehicleDocumentNotFoundError(documentId);
-    if (document.vehicleId !== vehicleId) throw new VehicleDocumentMismatchError();
-    if (document.verificationStatus === status) return document;
+      await lockForAudit(tx, 'vehicle_documents', documentId);
+      const document = await this.vehicleDocumentRepository.findById(documentId, tx);
+      if (!document) throw new VehicleDocumentNotFoundError(documentId);
+      if (document.vehicleId !== vehicleId) throw new VehicleDocumentMismatchError();
+      if (document.verificationStatus === status) return document;
 
-    return this.vehicleDocumentRepository.updateVerificationStatus(
-      documentId,
-      status,
-      reviewerUserId,
-      rejectionReason,
-    );
+      const reviewed = await this.vehicleDocumentRepository.updateVerificationStatus(
+        documentId,
+        status,
+        actor.actorId,
+        rejectionReason,
+        tx,
+      );
+      await recordAdminAction(tx, {
+        ...actor,
+        action: status === 'VERIFIED' ? 'APPROVE' : 'REJECT',
+        entityType: 'vehicle_document',
+        entityId: documentId,
+        summary: `Vehicle document ${document.documentType} ${status === 'VERIFIED' ? 'verified' : 'rejected'}`,
+        notes: rejectionReason,
+        before: { verificationStatus: document.verificationStatus },
+        after: {
+          verificationStatus: reviewed.verificationStatus,
+          vehicleId,
+          documentType: document.documentType,
+        },
+        result: 'SUCCESS',
+      });
+      return reviewed;
+    });
   }
 
+  /// Same shape as the document review: the vehicle row is locked before its status is
+  /// read, and the decision commits with its APPROVE/REJECT row or not at all.
   async reviewVehicle(
     vehicleId: string,
     status: VerificationStatus,
-    reviewerUserId: string,
+    actor: AuditActor,
     rejectionReason?: string,
   ): Promise<Vehicle> {
-    const existing = await this.vehicleRepository.findById(vehicleId);
-    if (!existing) throw new VehicleNotFoundError(vehicleId);
-    await this.assertNotSelfReview(existing, reviewerUserId);
-
     return this.txManager.execute(async (tx) => {
       const locked = await this.vehicleRepository.lockForUpdate(vehicleId, tx);
       if (!locked) throw new VehicleNotFoundError(vehicleId);
+      await this.assertNotSelfReview(locked, actor.actorId, tx);
       if (locked.verificationStatus === status) return locked;
 
       if (status === 'PENDING') {
@@ -103,13 +132,26 @@ export class VehicleVerificationService {
         }
       }
 
-      return this.vehicleRepository.updateVerificationStatus(
+      const updated = await this.vehicleRepository.updateVerificationStatus(
         vehicleId,
         status,
-        reviewerUserId,
+        actor.actorId,
         rejectionReason,
         tx,
       );
+      await recordAdminAction(tx, {
+        ...actor,
+        action: status === 'VERIFIED' ? 'APPROVE' : 'REJECT',
+        entityType: 'vehicle',
+        entityId: vehicleId,
+        summary:
+          status === 'VERIFIED' ? 'Vehicle Verification Approved' : 'Vehicle Verification Rejected',
+        notes: rejectionReason,
+        before: { verificationStatus: locked.verificationStatus },
+        after: { verificationStatus: updated.verificationStatus },
+        result: 'SUCCESS',
+      });
+      return updated;
     });
   }
 }

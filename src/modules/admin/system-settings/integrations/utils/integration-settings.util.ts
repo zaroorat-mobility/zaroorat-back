@@ -60,7 +60,9 @@ export async function saveIntegrationSettings(
       changes[entry.key] = entry.isSecret ? '[REDACTED]' : entry.value;
     }
 
-    if (actorId && Object.keys(changes).length > 0) {
+    // No actor-presence condition: `recordAdminAction` refuses a missing actor, so a lost
+    // actor rolls the change back instead of committing it unaudited.
+    if (Object.keys(changes).length > 0) {
       await recordAdminAction(tx, {
         actorId,
         action: 'UPDATE',

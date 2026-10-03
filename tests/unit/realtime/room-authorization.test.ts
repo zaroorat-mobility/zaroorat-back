@@ -6,16 +6,31 @@ import type { SocketPrincipal } from '../../../src/modules/realtime/socket-auth.
 
 const RIDE = { id: 'ride_1', customerId: 'user_cust', driverId: 'drv_assigned' };
 
-function service(ride: Record<string, unknown> | null = RIDE) {
-  return new RoomAuthorizationService({
-    async findById(id: string) {
-      return ride && ride.id === id ? ride : null;
-    },
-  } as never);
+function service(ride: Record<string, unknown> | null = RIDE, permissions: string[] | Error = []) {
+  return new RoomAuthorizationService(
+    {
+      async findById(id: string) {
+        return ride && ride.id === id ? ride : null;
+      },
+    } as never,
+    {
+      async findAllowedCodesForUser() {
+        if (permissions instanceof Error) throw permissions;
+        return permissions;
+      },
+    } as never,
+  );
 }
 
 function principal(overrides: Partial<SocketPrincipal> = {}): SocketPrincipal {
-  return { userId: 'user_cust', sid: 's', roles: ['customer'], driverId: null, ...overrides };
+  return {
+    userId: 'user_cust',
+    sid: 's',
+    epoch: 1,
+    roles: ['customer'],
+    driverId: null,
+    ...overrides,
+  };
 }
 
 describe('Room authorization', () => {
@@ -96,6 +111,57 @@ describe('Room authorization', () => {
         false,
       );
       assert.equal(await service().isAssignedDriver(principal(), 'ride_1'), false);
+    });
+  });
+
+  describe('admin dashboard rooms (permission-checked server-side)', () => {
+    const staff = (roles: string[]) => principal({ userId: 'user_staff', roles });
+
+    it('gives operations:read the ops room only', async () => {
+      assert.deepEqual(
+        await service(RIDE, ['operations:read']).dashboardRooms(staff(['support'])),
+        ['dashboard:ops'],
+      );
+    });
+
+    it('gives finance:read the finance room only', async () => {
+      assert.deepEqual(await service(RIDE, ['finance:read']).dashboardRooms(staff(['finance'])), [
+        'dashboard:finance',
+      ]);
+    });
+
+    it('gives both rooms to a holder of both permissions', async () => {
+      assert.deepEqual(
+        await service(RIDE, ['operations:read', 'finance:read']).dashboardRooms(staff(['admin'])),
+        ['dashboard:ops', 'dashboard:finance'],
+      );
+    });
+
+    it('gives system_admin both rooms without a lookup, as the HTTP guard does', async () => {
+      const lookupWouldFail = service(RIDE, new Error('must not be called'));
+      assert.deepEqual(await lookupWouldFail.dashboardRooms(staff(['system_admin'])), [
+        'dashboard:ops',
+        'dashboard:finance',
+      ]);
+    });
+
+    it('refuses a customer, a driver and staff without either permission', async () => {
+      for (const p of [
+        principal(),
+        principal({ roles: ['driver'], driverId: 'drv_1' }),
+        staff(['support']),
+      ]) {
+        await assert.rejects(service(RIDE, ['audit:read']).dashboardRooms(p), {
+          code: 'ROOM_ACCESS_DENIED',
+        });
+      }
+    });
+
+    it('fails closed when the permission lookup fails', async () => {
+      await assert.rejects(
+        service(RIDE, new Error('db down')).dashboardRooms(staff(['support'])),
+        /db down/,
+      );
     });
   });
 });

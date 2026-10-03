@@ -15,12 +15,15 @@ export async function authorizedDriverId(
   request: FastifyRequest,
   driverRepository: DriverRepository,
   requestedDriverId?: string | undefined,
-  staffRoles: string[] = ['admin', 'support'],
+  staffRoles: string[] = ['system_admin', 'admin', 'support', 'finance'],
 ): Promise<string> {
   // A staff caller acting on an explicit :driverId does not need a Driver row
   // of their own — requiring one would make every staff-only endpoint 404 for
   // any admin/support user who never onboarded as a driver themselves.
-  if (requestedDriverId && callerHasRole(request, ...staffRoles)) {
+  if (
+    requestedDriverId &&
+    (callerHasRole(request, ...staffRoles) || request.auth?.roles.includes('system_admin'))
+  ) {
     return requestedDriverId;
   }
   const own = await actingDriverId(request, driverRepository);

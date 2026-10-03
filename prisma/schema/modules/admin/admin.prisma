@@ -67,7 +67,9 @@ model AdminActivityLog {
   metadata   Json?
   createdAt  DateTime    @default(now()) @map("created_at")
 
-  actor        User?              @relation(fields: [actorId], references: [id])
+  /// RESTRICT: a user who has acted as an admin cannot be hard-deleted, so the actor
+  /// always resolves. Rows are append-only (trigger in 20261001120000).
+  actor        User?              @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   fieldChanges AuditFieldChange[]
 
   @@index([actorId, createdAt])
@@ -197,19 +199,27 @@ model Country {
 }
 
 model State {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  countryId String   @map("country_id") @db.Uuid
-  code      String
-  name      String
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id           String            @id @default(uuid(7)) @db.Uuid
+  countryId    String            @map("country_id") @db.Uuid
+  code         String
+  name         String
+  nativeName   String?           @map("native_name")
+  divisionType StateDivisionType @default(STATE) @map("division_type")
+  lgdCode      Int?              @map("lgd_code")
+  isoCode      String?           @map("iso_code")
+  censusCode   String?           @map("census_code")
+  isActive     Boolean           @default(true) @map("is_active")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
 
   country Country @relation(fields: [countryId], references: [id])
   cities  City[]
 
   @@unique([countryId, code])
+  @@unique([countryId, name])
+  @@unique([countryId, lgdCode])
   @@index([countryId])
+  @@index([countryId, divisionType])
   @@map("states")
 }
 

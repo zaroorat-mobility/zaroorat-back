@@ -1,5 +1,6 @@
+import { auditActor } from '@modules/admin/audit/index.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { errorEnvelope } from '@core/errors/envelope.js';
+import { errorEnvelope, rethrowServerFault } from '@core/errors/envelope.js';
 import { logger } from '@shared/logger/index.js';
 import { AppConfigAdminService } from '../services/app-config-admin.service.js';
 import {
@@ -38,9 +39,10 @@ export class AppConfigAdminController {
   async updateTheme(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = updateThemeSchema.parse(req.body);
-      const data = await this.appConfigAdminService.updateTheme(body, req.auth?.userId);
+      const data = await this.appConfigAdminService.updateTheme(body, auditActor(req));
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -66,9 +68,10 @@ export class AppConfigAdminController {
   async updateFonts(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = updateFontsSchema.parse(req.body);
-      const data = await this.appConfigAdminService.updateFonts(body, req.auth?.userId);
+      const data = await this.appConfigAdminService.updateFonts(body, auditActor(req));
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -93,9 +96,10 @@ export class AppConfigAdminController {
   async updateLocale(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = updateLocaleSchema.parse(req.body);
-      const data = await this.appConfigAdminService.updateLocale(body, req.auth?.userId);
+      const data = await this.appConfigAdminService.updateLocale(body, auditActor(req));
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -111,9 +115,10 @@ export class AppConfigAdminController {
   async createLocale(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = createLocaleSchema.parse(req.body);
-      const data = await this.appConfigAdminService.createLocale(body, req.auth?.userId);
+      const data = await this.appConfigAdminService.createLocale(body, auditActor(req));
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -143,9 +148,10 @@ export class AppConfigAdminController {
   async upsertTranslations(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const body = upsertTranslationsSchema.parse(req.body);
-      const data = await this.appConfigAdminService.upsertTranslations(body, req.auth?.userId);
+      const data = await this.appConfigAdminService.upsertTranslations(body, auditActor(req));
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(
@@ -160,7 +166,7 @@ export class AppConfigAdminController {
 
   async publish(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
-      const data = await this.appConfigAdminService.publish(req.auth?.userId);
+      const data = await this.appConfigAdminService.publish(auditActor(req));
       reply.send({ data });
     } catch (error) {
       logger.error({ error }, '[AppConfigAdminController] publish');
@@ -183,10 +189,11 @@ export class AppConfigAdminController {
         body.colorScheme,
         tokens,
         components,
-        req.auth?.userId,
+        auditActor(req),
       );
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       reply
         .status(400)
         .send(

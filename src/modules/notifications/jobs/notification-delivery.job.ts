@@ -16,7 +16,10 @@ import {
   resolveOfferWindow,
   type NotificationDeliveryClass,
 } from '../policies/notification-priority.policy.js';
-import { notificationNoActiveDevice } from '../metrics/notification.metrics.js';
+import {
+  notificationDeliveryOutcome,
+  notificationNoActiveDevice,
+} from '../metrics/notification.metrics.js';
 
 export interface NotificationDeliveryJobData {
   notificationId: string;
@@ -287,6 +290,7 @@ export class NotificationDeliveryJob {
     clock: () => number,
   ): Promise<DeviceOutcome> {
     const deviceTrace = { ...trace, deliveryId: delivery.id, deviceId: delivery.deviceId };
+    const category = message.deliveryClass;
     const fail = async (errorCode: string, failureReason: string, provider?: string) => {
       await this.notificationRepository.finalizeDelivery(delivery.id, {
         status: 'FAILED',
@@ -294,6 +298,7 @@ export class NotificationDeliveryJob {
         failureReason,
         ...(provider ? { provider } : {}),
       });
+      notificationDeliveryOutcome('failed', { code: errorCode, category });
       return { kind: 'failed' as const, error: errorCode };
     };
 
@@ -364,6 +369,7 @@ export class NotificationDeliveryJob {
       // otherwise sit on the delivery until it expired, and every retry inside
       // that window would find it busy. Release it — only if it is still ours —
       // keep the delivery QUEUED, and let the exception reach BullMQ.
+      notificationDeliveryOutcome('retry', { code: 'PROVIDER_EXCEPTION', category });
       await this.notificationRepository
         .releaseDelivery(
           delivery.id,
@@ -391,6 +397,7 @@ export class NotificationDeliveryJob {
         providerMessageId: result.providerRef ?? null,
         sentAt: new Date(clock()),
       });
+      notificationDeliveryOutcome('sent', { category });
       return { kind: 'sent', result };
     }
 
@@ -423,6 +430,7 @@ export class NotificationDeliveryJob {
       errorCode,
       `FCM push attempt ${attempt} failed: ${errorCode}`,
     );
+    notificationDeliveryOutcome('retry', { code: errorCode, category });
     return { kind: 'transient', error: errorCode };
   }
 

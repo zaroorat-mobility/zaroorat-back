@@ -294,7 +294,18 @@ export class AdminSafetyService {
         entityType: 'safety_incident',
         entityId: inc.id,
         summary: `Created safety incident ${inc.incidentNumber} (${inc.type})`,
-        after: inc,
+        // The incident's classification, not its content: the reporter's location, the
+        // free-text description and the evidence file ids stay on the incident row.
+        after: {
+          incidentNumber: inc.incidentNumber,
+          type: inc.type,
+          severity: inc.severity,
+          status: inc.status,
+          rideId: inc.rideId,
+          reporterUserId: inc.reporterUserId,
+          subjectUserId: inc.subjectUserId,
+          evidenceCount: inc.evidenceFileIds.length,
+        },
       });
 
       return inc;

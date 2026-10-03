@@ -10,8 +10,12 @@ import {
 import { PermissionRepository } from '@modules/auth/repositories/permission.repository.js';
 import { RoleRepository } from '@modules/auth/repositories/role.repository.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
+import type { AuthService } from '@modules/auth/services/auth.service.js';
+import type { SessionService } from '@modules/auth/services/session/session.service.js';
+import type { EpochService } from '@modules/auth/services/token/epoch.service.js';
 import { hashPassword } from '@modules/auth/utils/password.js';
 import { UserProfileRepository } from '@modules/users/repositories/user-profile.repository.js';
+import { recordAdminAction, type AuditActor } from '../audit/index.js';
 import { StaffConflictError, StaffForbiddenError, StaffNotFoundError } from './staff.errors.js';
 import type { CreateStaffBody, ListStaffQuery, UpdateStaffBody } from './staff.schemas.js';
 
@@ -42,6 +46,13 @@ function pickStaffRole(slugs: string[]): string | null {
   return slugs.find((slug) => isStaffRoleSlug(slug)) ?? null;
 }
 
+/// The active staff (non end-user) role slugs a staff row holds, de-duplicated.
+function staffRoleSlugs(row: { roleAssignments: Array<{ role: { slug: string } }> }): string[] {
+  return [
+    ...new Set(row.roleAssignments.map((a) => a.role.slug).filter((slug) => isStaffRoleSlug(slug))),
+  ];
+}
+
 function displayName(
   profile: { firstName: string | null; lastName: string | null } | null,
   email: string | null,
@@ -59,6 +70,9 @@ export class AdminStaffService {
     private readonly roleRepository: RoleRepository,
     private readonly permissionRepository: PermissionRepository,
     private readonly transactionManager: TransactionManager,
+    private readonly authService: AuthService,
+    private readonly sessionService: SessionService,
+    private readonly epochService: EpochService,
   ) {}
 
   async list(query: ListStaffQuery): Promise<{
@@ -90,7 +104,7 @@ export class AdminStaffService {
     return this.toDto(row);
   }
 
-  async create(input: CreateStaffBody, grantedBy: string): Promise<StaffUserDto> {
+  async create(input: CreateStaffBody, actor: AuditActor): Promise<StaffUserDto> {
     const emailTaken = await this.userRepository.findActiveByEmail(input.email);
     if (emailTaken) throw new StaffConflictError('That email is already in use');
     const phoneTaken = await this.userRepository.findActiveByPhone(input.phoneNumber);
@@ -119,14 +133,28 @@ export class AdminStaffService {
         { firstName: input.firstName, lastName: input.lastName || null },
         tx,
       );
-      await this.roleRepository.grant({ userId: user.id, roleId: role.id, grantedBy }, tx);
+      await this.authService.grantRoleInTransaction(
+        user.id,
+        role.slug,
+        { grantedBy: actor.actorId },
+        tx,
+      );
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'staff_user',
+        entityId: user.id,
+        summary: `Staff account created with role ${role.slug}`,
+        after: { roles: [role.slug], status: 'ACTIVE' },
+        result: 'SUCCESS',
+      });
       return user.id;
     });
 
     return this.getById(created);
   }
 
-  async update(id: string, input: UpdateStaffBody, actorId: string): Promise<StaffUserDto> {
+  async update(id: string, input: UpdateStaffBody, actor: AuditActor): Promise<StaffUserDto> {
     const row = await this.findStaffRow(id);
     if (!row) throw new StaffNotFoundError();
 
@@ -152,6 +180,21 @@ export class AdminStaffService {
     if (input.role && !nextRole) {
       throw new StaffConflictError(`Unknown staff role '${input.role}'`);
     }
+
+    const previousStaffRoles = staffRoleSlugs(row);
+    const roleChanges = !!nextRole && pickStaffRole(previousStaffRoles) !== nextRole.slug;
+    const passwordReset = !!input.password;
+    // Either change retires every access token the user holds (invalidateTokens).
+    const invalidates = roleChanges || passwordReset;
+    const changedFields = [
+      ...(input.firstName !== undefined || input.lastName !== undefined ? ['name'] : []),
+      ...(input.email !== undefined && input.email !== row.email ? ['email'] : []),
+      ...(input.phoneNumber !== undefined && input.phoneNumber !== row.phoneNumber
+        ? ['phoneNumber']
+        : []),
+      ...(passwordReset ? ['password'] : []),
+      ...(roleChanges ? ['role'] : []),
+    ];
 
     await this.transactionManager.execute(async (tx: TransactionClient) => {
       if (input.firstName !== undefined || input.lastName !== undefined) {
@@ -180,42 +223,106 @@ export class AdminStaffService {
         });
       }
 
-      if (input.role && nextRole) {
-        const currentRole = pickStaffRole(
-          row.roleAssignments.map((assignment) => assignment.role.slug),
-        );
-        if (currentRole !== input.role) {
-          for (const assignment of row.roleAssignments) {
-            if (isStaffRoleSlug(assignment.role.slug)) {
-              await this.roleRepository.revoke(id, assignment.roleId, new Date(), tx);
-            }
-          }
-          await this.roleRepository.grant(
-            { userId: id, roleId: nextRole.id, grantedBy: actorId },
+      if (roleChanges && nextRole) {
+        // Through AuthService, so this change publishes account.role.* like every other
+        // role change, and EpochInvalidationConsumer retires stale claims durably.
+        for (const slug of previousStaffRoles) {
+          await this.authService.revokeRoleInTransaction(
+            id,
+            slug,
+            { revokedBy: actor.actorId, reason: 'staff_role_changed' },
             tx,
           );
         }
+        await this.authService.grantRoleInTransaction(
+          id,
+          nextRole.slug,
+          { grantedBy: actor.actorId },
+          tx,
+        );
       }
+
+      // An administrator setting a password is a credential reset: no session opened
+      // with the previous password may continue, and no refresh token may renew one.
+      const sessionsRevoked = passwordReset
+        ? await this.sessionService.revokeAllInTransaction(id, 'staff_password_reset', tx)
+        : 0;
+
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'staff_user',
+        entityId: id,
+        summary: roleChanges
+          ? `Staff role changed from ${previousStaffRoles.join(', ') || 'none'} to ${nextRole?.slug}`
+          : 'Staff account updated',
+        before: { roles: previousStaffRoles },
+        after: {
+          roles: roleChanges && nextRole ? [nextRole.slug] : previousStaffRoles,
+          changedFields,
+          tokensInvalidated: invalidates,
+          sessionsRevoked,
+        },
+        result: 'SUCCESS',
+      });
+
+      // Inside the transaction: if the revocation store cannot be written, the change aborts.
+      if (invalidates) await this.invalidateTokens(id);
     });
 
+    // After commit: retires a token refreshed between the two bumps with pre-change roles.
+    if (invalidates) await this.invalidateTokens(id);
     return this.getById(id);
   }
 
-  async remove(id: string, actorId: string): Promise<void> {
-    if (id === actorId) {
+  async remove(id: string, actor: AuditActor): Promise<void> {
+    if (id === actor.actorId) {
       throw new StaffForbiddenError('You cannot remove your own admin account');
     }
     const row = await this.findStaffRow(id);
     if (!row) throw new StaffNotFoundError();
+    const previousStaffRoles = staffRoleSlugs(row);
 
     await this.transactionManager.execute(async (tx: TransactionClient) => {
-      for (const assignment of row.roleAssignments) {
-        if (isStaffRoleSlug(assignment.role.slug)) {
-          await this.roleRepository.revoke(id, assignment.roleId, new Date(), tx);
-        }
+      for (const slug of previousStaffRoles) {
+        await this.authService.revokeRoleInTransaction(
+          id,
+          slug,
+          { revokedBy: actor.actorId, reason: 'staff_removed' },
+          tx,
+        );
       }
       await this.userRepository.updateStatus(id, 'DEACTIVATED', tx);
+      // Sessions and refresh tokens end with the account, so nothing can be renewed.
+      const sessionsRevoked = await this.sessionService.revokeAllInTransaction(
+        id,
+        'staff_removed',
+        tx,
+      );
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'DELETE',
+        entityType: 'staff_user',
+        entityId: id,
+        summary: `Staff account removed (was ${previousStaffRoles.join(', ') || 'no staff role'})`,
+        before: { roles: previousStaffRoles, status: row.status },
+        after: { roles: [], status: 'DEACTIVATED', tokensInvalidated: true, sessionsRevoked },
+        result: 'SUCCESS',
+      });
+      await this.invalidateTokens(id);
     });
+
+    await this.invalidateTokens(id);
+  }
+
+  /// Retires every access token the user holds by bumping their epoch, which
+  /// `authenticate` checks on every request and the socket handshake checks on connect.
+  /// Callers bump twice: inside the transaction, so a revocation store that cannot be
+  /// written aborts the change instead of leaving old claims valid (fail closed); and
+  /// after commit, so a token refreshed between the two, whose roles were read before
+  /// the change committed, is retired too.
+  private async invalidateTokens(userId: string): Promise<void> {
+    await this.epochService.bump(userId);
   }
 
   private staffWhere(search?: string) {

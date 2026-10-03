@@ -5,6 +5,7 @@ import {
   reviewDriverDocumentSchema,
   reviewVerificationSchema,
 } from '@modules/drivers/schemas/driver.schemas.js';
+import { auditActor } from '../audit/index.js';
 import { AdminDriverService } from './drivers/driver.service.js';
 import { AdminApplicationService } from './applications/application.service.js';
 import { AdminBankAccountService } from './bank-accounts/bank-account.service.js';
@@ -70,10 +71,10 @@ export class AdminDriverManagementController {
   async approveApplication(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = applicationIdParamSchema.parse(req.params);
     const body = applicationNotesBodySchema.parse(req.body ?? {});
-    const actorId = callerId(req);
-    const application = await this.adminApplicationService.approve(id, actorId, body.notes);
+    const actor = auditActor(req);
+    const application = await this.adminApplicationService.approve(id, actor, body.notes);
     req.log.info(
-      { applicationId: id, actorUserId: actorId },
+      { applicationId: id, actorUserId: actor.actorId },
       '[admin-applications] application approved',
     );
     reply.send({ data: application });
@@ -82,10 +83,10 @@ export class AdminDriverManagementController {
   async rejectApplication(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = applicationIdParamSchema.parse(req.params);
     const body = applicationNotesBodySchema.parse(req.body ?? {});
-    const actorId = callerId(req);
-    const application = await this.adminApplicationService.reject(id, actorId, body.notes);
+    const actor = auditActor(req);
+    const application = await this.adminApplicationService.reject(id, actor, body.notes);
     req.log.info(
-      { applicationId: id, actorUserId: actorId },
+      { applicationId: id, actorUserId: actor.actorId },
       '[admin-applications] application rejected',
     );
     reply.send({ data: application });
@@ -94,14 +95,14 @@ export class AdminDriverManagementController {
   async requestApplicationResubmission(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = applicationIdParamSchema.parse(req.params);
     const body = applicationNotesBodySchema.parse(req.body ?? {});
-    const actorId = callerId(req);
+    const actor = auditActor(req);
     const application = await this.adminApplicationService.requestResubmission(
       id,
-      actorId,
+      actor,
       body.notes,
     );
     req.log.info(
-      { applicationId: id, actorUserId: actorId },
+      { applicationId: id, actorUserId: actor.actorId },
       '[admin-applications] resubmission requested',
     );
     reply.send({ data: application });
@@ -110,12 +111,11 @@ export class AdminDriverManagementController {
   async reviewApplicationDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id, documentId } = applicationDocumentParamSchema.parse(req.params);
     const body = reviewDriverDocumentSchema.parse(req.body);
-    const actorId = callerId(req);
     const application = await this.adminApplicationService.reviewDocument(
       id,
       documentId,
       body.status,
-      actorId,
+      auditActor(req),
       body.rejectionReason,
     );
     reply.send({ data: application });
@@ -126,19 +126,19 @@ export class AdminDriverManagementController {
       driverId: string;
       documentId: string;
     };
-    const reviewerId = callerId(req);
+    const actor = auditActor(req);
     const body = reviewDriverDocumentSchema.parse(req.body);
 
     const doc = await this.driverService.documents.reviewDocument(
       documentId,
       driverId,
       body.status,
-      reviewerId,
+      actor,
       body.rejectionReason,
     );
 
     req.log.info(
-      { documentId, driverId, status: body.status, reviewerUserId: reviewerId },
+      { documentId, driverId, status: body.status, reviewerUserId: actor.actorId },
       '[admin-drivers] document review decision recorded',
     );
     reply.send({ data: doc });
@@ -146,18 +146,18 @@ export class AdminDriverManagementController {
 
   async reviewVerification(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as { id: string };
-    const approvedBy = callerId(req);
+    const actor = auditActor(req);
     const body = reviewVerificationSchema.parse(req.body);
 
     const driver = await this.driverService.onboarding.reviewDriverVerification(
       id,
       body.status,
-      approvedBy,
+      actor,
       body.rejectionReason,
     );
 
     req.log.info(
-      { driverId: id, status: body.status, reviewerUserId: approvedBy },
+      { driverId: id, status: body.status, reviewerUserId: actor.actorId },
       '[admin-drivers] verification decision recorded',
     );
     reply.send({ data: driver });
@@ -166,14 +166,14 @@ export class AdminDriverManagementController {
   async suspend(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = driverIdParamSchema.parse(req.params);
     const body = suspendDriverBodySchema.parse(req.body ?? {});
-    const actorId = callerId(req);
+    const actor = auditActor(req);
     const driver =
       body.isSuspended === false
-        ? await this.adminDriverService.activate(id, actorId, body.notes)
-        : await this.adminDriverService.suspend(id, actorId, body.notes);
+        ? await this.adminDriverService.activate(id, actor, body.notes)
+        : await this.adminDriverService.suspend(id, actor, body.notes);
 
     req.log.warn(
-      { driverId: id, isSuspended: body.isSuspended !== false, actorUserId: actorId },
+      { driverId: id, isSuspended: body.isSuspended !== false, actorUserId: actor.actorId },
       '[admin-drivers] suspension state changed by operator',
     );
     reply.send({ data: driver });
@@ -182,11 +182,11 @@ export class AdminDriverManagementController {
   async block(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = driverIdParamSchema.parse(req.params);
     const body = suspendDriverBodySchema.parse(req.body ?? {});
-    const actorId = callerId(req);
-    const driver = await this.adminDriverService.block(id, actorId, body.notes);
+    const actor = auditActor(req);
+    const driver = await this.adminDriverService.block(id, actor, body.notes);
 
     req.log.warn(
-      { driverId: id, actorUserId: actorId },
+      { driverId: id, actorUserId: actor.actorId },
       '[admin-drivers] driver blocked by operator',
     );
     reply.send({ data: driver });
@@ -195,11 +195,11 @@ export class AdminDriverManagementController {
   async activate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = driverIdParamSchema.parse(req.params);
     const body = suspendDriverBodySchema.parse(req.body ?? {});
-    const actorId = callerId(req);
-    const driver = await this.adminDriverService.activate(id, actorId, body.notes);
+    const actor = auditActor(req);
+    const driver = await this.adminDriverService.activate(id, actor, body.notes);
 
     req.log.warn(
-      { driverId: id, isSuspended: false, actorUserId: actorId },
+      { driverId: id, isSuspended: false, actorUserId: actor.actorId },
       '[admin-drivers] driver reactivated by operator',
     );
     reply.send({ data: driver });

@@ -12,6 +12,12 @@ import {
   makeDriver,
   makeSettlement,
 } from './helpers/fixtures.js';
+import {
+  allowAuditWrites,
+  auditRows,
+  refuseAuditWrites,
+  SPOOFED_ACTOR_ID,
+} from './helpers/audit.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
 import { SettlementService } from '../../src/modules/payments/services/settlement/settlement.service.js';
 
@@ -39,6 +45,7 @@ describe('payout + settlement lifecycle (integration, real HTTP)', () => {
     await app.close();
   });
   afterEach(async () => {
+    await allowAuditWrites();
     await resetState();
   });
 
@@ -681,6 +688,106 @@ describe('payout + settlement lifecycle (integration, real HTTP)', () => {
         0,
       );
       assert.equal(net, 0, 'debits equal credits');
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  describe('payout audit is atomic with the payout (FR-035)', () => {
+    type PayoutAudit = { before?: { status: string }; after: Record<string, unknown> };
+
+    it('records each transition under the authenticated actor, never a body-supplied one', async () => {
+      const { finance, driverId, settlementId, bankAccountId } = await seed(800);
+      const created = await initiate(finance, {
+        driverId,
+        settlementId,
+        bankAccountId,
+        amount: 800,
+        actorId: SPOOFED_ACTOR_ID,
+      });
+      assert.equal(created.statusCode, 200, created.payload);
+      const payoutId = created.json().data.id as string;
+
+      const confirmed = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/payments/payouts/${payoutId}/confirm`,
+        headers: finance.authHeader,
+        payload: { externalReference: 'UTR-AUDIT-1', actorId: SPOOFED_ACTOR_ID },
+      });
+      assert.equal(confirmed.statusCode, 200, confirmed.payload);
+
+      const rows = await auditRows('driver_payout', payoutId);
+      assert.deepEqual(
+        rows.map((r) => [r.action, r.actorId]),
+        [
+          ['CREATE', finance.userId],
+          ['UPDATE', finance.userId],
+        ],
+      );
+      const createdMeta = rows[0]!.metadata as PayoutAudit;
+      assert.equal(createdMeta.before, undefined);
+      assert.equal(createdMeta.after.status, 'INITIATED');
+      assert.equal(createdMeta.after.amount, '800');
+      const confirmedMeta = rows[1]!.metadata as PayoutAudit;
+      assert.equal(confirmedMeta.before?.status, 'INITIATED');
+      assert.equal(confirmedMeta.after.status, 'COMPLETED');
+      assert.equal(confirmedMeta.after.externalReference, 'UTR-AUDIT-1');
+      assert.doesNotMatch(JSON.stringify(rows.map((r) => r.metadata)), /cipher|account_?number/i);
+    });
+
+    it('rolls back an initiation — reservation and event included — when its audit row fails', async () => {
+      const { finance, driverId, settlementId, bankAccountId } = await seed(800);
+      await refuseAuditWrites('driver_payout');
+
+      const created = await initiate(finance, {
+        driverId,
+        settlementId,
+        bankAccountId,
+        amount: 800,
+      });
+
+      assert.ok(created.statusCode >= 500, `${created.statusCode} ${created.payload}`);
+      assert.equal(await db().client.driverPayout.count({ where: { driverId } }), 0);
+      const wallet = await db().client.driverWallet.findUniqueOrThrow({ where: { driverId } });
+      assert.equal(wallet.lockedBalance.toString(), '0', 'no reservation survives');
+      assert.equal(
+        await db().client.outboxEvent.count({ where: { eventType: { contains: 'payout' } } }),
+        0,
+      );
+      assert.equal((await auditRows('driver_payout')).length, 0);
+    });
+
+    it('rolls back a confirmation — no debit, no ledger — and a retry then succeeds', async () => {
+      const { finance, driverId, settlementId, bankAccountId } = await seed(800);
+      const created = await initiate(finance, {
+        driverId,
+        settlementId,
+        bankAccountId,
+        amount: 800,
+      });
+      const payoutId = created.json().data.id as string;
+      await refuseAuditWrites('driver_payout');
+
+      const refused = await confirm(finance, payoutId, 'UTR-RETRY');
+
+      assert.ok(refused.statusCode >= 500, `${refused.statusCode} ${refused.payload}`);
+      const row = await db().client.driverPayout.findUniqueOrThrow({ where: { id: payoutId } });
+      assert.equal(row.status, 'INITIATED');
+      assert.equal(row.externalReference, null);
+      assert.equal(await driverWalletBalance(driverId), 800);
+      assert.equal(
+        await db().client.paymentLedgerEntry.count({
+          where: { referenceType: 'PAYOUT', referenceId: payoutId },
+        }),
+        0,
+      );
+      assert.equal((await auditRows('driver_payout', payoutId)).length, 1, 'only the CREATE');
+
+      // The payout state machine is untouched, so finance simply confirms again.
+      await allowAuditWrites();
+      const retried = await confirm(finance, payoutId, 'UTR-RETRY');
+      assert.equal(retried.statusCode, 200, retried.payload);
+      assert.equal(await driverWalletBalance(driverId), 0);
+      assert.equal((await auditRows('driver_payout', payoutId)).length, 2);
     });
   });
 });

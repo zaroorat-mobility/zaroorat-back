@@ -48,6 +48,59 @@ export function notificationNoActiveDevice(fields?: NotificationMetricFields): v
   emit('no_active_device', fields);
 }
 
+// ── Delivery outcomes, per device attempt ────────────────────────────────────
+//
+// Until this existed a provider failure was a log line only, so a Firebase or
+// APNs credential problem — every push failing with `third-party-auth-error` or
+// `mismatched-credential` — could not be graphed or alerted on.
+//
+// `code` comes from a fixed allowlist (Firebase's documented codes plus this
+// pipeline's own); anything else is `other`, so the label stays bounded.
+
+const DELIVERY_CODES: ReadonlySet<string> = new Set([
+  'messaging/invalid-argument',
+  'messaging/invalid-recipient',
+  'messaging/invalid-payload',
+  'messaging/invalid-data-payload-key',
+  'messaging/payload-size-limit-exceeded',
+  'messaging/invalid-options',
+  'messaging/invalid-registration-token',
+  'messaging/registration-token-not-registered',
+  'messaging/invalid-package-name',
+  'messaging/message-rate-exceeded',
+  'messaging/device-message-rate-exceeded',
+  'messaging/topics-message-rate-exceeded',
+  'messaging/quota-exceeded',
+  'messaging/invalid-apns-credentials',
+  'messaging/third-party-auth-error',
+  'messaging/mismatched-credential',
+  'messaging/sender-id-mismatch',
+  'messaging/authentication-error',
+  'messaging/server-unavailable',
+  'messaging/internal-error',
+  'messaging/unknown-error',
+  'app/invalid-credential',
+  'unknown',
+  'zaroorat/payload-too-large',
+  'DEVICE_INELIGIBLE',
+  'OFFER_EXPIRED',
+  'PROVIDER_EXCEPTION',
+  'UNKNOWN_FCM_ERROR',
+]);
+
+/// `sent`, `failed` (terminal for that device) or `retry` (left QUEUED for
+/// BullMQ). No log line: the delivery job already logs every outcome.
+export function notificationDeliveryOutcome(
+  result: 'sent' | 'failed' | 'retry',
+  fields: { code?: string; category?: string } = {},
+): void {
+  incrementCounter('notification_delivery_outcome', {
+    result,
+    ...(fields.code ? { code: DELIVERY_CODES.has(fields.code) ? fields.code : 'other' } : {}),
+    ...(fields.category ? { category: fields.category } : {}),
+  });
+}
+
 // ── Reconciliation sweep (PA-11) ─────────────────────────────────────────────
 //
 // One counter per outcome. Labels are bounded sets only: `status` is a BullMQ

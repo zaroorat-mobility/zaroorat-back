@@ -136,8 +136,9 @@ build-prod: ## Build the production image
 	$(PROD) build
 
 .PHONY: migrate-prod
-migrate-prod: ## Run migrations once, before rolling the app (deployment step)
+migrate-prod: ## Run migrations once, then (re)provision the runtime DB login (deployment step)
 	$(PROD) run --rm migrate
+	$(PROD) run --rm db-roles
 
 .PHONY: up-prod
 up-prod: ## Start the production stack

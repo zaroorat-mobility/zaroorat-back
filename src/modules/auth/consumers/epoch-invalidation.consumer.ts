@@ -1,10 +1,13 @@
 import { EventBus, type EventEnvelope, type Unsubscribe } from '@core/events';
 import { logger } from '@shared/logger/index.js';
 import { EpochService } from '../services/token/epoch.service';
-const EPOCH_INVALIDATING = new Set([
+/// Events that retire every token a user holds. `RealtimeRevocationConsumer` ends
+/// the user's sockets on the same set, so a socket never outlives its token.
+export const EPOCH_INVALIDATING = new Set([
   'account.role.granted',
   'account.role.revoked',
   'account.suspended',
+  'account.sessions.force_revoked',
   'auth.refresh.reuse_detected',
 ]);
 export class EpochInvalidationConsumer {

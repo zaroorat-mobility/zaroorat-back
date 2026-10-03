@@ -1,10 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { auditActor } from '@modules/admin/audit/index.js';
 import { Decimal } from '../types/index.js';
 import { actingDriverId } from '@modules/drivers/controllers/driver-identity.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { SubscriptionService } from '../services/subscription.service.js';
-import { SubscriptionPlanRepository } from '../repositories/subscription-plan.repository.js';
 import { PaymentService } from '@modules/payments/services/payment.service.js';
 import {
   purchaseSubscriptionSchema,
@@ -14,7 +14,6 @@ import {
 export class SubscriptionController {
   constructor(
     private readonly subscriptionService: SubscriptionService,
-    private readonly subscriptionPlanRepository: SubscriptionPlanRepository,
     private readonly driverRepository: DriverRepository,
     private readonly paymentService: PaymentService,
   ) {}
@@ -96,22 +95,40 @@ export class SubscriptionController {
   }
 
   // Admin — finance:execute (payment-management.routes.ts's own precedent).
+  /// An Idempotency-Key is honoured when sent: a retried or double-submitted create returns
+  /// the first plan instead of a second one (and writes no second audit row). Without one,
+  /// each request creates a plan, as before.
   async createPlan(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createSubscriptionPlanSchema.parse(req.body);
-    const plan = await this.subscriptionPlanRepository.create({
-      name: body.name,
-      billingPeriod: body.billingPeriod,
-      price: new Decimal(body.price),
-      ...(body.currency !== undefined ? { currency: body.currency } : {}),
-    });
-    reply.status(201).send({
-      data: {
+    const actor = auditActor(req);
+    const create = async () => {
+      const plan = await this.subscriptionService.createPlan(
+        {
+          name: body.name,
+          billingPeriod: body.billingPeriod,
+          price: new Decimal(body.price),
+          ...(body.currency !== undefined ? { currency: body.currency } : {}),
+        },
+        actor,
+      );
+      return {
         id: plan.id,
         name: plan.name,
         billingPeriod: plan.billingPeriod,
         price: plan.price.toNumber(),
         currency: plan.currency,
-      },
-    });
+      };
+    };
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    const data = idempotencyKey
+      ? await this.paymentService.withIdempotency(
+          actor.actorId,
+          '/subscriptions/plans',
+          idempotencyKey,
+          body,
+          create,
+        )
+      : await create();
+    reply.status(201).send({ data });
   }
 }

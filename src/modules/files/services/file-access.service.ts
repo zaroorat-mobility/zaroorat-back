@@ -35,7 +35,20 @@ const OPS_SCOPE_FOR_PURPOSE: Readonly<Record<FilePurposeName, string>> = Object.
   PROMO_BANNER: 'campaigns:read',
 });
 const SCOPES_FOR_ROLE: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  admin: Object.freeze(['users:read', 'drivers:verify', 'safety:read', 'support:read']),
+  system_admin: Object.freeze([
+    'users:read',
+    'drivers:verify',
+    'safety:read',
+    'support:read',
+    'campaigns:read',
+  ]),
+  admin: Object.freeze([
+    'users:read',
+    'drivers:verify',
+    'safety:read',
+    'support:read',
+    'campaigns:read',
+  ]),
   support: Object.freeze(['support:read', 'safety:read']),
 });
 export function decideRead(
@@ -50,6 +63,9 @@ export function decideRead(
 ): ReadGrant {
   if (file.ownerUserId === caller.userId) return { granted: true, actor: 'owner' };
   const required = OPS_SCOPE_FOR_PURPOSE[file.purpose];
+  if (caller.roles.includes('system_admin')) {
+    return { granted: true, actor: 'ops', scope: required };
+  }
   const held = caller.roles.flatMap((role) => SCOPES_FOR_ROLE[role] ?? []);
   if (held.includes(required)) return { granted: true, actor: 'ops', scope: required };
   return { granted: false };

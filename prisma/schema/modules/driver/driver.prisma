@@ -225,6 +225,7 @@ model DriverLocation {
 
   driver Driver @relation(fields: [driverId], references: [id])
 
+  @@index([recordedAt(sort: Desc)])
   @@map("driver_locations")
 }
 

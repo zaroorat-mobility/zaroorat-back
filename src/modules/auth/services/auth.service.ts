@@ -425,32 +425,9 @@ export class AuthService {
   ): Promise<boolean> {
     const role = await this.roleRepository.findBySlug(roleSlug);
     if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
-    const granted = await this.transactionManager.execute(async (tx) => {
-      const active = await this.roleRepository.findActiveAssignment(userId, role.id, undefined, tx);
-      if (active) return false;
-      await this.roleRepository.grant(
-        {
-          userId,
-          roleId: role.id,
-          ...(options.grantedBy != null ? { grantedBy: options.grantedBy } : {}),
-          ...(options.expiresAt != null ? { expiresAt: options.expiresAt } : {}),
-        },
-        tx,
-      );
-      await this.eventPublisher.publish(
-        authEvent('account.role.granted', {
-          subjectUserId: userId,
-          data: {
-            userId,
-            roleSlug,
-            ...(options.grantedBy != null ? { grantedBy: options.grantedBy } : {}),
-            ...(options.expiresAt != null ? { expiresAt: options.expiresAt.toISOString() } : {}),
-          },
-        }),
-        tx,
-      );
-      return true;
-    });
+    const granted = await this.transactionManager.execute((tx) =>
+      this.grantRoleInTransaction(userId, roleSlug, options, tx),
+    );
     if (granted) await this.epochService.bump(userId);
     return granted;
   }
@@ -464,25 +441,73 @@ export class AuthService {
   ): Promise<boolean> {
     const role = await this.roleRepository.findBySlug(roleSlug);
     if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
-    const revoked = await this.transactionManager.execute(async (tx) => {
-      const count = await this.roleRepository.revoke(userId, role.id, undefined, tx);
-      if (count === 0) return false;
-      await this.eventPublisher.publish(
-        authEvent('account.role.revoked', {
-          subjectUserId: userId,
-          data: {
-            userId,
-            roleSlug,
-            ...(options.revokedBy != null ? { revokedBy: options.revokedBy } : {}),
-            ...(options.reason != null ? { reason: options.reason } : {}),
-          },
-        }),
-        tx,
-      );
-      return true;
-    });
+    const revoked = await this.transactionManager.execute((tx) =>
+      this.revokeRoleInTransaction(userId, roleSlug, options, tx),
+    );
     if (revoked) await this.epochService.bump(userId);
     return revoked;
+  }
+  /// `grantRole` inside a caller's transaction, for callers that change roles as part of a
+  /// larger write (staff management). The `account.role.granted` event is published in the
+  /// same transaction, so `EpochInvalidationConsumer` retires stale claims durably. The
+  /// caller still owns the epoch bump after commit: that is what makes it immediate.
+  async grantRoleInTransaction(
+    userId: string,
+    roleSlug: string,
+    options: { grantedBy?: string | null; expiresAt?: Date | null },
+    tx: TransactionClient,
+  ): Promise<boolean> {
+    const role = await this.roleRepository.findBySlug(roleSlug, tx);
+    if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
+    const active = await this.roleRepository.findActiveAssignment(userId, role.id, undefined, tx);
+    if (active) return false;
+    await this.roleRepository.grant(
+      {
+        userId,
+        roleId: role.id,
+        ...(options.grantedBy != null ? { grantedBy: options.grantedBy } : {}),
+        ...(options.expiresAt != null ? { expiresAt: options.expiresAt } : {}),
+      },
+      tx,
+    );
+    await this.eventPublisher.publish(
+      authEvent('account.role.granted', {
+        subjectUserId: userId,
+        data: {
+          userId,
+          roleSlug,
+          ...(options.grantedBy != null ? { grantedBy: options.grantedBy } : {}),
+          ...(options.expiresAt != null ? { expiresAt: options.expiresAt.toISOString() } : {}),
+        },
+      }),
+      tx,
+    );
+    return true;
+  }
+  /// `revokeRole` inside a caller's transaction; same contract as `grantRoleInTransaction`.
+  async revokeRoleInTransaction(
+    userId: string,
+    roleSlug: string,
+    options: { revokedBy?: string | null; reason?: string | null },
+    tx: TransactionClient,
+  ): Promise<boolean> {
+    const role = await this.roleRepository.findBySlug(roleSlug, tx);
+    if (!role) throw new Error(`Role "${roleSlug}" is not seeded`);
+    const count = await this.roleRepository.revoke(userId, role.id, undefined, tx);
+    if (count === 0) return false;
+    await this.eventPublisher.publish(
+      authEvent('account.role.revoked', {
+        subjectUserId: userId,
+        data: {
+          userId,
+          roleSlug,
+          ...(options.revokedBy != null ? { revokedBy: options.revokedBy } : {}),
+          ...(options.reason != null ? { reason: options.reason } : {}),
+        },
+      }),
+      tx,
+    );
+    return true;
   }
   async activate(userId: string): Promise<void> {
     await this.transactionManager.execute(async (tx) => {

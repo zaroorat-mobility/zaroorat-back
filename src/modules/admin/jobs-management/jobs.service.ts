@@ -1,6 +1,13 @@
 import type { Job } from 'bullmq';
+import { DatabaseService } from '@core/database';
+import { auditExternalAction, redactSensitive, type AuditActor } from '../audit/index.js';
 import { JOB_SCHEDULES } from '@/jobs/scheduler/index.js';
-import { allManagedQueues, resolveQueue } from '@/jobs/queues/index.js';
+import {
+  allManagedQueues,
+  QUEUE_NAMES,
+  resolveQueue,
+  type QueueName,
+} from '@/jobs/queues/index.js';
 import { JobNotFoundError, QueueNotFoundError } from './jobs.errors.js';
 
 export interface QueueSummaryDto {
@@ -21,8 +28,53 @@ export interface JobSummaryDto {
   timestamp: string | null;
   processedOn: string | null;
   finishedOn: string | null;
+  maxAttempts: number | null;
+  /// Redacted: provider and queue errors echo what they were sent.
   failedReason: string | null;
-  data: unknown;
+  /// Only the fields `SAFE_JOB_DATA_FIELDS` names for this queue; null when it names none.
+  data: Record<string, unknown> | null;
+}
+
+const MAINTENANCE_FIELDS = ['name'] as const;
+
+/// What the admin job browser may show of a job's payload, per queue — an allowlist. A
+/// field not listed is never returned, and a queue not listed returns no data at all.
+///
+/// `auth-otp` is absent on purpose and must stay absent: its payload is the plaintext OTP
+/// and the phone number it is sent to (`OtpDeliveryJobData`). Anyone holding `jobs:read`
+/// could otherwise read live codes and sign in as the recipient.
+const SAFE_JOB_DATA_FIELDS: Partial<Record<QueueName, readonly string[]>> = {
+  [QUEUE_NAMES.NOTIFICATIONS]: [
+    'notificationId',
+    'deliveryId',
+    'category',
+    'eventType',
+    'eventId',
+    'rideId',
+  ],
+  [QUEUE_NAMES.FILES_MAINTENANCE]: MAINTENANCE_FIELDS,
+  [QUEUE_NAMES.USERS_MAINTENANCE]: MAINTENANCE_FIELDS,
+  [QUEUE_NAMES.AUTH_MAINTENANCE]: MAINTENANCE_FIELDS,
+  [QUEUE_NAMES.RIDES_MAINTENANCE]: MAINTENANCE_FIELDS,
+  [QUEUE_NAMES.DRIVERS_MAINTENANCE]: MAINTENANCE_FIELDS,
+  [QUEUE_NAMES.PAYMENTS_MAINTENANCE]: MAINTENANCE_FIELDS,
+  [QUEUE_NAMES.SUBSCRIPTIONS_MAINTENANCE]: MAINTENANCE_FIELDS,
+  [QUEUE_NAMES.NOTIFICATIONS_MAINTENANCE]: MAINTENANCE_FIELDS,
+};
+
+function safeJobData(queue: string, data: unknown): Record<string, unknown> | null {
+  const fields = SAFE_JOB_DATA_FIELDS[queue as QueueName];
+  if (!fields || !data || typeof data !== 'object') return null;
+  const source = data as Record<string, unknown>;
+  const picked: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = source[field];
+    // Scalars only: an allowlisted name holding an object would smuggle its contents.
+    if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+      picked[field] = value;
+    }
+  }
+  return Object.keys(picked).length > 0 ? picked : null;
 }
 
 export interface SchedulerDto {
@@ -50,12 +102,15 @@ function serializeJob(queue: string, job: Job, status: string): JobSummaryDto {
     timestamp: job.timestamp ? new Date(job.timestamp).toISOString() : null,
     processedOn: job.processedOn ? new Date(job.processedOn).toISOString() : null,
     finishedOn: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
-    failedReason: job.failedReason ?? null,
-    data: job.data,
+    maxAttempts: typeof job.opts?.attempts === 'number' ? job.opts.attempts : null,
+    failedReason: job.failedReason ? redactSensitive(job.failedReason).slice(0, 200) : null,
+    data: safeJobData(queue, job.data),
   };
 }
 
 export class AdminJobsService {
+  constructor(private readonly databaseService: DatabaseService) {}
+
   async listQueues(): Promise<{ data: QueueSummaryDto[] }> {
     const data = await Promise.all(
       allManagedQueues().map(async ({ name }) => {
@@ -108,16 +163,32 @@ export class AdminJobsService {
     return { data: serializeJob(queueName, job, state) };
   }
 
-  async mutateJob(queueName: string, jobId: string, action: 'retry' | 'remove'): Promise<void> {
+  /// Retrying re-runs a job's side effects and removing drops its work, so both are
+  /// audited. The job lives in Redis, so no transaction can hold the row and the change
+  /// together: `auditExternalAction` logs the request first and the outcome after. The
+  /// row names the job but never carries `job.data` — an OTP job's payload is a secret.
+  async mutateJob(
+    queueName: string,
+    jobId: string,
+    action: 'retry' | 'remove',
+    actor: AuditActor,
+  ): Promise<void> {
     const queue = queueOrThrow(queueName);
     const job = await queue.getJob(jobId);
     if (!job) throw new JobNotFoundError(queueName, jobId);
+    const state = await job.getState();
 
-    if (action === 'retry') {
-      await job.retry();
-      return;
-    }
-    await job.remove();
+    await auditExternalAction(
+      this.databaseService.client,
+      {
+        ...actor,
+        action: action === 'retry' ? 'UPDATE' : 'DELETE',
+        entityType: 'background_job',
+        summary: `Job ${queueName}/${jobId} (${job.name}) ${action === 'retry' ? 'retried' : 'removed'}`,
+        before: { queue: queueName, jobId, name: job.name, state, attemptsMade: job.attemptsMade },
+      },
+      () => (action === 'retry' ? job.retry() : job.remove()),
+    );
   }
 
   async listSchedulers(): Promise<{ data: SchedulerDto[] }> {

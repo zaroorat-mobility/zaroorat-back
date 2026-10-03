@@ -47,12 +47,16 @@ export async function listErrorEvents(limit = 50): Promise<StoredErrorEvent[]> {
     .filter((row): row is StoredErrorEvent => row !== null);
 }
 
-export async function acknowledgeAlert(alertId: string, actorId: string): Promise<void> {
-  await redis.hset(
+/// Claims the acknowledgement: true for the one caller that sets it, false for anyone
+/// after. HSETNX is atomic, so of two concurrent acknowledgements exactly one wins and the
+/// loser cannot overwrite the winner's actor.
+export async function acknowledgeAlert(alertId: string, actorId: string): Promise<boolean> {
+  const set = await redis.hsetnx(
     ALERT_ACK_KEY,
     alertId,
     JSON.stringify({ actorId, acknowledgedAt: new Date().toISOString() }),
   );
+  return set === 1;
 }
 
 export async function getAlertAcks(): Promise<

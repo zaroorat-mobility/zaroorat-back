@@ -6,9 +6,13 @@ export interface SendSmsOptions {
   variables?: Record<string, string>;
 }
 export class NotificationService {
+  /// The push provider is resolved on first use, not injected: OTP (API and
+  /// worker) builds this service, and a push misconfiguration — PUSH_PROVIDER
+  /// unset in production, an unparseable Firebase credential — must fail push
+  /// only, never SMS.
   constructor(
     private readonly smsProvider: SmsProvider,
-    private readonly pushProvider: PushProvider,
+    private readonly resolvePushProvider: () => PushProvider,
     private readonly notificationConfig: NotificationConfig,
   ) {}
   async sendPush(
@@ -17,7 +21,12 @@ export class NotificationService {
     body: string,
     data?: Record<string, string>,
   ): Promise<PushSendResult> {
-    return this.pushProvider.sendPush({ to: fcmToken, title, body, ...(data ? { data } : {}) });
+    return this.resolvePushProvider().sendPush({
+      to: fcmToken,
+      title,
+      body,
+      ...(data ? { data } : {}),
+    });
   }
   async sendSms(to: string, body: string, options?: SendSmsOptions): Promise<SmsSendResult> {
     return this.smsProvider.sendSms({

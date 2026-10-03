@@ -1,5 +1,6 @@
 import { DatabaseService } from '@core/database';
 import { Prisma } from '../../../../generated/prisma/index.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { generateUniqueCode } from '../shared/code.util.js';
 import { SegmentConflictError, SegmentNotFoundError } from '../promotions.errors.js';
 import type { CreateSegmentBody, ListSegmentsQuery, UpdateSegmentBody } from '../schemas.js';
@@ -80,7 +81,7 @@ export class AdminSegmentService {
     return this.toDto(row);
   }
 
-  async create(body: CreateSegmentBody): Promise<SegmentDto> {
+  async create(body: CreateSegmentBody, actor: AuditActor): Promise<SegmentDto> {
     let code = body.code?.trim().toUpperCase();
     if (!code) {
       code = generateUniqueCode(body.name, 'SEG');
@@ -95,58 +96,87 @@ export class AdminSegmentService {
       code = generateUniqueCode(body.name, 'SEG');
     }
 
-    const row = await this.databaseService.client.audienceSegment.create({
-      data: {
-        code,
-        name: body.name,
-        description: body.description ?? null,
-        rules: body.rules ?? Prisma.JsonNull,
-        estimatedSize: body.estimatedSize ?? null,
-        isDynamic: body.isDynamic ?? true,
-      },
-    });
-    return this.toDto(row);
-  }
-
-  async update(id: string, body: UpdateSegmentBody): Promise<SegmentDto> {
-    const existing = await this.databaseService.client.audienceSegment.findUnique({
-      where: { id },
-    });
-    if (!existing) throw new SegmentNotFoundError();
-
-    if (body.code) {
-      const code = body.code.trim().toUpperCase();
-      const clash = await this.databaseService.client.audienceSegment.findFirst({
-        where: { code, id: { not: id } },
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      const row = await tx.audienceSegment.create({
+        data: {
+          code,
+          name: body.name,
+          description: body.description ?? null,
+          rules: body.rules ?? Prisma.JsonNull,
+          estimatedSize: body.estimatedSize ?? null,
+          isDynamic: body.isDynamic ?? true,
+        },
       });
-      if (clash) throw new SegmentConflictError(`Segment code "${code}" already exists`);
-    }
-
-    const row = await this.databaseService.client.audienceSegment.update({
-      where: { id },
-      data: {
-        ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.description !== undefined ? { description: body.description } : {}),
-        ...(body.rules !== undefined
-          ? { rules: body.rules === null ? Prisma.JsonNull : body.rules }
-          : {}),
-        ...(body.estimatedSize !== undefined ? { estimatedSize: body.estimatedSize } : {}),
-        ...(body.isDynamic !== undefined ? { isDynamic: body.isDynamic } : {}),
-      },
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'audience_segment',
+        entityId: row.id,
+        summary: `Segment ${row.code} created`,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
     });
-    return this.toDto(row);
   }
 
-  async remove(id: string): Promise<void> {
-    const existing = await this.databaseService.client.audienceSegment.findUnique({
-      where: { id },
-    });
-    if (!existing) throw new SegmentNotFoundError();
+  async update(id: string, body: UpdateSegmentBody, actor: AuditActor): Promise<SegmentDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'audience_segments', id);
+      const existing = await tx.audienceSegment.findUnique({ where: { id } });
+      if (!existing) throw new SegmentNotFoundError();
 
+      if (body.code) {
+        const code = body.code.trim().toUpperCase();
+        const clash = await tx.audienceSegment.findFirst({ where: { code, id: { not: id } } });
+        if (clash) throw new SegmentConflictError(`Segment code "${code}" already exists`);
+      }
+
+      const row = await tx.audienceSegment.update({
+        where: { id },
+        data: {
+          ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.description !== undefined ? { description: body.description } : {}),
+          ...(body.rules !== undefined
+            ? { rules: body.rules === null ? Prisma.JsonNull : body.rules }
+            : {}),
+          ...(body.estimatedSize !== undefined ? { estimatedSize: body.estimatedSize } : {}),
+          ...(body.isDynamic !== undefined ? { isDynamic: body.isDynamic } : {}),
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'audience_segment',
+        entityId: id,
+        summary: `Segment ${row.code} updated`,
+        before: existing,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
+    });
+  }
+
+  async remove(id: string, actor: AuditActor): Promise<void> {
     await this.databaseService.transactionManager.execute(async (tx) => {
-      await tx.campaignTarget.deleteMany({ where: { segmentId: id } });
+      await lockForAudit(tx, 'audience_segments', id);
+      const existing = await tx.audienceSegment.findUnique({ where: { id } });
+      if (!existing) throw new SegmentNotFoundError();
+      const { count: targetsRemoved } = await tx.campaignTarget.deleteMany({
+        where: { segmentId: id },
+      });
       await tx.audienceSegment.delete({ where: { id } });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'DELETE',
+        entityType: 'audience_segment',
+        entityId: id,
+        summary: `Segment ${existing.code} deleted`,
+        before: { ...existing, campaignTargets: targetsRemoved },
+        result: 'SUCCESS',
+      });
     });
   }
 }

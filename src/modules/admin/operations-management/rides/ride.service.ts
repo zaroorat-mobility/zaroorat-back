@@ -4,7 +4,7 @@ import {
   type PaymentMethod,
   type PaymentStatus,
 } from '../../../../generated/prisma/index.js';
-import { recordAdminAction } from '../../audit/index.js';
+import { recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { LifecycleService } from '../../../rides/services/lifecycle/lifecycle.service.js';
 import { RideNotFoundError } from '../operations.errors.js';
 import type { MapProviderService } from '@modules/location/business-services/map-provider.service.js';
@@ -1018,31 +1018,16 @@ export class AdminRideService {
     };
   }
 
-  async cancelRide(idOrCode: string, body: CancelRideBody, actorId?: string) {
+  async cancelRide(idOrCode: string, body: CancelRideBody, actor: AuditActor) {
     const ride = await this.resolveRide(idOrCode);
-
-    const cancelled = await this.lifecycleService.cancelRide(
+    await this.lifecycleService.cancelRide(
       ride.id,
       'SYSTEM',
-      actorId,
+      actor.actorId,
       body.reasonCode || 'ADMIN_CANCELLED',
       body.reasonText || 'Ride cancelled by operations admin',
+      actor,
     );
-
-    await recordAdminAction(this.client, {
-      actorId,
-      action: 'UPDATE',
-      entityType: 'ride',
-      entityId: ride.id,
-      summary: `Operations admin cancelled ride ${ride.rideCode}: ${body.reasonText || body.reasonCode}`,
-      before: { status: ride.status },
-      after: {
-        status: cancelled.status,
-        reasonCode: body.reasonCode,
-        reasonText: body.reasonText,
-      },
-    });
-
     return this.getById(ride.id);
   }
 

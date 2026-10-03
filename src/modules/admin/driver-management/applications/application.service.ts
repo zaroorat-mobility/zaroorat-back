@@ -1,4 +1,5 @@
 import { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import { protectAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import { AuthService } from '@modules/auth/services/auth.service.js';
 import { DriverService } from '@modules/drivers/services/driver.service.js';
@@ -7,6 +8,7 @@ import type { VerificationStatus } from '@modules/drivers/types/index.js';
 import { generateDriverCode } from '@modules/drivers/utils/driver-code.util.js';
 import { VEHICLE_DOCUMENT_TYPE } from '@config/vehicle/vehicle.config.js';
 import { ReferralApplyService, ReferralError } from '@modules/referrals/index.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { AdminDriverNotFoundError, AdminDriverConflictError } from '../driver.errors.js';
 import {
   AdminDriverService,
@@ -517,6 +519,14 @@ export class AdminApplicationService {
         }
       }
 
+      // The roles commit with the driver and its audit row. They were granted after commit,
+      // so a failure there left an approved driver who could not sign in as one, and the
+      // `driver` role — a privilege — was granted with no `grantedBy` and no record here.
+      const rolesGranted = ['customer', ...(approveImmediately ? ['driver'] : [])];
+      for (const slug of rolesGranted) {
+        await this.authService.grantRoleInTransaction(user.id, slug, { grantedBy: actorId }, tx);
+      }
+
       await tx.adminActivityLog.create({
         data: {
           actorId,
@@ -530,6 +540,7 @@ export class AdminApplicationService {
             source: 'admin_manual',
             registrationAction: input.registrationAction,
             registrationPlate: plate,
+            rolesGranted,
           },
         },
       });
@@ -537,44 +548,38 @@ export class AdminApplicationService {
       return driver.id;
     });
 
-    await this.authService.grantRole(
-      (
-        await this.databaseService.client.driver.findUniqueOrThrow({
-          where: { id: driverId },
-          select: { userId: true },
-        })
-      ).userId,
-      'customer',
-    );
-
-    if (approveImmediately) {
-      const userId = (
-        await this.databaseService.client.driver.findUniqueOrThrow({
-          where: { id: driverId },
-          select: { userId: true },
-        })
-      ).userId;
-      await this.authService.grantRole(userId, 'driver');
-    }
-
     const details = await this.adminDriverService.getById(driverId);
     return toDetails(details, 'admin_manual');
   }
 
-  async approve(id: string, actorId: string, notes?: string): Promise<ApplicationDetailsDto> {
-    await this.ensureDocumentsVerifiedForApproval(id, actorId);
-    await this.driverService.onboarding.reviewDriverVerification(id, 'VERIFIED', actorId, notes);
-    await this.verifyLinkedVehicle(id, actorId, notes);
+  /// One transaction: the documents promoted for approval, the verification decision and
+  /// the linked vehicle, each with its audit row. A refusal at any step — self-review,
+  /// missing eligibility, a failed audit write — leaves none of them changed.
+  async approve(id: string, actor: AuditActor, notes?: string): Promise<ApplicationDetailsDto> {
+    await this.databaseService.transactionManager.execute(async (tx) => {
+      // The driver row first: a concurrent approval waits here, then finds nothing left
+      // to promote and the driver already VERIFIED, so it changes and logs nothing.
+      await lockForAudit(tx, 'drivers', id);
+      await this.promoteDocumentsForApproval(id, actor, tx);
+      await this.driverService.onboarding.reviewDriverVerificationInTransaction(
+        id,
+        'VERIFIED',
+        actor,
+        notes,
+        tx,
+      );
+      await this.verifyLinkedVehicle(id, actor, notes, tx);
+    });
     const source = (await this.resolveSources([id])).get(id) ?? 'driver_app';
     const driver = await this.adminDriverService.getById(id);
     return toDetails(driver, source);
   }
 
-  async reject(id: string, actorId: string, notes?: string): Promise<ApplicationDetailsDto> {
+  async reject(id: string, actor: AuditActor, notes?: string): Promise<ApplicationDetailsDto> {
     await this.driverService.onboarding.reviewDriverVerification(
       id,
       'REJECTED',
-      actorId,
+      actor,
       notes || 'Application rejected',
     );
     return this.getById(id);
@@ -582,13 +587,12 @@ export class AdminApplicationService {
 
   async requestResubmission(
     id: string,
-    actorId: string,
+    actor: AuditActor,
     notes?: string,
   ): Promise<ApplicationDetailsDto> {
-    await this.driverService.onboarding.reviewDriverVerification(
+    await this.driverService.onboarding.requestResubmission(
       id,
-      'REJECTED',
-      actorId,
+      actor,
       notes || 'Resubmission requested',
     );
     return this.getById(id);
@@ -598,7 +602,7 @@ export class AdminApplicationService {
     applicationId: string,
     documentId: string,
     status: VerificationStatus,
-    actorId: string,
+    actor: AuditActor,
     rejectionReason?: string,
   ): Promise<ApplicationDetailsDto> {
     const existing = await this.adminDriverService.getById(applicationId);
@@ -608,7 +612,7 @@ export class AdminApplicationService {
       documentId,
       applicationId,
       status,
-      actorId,
+      actor,
       rejectionReason,
     );
     return this.getById(applicationId);
@@ -636,78 +640,95 @@ export class AdminApplicationService {
     return map;
   }
 
-  private async ensureDocumentsVerifiedForApproval(
+  /// Admin overall approve after reviewing docs in UI — promote remaining required docs
+  /// so eligibility can pass when the operator already audited them. Each promoted
+  /// document gets its own row: its history would otherwise show it never verified.
+  private async promoteDocumentsForApproval(
     driverId: string,
-    actorId: string,
+    actor: AuditActor,
+    tx: TransactionClient,
   ): Promise<void> {
-    const pending = await this.databaseService.client.driverDocument.findMany({
-      where: {
-        driverId,
-        verificationStatus: { not: 'VERIFIED' },
-      },
+    const pending = await tx.driverDocument.findMany({
+      where: { driverId, verificationStatus: { not: 'VERIFIED' } },
+      select: { id: true, documentType: true, verificationStatus: true },
     });
     if (pending.length === 0) return;
 
-    // Admin overall approve after reviewing docs in UI — promote remaining
-    // required docs so eligibility can pass when the operator already audited them.
-    await this.databaseService.client.driverDocument.updateMany({
-      where: {
-        driverId,
-        verificationStatus: { not: 'VERIFIED' },
-      },
+    await tx.driverDocument.updateMany({
+      where: { id: { in: pending.map((doc) => doc.id) } },
       data: {
         verificationStatus: 'VERIFIED',
         verifiedAt: new Date(),
-        verifiedBy: actorId,
+        verifiedBy: actor.actorId,
         rejectionReason: null,
       },
     });
+    for (const doc of pending) {
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'APPROVE',
+        entityType: 'driver_document',
+        entityId: doc.id,
+        summary: `Driver document ${doc.documentType} verified with application approval`,
+        before: { verificationStatus: doc.verificationStatus },
+        after: { verificationStatus: 'VERIFIED', driverId, documentType: doc.documentType },
+        result: 'SUCCESS',
+      });
+    }
   }
 
+  /// Skipped when the vehicle and its documents are already verified, so a repeated
+  /// approval writes no second row claiming it verified them.
   private async verifyLinkedVehicle(
     driverId: string,
-    actorId: string,
-    notes?: string,
+    actor: AuditActor,
+    notes: string | undefined,
+    tx: TransactionClient,
   ): Promise<void> {
-    const driver = await this.databaseService.client.driver.findUnique({
+    const driver = await tx.driver.findUnique({
       where: { id: driverId },
       select: { currentVehicleId: true },
     });
     const vehicleId = driver?.currentVehicleId;
     if (!vehicleId) return;
 
-    await this.databaseService.client.$transaction(async (tx) => {
-      await tx.vehicle.update({
-        where: { id: vehicleId },
-        data: {
-          verificationStatus: 'VERIFIED',
-          verifiedAt: new Date(),
-          verifiedBy: actorId,
-          rejectionReason: null,
-        },
-      });
-      await tx.vehicleDocument.updateMany({
-        where: { vehicleId },
-        data: {
-          verificationStatus: 'VERIFIED',
-          verifiedAt: new Date(),
-          verifiedBy: actorId,
-          rejectionReason: null,
-        },
-      });
-      await tx.adminActivityLog.create({
-        data: {
-          actorId,
-          action: 'UPDATE',
-          entityType: 'vehicle',
-          entityId: vehicleId,
-          summary: 'Vehicle Verified with Driver Application Approval',
-          metadata: {
-            driverId,
-            ...(notes ? { notes } : {}),
-          },
-        },
-      });
+    const vehicle = await tx.vehicle.findUniqueOrThrow({
+      where: { id: vehicleId },
+      select: { verificationStatus: true },
+    });
+    const pendingDocuments = await tx.vehicleDocument.count({
+      where: { vehicleId, verificationStatus: { not: 'VERIFIED' } },
+    });
+    if (vehicle.verificationStatus === 'VERIFIED' && pendingDocuments === 0) return;
+
+    await tx.vehicle.update({
+      where: { id: vehicleId },
+      data: {
+        verificationStatus: 'VERIFIED',
+        verifiedAt: new Date(),
+        verifiedBy: actor.actorId,
+        rejectionReason: null,
+      },
+    });
+    await tx.vehicleDocument.updateMany({
+      where: { vehicleId },
+      data: {
+        verificationStatus: 'VERIFIED',
+        verifiedAt: new Date(),
+        verifiedBy: actor.actorId,
+        rejectionReason: null,
+      },
+    });
+    await recordAdminAction(tx, {
+      ...actor,
+      action: 'UPDATE',
+      entityType: 'vehicle',
+      entityId: vehicleId,
+      summary: 'Vehicle Verified with Driver Application Approval',
+      notes,
+      before: { verificationStatus: vehicle.verificationStatus, pendingDocuments },
+      after: { verificationStatus: 'VERIFIED', driverId },
+      result: 'SUCCESS',
     });
   }
 }

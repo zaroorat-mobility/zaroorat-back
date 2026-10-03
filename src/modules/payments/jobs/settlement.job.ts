@@ -24,7 +24,8 @@ export class SettlementJob {
     try {
       const periodEnd = startOfUtcDay(now);
       const periodStart = new Date(periodEnd.getTime() - 24 * 60 * 60 * 1000);
-      return await this.settlementService.calculateSettlementsForPeriod(periodStart, periodEnd);
+      return (await this.settlementService.calculateSettlementsForPeriod(periodStart, periodEnd))
+        .settled;
     } finally {
       await this.redis.lock.release('job:settlement', lockToken);
     }

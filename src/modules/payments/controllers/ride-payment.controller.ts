@@ -162,7 +162,7 @@ export class RidePaymentController {
     const isParty = options.riderOnly
       ? isRider
       : isRider || (driverUserId != null && driverUserId === caller.userId);
-    if (!isParty && !callerHasRole(req, 'admin', 'support')) {
+    if (!isParty && !callerHasRole(req, 'system_admin', 'admin', 'support', 'finance')) {
       throw new RidePaymentNotFoundError(rideId);
     }
 

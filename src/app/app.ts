@@ -4,7 +4,14 @@ import { registerPlugins } from '../plugins/register.js';
 import { registerHooks } from '../hooks/register.js';
 import { registerRoutes } from '../routes/register.js';
 import { errorHandler, notFoundHandler } from '../core/errors/index.js';
+import { resolveTrustProxy } from './trust-proxy.js';
 export async function createApp(): Promise<FastifyInstance> {
+  const trustProxy = resolveTrustProxy(process.env);
+  if (trustProxy === false && process.env.APP_ENV === 'production') {
+    logger.warn(
+      'No TRUSTED_PROXIES / TRUSTED_PROXY_HOPS set: client IPs (audit rows, rate limits) are the socket peer. Declare the proxy topology if the API sits behind one.',
+    );
+  }
   const app = Fastify({
     loggerInstance: logger as FastifyBaseLogger,
     logController: new LogController({
@@ -20,7 +27,7 @@ export async function createApp(): Promise<FastifyInstance> {
       requestIdLogLabel: 'requestId',
     }),
     requestIdHeader: 'x-request-id',
-    trustProxy: Number(process.env.TRUSTED_PROXY_HOPS ?? 1),
+    trustProxy,
     bodyLimit: 10 * 1024 * 1024,
   });
   app.setErrorHandler(errorHandler);

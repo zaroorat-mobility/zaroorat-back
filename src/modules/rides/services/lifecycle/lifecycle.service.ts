@@ -2,6 +2,7 @@ import { Decimal } from '../../types/index.js';
 import { TransactionManager } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { EventPublisher } from '@core/events';
+import { recordAdminAction, type AuditActor } from '@modules/admin/audit/index.js';
 import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideRequestRepository } from '../../repositories/ride-request.repository.js';
 import { RideStatusEventRepository } from '../../repositories/ride-status-event.repository.js';
@@ -1090,12 +1091,15 @@ export class LifecycleService {
     await this.resetTripMeter(driverId);
     return completed;
   }
+  /// `adminActor` is set when an operator cancels from the admin surface: their audit row
+  /// is written in this transaction, so it exists exactly when the cancellation does.
   async cancelRide(
     rideId: string,
     cancelledBy: 'CUSTOMER' | 'DRIVER' | 'SYSTEM',
     actorId?: string,
     reasonCode = 'OTHER',
     reasonText?: string,
+    adminActor?: AuditActor,
   ): Promise<Ride> {
     const toStatus: RideStatus =
       cancelledBy === 'CUSTOMER'
@@ -1144,6 +1148,18 @@ export class LifecycleService {
         },
         tx,
       );
+      if (adminActor) {
+        await recordAdminAction(tx, {
+          ...adminActor,
+          action: 'UPDATE',
+          entityType: 'ride',
+          entityId: rideId,
+          summary: `Operations admin cancelled ride ${ride.rideCode}: ${reasonText ?? reasonCode}`,
+          before: { status: ride.status },
+          after: { status: toStatus, reasonCode, reasonText: reasonText ?? null },
+          result: 'SUCCESS',
+        });
+      }
       this.rideMetrics.rideCancelled({ rideId, cancelledBy });
       await this.eventPublisher.publish(
         rideEvent(RIDE_EVENT_CATALOG.CANCELLED, ride.customerId, { rideId, cancelledBy, toStatus }),

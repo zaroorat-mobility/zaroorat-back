@@ -25,6 +25,7 @@ import {
 import type { DriverPayout, DriverSettlement } from '../../types';
 import { SystemSettingService } from '@modules/admin/system-settings/services/system-setting.service.js';
 import { BANK_ENCRYPTION_VERIFIED_SETTING } from '@shared/crypto/bank-account-crypto.js';
+import { recordAdminAction, type AuditActor } from '@modules/admin/audit/index.js';
 
 /// Written into `DriverPayout.gateway`. Option A performs no provider payout
 /// call: finance executes the bank transfer outside this system and records it
@@ -82,13 +83,19 @@ export class PayoutService {
 
   /// Phase 1. Validates every precondition, reserves the amount, and records
   /// the intent to pay. Moves nothing.
-  async executePayout(data: {
-    driverId: string;
-    settlementId?: string;
-    bankAccountId: string;
-    amount: Decimal;
-    idempotencyKey: string;
-  }): Promise<DriverPayout> {
+  ///
+  /// A replayed idempotency key returns the original payout and writes no second audit
+  /// row; a racing duplicate rolls back with its audit row before the winner is returned.
+  async executePayout(
+    data: {
+      driverId: string;
+      settlementId?: string;
+      bankAccountId: string;
+      amount: Decimal;
+      idempotencyKey: string;
+    },
+    actor: AuditActor,
+  ): Promise<DriverPayout> {
     if (!data.amount.isFinite() || data.amount.lte(0)) {
       throw new InvalidPayoutAmountError();
     }
@@ -150,6 +157,7 @@ export class PayoutService {
           }),
           tx,
         );
+        await auditPayout(tx, actor, 'CREATE', payoutRecord, null, 'Payout initiated');
         return payoutRecord;
       });
     } catch (err) {
@@ -165,10 +173,13 @@ export class PayoutService {
   /// executed, quoting the bank's reference. This is the ONE place in the
   /// codebase where a driver's money is recognised as having left the
   /// platform.
-  async confirmPayout(data: {
-    payoutId: string;
-    externalReference: string;
-  }): Promise<DriverPayout> {
+  async confirmPayout(
+    data: {
+      payoutId: string;
+      externalReference: string;
+    },
+    actor: AuditActor,
+  ): Promise<DriverPayout> {
     return this.txManager.execute(async (tx) => {
       const payout = await this.payoutRepo.lockForUpdate(data.payoutId, tx);
       if (!payout) throw new PayoutNotFoundError();
@@ -243,6 +254,14 @@ export class PayoutService {
         }),
         tx,
       );
+      await auditPayout(
+        tx,
+        actor,
+        'UPDATE',
+        updated,
+        payout,
+        `Payout confirmed against bank reference ${data.externalReference}`,
+      );
       return updated;
     });
   }
@@ -251,7 +270,10 @@ export class PayoutService {
   /// with a reason — never deleted, never rolled back — so a failed attempt
   /// stays auditable. Its wallet reservation is released and, being FAILED, it
   /// drops out of `sumCommittedForSettlement` too.
-  async failPayout(data: { payoutId: string; reason: string }): Promise<DriverPayout> {
+  async failPayout(
+    data: { payoutId: string; reason: string },
+    actor: AuditActor,
+  ): Promise<DriverPayout> {
     return this.txManager.execute(async (tx) => {
       const payout = await this.payoutRepo.lockForUpdate(data.payoutId, tx);
       if (!payout) throw new PayoutNotFoundError();
@@ -272,6 +294,7 @@ export class PayoutService {
         }),
         tx,
       );
+      await auditPayout(tx, actor, 'UPDATE', updated, payout, `Payout failed: ${data.reason}`);
       return updated;
     });
   }
@@ -327,6 +350,41 @@ export class PayoutService {
       await this.settlementRepo.updateStatus(settlement.id, 'PAID', tx);
     }
   }
+}
+
+function payoutState(payout: DriverPayout) {
+  return {
+    status: payout.status,
+    amount: payout.amount.toString(),
+    driverId: payout.driverId,
+    settlementId: payout.settlementId,
+    bankAccountId: payout.bankAccountId,
+    externalReference: payout.externalReference,
+    failureReason: payout.failureReason,
+  };
+}
+
+/// Written in the transaction that moves the payout, so the log can never claim a
+/// state the row does not hold. No provider is called on any path here (Option A),
+/// so there is no external outcome for the audit row to run ahead of.
+async function auditPayout(
+  tx: TransactionClient,
+  actor: AuditActor,
+  action: 'CREATE' | 'UPDATE',
+  after: DriverPayout,
+  before: DriverPayout | null,
+  summary: string,
+): Promise<void> {
+  await recordAdminAction(tx, {
+    ...actor,
+    action,
+    entityType: 'driver_payout',
+    entityId: after.id,
+    summary: `${summary} for driver ${after.driverId}`,
+    ...(before ? { before: payoutState(before) } : {}),
+    after: payoutState(after),
+    result: 'SUCCESS',
+  });
 }
 
 function isDuplicateIdempotencyKey(err: unknown): boolean {

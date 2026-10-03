@@ -77,3 +77,7 @@ export type SendPushBody = z.infer<typeof sendPushBodySchema>;
 export type SchedulePushBody = z.infer<typeof schedulePushBodySchema>;
 export type PushHistoryQuery = z.infer<typeof pushHistoryQuerySchema>;
 export type BroadcastTargeting = z.infer<typeof broadcastTargetingSchema>;
+
+/// Optional on push schedule; when sent, a retried or doubled submission creates one
+/// broadcast.
+export const idempotencyKeyHeaderSchema = z.string().trim().min(8).max(200).optional();

@@ -1,4 +1,5 @@
 import { TransactionManager } from '@core/database';
+import { lockForAudit, recordAdminAction, type AuditActor } from '@modules/admin/audit/index.js';
 import { FileService } from '@modules/files';
 import { driverConfig } from '@config';
 import { DriverRepository } from '../../repositories/driver.repository.js';
@@ -84,47 +85,77 @@ export class DocumentsService {
     return doc;
   }
 
+  /// The review and its audit row commit together, under a row lock, so two concurrent
+  /// reviews cannot both pass the "already in this status" check and log twice. A repeated
+  /// decision changes nothing and is not logged again. The row carries the document's
+  /// type and statuses — never its number, file id or URL.
   async reviewDocument(
     documentId: string,
     driverId: string,
     status: VerificationStatus,
-    reviewerId: string,
+    actor: AuditActor,
     rejectionReason?: string,
   ): Promise<DriverDocument> {
     const driver = await this.driverRepo.findById(driverId);
     if (!driver) throw new DriverNotFoundError(driverId);
 
-    if (driver.userId === reviewerId) throw new SelfReviewForbiddenError();
+    if (driver.userId === actor.actorId) throw new SelfReviewForbiddenError();
 
-    const doc = await this.docRepo.findById(documentId);
-    if (!doc) {
-      throw new DriverError(`Document '${documentId}' was not found`, 'DOCUMENT_NOT_FOUND', 404);
-    }
-    if (doc.driverId !== driverId) {
-      throw new DriverError(
-        'Document does not belong to the specified driver',
-        'DOCUMENT_DRIVER_MISMATCH',
-        409,
+    const outcome = await this.txManager.execute(async (tx) => {
+      await lockForAudit(tx, 'driver_documents', documentId);
+      const doc = await this.docRepo.findById(documentId, tx);
+      if (!doc) {
+        throw new DriverError(`Document '${documentId}' was not found`, 'DOCUMENT_NOT_FOUND', 404);
+      }
+      if (doc.driverId !== driverId) {
+        throw new DriverError(
+          'Document does not belong to the specified driver',
+          'DOCUMENT_DRIVER_MISMATCH',
+          409,
+        );
+      }
+      if (doc.verificationStatus === status) return { reviewed: doc, changed: false };
+
+      const reviewed = await this.docRepo.updateVerificationStatus(
+        documentId,
+        status,
+        actor.actorId,
+        rejectionReason,
+        tx,
       );
+      // Only REJECTED is a rejection: the compliance route can also return a document to
+      // PENDING, which is recorded as the update it is.
+      await recordAdminAction(tx, {
+        ...actor,
+        action: status === 'VERIFIED' ? 'APPROVE' : status === 'REJECTED' ? 'REJECT' : 'UPDATE',
+        entityType: 'driver_document',
+        entityId: documentId,
+        summary: `Driver document ${doc.documentType} ${
+          status === 'VERIFIED'
+            ? 'verified'
+            : status === 'REJECTED'
+              ? 'rejected'
+              : 'returned to pending'
+        }`,
+        notes: rejectionReason,
+        before: { verificationStatus: doc.verificationStatus },
+        after: {
+          verificationStatus: reviewed.verificationStatus,
+          driverId,
+          documentType: doc.documentType,
+        },
+        result: 'SUCCESS',
+      });
+      return { reviewed, changed: true };
+    });
+
+    if (outcome.changed) {
+      if (status === 'VERIFIED') {
+        this.driverMetrics.documentVerified({ documentId, driverId });
+      } else if (status === 'REJECTED') {
+        this.driverMetrics.documentRejected({ documentId, driverId });
+      }
     }
-
-    if (doc.verificationStatus === status) {
-      return doc;
-    }
-
-    const reviewed = await this.docRepo.updateVerificationStatus(
-      documentId,
-      status,
-      reviewerId,
-      rejectionReason,
-    );
-
-    if (status === 'VERIFIED') {
-      this.driverMetrics.documentVerified({ documentId, driverId });
-    } else {
-      this.driverMetrics.documentRejected({ documentId, driverId });
-    }
-
-    return reviewed;
+    return outcome.reviewed;
   }
 }

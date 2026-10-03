@@ -1,4 +1,6 @@
 import { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { InvoiceNotFoundError, InvoiceTemplateNotFoundError } from '../pricing.errors.js';
 import type {
   CreateInvoiceTemplateBody,
@@ -167,83 +169,153 @@ export class AdminInvoiceService {
     return rows.map(mapTemplate);
   }
 
-  async createTemplate(body: CreateInvoiceTemplateBody): Promise<InvoiceTemplateDto> {
-    if (body.isDefault) {
-      await this.db.client.invoiceTemplate.updateMany({
-        where: { appliesTo: body.appliesTo },
+  async createTemplate(
+    body: CreateInvoiceTemplateBody,
+    actor: AuditActor,
+  ): Promise<InvoiceTemplateDto> {
+    return this.db.transactionManager.execute(async (tx) => {
+      if (body.isDefault) await this.clearDefaults(tx, body.appliesTo, actor);
+      const row = await tx.invoiceTemplate.create({
+        data: {
+          name: body.name,
+          headerLogoText: body.headerLogoText,
+          address: body.address,
+          gstin: body.gstin,
+          footerTerms: body.footerTerms,
+          cgstRate: body.cgstRate,
+          sgstRate: body.sgstRate,
+          igstRate: body.igstRate,
+          appliesTo: body.appliesTo,
+          isDefault: body.isDefault ?? false,
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'invoice_template',
+        entityId: row.id,
+        summary: `Invoice template ${row.name} created`,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return mapTemplate(row);
+    });
+  }
+
+  async updateTemplate(
+    id: string,
+    body: UpdateInvoiceTemplateBody,
+    actor: AuditActor,
+  ): Promise<InvoiceTemplateDto> {
+    return this.db.transactionManager.execute(async (tx) => {
+      const existing = await this.lockTemplate(tx, id);
+      if (body.isDefault) {
+        await this.clearDefaults(tx, body.appliesTo ?? existing.appliesTo, actor, id);
+      }
+      const row = await tx.invoiceTemplate.update({
+        where: { id },
+        data: {
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.headerLogoText !== undefined ? { headerLogoText: body.headerLogoText } : {}),
+          ...(body.address !== undefined ? { address: body.address } : {}),
+          ...(body.gstin !== undefined ? { gstin: body.gstin } : {}),
+          ...(body.footerTerms !== undefined ? { footerTerms: body.footerTerms } : {}),
+          ...(body.cgstRate !== undefined ? { cgstRate: body.cgstRate } : {}),
+          ...(body.sgstRate !== undefined ? { sgstRate: body.sgstRate } : {}),
+          ...(body.igstRate !== undefined ? { igstRate: body.igstRate } : {}),
+          ...(body.appliesTo !== undefined ? { appliesTo: body.appliesTo } : {}),
+          ...(body.isDefault !== undefined ? { isDefault: body.isDefault } : {}),
+        },
+      });
+      await this.audit(tx, actor, 'UPDATE', existing, row, `Invoice template ${row.name} updated`);
+      return mapTemplate(row);
+    });
+  }
+
+  /// Soft delete: the row stays for the invoices that were issued against it.
+  async deleteTemplate(id: string, actor: AuditActor): Promise<void> {
+    await this.db.transactionManager.execute(async (tx) => {
+      const existing = await this.lockTemplate(tx, id);
+      const row = await tx.invoiceTemplate.update({
+        where: { id },
+        data: { isActive: false, isDefault: false },
+      });
+      await this.audit(tx, actor, 'DELETE', existing, row, `Invoice template ${row.name} deleted`);
+    });
+  }
+
+  async setDefaultTemplate(id: string, actor: AuditActor): Promise<InvoiceTemplateDto> {
+    return this.db.transactionManager.execute(async (tx) => {
+      const existing = await this.lockTemplate(tx, id);
+      await this.clearDefaults(tx, existing.appliesTo, actor, id);
+      const row = await tx.invoiceTemplate.update({
+        where: { id },
+        data: { isDefault: true, isActive: true },
+      });
+      await this.audit(
+        tx,
+        actor,
+        'UPDATE',
+        existing,
+        row,
+        `Invoice template ${row.name} set as default`,
+      );
+      return mapTemplate(row);
+    });
+  }
+
+  private async lockTemplate(tx: TransactionClient, id: string) {
+    await lockForAudit(tx, 'invoice_templates', id);
+    const existing = await tx.invoiceTemplate.findUnique({ where: { id } });
+    if (!existing) throw new InvoiceTemplateNotFoundError(id);
+    return existing;
+  }
+
+  private async audit(
+    tx: TransactionClient,
+    actor: AuditActor,
+    action: 'UPDATE' | 'DELETE',
+    before: { id: string },
+    after: unknown,
+    summary: string,
+  ): Promise<void> {
+    await recordAdminAction(tx, {
+      ...actor,
+      action,
+      entityType: 'invoice_template',
+      entityId: before.id,
+      summary,
+      before,
+      after,
+      result: 'SUCCESS',
+    });
+  }
+
+  /// One default per `appliesTo`. A template that loses the flag is changed too, so it
+  /// gets its own audit row in the same transaction.
+  private async clearDefaults(
+    tx: TransactionClient,
+    appliesTo: string,
+    actor: AuditActor,
+    exceptId?: string,
+  ): Promise<void> {
+    const previous = await tx.invoiceTemplate.findMany({
+      where: { appliesTo, isDefault: true, ...(exceptId ? { NOT: { id: exceptId } } : {}) },
+    });
+    for (const template of previous) {
+      const row = await tx.invoiceTemplate.update({
+        where: { id: template.id },
         data: { isDefault: false },
       });
+      await this.audit(
+        tx,
+        actor,
+        'UPDATE',
+        template,
+        row,
+        `Invoice template ${row.name} is no longer the default`,
+      );
     }
-
-    const row = await this.db.client.invoiceTemplate.create({
-      data: {
-        name: body.name,
-        headerLogoText: body.headerLogoText,
-        address: body.address,
-        gstin: body.gstin,
-        footerTerms: body.footerTerms,
-        cgstRate: body.cgstRate,
-        sgstRate: body.sgstRate,
-        igstRate: body.igstRate,
-        appliesTo: body.appliesTo,
-        isDefault: body.isDefault ?? false,
-      },
-    });
-    return mapTemplate(row);
-  }
-
-  async updateTemplate(id: string, body: UpdateInvoiceTemplateBody): Promise<InvoiceTemplateDto> {
-    const existing = await this.db.client.invoiceTemplate.findUnique({ where: { id } });
-    if (!existing) throw new InvoiceTemplateNotFoundError(id);
-
-    if (body.isDefault) {
-      await this.db.client.invoiceTemplate.updateMany({
-        where: { appliesTo: body.appliesTo ?? existing.appliesTo },
-        data: { isDefault: false },
-      });
-    }
-
-    const row = await this.db.client.invoiceTemplate.update({
-      where: { id },
-      data: {
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.headerLogoText !== undefined ? { headerLogoText: body.headerLogoText } : {}),
-        ...(body.address !== undefined ? { address: body.address } : {}),
-        ...(body.gstin !== undefined ? { gstin: body.gstin } : {}),
-        ...(body.footerTerms !== undefined ? { footerTerms: body.footerTerms } : {}),
-        ...(body.cgstRate !== undefined ? { cgstRate: body.cgstRate } : {}),
-        ...(body.sgstRate !== undefined ? { sgstRate: body.sgstRate } : {}),
-        ...(body.igstRate !== undefined ? { igstRate: body.igstRate } : {}),
-        ...(body.appliesTo !== undefined ? { appliesTo: body.appliesTo } : {}),
-        ...(body.isDefault !== undefined ? { isDefault: body.isDefault } : {}),
-      },
-    });
-    return mapTemplate(row);
-  }
-
-  async deleteTemplate(id: string): Promise<void> {
-    const existing = await this.db.client.invoiceTemplate.findUnique({ where: { id } });
-    if (!existing) throw new InvoiceTemplateNotFoundError(id);
-    await this.db.client.invoiceTemplate.update({
-      where: { id },
-      data: { isActive: false, isDefault: false },
-    });
-  }
-
-  async setDefaultTemplate(id: string): Promise<InvoiceTemplateDto> {
-    const existing = await this.db.client.invoiceTemplate.findUnique({ where: { id } });
-    if (!existing) throw new InvoiceTemplateNotFoundError(id);
-
-    await this.db.client.invoiceTemplate.updateMany({
-      where: { appliesTo: existing.appliesTo },
-      data: { isDefault: false },
-    });
-
-    const row = await this.db.client.invoiceTemplate.update({
-      where: { id },
-      data: { isDefault: true, isActive: true },
-    });
-    return mapTemplate(row);
   }
 
   buildPreviewContext(

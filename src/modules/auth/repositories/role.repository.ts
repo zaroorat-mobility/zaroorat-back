@@ -26,13 +26,16 @@ export class RoleRepository extends BaseRepository {
       orderBy: { slug: 'asc' },
     });
   }
-  async create(input: {
-    slug: string;
-    name: string;
-    description?: string | null;
-    isSystem?: boolean;
-  }): Promise<Role> {
-    return this.client.role.create({
+  async create(
+    input: {
+      slug: string;
+      name: string;
+      description?: string | null;
+      isSystem?: boolean;
+    },
+    tx?: TransactionClient,
+  ): Promise<Role> {
+    return (tx ?? this.client).role.create({
       data: {
         slug: input.slug,
         name: input.name,

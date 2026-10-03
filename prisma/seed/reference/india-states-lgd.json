@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "metadata": {
+    "source": "Local Government Directory (LGD), Ministry of Panchayati Raj, Government of India",
+    "sourceUrl": "https://lgdirectory.gov.in",
+    "standard": "LGD & ISO 3166-2:IN (Updated Nov 2023)",
+    "version": "2026.1",
+    "retrievedAt": "2026-10-02T11:00:00.000Z",
+    "countryCode": "IN",
+    "totalRecords": 36,
+    "breakdown": {
+      "states": 28,
+      "unionTerritories": 8
+    }
+  },
+  "records": [
+    {
+      "lgdCode": 28,
+      "code": "AP",
+      "name": "Andhra Pradesh",
+      "nativeName": "ఆంధ్రప్రదేశ్",
+      "divisionType": "STATE",
+      "isoCode": "IN-AP",
+      "censusCode": "28"
+    },
+    {
+      "lgdCode": 12,
+      "code": "AR",
+      "name": "Arunachal Pradesh",
+      "nativeName": "অৰুণাচল প্ৰদেশ",
+      "divisionType": "STATE",
+      "isoCode": "IN-AR",
+      "censusCode": "12"
+    },
+    {
+      "lgdCode": 18,
+      "code": "AS",
+      "name": "Assam",
+      "nativeName": "অসম",
+      "divisionType": "STATE",
+      "isoCode": "IN-AS",
+      "censusCode": "18"
+    },
+    {
+      "lgdCode": 10,
+      "code": "BR",
+      "name": "Bihar",
+      "nativeName": "बिहार",
+      "divisionType": "STATE",
+      "isoCode": "IN-BR",
+      "censusCode": "10"
+    },
+    {
+      "lgdCode": 22,
+      "code": "CG",
+      "name": "Chhattisgarh",
+      "nativeName": "छत्तीसगढ़",
+      "divisionType": "STATE",
+      "isoCode": "IN-CG",
+      "censusCode": "22"
+    },
+    {
+      "lgdCode": 30,
+      "code": "GA",
+      "name": "Goa",
+      "nativeName": "गोंय",
+      "divisionType": "STATE",
+      "isoCode": "IN-GA",
+      "censusCode": "30"
+    },
+    {
+      "lgdCode": 24,
+      "code": "GJ",
+      "name": "Gujarat",
+      "nativeName": "ગુજરાત",
+      "divisionType": "STATE",
+      "isoCode": "IN-GJ",
+      "censusCode": "24"
+    },
+    {
+      "lgdCode": 6,
+      "code": "HR",
+      "name": "Haryana",
+      "nativeName": "हरियाणा",
+      "divisionType": "STATE",
+      "isoCode": "IN-HR",
+      "censusCode": "06"
+    },
+    {
+      "lgdCode": 2,
+      "code": "HP",
+      "name": "Himachal Pradesh",
+      "nativeName": "हिमाचल प्रदेश",
+      "divisionType": "STATE",
+      "isoCode": "IN-HP",
+      "censusCode": "02"
+    },
+    {
+      "lgdCode": 20,
+      "code": "JH",
+      "name": "Jharkhand",
+      "nativeName": "झारखंड",
+      "divisionType": "STATE",
+      "isoCode": "IN-JH",
+      "censusCode": "20"
+    },
+    {
+      "lgdCode": 29,
+      "code": "KA",
+      "name": "Karnataka",
+      "nativeName": "ಕರ್ನಾಟಕ",
+      "divisionType": "STATE",
+      "isoCode": "IN-KA",
+      "censusCode": "29"
+    },
+    {
+      "lgdCode": 32,
+      "code": "KL",
+      "name": "Kerala",
+      "nativeName": "കേരളം",
+      "divisionType": "STATE",
+      "isoCode": "IN-KL",
+      "censusCode": "32"
+    },
+    {
+      "lgdCode": 23,
+      "code": "MP",
+      "name": "Madhya Pradesh",
+      "nativeName": "मध्य प्रदेश",
+      "divisionType": "STATE",
+      "isoCode": "IN-MP",
+      "censusCode": "23"
+    },
+    {
+      "lgdCode": 27,
+      "code": "MH",
+      "name": "Maharashtra",
+      "nativeName": "महाराष्ट्र",
+      "divisionType": "STATE",
+      "isoCode": "IN-MH",
+      "censusCode": "27"
+    },
+    {
+      "lgdCode": 14,
+      "code": "MN",
+      "name": "Manipur",
+      "nativeName": "মণিপুর",
+      "divisionType": "STATE",
+      "isoCode": "IN-MN",
+      "censusCode": "14"
+    },
+    {
+      "lgdCode": 17,
+      "code": "ML",
+      "name": "Meghalaya",
+      "nativeName": "Meghalaya",
+      "divisionType": "STATE",
+      "isoCode": "IN-ML",
+      "censusCode": "17"
+    },
+    {
+      "lgdCode": 15,
+      "code": "MZ",
+      "name": "Mizoram",
+      "nativeName": "Mizoram",
+      "divisionType": "STATE",
+      "isoCode": "IN-MZ",
+      "censusCode": "15"
+    },
+    {
+      "lgdCode": 13,
+      "code": "NL",
+      "name": "Nagaland",
+      "nativeName": "Nagaland",
+      "divisionType": "STATE",
+      "isoCode": "IN-NL",
+      "censusCode": "13"
+    },
+    {
+      "lgdCode": 21,
+      "code": "OD",
+      "name": "Odisha",
+      "nativeName": "ଓଡ଼ିଶା",
+      "divisionType": "STATE",
+      "isoCode": "IN-OD",
+      "censusCode": "21"
+    },
+    {
+      "lgdCode": 3,
+      "code": "PB",
+      "name": "Punjab",
+      "nativeName": "ਪੰਜਾਬ",
+      "divisionType": "STATE",
+      "isoCode": "IN-PB",
+      "censusCode": "03"
+    },
+    {
+      "lgdCode": 8,
+      "code": "RJ",
+      "name": "Rajasthan",
+      "nativeName": "राजस्थान",
+      "divisionType": "STATE",
+      "isoCode": "IN-RJ",
+      "censusCode": "08"
+    },
+    {
+      "lgdCode": 11,
+      "code": "SK",
+      "name": "Sikkim",
+      "nativeName": "सिक्किम",
+      "divisionType": "STATE",
+      "isoCode": "IN-SK",
+      "censusCode": "11"
+    },
+    {
+      "lgdCode": 33,
+      "code": "TN",
+      "name": "Tamil Nadu",
+      "nativeName": "தமிழ்நாடு",
+      "divisionType": "STATE",
+      "isoCode": "IN-TN",
+      "censusCode": "33"
+    },
+    {
+      "lgdCode": 36,
+      "code": "TG",
+      "name": "Telangana",
+      "nativeName": "తెలంగాణ",
+      "divisionType": "STATE",
+      "isoCode": "IN-TG",
+      "censusCode": "36"
+    },
+    {
+      "lgdCode": 16,
+      "code": "TR",
+      "name": "Tripura",
+      "nativeName": "ত্রিপুরা",
+      "divisionType": "STATE",
+      "isoCode": "IN-TR",
+      "censusCode": "16"
+    },
+    {
+      "lgdCode": 9,
+      "code": "UP",
+      "name": "Uttar Pradesh",
+      "nativeName": "उत्तर प्रदेश",
+      "divisionType": "STATE",
+      "isoCode": "IN-UP",
+      "censusCode": "09"
+    },
+    {
+      "lgdCode": 5,
+      "code": "UK",
+      "name": "Uttarakhand",
+      "nativeName": "उत्तराखंड",
+      "divisionType": "STATE",
+      "isoCode": "IN-UK",
+      "censusCode": "05"
+    },
+    {
+      "lgdCode": 19,
+      "code": "WB",
+      "name": "West Bengal",
+      "nativeName": "পশ্চিমবঙ্গ",
+      "divisionType": "STATE",
+      "isoCode": "IN-WB",
+      "censusCode": "19"
+    },
+    {
+      "lgdCode": 35,
+      "code": "AN",
+      "name": "Andaman and Nicobar Islands",
+      "nativeName": "अंडमान और निकोबार द्वीप समूह",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-AN",
+      "censusCode": "35"
+    },
+    {
+      "lgdCode": 4,
+      "code": "CH",
+      "name": "Chandigarh",
+      "nativeName": "चंडीगढ़",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-CH",
+      "censusCode": "04"
+    },
+    {
+      "lgdCode": 38,
+      "code": "DH",
+      "name": "The Dadra and Nagar Haveli and Daman and Diu",
+      "nativeName": "દાંદરા અને નગરહવેલી અને દમણ અને દીવ",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-DH",
+      "censusCode": "25"
+    },
+    {
+      "lgdCode": 7,
+      "code": "DL",
+      "name": "Delhi",
+      "nativeName": "दिल्ली",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-DL",
+      "censusCode": "07"
+    },
+    {
+      "lgdCode": 1,
+      "code": "JK",
+      "name": "Jammu and Kashmir",
+      "nativeName": "جموں و کشمیر",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-JK",
+      "censusCode": "01"
+    },
+    {
+      "lgdCode": 37,
+      "code": "LA",
+      "name": "Ladakh",
+      "nativeName": "ལ་དྭགས",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-LA",
+      "censusCode": null
+    },
+    {
+      "lgdCode": 31,
+      "code": "LD",
+      "name": "Lakshadweep",
+      "nativeName": "ലക്ഷദ്വീപ്",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-LD",
+      "censusCode": "31"
+    },
+    {
+      "lgdCode": 34,
+      "code": "PY",
+      "name": "Puducherry",
+      "nativeName": "புதுச்சேரி",
+      "divisionType": "UNION_TERRITORY",
+      "isoCode": "IN-PY",
+      "censusCode": "34"
+    }
+  ]
+}

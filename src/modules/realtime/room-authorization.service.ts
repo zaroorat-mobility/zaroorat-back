@@ -1,4 +1,6 @@
 import { RideRepository } from '@modules/rides/repositories/ride.repository.js';
+import type { PermissionRepository } from '@modules/auth/repositories/permission.repository.js';
+import { SYSTEM_ADMIN_ROLE_SLUG } from '@modules/auth/constants/auth.constants.js';
 import { room } from './events.js';
 import { RoomAccessDeniedError } from './realtime.errors.js';
 import type { SocketPrincipal } from './socket-auth.service.js';
@@ -7,7 +9,26 @@ import type { SocketPrincipal } from './socket-auth.service.js';
 /// says which ride room it is *in*, and the answer is always re-derived from the
 /// ride row rather than from anything the client sent.
 export class RoomAuthorizationService {
-  constructor(private readonly rideRepository: RideRepository) {}
+  constructor(
+    private readonly rideRepository: RideRepository,
+    private readonly permissionRepository: PermissionRepository,
+  ) {}
+
+  /// Admin dashboard rooms, decided exactly as the HTTP `authorize` guard
+  /// decides the dashboard routes: system_admin holds every permission, anyone
+  /// else by their role grants, looked up now (the token carries no
+  /// permissions). A failed lookup throws, so the join fails closed.
+  async dashboardRooms(principal: SocketPrincipal): Promise<string[]> {
+    if (principal.roles.includes(SYSTEM_ADMIN_ROLE_SLUG)) {
+      return [room.opsDashboard(), room.financeDashboard()];
+    }
+    const held = await this.permissionRepository.findAllowedCodesForUser(principal.userId);
+    const rooms: string[] = [];
+    if (held.includes('operations:read')) rooms.push(room.opsDashboard());
+    if (held.includes('finance:read')) rooms.push(room.financeDashboard());
+    if (rooms.length === 0) throw new RoomAccessDeniedError('dashboard');
+    return rooms;
+  }
 
   /// The rooms a principal is entitled to the moment it connects, with no
   /// request from the client at all: its own user room, and its driver room if

@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { auditActor } from '../audit/index.js';
 import { VehicleVerificationService } from '@modules/vehicles/services/vehicle-verification.service.js';
 import { reviewVehicleSchema } from '@modules/vehicles/schemas/vehicle.schemas.js';
 import { toVehicleView } from '@modules/vehicles/controllers/vehicle.controller.js';
@@ -49,16 +50,16 @@ export class AdminVehicleManagementController {
   async reviewDocument(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id, documentId } = req.params as { id: string; documentId: string };
     const body = reviewVehicleSchema.parse(req.body);
-    const reviewerUserId = callerId(req);
+    const actor = auditActor(req);
     const document = await this.vehicleVerificationService.reviewDocument(
       id,
       documentId,
       body.status,
-      reviewerUserId,
+      actor,
       body.rejectionReason,
     );
     req.log.info(
-      { vehicleId: id, documentId, status: body.status, reviewerUserId },
+      { vehicleId: id, documentId, status: body.status, reviewerUserId: actor.actorId },
       '[admin-vehicles] document review decision recorded',
     );
     reply.send({ data: document });
@@ -67,15 +68,15 @@ export class AdminVehicleManagementController {
   async reviewVehicle(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as { id: string };
     const body = reviewVehicleSchema.parse(req.body);
-    const reviewerUserId = callerId(req);
+    const actor = auditActor(req);
     const vehicle = await this.vehicleVerificationService.reviewVehicle(
       id,
       body.status,
-      reviewerUserId,
+      actor,
       body.rejectionReason,
     );
     req.log.warn(
-      { vehicleId: id, status: body.status, reviewerUserId },
+      { vehicleId: id, status: body.status, reviewerUserId: actor.actorId },
       '[admin-vehicles] verification decision recorded',
     );
     reply.send({ data: toVehicleView(vehicle) });

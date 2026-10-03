@@ -2,6 +2,7 @@ import { DatabaseService } from '@core/database';
 import { TransactionManager, type TransactionClient } from '@core/database/TransactionManager.js';
 import { FileLifecycleService } from '@modules/files/services/file-lifecycle.service.js';
 import { Prisma } from '../../../../generated/prisma/index.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { BannerNotFoundError, CampaignNotFoundError } from '../promotions.errors.js';
 import type { CreateBannerBody, ListBannersQuery, UpdateBannerBody } from '../schemas.js';
 
@@ -98,7 +99,9 @@ export class AdminBannerService {
     return this.toDto(row);
   }
 
-  async create(body: CreateBannerBody, ownerUserId: string): Promise<BannerDto> {
+  /// The uploader the image must belong to is the authenticated staff member — the
+  /// same `actorId` the audit row records.
+  async create(body: CreateBannerBody, actor: AuditActor): Promise<BannerDto> {
     if (body.campaignId) {
       const campaign = await this.databaseService.client.promoCampaign.findUnique({
         where: { id: body.campaignId },
@@ -109,7 +112,7 @@ export class AdminBannerService {
     return this.transactionManager.execute(async (tx) => {
       await this.fileLifecycleService.assertReferenceable(
         body.imageFileId,
-        ownerUserId,
+        actor.actorId,
         'PROMO_BANNER',
         tx,
       );
@@ -127,26 +130,33 @@ export class AdminBannerService {
           isActive: body.isActive ?? true,
         },
       });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'promo_banner',
+        entityId: row.id,
+        summary: `Banner ${row.title ?? row.id} created`,
+        after: row,
+        result: 'SUCCESS',
+      });
       return this.toDto(row);
     });
   }
 
-  async update(id: string, body: UpdateBannerBody, ownerUserId: string): Promise<BannerDto> {
-    const existing = await this.databaseService.client.promoBanner.findUnique({ where: { id } });
-    if (!existing) throw new BannerNotFoundError();
-
-    if (body.campaignId) {
-      const campaign = await this.databaseService.client.promoCampaign.findUnique({
-        where: { id: body.campaignId },
-      });
-      if (!campaign) throw new CampaignNotFoundError();
-    }
-
+  async update(id: string, body: UpdateBannerBody, actor: AuditActor): Promise<BannerDto> {
     return this.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'promo_banners', id);
+      const existing = await tx.promoBanner.findUnique({ where: { id } });
+      if (!existing) throw new BannerNotFoundError();
+      if (body.campaignId) {
+        const campaign = await tx.promoCampaign.findUnique({ where: { id: body.campaignId } });
+        if (!campaign) throw new CampaignNotFoundError();
+      }
+
       if (body.imageFileId !== undefined && body.imageFileId !== existing.imageFileId) {
         await this.fileLifecycleService.assertReferenceable(
           body.imageFileId,
-          ownerUserId,
+          actor.actorId,
           'PROMO_BANNER',
           tx,
         );
@@ -167,21 +177,43 @@ export class AdminBannerService {
           ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
         },
       });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'promo_banner',
+        entityId: id,
+        summary: `Banner ${row.title ?? row.id} updated`,
+        before: existing,
+        after: row,
+        result: 'SUCCESS',
+      });
       return this.toDto(row);
     });
   }
 
-  async activate(id: string, ownerUserId: string): Promise<BannerDto> {
-    return this.update(id, { isActive: true }, ownerUserId);
+  async activate(id: string, actor: AuditActor): Promise<BannerDto> {
+    return this.update(id, { isActive: true }, actor);
   }
 
-  async deactivate(id: string, ownerUserId: string): Promise<BannerDto> {
-    return this.update(id, { isActive: false }, ownerUserId);
+  async deactivate(id: string, actor: AuditActor): Promise<BannerDto> {
+    return this.update(id, { isActive: false }, actor);
   }
 
-  async remove(id: string): Promise<void> {
-    const existing = await this.databaseService.client.promoBanner.findUnique({ where: { id } });
-    if (!existing) throw new BannerNotFoundError();
-    await this.databaseService.client.promoBanner.delete({ where: { id } });
+  async remove(id: string, actor: AuditActor): Promise<void> {
+    await this.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'promo_banners', id);
+      const existing = await tx.promoBanner.findUnique({ where: { id } });
+      if (!existing) throw new BannerNotFoundError();
+      await tx.promoBanner.delete({ where: { id } });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'DELETE',
+        entityType: 'promo_banner',
+        entityId: id,
+        summary: `Banner ${existing.title ?? existing.id} deleted`,
+        before: existing,
+        result: 'SUCCESS',
+      });
+    });
   }
 }

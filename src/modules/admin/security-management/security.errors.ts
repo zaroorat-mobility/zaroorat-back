@@ -16,3 +16,14 @@ export class AdminSessionNotFoundError extends SecurityError {
     this.name = 'AdminSessionNotFoundError';
   }
 }
+
+export class ForceLogoutIncompleteError extends SecurityError {
+  constructor(loggedOut: number, failed: number) {
+    super(
+      `Force logout incomplete: ${loggedOut} account(s) logged out, ${failed} failed and were left unchanged`,
+      'FORCE_LOGOUT_INCOMPLETE',
+      500,
+    );
+    this.name = 'ForceLogoutIncompleteError';
+  }
+}

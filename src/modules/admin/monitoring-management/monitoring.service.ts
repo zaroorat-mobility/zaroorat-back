@@ -16,6 +16,16 @@ import {
   listErrorEvents,
   type StoredErrorEvent,
 } from './monitoring.store.js';
+import { auditExternalAction, redactSensitive, type AuditActor } from '../audit/index.js';
+
+export class AlertAlreadyAcknowledgedError extends Error {
+  readonly code = 'ALERT_ALREADY_ACKNOWLEDGED';
+  readonly statusCode = 409;
+  constructor(alertId: string) {
+    super(`Alert ${alertId} is already acknowledged`);
+    this.name = 'AlertAlreadyAcknowledgedError';
+  }
+}
 
 export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy';
 
@@ -292,7 +302,10 @@ export class AdminMonitoringService {
     const merged: StoredErrorEvent[] = [
       ...dbErrors.map((row) => ({
         id: row.id,
-        message: row.lastError ?? 'Outbox event failed',
+        // Consumer errors echo what a provider was sent; redacted like the job browser's.
+        message: row.lastError
+          ? redactSensitive(row.lastError).slice(0, 500)
+          : 'Outbox event failed',
         source: `outbox:${row.aggregateType}`,
         severity: 'error' as const,
         occurredAt: row.createdAt.toISOString(),
@@ -413,8 +426,29 @@ export class AdminMonitoringService {
     return { data: enriched.sort((a, b) => a.severity.localeCompare(b.severity)) };
   }
 
-  async ackAlert(alertId: string, actorId: string): Promise<void> {
-    await acknowledgeAlert(alertId, actorId);
+  /// Acknowledging hides an alert from every operator's active list, so who silenced
+  /// what is audited. The ack lives in Redis: `auditExternalAction` logs the request first
+  /// and the outcome after. The claim is atomic (`acknowledgeAlert` is HSETNX): of two
+  /// concurrent acknowledgements one records SUCCESS and owns the alert, the other records
+  /// NO_OP and is refused. An already-acknowledged alert is refused without a request row.
+  async ackAlert(alertId: string, actor: AuditActor): Promise<void> {
+    if ((await getAlertAcks()).has(alertId)) throw new AlertAlreadyAcknowledgedError(alertId);
+    const claimed = await auditExternalAction(
+      this.client,
+      {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'monitoring_alert',
+        summary: `Alert ${alertId} acknowledged`,
+        after: { alertId, acknowledged: true },
+      },
+      () => acknowledgeAlert(alertId, actor.actorId),
+      (won) =>
+        won
+          ? { outcome: 'SUCCESS' }
+          : { outcome: 'NO_OP', after: { alertId, reason: 'ALREADY_ACKNOWLEDGED' } },
+    );
+    if (!claimed) throw new AlertAlreadyAcknowledgedError(alertId);
   }
 
   private toAlert(

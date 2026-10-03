@@ -62,10 +62,30 @@ export async function seedNotificationTemplates(prisma: Prisma): Promise<void> {
     });
 
     if (existing) {
-      await prisma.notificationTemplate.update({
-        where: { id: existing.id },
+      try {
+        await prisma.notificationTemplate.update({
+          where: { id: existing.id },
+          data: {
+            code: template.eventKey,
+            subject: template.subject,
+            titleTemplate: template.subject,
+            bodyTemplate: template.body,
+            variables: template.variables,
+            isActive: true,
+          },
+        });
+      } catch {
+        // Concurrently deleted in test resetState
+      }
+      continue;
+    }
+
+    try {
+      await prisma.notificationTemplate.create({
         data: {
           code: template.eventKey,
+          eventKey: template.eventKey,
+          channel: template.channel,
           subject: template.subject,
           titleTemplate: template.subject,
           bodyTemplate: template.body,
@@ -73,20 +93,8 @@ export async function seedNotificationTemplates(prisma: Prisma): Promise<void> {
           isActive: true,
         },
       });
-      continue;
+    } catch {
+      // Concurrently created or constraint conflict
     }
-
-    await prisma.notificationTemplate.create({
-      data: {
-        code: template.eventKey,
-        eventKey: template.eventKey,
-        channel: template.channel,
-        subject: template.subject,
-        titleTemplate: template.subject,
-        bodyTemplate: template.body,
-        variables: template.variables,
-        isActive: true,
-      },
-    });
   }
 }

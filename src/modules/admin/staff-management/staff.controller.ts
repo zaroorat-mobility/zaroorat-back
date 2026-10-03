@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { callerId } from '@core/auth';
+import { auditActor } from '../audit/index.js';
 import { AdminStaffService } from './staff.service.js';
 import {
   createStaffBodySchema,
@@ -25,21 +25,20 @@ export class AdminStaffController {
 
   async create(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createStaffBodySchema.parse(req.body);
-    const actorId = callerId(req);
-    const user = await this.adminStaffService.create(body, actorId);
+    const user = await this.adminStaffService.create(body, auditActor(req));
     reply.status(201).send({ data: user });
   }
 
   async update(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = staffIdParamSchema.parse(req.params);
     const body = updateStaffBodySchema.parse(req.body);
-    const user = await this.adminStaffService.update(id, body, callerId(req));
+    const user = await this.adminStaffService.update(id, body, auditActor(req));
     reply.send({ data: user });
   }
 
   async remove(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = staffIdParamSchema.parse(req.params);
-    await this.adminStaffService.remove(id, callerId(req));
+    await this.adminStaffService.remove(id, auditActor(req));
     reply.status(204).send();
   }
 }

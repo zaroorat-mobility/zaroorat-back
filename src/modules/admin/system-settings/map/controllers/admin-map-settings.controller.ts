@@ -4,7 +4,7 @@ import {
   updateMapSettingsBodySchema,
   testProviderHealthBodySchema,
 } from '../schemas/map-settings.schema.js';
-import { errorEnvelope } from '@core/errors/envelope.js';
+import { errorEnvelope, rethrowServerFault } from '@core/errors/envelope.js';
 import { logger } from '@shared/logger/index.js';
 
 export class AdminMapSettingsController {
@@ -15,9 +15,10 @@ export class AdminMapSettingsController {
       const data = await this.adminMapSettingsService.getMapSettings();
       reply.send({ data });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to fetch map settings';
       logger.error({ error }, '[AdminMapSettingsController] getMapSettings error');
-      reply.status(500).send(errorEnvelope('INTERNAL_ERROR', message, request.id));
+      reply
+        .status(500)
+        .send(errorEnvelope('INTERNAL_ERROR', 'Failed to fetch map settings', request.id));
     }
   }
 
@@ -28,6 +29,7 @@ export class AdminMapSettingsController {
       const data = await this.adminMapSettingsService.updateMapSettings(body, actorId);
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       const message = error instanceof Error ? error.message : 'Failed to update map settings';
       logger.warn({ error }, '[AdminMapSettingsController] updateMapSettings validation/conflict');
       reply.status(400).send(errorEnvelope('SETTINGS_UPDATE_FAILED', message, request.id));
@@ -40,6 +42,7 @@ export class AdminMapSettingsController {
       const data = await this.adminMapSettingsService.testProviderHealth(body);
       reply.send({ data });
     } catch (error) {
+      rethrowServerFault(error);
       const message = error instanceof Error ? error.message : 'Provider test failed';
       logger.warn({ error }, '[AdminMapSettingsController] testProvider error');
       reply.status(400).send(errorEnvelope('PROVIDER_TEST_FAILED', message, request.id));

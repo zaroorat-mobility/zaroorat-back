@@ -32,27 +32,41 @@ export function callerHasRole(request: FastifyRequest, ...roles: string[]): bool
   const held = request.auth?.roles ?? [];
   return roles.some((role) => held.includes(role));
 }
+export const DEFAULT_STAFF_ROLES: readonly string[] = Object.freeze([
+  'system_admin',
+  'admin',
+  'support',
+]);
+
+export function callerIsStaff(request: FastifyRequest): boolean {
+  const held = request.auth?.roles ?? [];
+  return held.some((role) => DEFAULT_STAFF_ROLES.includes(role) || role === 'finance');
+}
+
 export function assertOwnerOrStaff(
   request: FastifyRequest,
   ownerUserId: string | null | undefined,
-  staffRoles: string[] = ['admin', 'support'],
+  staffRoles: readonly string[] = DEFAULT_STAFF_ROLES,
 ): void {
   const caller = requireCaller(request);
   if (ownerUserId && ownerUserId === caller.userId) return;
+  if (caller.roles.includes('system_admin')) return;
   if (staffRoles.some((role) => caller.roles.includes(role))) return;
   throw new ForbiddenResourceError();
 }
+
 export function assertRideParty(
   request: FastifyRequest,
   ride: {
     customerId: string;
     driverUserId?: string | null;
   },
-  staffRoles: string[] = ['admin', 'support'],
+  staffRoles: readonly string[] = DEFAULT_STAFF_ROLES,
 ): void {
   const caller = requireCaller(request);
   if (ride.customerId === caller.userId) return;
   if (ride.driverUserId && ride.driverUserId === caller.userId) return;
+  if (caller.roles.includes('system_admin')) return;
   if (staffRoles.some((role) => caller.roles.includes(role))) return;
   throw new ForbiddenResourceError();
 }

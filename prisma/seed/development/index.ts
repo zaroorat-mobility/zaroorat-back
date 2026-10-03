@@ -8,6 +8,7 @@ import { assignRole, RoleSlug, seedRoles } from '../shared/roles';
 import { seedVehicleTypes } from '../shared/vehicle-types';
 import { seedNotificationTemplates } from '../shared/notification-templates';
 import { seedAppConfig } from '../shared/app-config';
+import { seedGeographicReference as seedCanonicalGeographicReference } from '../shared/geography';
 
 type Prisma = ProviderClient;
 
@@ -484,26 +485,10 @@ const PNQ_BOUNDARY: number[][][] = [
 ];
 
 async function seedGeographicReference(prisma: Prisma) {
-  const india = await prisma.country.upsert({
-    where: { code: 'IN' },
-    update: { name: 'India', isActive: true },
-    create: { code: 'IN', name: 'India', isActive: true },
-  });
+  await seedCanonicalGeographicReference(prisma);
 
-  const stateSeeds = [
-    { code: 'JK', name: 'Jammu & Kashmir' },
-    { code: 'KA', name: 'Karnataka' },
-    { code: 'MH', name: 'Maharashtra' },
-  ];
-  const stateByName = new Map<string, string>();
-  for (const s of stateSeeds) {
-    const row = await prisma.state.upsert({
-      where: { countryId_code: { countryId: india.id, code: s.code } },
-      update: { name: s.name, isActive: true },
-      create: { countryId: india.id, code: s.code, name: s.name, isActive: true },
-    });
-    stateByName.set(s.name, row.id);
-  }
+  const stateRows = await prisma.state.findMany();
+  const stateByCode = new Map(stateRows.map((s) => [s.code, s.id]));
 
   const cityBoundaries: Record<string, { boundary: number[][][]; center: [number, number] }> = {
     SGR: { boundary: SGR_BOUNDARY, center: [74.85, 34.1] },
@@ -517,10 +502,10 @@ async function seedGeographicReference(prisma: Prisma) {
     if (!city) continue;
     const stateId =
       code === 'SGR'
-        ? stateByName.get('Jammu & Kashmir')
+        ? stateByCode.get('JK')
         : code === 'PNQ' || code === 'PUN'
-          ? stateByName.get('Maharashtra')
-          : stateByName.get('Karnataka');
+          ? stateByCode.get('MH')
+          : stateByCode.get('KA');
     await prisma.city.update({
       where: { id: city.id },
       data: {
@@ -537,7 +522,9 @@ async function seedGeographicReference(prisma: Prisma) {
       WHERE id = ${city.id}::uuid
     `;
   }
-  console.log('  -> Seeded country IN, states, city boundaries for SGR/BLR/PNQ/PUN');
+  console.log(
+    '  -> Seeded country IN, 36 official states/UTs, city boundaries for SGR/BLR/PNQ/PUN',
+  );
 }
 
 async function seedServiceZones(prisma: Prisma) {

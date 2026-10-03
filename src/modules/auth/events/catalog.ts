@@ -19,7 +19,11 @@ export const AUTH_EVENT_CATALOG = {
   'auth.device.revoked': { classification: 'audit', aggregateType: 'device' },
   'account.role.granted': { classification: 'audit', aggregateType: 'user' },
   'account.role.revoked': { classification: 'audit', aggregateType: 'user' },
+  'auth.role.permissions_changed': { classification: 'audit', aggregateType: 'role' },
   'account.suspended': { classification: 'audit', aggregateType: 'user' },
+  // Committed with an admin force logout. Its consumers retire the user's tokens and end
+  // their sockets, so a cache invalidation that failed after commit is still completed.
+  'account.sessions.force_revoked': { classification: 'audit', aggregateType: 'user' },
   'account.reactivated': { classification: 'audit', aggregateType: 'user' },
   'account.recovery.completed': { classification: 'audit', aggregateType: 'user' },
 } satisfies Record<string, CatalogEntry>;

@@ -1,3 +1,4 @@
+import { auditActor } from '../audit/index.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AdminCommunicationsHistoryService } from './history.service.js';
 import { AdminCommunicationsPushService } from './push.service.js';
@@ -11,6 +12,7 @@ import {
   schedulePushBodySchema,
   sendPushBodySchema,
   updateTemplateBodySchema,
+  idempotencyKeyHeaderSchema,
 } from './communications.schemas.js';
 
 export class AdminCommunicationsController {
@@ -49,14 +51,18 @@ export class AdminCommunicationsController {
     const body = sendPushBodySchema.parse(req.body);
     reply
       .status(201)
-      .send({ data: await this.adminCommunicationsPushService.send(body, req.auth?.userId) });
+      .send({ data: await this.adminCommunicationsPushService.send(body, auditActor(req)) });
   }
 
   async schedulePush(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = schedulePushBodySchema.parse(req.body);
-    reply
-      .status(201)
-      .send({ data: await this.adminCommunicationsPushService.schedule(body, req.auth?.userId) });
+    reply.status(201).send({
+      data: await this.adminCommunicationsPushService.schedule(
+        body,
+        auditActor(req),
+        idempotencyKeyHeaderSchema.parse(req.headers['idempotency-key']),
+      ),
+    });
   }
 
   async listPushHistory(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -66,6 +72,6 @@ export class AdminCommunicationsController {
 
   async retryPush(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = idParamSchema.parse(req.params);
-    reply.send({ data: await this.adminCommunicationsPushService.retry(id, req.auth?.userId) });
+    reply.send({ data: await this.adminCommunicationsPushService.retry(id, auditActor(req)) });
   }
 }

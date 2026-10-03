@@ -10,6 +10,8 @@ import type {
 } from '@modules/rides';
 import type { RideCollectionConsumer } from '@modules/payments';
 import type { SubscriptionPaymentConsumer } from '@modules/subscriptions';
+import type { DashboardRealtimeConsumer } from '@modules/admin/dashboard/index.js';
+import type { RealtimeRevocationConsumer } from '@modules/realtime';
 import type {
   ReferralRideCompletedConsumer,
   ReferralDriverVerifiedConsumer,
@@ -23,6 +25,8 @@ const CONSUMER_KEYS = [
   'rideRequestBoostedConsumer',
   'rideNotificationConsumer',
   'rideRealtimeConsumer',
+  'dashboardRealtimeConsumer',
+  'realtimeRevocationConsumer',
   'rideCollectionConsumer',
   'referralRideCompletedConsumer',
   'referralDriverVerifiedConsumer',
@@ -36,6 +40,8 @@ type Consumer =
   | RideRequestBoostedConsumer
   | RideNotificationConsumer
   | RideRealtimeConsumer
+  | DashboardRealtimeConsumer
+  | RealtimeRevocationConsumer
   | RideCollectionConsumer
   | ReferralRideCompletedConsumer
   | ReferralDriverVerifiedConsumer

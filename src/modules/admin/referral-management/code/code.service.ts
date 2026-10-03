@@ -1,5 +1,6 @@
 import { DatabaseService } from '@core/database';
 import { Prisma } from '../../../../generated/prisma/index.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { ReferralCodeNotFoundError } from '../referral.errors.js';
 import type { ListCodesQuery } from '../schemas.js';
 
@@ -87,25 +88,45 @@ export class AdminReferralCodeService {
     };
   }
 
-  async activate(id: string): Promise<ReferralCodeDto> {
-    const existing = await this.databaseService.client.referralCode.findUnique({ where: { id } });
-    if (!existing) throw new ReferralCodeNotFoundError();
-    const row = await this.databaseService.client.referralCode.update({
-      where: { id },
-      data: { isActive: true },
-      include: { user: true, program: true },
-    });
-    return this.toDto(row);
+  async activate(id: string, actor: AuditActor): Promise<ReferralCodeDto> {
+    return this.setActive(id, true, actor);
   }
 
-  async deactivate(id: string): Promise<ReferralCodeDto> {
-    const existing = await this.databaseService.client.referralCode.findUnique({ where: { id } });
-    if (!existing) throw new ReferralCodeNotFoundError();
-    const row = await this.databaseService.client.referralCode.update({
-      where: { id },
-      data: { isActive: false },
-      include: { user: true, program: true },
+  async deactivate(id: string, actor: AuditActor): Promise<ReferralCodeDto> {
+    return this.setActive(id, false, actor);
+  }
+
+  /// The row carries its owner's `user` relation for the DTO; the audit names only the
+  /// fields that changed and their keys, never that user record.
+  private async setActive(
+    id: string,
+    isActive: boolean,
+    actor: AuditActor,
+  ): Promise<ReferralCodeDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'referral_codes', id);
+      const existing = await tx.referralCode.findUnique({ where: { id } });
+      if (!existing) throw new ReferralCodeNotFoundError();
+      const row = await tx.referralCode.update({
+        where: { id },
+        data: { isActive },
+        include: { user: true, program: true },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'referral_code',
+        entityId: id,
+        summary: `Referral code ${row.code} ${isActive ? 'activated' : 'deactivated'}`,
+        before: {
+          isActive: existing.isActive,
+          userId: existing.userId,
+          programId: existing.programId,
+        },
+        after: { isActive: row.isActive, userId: row.userId, programId: row.programId },
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
     });
-    return this.toDto(row);
   }
 }

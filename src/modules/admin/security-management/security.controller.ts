@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { callerId } from '@core/auth';
+import { auditActor } from '../audit/index.js';
 import { AdminSecurityService } from './security.service.js';
 import {
   forceLogoutBodySchema,
@@ -21,13 +21,13 @@ export class AdminSecurityController {
 
   async revokeSession(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = sessionIdParamSchema.parse(req.params);
-    await this.adminSecurityService.revokeSession(id, callerId(req));
+    await this.adminSecurityService.revokeSession(id, auditActor(req));
     reply.status(204).send();
   }
 
   async forceLogoutAll(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = forceLogoutBodySchema.parse(req.body ?? {});
-    const result = await this.adminSecurityService.forceLogoutAll(callerId(req), body.userId);
+    const result = await this.adminSecurityService.forceLogoutAll(auditActor(req), body.userId);
     reply.send(result);
   }
 
@@ -50,6 +50,6 @@ export class AdminSecurityController {
     const patch = Object.fromEntries(
       Object.entries(body).filter(([, value]) => value !== undefined),
     ) as Partial<SecurityPolicyDto>;
-    reply.send(await this.adminSecurityService.updatePolicy(patch, callerId(req)));
+    reply.send(await this.adminSecurityService.updatePolicy(patch, auditActor(req)));
   }
 }
