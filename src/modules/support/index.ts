@@ -75,7 +75,10 @@ export class CustomerSupportService {
     let rideId: string | null = input.rideId ?? null;
     if (rideId) {
       const ride = await this.client.ride.findFirst({
-        where: { id: rideId, customerId: userId },
+        where: {
+          id: rideId,
+          OR: [{ customerId: userId }, { driver: { userId } }],
+        },
         select: { id: true },
       });
       if (!ride) rideId = null;

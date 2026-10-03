@@ -361,7 +361,13 @@ export class PricingService {
       if (distanceKm <= 0) throw new ZeroDistanceTripError();
       const durationMin = Math.max(1, Math.round(result.durationSeconds / 60));
 
-      return { distanceKm, durationMin, source: result.providerName };
+      return {
+        distanceKm,
+        durationMin,
+        source: result.providerName,
+        ...(result.path?.length ? { path: result.path } : {}),
+        ...(result.encodedPolyline ? { encodedPolyline: result.encodedPolyline } : {}),
+      };
     }
 
     // ── Haversine fallback (Unit tests only when no MapProviderService is registered) ──

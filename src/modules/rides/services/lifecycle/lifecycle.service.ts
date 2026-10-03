@@ -15,10 +15,12 @@ import { CancellationService } from '../cancellation/cancellation.service.js';
 import { RideFareRepository } from '../../repositories/ride-fare.repository.js';
 import { DriverStatusRepository } from '@modules/drivers/repositories/driver-status.repository.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
+import { DriverLocationRepository } from '@modules/drivers/repositories/driver-location.repository.js';
 import { VehicleRepository } from '@modules/vehicles/repositories/vehicle.repository.js';
 import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
 import { VehicleAssignmentRepository } from '@modules/vehicles/repositories/vehicle-assignment.repository.js';
-import { cashConfirmationRequired, pricingConfig } from '@config';
+import { cashConfirmationRequired, pricingConfig, rideConfig } from '@config';
+import { haversineMeters } from '@modules/location/utils/coordinate.util.js';
 import { logger } from '@shared/logger/index.js';
 import {
   InvalidRideStateTransitionError,
@@ -38,6 +40,7 @@ import {
   DriverSubscriptionRequiredError,
   InsufficientCommissionBalanceError,
   WalletRidesNotAcceptedError,
+  DriverNotAtLocationError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import {
@@ -104,6 +107,7 @@ export class LifecycleService {
     private readonly ledgerService: LedgerService,
     private readonly driverStatusRepository: DriverStatusRepository,
     private readonly driverRepository: DriverRepository,
+    private readonly driverLocationRepository: DriverLocationRepository,
     private readonly vehicleRepository: VehicleRepository,
     private readonly vehicleAssignmentRepository: VehicleAssignmentRepository,
     private readonly vehicleEligibilityService: VehicleEligibilityService,
@@ -119,6 +123,38 @@ export class LifecycleService {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
     if (!allowed.includes(toState)) {
       throw new InvalidRideStateTransitionError(fromState, toState);
+    }
+  }
+
+  /// Ensures the driver's latest GPS fix is within `requiredMeters` of the target.
+  private async assertDriverNear(
+    driverId: string,
+    target: 'pickup' | 'drop',
+    lat: number | null | undefined,
+    lng: number | null | undefined,
+    requiredMeters: number,
+  ): Promise<void> {
+    if (
+      lat == null ||
+      lng == null ||
+      !Number.isFinite(Number(lat)) ||
+      !Number.isFinite(Number(lng))
+    ) {
+      // No coordinates on the request — cannot enforce; allow through.
+      return;
+    }
+    const location = await this.driverLocationRepository.getLocation(driverId);
+    if (!location || location.latitude == null || location.longitude == null) {
+      throw new DriverNotAtLocationError(target, requiredMeters + 1, requiredMeters);
+    }
+    const distanceMeters = haversineMeters(
+      Number(location.latitude),
+      Number(location.longitude),
+      Number(lat),
+      Number(lng),
+    );
+    if (distanceMeters > requiredMeters) {
+      throw new DriverNotAtLocationError(target, distanceMeters, requiredMeters);
     }
   }
   private async lockAndValidate(
@@ -532,6 +568,14 @@ export class LifecycleService {
         'DRIVER_ARRIVED',
         tx,
       );
+      const request = await this.requestRepo.findById(ride.requestId, tx);
+      await this.assertDriverNear(
+        driverId,
+        'pickup',
+        request?.pickupLat != null ? Number(request.pickupLat) : null,
+        request?.pickupLng != null ? Number(request.pickupLng) : null,
+        rideConfig.pickupGeofenceMeters,
+      );
       const arrivedAt = new Date();
       if (
         !(await this.rideRepo.updateStatusIf(
@@ -721,6 +765,16 @@ export class LifecycleService {
         tx,
       );
       const request = await this.requestRepo.findById(ride.requestId, tx);
+      // Early-end reasons skip the drop geofence; otherwise the driver must be nearby.
+      if (!endReason?.endReasonCode) {
+        await this.assertDriverNear(
+          driverId,
+          'drop',
+          request?.dropLat != null ? Number(request.dropLat) : null,
+          request?.dropLng != null ? Number(request.dropLng) : null,
+          rideConfig.dropGeofenceMeters,
+        );
+      }
       const completedAt = new Date();
       // C-3b. `actualDistanceKm` is still checked for plausibility below, but it
       // no longer decides the fare: the server bills what it measured, floored

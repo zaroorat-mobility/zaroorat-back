@@ -23,6 +23,9 @@ export async function ratingRoutes(fastify: FastifyInstance): Promise<void> {
   // We reuse the ride error handler because we throw ride-related errors (RideNotFoundError, etc.)
   fastify.setErrorHandler(handleRideError);
 
+  // GET /api/v1/rides/:id/rating
+  fastify.get('/:id/rating', byId, (req, reply) => controller.getRating(req, reply));
+
   // Mounted via /api/v1/rides (so path is POST /:id/rating)
   fastify.post(
     '/:id/rating',

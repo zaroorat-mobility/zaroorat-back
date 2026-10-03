@@ -4,6 +4,7 @@ import type { Unsubscribe } from '@core/events';
 import type { EpochInvalidationConsumer, AuthDriverVerifiedConsumer } from '@modules/auth';
 import type {
   RideRequestedConsumer,
+  RideRequestBoostedConsumer,
   RideNotificationConsumer,
   RideRealtimeConsumer,
 } from '@modules/rides';
@@ -21,6 +22,7 @@ const CONSUMER_KEYS = [
   'epochInvalidationConsumer',
   'authDriverVerifiedConsumer',
   'rideRequestedConsumer',
+  'rideRequestBoostedConsumer',
   'rideNotificationConsumer',
   'rideRealtimeConsumer',
   'dashboardRealtimeConsumer',
@@ -35,6 +37,7 @@ type Consumer =
   | EpochInvalidationConsumer
   | AuthDriverVerifiedConsumer
   | RideRequestedConsumer
+  | RideRequestBoostedConsumer
   | RideNotificationConsumer
   | RideRealtimeConsumer
   | DashboardRealtimeConsumer

@@ -18,6 +18,28 @@ export class RatingService {
     private readonly driverRepository: DriverRepository,
     private readonly txManager: TransactionManager,
   ) {}
+
+  async getRating(
+    rideId: string,
+    ratedBy: RatedByRole,
+    actorId: string,
+  ): Promise<{ given: RideRating | null; received: RideRating | null }> {
+    const ride = await this.rideRepo.findById(rideId);
+    if (!ride) throw new RideNotFoundError(rideId);
+    if (ratedBy === 'CUSTOMER' && ride.customerId !== actorId) {
+      throw new RideCustomerMismatchError(rideId);
+    }
+    if (ratedBy === 'DRIVER' && ridePartyIds(ride).driverUserId !== actorId) {
+      throw new RideDriverMismatchError(rideId);
+    }
+    const otherSide: RatedByRole = ratedBy === 'DRIVER' ? 'CUSTOMER' : 'DRIVER';
+    const [given, received] = await Promise.all([
+      this.ratingRepo.findByRideAndRater(rideId, ratedBy),
+      this.ratingRepo.findByRideAndRater(rideId, otherSide),
+    ]);
+    return { given, received };
+  }
+
   async submitRating(
     rideId: string,
     ratedBy: RatedByRole,

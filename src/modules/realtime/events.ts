@@ -19,6 +19,7 @@ export const SOCKET_EVENT = {
   /// the search ran out of time without a driver.
   REQUEST_EXPIRED: 'ride.request.expired',
   DRIVER_ASSIGNED: 'ride.driver.assigned',
+  DRIVER_NEARBY: 'ride.driver.nearby',
   DRIVER_ARRIVING: 'ride.driver.arriving',
   DRIVER_ARRIVED: 'ride.driver.arrived',
   RIDE_STARTED: 'ride.started',

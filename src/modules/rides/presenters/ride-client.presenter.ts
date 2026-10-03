@@ -403,6 +403,65 @@ export function toClientRideView(
   };
 }
 
+/** Shape a RideRequest row for the customer app (active search / resume). */
+export function toClientRequestView(
+  req:
+    | (RideRequestInput & {
+        id: string;
+        status?: string | null;
+        createdAt?: Date | string | null;
+        expiresAt?: Date | string | null;
+        scheduledFor?: Date | string | null;
+      })
+    | null
+    | undefined,
+  offerStats?: {
+    offersSent?: number;
+    offersRejected?: number;
+    driversNotified?: number;
+    driversRejected?: number;
+  } | null,
+): Record<string, unknown> | null {
+  if (!req?.id) return null;
+  const quoted = dec(req.quotedFare);
+  const boost = dec(req.boostAmount) ?? 0;
+  const notified = offerStats?.driversNotified ?? offerStats?.offersSent;
+  const rejected = offerStats?.driversRejected ?? offerStats?.offersRejected;
+  return {
+    id: req.id,
+    customerId: req.customerId ?? null,
+    status: req.status ?? null,
+    vehicleTypeId: req.vehicleTypeId ?? null,
+    pickupLat: dec(req.pickupLat),
+    pickupLng: dec(req.pickupLng),
+    dropLat: dec(req.dropLat),
+    dropLng: dec(req.dropLng),
+    pickupAddress: req.pickupAddress ?? null,
+    dropAddress: req.dropAddress ?? null,
+    quotedFare: quoted,
+    boostAmount: boost,
+    totalOffered: quoted != null ? quoted + boost : null,
+    paymentMethod: req.paymentMethod ?? null,
+    estimatedDistanceKm: dec(req.estimatedDistanceKm),
+    estimatedDurationMin: req.estimatedDurationMin ?? null,
+    createdAt: req.createdAt ?? null,
+    expiresAt: req.expiresAt ?? null,
+    scheduledFor: req.scheduledFor ?? null,
+    ...(notified != null
+      ? {
+          driversNotified: notified,
+          offersSent: notified,
+        }
+      : {}),
+    ...(rejected != null
+      ? {
+          driversRejected: rejected,
+          offersRejected: rejected,
+        }
+      : {}),
+  };
+}
+
 export function toClientOfferView(
   offer: OfferInput,
   customerById: Map<string, { firstName: string | null; lastName: string | null }>,

@@ -133,6 +133,22 @@ export class RideRequestNotCancellableError extends RideError {
     this.name = 'RideRequestNotCancellableError';
   }
 }
+export class RideRequestNotBoostableError extends RideError {
+  constructor(status: string) {
+    super(
+      `Fare can only be boosted while searching (current status: '${status}')`,
+      'RIDE_REQUEST_NOT_BOOSTABLE',
+      409,
+    );
+    this.name = 'RideRequestNotBoostableError';
+  }
+}
+export class FareBoostInvalidError extends RideError {
+  constructor(message: string) {
+    super(message, 'FARE_BOOST_INVALID', 400);
+    this.name = 'FareBoostInvalidError';
+  }
+}
 export class VehicleMismatchError extends RideError {
   constructor(message: string) {
     super(message, 'VEHICLE_MISMATCH', 403);
@@ -295,12 +311,6 @@ export class ScheduledTooSoonError extends RideError {
     this.name = 'ScheduledTooSoonError';
   }
 }
-export class RideRequestNotBoostableError extends RideError {
-  constructor(status: string) {
-    super(`Cannot boost a ride request in status ${status}`, 'RIDE_REQUEST_NOT_BOOSTABLE', 409);
-    this.name = 'RideRequestNotBoostableError';
-  }
-}
 export class DestinationChangeNotAllowedError extends RideError {
   constructor(status: string) {
     super(
@@ -338,6 +348,19 @@ export class ShareLinkNotFoundError extends RideError {
   constructor() {
     super('This trip link is invalid or has expired', 'SHARE_LINK_NOT_FOUND', 404);
     this.name = 'ShareLinkNotFoundError';
+  }
+}
+
+/// Driver tried to mark arrived / complete while still too far from the target.
+export class DriverNotAtLocationError extends RideError {
+  constructor(target: 'pickup' | 'drop', distanceMeters: number, requiredMeters: number) {
+    super(
+      `You must be within ${requiredMeters}m of the ${target} to continue (currently ${Math.round(distanceMeters)}m away)`,
+      'DRIVER_NOT_AT_LOCATION',
+      422,
+      { target, distanceMeters: Math.round(distanceMeters), requiredMeters },
+    );
+    this.name = 'DriverNotAtLocationError';
   }
 }
 

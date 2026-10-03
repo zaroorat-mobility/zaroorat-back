@@ -24,6 +24,18 @@ export class RatingController {
   /// RIDE_CUSTOMER_MISMATCH; the service still re-checks both sides against the
   /// ride, so this is a correction to the guess, not a replacement for the
   /// authorization.
+
+  async getRating(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as { id: string };
+    const actorId = callerId(req);
+    const ride = await this.rideRepo.findById(id);
+    const ratedBy = ride && rideParty(actorId, ride) === 'DRIVER' ? 'DRIVER' : 'CUSTOMER';
+
+    const { given, received } = await this.ratingService.getRating(id, ratedBy, actorId);
+    // Nested under `data` so API clients that unwrap `{ data }` keep both sides.
+    reply.send({ data: { given, received } });
+  }
+
   async submitRating(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as { id: string };
     const body = submitRatingSchema.parse(req.body);

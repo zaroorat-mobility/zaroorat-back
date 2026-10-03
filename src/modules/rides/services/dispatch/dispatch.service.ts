@@ -249,4 +249,50 @@ export class DispatchService {
     }
     return outcome.offer;
   }
+
+  /// Customer changed the offered fare: put the request back in front of every
+  /// captain who already saw it (passed, timed out, or still holding it), then
+  /// top up with any fresh candidates.
+  async redispatchAfterBoost(requestId: string): Promise<{
+    reopened: number;
+    newOffers: number;
+  }> {
+    const request = await this.requestRepo.findById(requestId);
+    if (!request) return { reopened: 0, newOffers: 0 };
+    if (!DISPATCHABLE_REQUEST_STATUSES.has(request.status)) {
+      return { reopened: 0, newOffers: 0 };
+    }
+    if (request.expiresAt && request.expiresAt <= new Date()) {
+      return { reopened: 0, newOffers: 0 };
+    }
+
+    const dispatchRound = (await this.dispatchRepo.highestRound(requestId)) + 1;
+    const expiresAt = new Date(Date.now() + rideConfig.dispatchTimeoutSeconds * 1000);
+    const refreshed = await this.dispatchRepo.refreshOffersAfterFareChange(requestId, {
+      expiresAt,
+      dispatchRound,
+    });
+
+    for (const row of refreshed) {
+      this.rideMetrics.dispatchOffered({ requestId, driverId: row.driverId });
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.DISPATCH_OFFERED, row.driverId, {
+          dispatchId: row.id,
+          requestId,
+          driverId: row.driverId,
+          expiresAt: expiresAt.toISOString(),
+          reason: 'fare_change',
+        }),
+      );
+    }
+
+    // Already-offered drivers stay excluded from the fresh batch so we only add
+    // captains who have never seen this request.
+    const newOffers = await this.dispatchNextBatch(requestId).catch((err: unknown) => {
+      logger.warn({ err, requestId }, '[rides] fare change could not dispatch a fresh batch');
+      return 0;
+    });
+
+    return { reopened: refreshed.length, newOffers };
+  }
 }

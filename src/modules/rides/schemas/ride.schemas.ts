@@ -87,7 +87,18 @@ export type BoostRequestBody = z.infer<typeof boostRequestSchema>;
 export const changeDestinationQuoteSchema = z.object({
   dropLat: latitudeSchema,
   dropLng: longitudeSchema,
-  dropAddress: z.string().trim().max(255).optional(),
+  dropAddress: z.string().max(255).optional(),
+  /// D1. WALLET is not accepted for a new ride — see NEW_RIDE_PAYMENT_METHODS.
+  paymentMethod: z.enum(NEW_RIDE_PAYMENT_METHODS).optional(),
+  promoCode: z.string().max(50).optional(),
+  /// Optional ₹ offset from the quoted fare (−10 … +60) applied at create time.
+  boostAmount: z.coerce
+    .number()
+    .transform((n) => Math.round(n))
+    .refine((n): n is (typeof FARE_BOOST_AMOUNTS)[number] =>
+      (FARE_BOOST_AMOUNTS as readonly number[]).includes(n),
+    )
+    .optional(),
 });
 export type ChangeDestinationQuoteBody = z.infer<typeof changeDestinationQuoteSchema>;
 /// `expectedFare` is the figure the rider was shown by the quote call. When
@@ -164,3 +175,15 @@ export const rejectOfferSchema = z.object({
   reason: z.string().max(255).optional(),
 });
 export type RejectOfferBody = z.infer<typeof rejectOfferSchema>;
+
+/// Discrete ₹ offsets from the quoted fare while a request is still searching.
+/// Negative = offer below quote; 0 = keep quote; positive = bump.
+export const FARE_BOOST_AMOUNTS = [-10, 0, 20, 30, 40, 50, 60] as const;
+export const boostRideRequestSchema = z.object({
+  boostAmount: z.coerce
+    .number()
+    .refine((n): n is (typeof FARE_BOOST_AMOUNTS)[number] =>
+      (FARE_BOOST_AMOUNTS as readonly number[]).includes(n),
+    ),
+});
+export type BoostRideRequestBody = z.infer<typeof boostRideRequestSchema>;

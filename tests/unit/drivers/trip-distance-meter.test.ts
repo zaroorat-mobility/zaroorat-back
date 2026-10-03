@@ -50,6 +50,14 @@ function makeWorld(previous: { latitude: number; longitude: number } | null = BL
         },
       },
     } as never,
+    {
+      async findActiveByDriver() {
+        return null;
+      },
+    } as never,
+    {
+      async publish() {},
+    } as never,
   );
 
   return { service, meter };
