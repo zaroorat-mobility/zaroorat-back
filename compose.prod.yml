@@ -102,13 +102,15 @@ services:
     <<: *app-image
     profiles: ['migrate']
     command: ['npx', 'prisma', 'migrate', 'deploy']
-    # Deliberately NOT *app-env: the Prisma CLI reads only DATABASE_URL, and
+    # Deliberately NOT *app-env: the Prisma CLI reads only the database URL, and
     # requiring the storage/SMS/payment secrets here would mean you could not
     # run a migration without them.
+    # The owner credential is named MIGRATION_DATABASE_URL (read by prisma.config.ts) so it
+    # can never be mistaken for the app's DATABASE_URL, which only the runtime login fills.
     environment:
       APP_ENV: production
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-zaroorat}
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-zaroorat}
     depends_on:
       postgres:
         condition: service_healthy
