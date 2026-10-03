@@ -25,9 +25,15 @@ export default defineConfig({
   // and introspection commands read the connection string from here.
   // Spread conditionally: exactOptionalPropertyTypes rejects an explicit
   // `url: undefined`, which is also what prisma sees when DATABASE_URL is unset.
-  datasource: {
-    ...(process.env.DATABASE_URL ? { url: process.env.DATABASE_URL } : {}),
-  },
+  //
+  // MIGRATION_DATABASE_URL is the schema owner, for `prisma migrate deploy` only. Deployed
+  // environments set it on the migration job and DATABASE_URL (the restricted runtime
+  // login) on the app — the app never reads this file. Locally only DATABASE_URL is set,
+  // and it is used for both.
+  datasource: (() => {
+    const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
+    return url ? { url } : {};
+  })(),
 
   migrations: {
     path: 'prisma/migrations',

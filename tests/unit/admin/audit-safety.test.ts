@@ -241,4 +241,41 @@ describe('trust proxy (V5)', () => {
     // A peer outside the list is the client, whatever header it sends.
     assert.equal(await ipSeen(env, '192.0.2.44', '198.51.100.1'), '192.0.2.44');
   });
+
+  // The header shapes an API pod sees behind ALB → ingress-nginx → pod. Which one arrives
+  // depends on the controller's ConfigMap; docs/15_Security/database-roles.md has the
+  // matrix. Socket peer 10.1.2.3 is the ingress-nginx pod, 10.0.4.5 the ALB, 203.0.113.7
+  // the real client, 198.51.100.1 what the client typed into X-Forwarded-For.
+  describe('ALB → ingress-nginx → API', () => {
+    const NGINX = '10.1.2.3';
+
+    it('nginx forwards a single resolved client address: one hop, or the nginx pod CIDR', async () => {
+      for (const env of [{ TRUSTED_PROXY_HOPS: '1' }, { TRUSTED_PROXIES: '10.1.0.0/16' }]) {
+        assert.equal(await ipSeen(env, NGINX, '203.0.113.7'), '203.0.113.7');
+      }
+    });
+
+    it('nginx appends to the full chain: one hop records the ALB, two hops or both CIDRs the client', async () => {
+      const chain = '198.51.100.1, 203.0.113.7, 10.0.4.5';
+      assert.equal(
+        await ipSeen({ TRUSTED_PROXY_HOPS: '1' }, NGINX, chain),
+        '10.0.4.5',
+        'wrong: the ALB',
+      );
+      assert.equal(await ipSeen({ TRUSTED_PROXY_HOPS: '2' }, NGINX, chain), '203.0.113.7');
+      assert.equal(
+        await ipSeen({ TRUSTED_PROXIES: '10.1.0.0/16,10.0.0.0/16' }, NGINX, chain),
+        '203.0.113.7',
+      );
+    });
+
+    it('no hop count can undo an nginx that already trusted the spoofed entry', async () => {
+      // nginx with real-ip trusting 0.0.0.0/0 resolves the client to the spoofed value and
+      // forwards it alone: the API cannot tell. Fixed in nginx (proxy-real-ip-cidr), not here.
+      assert.equal(
+        await ipSeen({ TRUSTED_PROXY_HOPS: '1' }, NGINX, '198.51.100.1'),
+        '198.51.100.1',
+      );
+    });
+  });
 });

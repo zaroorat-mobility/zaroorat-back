@@ -432,8 +432,6 @@ async function seedCities(prisma: Prisma) {
     { code: 'SGR', name: 'Srinagar', state: 'Jammu & Kashmir' },
     { code: 'BLR', name: 'Bengaluru', state: 'Karnataka' },
     { code: 'PNQ', name: 'Pune', state: 'Maharashtra' },
-    // Admin / live DBs often use PUN; seed both so either code gets coverage.
-    { code: 'PUN', name: 'Pune', state: 'Maharashtra' },
     { code: 'GLOBAL', name: 'All cities (global)', state: null as string | null },
   ];
   for (const city of cities) {
@@ -494,7 +492,6 @@ async function seedGeographicReference(prisma: Prisma) {
     SGR: { boundary: SGR_BOUNDARY, center: [74.85, 34.1] },
     BLR: { boundary: BLR_BOUNDARY, center: [77.5946, 12.9716] },
     PNQ: { boundary: PNQ_BOUNDARY, center: [73.8567, 18.5204] },
-    PUN: { boundary: PNQ_BOUNDARY, center: [73.8567, 18.5204] },
   };
 
   for (const [code, geo] of Object.entries(cityBoundaries)) {
@@ -503,7 +500,7 @@ async function seedGeographicReference(prisma: Prisma) {
     const stateId =
       code === 'SGR'
         ? stateByCode.get('JK')
-        : code === 'PNQ' || code === 'PUN'
+        : code === 'PNQ'
           ? stateByCode.get('MH')
           : stateByCode.get('KA');
     await prisma.city.update({
@@ -585,17 +582,6 @@ async function seedServiceZones(prisma: Prisma) {
       zones: [
         {
           code: 'PNQ_CITYWIDE',
-          name: 'Pune Citywide',
-          zoneType: 'SERVICE',
-          coordinates: PNQ_BOUNDARY,
-        },
-      ],
-    },
-    {
-      cityCode: 'PUN',
-      zones: [
-        {
-          code: 'PUN_CITYWIDE',
           name: 'Pune Citywide',
           zoneType: 'SERVICE',
           coordinates: PNQ_BOUNDARY,
