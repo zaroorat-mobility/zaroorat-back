@@ -1096,7 +1096,7 @@ describe('admin audit remediation (integration)', () => {
       /9811155566/,
       /482915/,
       /jane/i,
-      /example\.com/,
+      /(^|[^a-z0-9.-])example\.com([^a-z0-9.-]|$)/i,
       /eyJ/,
       /mock_live/,
       /Jane Doe/,
