@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
 import { DriverService } from '../services/driver.service.js';
 import { DriverRepository } from '../repositories/driver.repository.js';
-import { updateDriverProfileSchema } from '../schemas/driver.schemas.js';
+import { updateDriverProfileSchema, validateDriverDob } from '../schemas/driver.schemas.js';
 import { actingDriverId } from './driver-identity.js';
 import { DriverNotFoundError } from '../errors/driver.errors.js';
 
@@ -29,7 +29,10 @@ export class DriverOnboardingController {
 
     const updateParams: Record<string, unknown> = {};
     if (body.fullLegalName !== undefined) updateParams.fullLegalName = body.fullLegalName;
-    if (body.dateOfBirth !== undefined) updateParams.dateOfBirth = new Date(body.dateOfBirth);
+    if (body.dateOfBirth !== undefined) {
+      const parsed = validateDriverDob(body.dateOfBirth);
+      updateParams.dateOfBirth = parsed.parsedDate ?? new Date(body.dateOfBirth);
+    }
     if (body.gender !== undefined) updateParams.gender = body.gender;
     if (body.addressLine !== undefined) updateParams.addressLine = body.addressLine;
     if (body.city !== undefined) updateParams.city = body.city;

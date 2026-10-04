@@ -1,8 +1,84 @@
 import { z } from 'zod';
 import { latitudeSchema, longitudeSchema } from '@modules/location';
+export function validateDriverDob(
+  val: string,
+  now: Date = new Date(),
+): {
+  valid: boolean;
+  code?: 'INVALID_FORMAT' | 'INVALID_CALENDAR_DATE' | 'MUST_BE_PAST' | 'AGE_BELOW_MINIMUM';
+  message?: string;
+  parsedDate?: Date;
+} {
+  const match = val.match(/^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/);
+  if (!match) {
+    return {
+      valid: false,
+      code: 'INVALID_FORMAT',
+      message: 'Date of birth must be in YYYY-MM-DD format',
+    };
+  }
+
+  const year = parseInt(match[1]!, 10);
+  const month = parseInt(match[2]!, 10);
+  const day = parseInt(match[3]!, 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return { valid: false, code: 'INVALID_FORMAT', message: 'Invalid calendar month or day' };
+  }
+
+  const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (day > daysInMonth[month - 1]!) {
+    return {
+      valid: false,
+      code: 'INVALID_CALENDAR_DATE',
+      message: 'Date does not exist in calendar',
+    };
+  }
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (isNaN(date.getTime())) {
+    return { valid: false, code: 'INVALID_FORMAT', message: 'Invalid date' };
+  }
+
+  const nowUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999),
+  );
+  if (date.getTime() > nowUtc.getTime()) {
+    return { valid: false, code: 'MUST_BE_PAST', message: 'Date of birth must be in the past' };
+  }
+
+  let age = now.getUTCFullYear() - year;
+  const monthDiff = now.getUTCMonth() - (month - 1);
+  if (monthDiff < 0 || (monthDiff === 0 && now.getUTCDate() < day)) {
+    age--;
+  }
+
+  if (age < 18) {
+    return {
+      valid: false,
+      code: 'AGE_BELOW_MINIMUM',
+      message: 'Driver must be at least 18 years old',
+    };
+  }
+
+  return { valid: true, parsedDate: date };
+}
+
+export const driverDobSchema = z.string().superRefine((val, ctx) => {
+  const result = validateDriverDob(val);
+  if (!result.valid) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: result.message || 'Driver must be at least 18 years old',
+      params: { code: result.code },
+    });
+  }
+});
+
 export const updateDriverProfileSchema = z.object({
   fullLegalName: z.string().min(2).max(100).optional(),
-  dateOfBirth: z.string().datetime().optional(),
+  dateOfBirth: driverDobSchema.optional(),
   gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(),
   addressLine: z.string().max(255).optional(),
   city: z.string().max(100).optional(),

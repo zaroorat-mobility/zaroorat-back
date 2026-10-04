@@ -66,6 +66,7 @@ export class AuthController {
     try {
       const result = await this.authService.sendOtp({
         phoneNumber: parsed.data.phoneNumber,
+        ...(parsed.data.userType != null ? { userType: parsed.data.userType } : {}),
         ip: request.ip,
         userAgent: request.headers['user-agent'] ?? null,
         ...(parsed.data.device?.deviceId != null ? { deviceId: parsed.data.device.deviceId } : {}),

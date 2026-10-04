@@ -34,6 +34,10 @@ export class SmsProviderNotDeliverableError extends Error {
 export interface NotificationConfig {
   smsProvider: SmsProviderName;
   otpTemplateId?: string;
+  customerOtpTemplateId?: string;
+  customerOtpMessage?: string;
+  driverOtpTemplateId?: string;
+  driverOtpMessage?: string;
   airtel: {
     apiKey?: string;
     username?: string;
@@ -135,12 +139,29 @@ export function getNotificationConfig(): NotificationConfig {
   // Push is deliberately not resolved here. SMS (OTP, login) reads this config,
   // and a push misconfiguration must fail push — never OTP. createPushProvider
   // resolves PUSH_PROVIDER itself.
+  const cleanEnv = (val?: string): string | undefined => {
+    if (!val) return undefined;
+    const trimmed = val.trim().replace(/^["']|["']$/g, '');
+    return trimmed.length > 0 ? trimmed : undefined;
+  };
+
+  const defaultOtpTemplateId = cleanEnv(process.env.AIRTEL_OTP_TEMPLATE_ID);
+  const customerOtpTemplateId =
+    cleanEnv(process.env.AIRTEL_CUSTOMER_OTP_TEMPLATE_ID) ?? defaultOtpTemplateId;
+  const customerOtpMessage = cleanEnv(process.env.AIRTEL_CUSTOMER_OTP_MESSAGE);
+
+  const driverOtpTemplateId =
+    cleanEnv(process.env.AIRTEL_DRIVER_OTP_TEMPLATE_ID) ?? defaultOtpTemplateId;
+  const driverOtpMessage = cleanEnv(process.env.AIRTEL_DRIVER_OTP_MESSAGE);
+
   return {
     smsProvider,
     airtel,
-    ...(process.env.AIRTEL_OTP_TEMPLATE_ID
-      ? { otpTemplateId: process.env.AIRTEL_OTP_TEMPLATE_ID }
-      : {}),
+    ...(defaultOtpTemplateId ? { otpTemplateId: defaultOtpTemplateId } : {}),
+    ...(customerOtpTemplateId ? { customerOtpTemplateId } : {}),
+    ...(customerOtpMessage ? { customerOtpMessage } : {}),
+    ...(driverOtpTemplateId ? { driverOtpTemplateId } : {}),
+    ...(driverOtpMessage ? { driverOtpMessage } : {}),
   };
 }
 export function createSmsProvider(notificationConfig: NotificationConfig): SmsProvider {

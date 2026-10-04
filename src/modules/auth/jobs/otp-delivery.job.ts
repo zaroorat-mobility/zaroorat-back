@@ -27,7 +27,11 @@ export class OtpDeliveryJob {
   ) {}
   async run(data: OtpDeliveryJobData): Promise<OtpDeliveryResult> {
     const startedAt = performance.now();
-    const delivery = await this.notificationService.sendOtp(data.phoneNumber, data.code);
+    const delivery = await this.notificationService.sendOtp(
+      data.phoneNumber,
+      data.code,
+      data.userType != null ? { userType: data.userType } : undefined,
+    );
     const latencyMs = Math.round(performance.now() - startedAt);
     if (delivery.accepted) {
       await this.otpRepository.recordDelivery(data.challengeId, 'sent', {

@@ -69,6 +69,7 @@ export interface SendOtpInput {
   ip?: string | null;
   userAgent?: string | null;
   deviceFingerprint?: string | null;
+  userType?: 'customer' | 'driver' | undefined;
 }
 export interface VerifyOtpInput {
   phoneNumber: string;
@@ -114,9 +115,24 @@ export class AuthService {
     private readonly sessionConfig: SessionConfig,
   ) {}
   async sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
+    let userType = input.userType;
+    if (!userType) {
+      try {
+        const user = await this.userRepository.findActiveByPhone(input.phoneNumber);
+        if (user) {
+          const roles = await this.roleRepository.findActiveRoleSlugs(user.id);
+          if (roles.includes('driver')) {
+            userType = 'driver';
+          }
+        }
+      } catch {
+        // Fallback to customer default
+      }
+    }
     return this.otpService.send({
       phoneNumber: input.phoneNumber,
       purpose: AUTH_OTP_PURPOSE,
+      userType: userType ?? 'customer',
       ...(input.deviceId != null ? { deviceId: input.deviceId } : {}),
       ...(input.ip != null ? { ip: input.ip } : {}),
       ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),

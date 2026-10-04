@@ -30,6 +30,19 @@ export const EnvironmentSchema = z
     // different schedules. Optional outside production; required below.
     BANK_DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
     BANK_ACCOUNT_HASH_KEY: z.string().min(32).optional(),
+    // SMS & DLT configuration
+    SMS_PROVIDER: z.string().optional(),
+    AIRTEL_API_KEY: z.string().optional(),
+    AIRTEL_USERNAME: z.string().optional(),
+    AIRTEL_PASSWORD: z.string().optional(),
+    AIRTEL_CUSTOMER_ID: z.string().optional(),
+    AIRTEL_SENDER_ID: z.string().optional(),
+    AIRTEL_ENTITY_ID: z.string().optional(),
+    AIRTEL_OTP_TEMPLATE_ID: z.string().optional(),
+    AIRTEL_CUSTOMER_OTP_TEMPLATE_ID: z.string().optional(),
+    AIRTEL_CUSTOMER_OTP_MESSAGE: z.string().optional(),
+    AIRTEL_DRIVER_OTP_TEMPLATE_ID: z.string().optional(),
+    AIRTEL_DRIVER_OTP_MESSAGE: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     for (const name of ['BANK_DATA_ENCRYPTION_KEY', 'BANK_ACCOUNT_HASH_KEY'] as const) {

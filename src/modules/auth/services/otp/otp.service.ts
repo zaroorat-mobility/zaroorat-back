@@ -32,6 +32,7 @@ export interface SendOtpInput {
   ip?: string | null;
   deviceFingerprint?: string | null;
   userAgent?: string | null;
+  userType?: 'customer' | 'driver' | string | undefined;
 }
 export interface SendOtpResult {
   challengeId: string;
@@ -122,7 +123,13 @@ export class OtpService {
         ...(input.deviceFingerprint != null ? { deviceFingerprint: input.deviceFingerprint } : {}),
         ...(input.userAgent != null ? { userAgent: input.userAgent } : {}),
       });
-      await this.otpProducer.enqueue({ challengeId, phoneNumber, code, purpose });
+      await this.otpProducer.enqueue({
+        challengeId,
+        phoneNumber,
+        code,
+        purpose,
+        ...(input.userType != null ? { userType: input.userType } : {}),
+      });
     } catch (err) {
       await release();
       await this.redisService.otp.clearSecret(purpose, phoneNumber);

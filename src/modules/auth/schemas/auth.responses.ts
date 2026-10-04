@@ -69,6 +69,11 @@ export const sendOtpBodySchema = {
       type: 'string',
       description: 'E.164 phone number, required (e.g. +919876543210)',
     },
+    userType: {
+      type: 'string',
+      enum: ['customer', 'driver'],
+      description: 'Target audience (defaults to customer or detected driver role)',
+    },
     device: deviceBodySchema,
   },
 } as const;

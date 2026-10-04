@@ -5,6 +5,7 @@ export interface OtpDeliveryJobData {
   phoneNumber: string;
   code: string;
   purpose: OtpPurpose;
+  userType?: 'customer' | 'driver' | string | undefined;
 }
 export async function enqueueOtpDelivery(data: OtpDeliveryJobData): Promise<void> {
   await otpQueue().add(JOB_NAMES.OTP_SEND, data, { jobId: data.challengeId });
