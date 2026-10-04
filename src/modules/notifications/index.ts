@@ -39,7 +39,11 @@ export {
   type SmsProviderName,
   type PushProviderName,
 } from './notification.config';
-export { NotificationService, type SendSmsOptions } from './notification.service';
+export {
+  NotificationService,
+  type SendSmsOptions,
+  type SendOtpOptions,
+} from './notification.service';
 export {
   registerNotificationInbox,
   notificationInboxRoutes,

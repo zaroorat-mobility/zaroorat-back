@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { DatabaseService } from '@core/database';
 import { DriverService } from '@modules/drivers/services/driver.service.js';
 import {
   reviewDriverDocumentSchema,
@@ -9,6 +10,7 @@ import { auditActor } from '../audit/index.js';
 import { AdminDriverService } from './drivers/driver.service.js';
 import { AdminApplicationService } from './applications/application.service.js';
 import { AdminBankAccountService } from './bank-accounts/bank-account.service.js';
+import { VehicleVerificationService } from '@modules/vehicles/services/vehicle-verification.service.js';
 import {
   bankAccountDriverParamSchema,
   bankAccountParamSchema,
@@ -31,6 +33,8 @@ export class AdminDriverManagementController {
     private readonly adminDriverService: AdminDriverService,
     private readonly adminApplicationService: AdminApplicationService,
     private readonly adminBankAccountService: AdminBankAccountService,
+    private readonly vehicleVerificationService: VehicleVerificationService,
+    private readonly databaseService: DatabaseService,
   ) {}
 
   async list(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -128,6 +132,50 @@ export class AdminDriverManagementController {
     };
     const actor = auditActor(req);
     const body = reviewDriverDocumentSchema.parse(req.body);
+
+    const driverDoc = await this.databaseService.client.driverDocument.findUnique({
+      where: { id: documentId },
+      select: { id: true, driverId: true },
+    });
+
+    if (driverDoc) {
+      const doc = await this.driverService.documents.reviewDocument(
+        documentId,
+        driverId,
+        body.status,
+        actor,
+        body.rejectionReason,
+      );
+
+      req.log.info(
+        { documentId, driverId, status: body.status, reviewerUserId: actor.actorId },
+        '[admin-drivers] driver document review decision recorded',
+      );
+      reply.send({ data: doc });
+      return;
+    }
+
+    const vehicleDoc = await this.databaseService.client.vehicleDocument.findUnique({
+      where: { id: documentId },
+      select: { id: true, vehicleId: true },
+    });
+
+    if (vehicleDoc) {
+      const doc = await this.vehicleVerificationService.reviewDocument(
+        vehicleDoc.vehicleId,
+        documentId,
+        body.status,
+        actor,
+        body.rejectionReason,
+      );
+
+      req.log.info(
+        { documentId, driverId, status: body.status, reviewerUserId: actor.actorId },
+        '[admin-drivers] vehicle document review decision recorded',
+      );
+      reply.send({ data: doc });
+      return;
+    }
 
     const doc = await this.driverService.documents.reviewDocument(
       documentId,

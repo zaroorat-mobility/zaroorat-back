@@ -10,6 +10,7 @@ import { VEHICLE_DOCUMENT_TYPE } from '@config/vehicle/vehicle.config.js';
 import { ReferralApplyService, ReferralError } from '@modules/referrals/index.js';
 import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { AdminDriverNotFoundError, AdminDriverConflictError } from '../driver.errors.js';
+import { VehicleVerificationService } from '@modules/vehicles/services/vehicle-verification.service.js';
 import {
   AdminDriverService,
   type DriverDetailsDto,
@@ -169,6 +170,7 @@ export class AdminApplicationService {
     private readonly databaseService: DatabaseService,
     private readonly authService: AuthService,
     private readonly referralApplyService: ReferralApplyService,
+    private readonly vehicleVerificationService: VehicleVerificationService,
   ) {}
 
   async list(query: ListApplicationsQuery): Promise<{
@@ -608,14 +610,64 @@ export class AdminApplicationService {
     const existing = await this.adminDriverService.getById(applicationId);
     if (!existing) throw new AdminDriverNotFoundError();
 
-    await this.driverService.documents.reviewDocument(
-      documentId,
-      applicationId,
-      status,
-      actor,
-      rejectionReason,
-    );
-    return this.getById(applicationId);
+    // 1. Check if document belongs to driverDocument
+    const driverDoc = await this.databaseService.client.driverDocument.findUnique({
+      where: { id: documentId },
+      select: { id: true, driverId: true },
+    });
+
+    if (driverDoc) {
+      if (driverDoc.driverId !== applicationId) {
+        throw new AdminDriverNotFoundError();
+      }
+      await this.driverService.documents.reviewDocument(
+        documentId,
+        applicationId,
+        status,
+        actor,
+        rejectionReason,
+      );
+      return this.getById(applicationId);
+    }
+
+    // 2. Check if document belongs to vehicleDocument
+    const vehicleDoc = await this.databaseService.client.vehicleDocument.findUnique({
+      where: { id: documentId },
+      select: {
+        id: true,
+        vehicleId: true,
+        vehicle: {
+          select: {
+            id: true,
+            currentDriverId: true,
+            assignments: {
+              where: { driverId: applicationId, status: 'ACTIVE', releasedAt: null },
+              select: { id: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (vehicleDoc) {
+      const isAssociated =
+        vehicleDoc.vehicle.currentDriverId === applicationId ||
+        vehicleDoc.vehicle.assignments.length > 0;
+      if (!isAssociated) {
+        throw new AdminDriverNotFoundError();
+      }
+
+      await this.vehicleVerificationService.reviewDocument(
+        vehicleDoc.vehicleId,
+        documentId,
+        status,
+        actor,
+        rejectionReason,
+      );
+      return this.getById(applicationId);
+    }
+
+    throw new AdminDriverNotFoundError();
   }
 
   private async resolveSources(driverIds: string[]): Promise<Map<string, ApplicationSourceDto>> {

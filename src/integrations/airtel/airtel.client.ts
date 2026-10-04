@@ -23,6 +23,7 @@ interface AirtelSmsResponse {
   code?: number | string;
   requestId?: string;
   messageId?: string;
+  messageRequestId?: string;
   message?: string;
   description?: string;
   accepted?: boolean;
@@ -81,6 +82,17 @@ export class AirtelProvider implements SmsProvider {
       ...(authHeader ? { Authorization: authHeader } : {}),
     };
 
+    logger.info(
+      {
+        recipient,
+        dltTemplateId: payload.dltTemplateId,
+        sourceAddress: payload.sourceAddress,
+        entityId: payload.entityId,
+        message: payload.message,
+      },
+      '[Airtel] sending SMS payload',
+    );
+
     try {
       const res = await fetch(apiUrl, {
         method: 'POST',
@@ -92,6 +104,15 @@ export class AirtelProvider implements SmsProvider {
       const raw: unknown = await res.json().catch(() => null);
       const data = raw as AirtelSmsResponse | null;
 
+      logger.info(
+        {
+          recipient,
+          httpStatus: res.status,
+          responseData: raw,
+        },
+        '[Airtel] gateway response',
+      );
+
       const isSuccess =
         res.ok &&
         (data?.statusCode === 200 ||
@@ -99,6 +120,7 @@ export class AirtelProvider implements SmsProvider {
           data?.status === 'SUCCESS' ||
           data?.status === 'OK' ||
           data?.accepted === true ||
+          Boolean(data?.messageRequestId) ||
           (Boolean(data?.requestId || data?.messageId) && data?.status !== 'FAILED'));
 
       if (!isSuccess) {
@@ -118,7 +140,7 @@ export class AirtelProvider implements SmsProvider {
         return { accepted: false, provider: this.name, retryable, error };
       }
 
-      const providerRef = data?.requestId || data?.messageId;
+      const providerRef = data?.messageRequestId || data?.requestId || data?.messageId;
       return {
         accepted: true,
         provider: this.name,

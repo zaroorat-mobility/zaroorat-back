@@ -5,6 +5,11 @@ export interface SendSmsOptions {
   templateId?: string;
   variables?: Record<string, string>;
 }
+export interface SendOtpOptions {
+  userType?: 'customer' | 'driver' | string | undefined;
+  templateId?: string | undefined;
+  message?: string | undefined;
+}
 export class NotificationService {
   /// The push provider is resolved on first use, not injected: OTP (API and
   /// worker) builds this service, and a push misconfiguration — PUSH_PROVIDER
@@ -36,15 +41,29 @@ export class NotificationService {
       ...(options?.variables ? { variables: options.variables } : {}),
     });
   }
-  async sendOtp(to: string, code: string): Promise<SmsSendResult> {
-    const body = `Zaroorat: ${code} is your verification code. Do not share it with anyone.`;
+  async sendOtp(to: string, code: string, options?: SendOtpOptions): Promise<SmsSendResult> {
+    const isDriver = options?.userType === 'driver';
+    const templateId =
+      options?.templateId ||
+      (isDriver
+        ? (this.notificationConfig.driverOtpTemplateId ?? this.notificationConfig.otpTemplateId)
+        : (this.notificationConfig.customerOtpTemplateId ?? this.notificationConfig.otpTemplateId));
+
+    const rawTemplate =
+      options?.message ||
+      (isDriver
+        ? this.notificationConfig.driverOtpMessage
+        : this.notificationConfig.customerOtpMessage);
+
+    const body = rawTemplate
+      ? rawTemplate.replace(/\{otp\}/g, code).replace(/\{#var#\}/g, code)
+      : `Your OTP is ${code}. Do not share it with anyone.`;
+
     return this.smsProvider.sendSms({
       to,
       body,
       variables: { otp: code },
-      ...(this.notificationConfig.otpTemplateId
-        ? { templateId: this.notificationConfig.otpTemplateId }
-        : {}),
+      ...(templateId ? { templateId } : {}),
     });
   }
 }

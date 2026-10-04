@@ -78,6 +78,10 @@ x-app-env: &app-env
   AIRTEL_SENDER_ID: ${AIRTEL_SENDER_ID:-}
   AIRTEL_ENTITY_ID: ${AIRTEL_ENTITY_ID:-}
   AIRTEL_OTP_TEMPLATE_ID: ${AIRTEL_OTP_TEMPLATE_ID:-}
+  AIRTEL_CUSTOMER_OTP_TEMPLATE_ID: ${AIRTEL_CUSTOMER_OTP_TEMPLATE_ID:-}
+  AIRTEL_CUSTOMER_OTP_MESSAGE: ${AIRTEL_CUSTOMER_OTP_MESSAGE:-}
+  AIRTEL_DRIVER_OTP_TEMPLATE_ID: ${AIRTEL_DRIVER_OTP_TEMPLATE_ID:-}
+  AIRTEL_DRIVER_OTP_MESSAGE: ${AIRTEL_DRIVER_OTP_MESSAGE:-}
   # ── Push (FCM) ────────────────────────────────────────────────────────
   # Production refuses any other push provider (resolvePushProviderName), and a
   # single host has no Application Default Credentials, so the service-account

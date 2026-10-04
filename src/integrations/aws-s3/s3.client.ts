@@ -63,6 +63,13 @@ function buildClient(storageConfig: StorageConfig): S3Client {
       requestTimeout: storageConfig.requestTimeoutMs,
       connectionTimeout: storageConfig.requestTimeoutMs,
     },
+    // AWS SDK v3.1101+ injects x-amz-checksum-crc32 into presigned PUT URLs by
+    // default. Mobile clients uploading via fetch don't send this header, which
+    // causes a SignatureDoesNotMatch 403. Opt out of automatic checksum
+    // calculation; checksums are still used when the caller explicitly provides
+    // a checksumSha256 (passed as ChecksumSHA256 in PutObjectCommand).
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
 }
 export class S3StorageProvider implements StorageProvider {
@@ -101,7 +108,6 @@ export class S3StorageProvider implements StorageProvider {
           Bucket: this.quarantineBucket,
           Key: input.key,
           ContentType: input.contentType,
-          ContentLength: input.contentLength,
           ServerSideEncryption: this.storageConfig.serverSideEncryption,
           ...(this.storageConfig.kmsKeyId != null
             ? { SSEKMSKeyId: this.storageConfig.kmsKeyId }
@@ -112,8 +118,16 @@ export class S3StorageProvider implements StorageProvider {
         }),
         {
           expiresIn: input.ttlSeconds,
-          signableHeaders: new Set(['content-type', 'content-length']),
-          unhoistableHeaders: new Set(['x-amz-checksum-sha256']),
+          // SDK v3.1101+ no longer serialises ContentType from PutObjectCommand
+          // as an HTTP header during presigned URL generation; signableHeaders
+          // therefore signed an empty content-type value, causing a 403 on any
+          // real upload. unhoistableHeaders keeps the actual value attached so
+          // the signature matches what the client sends.
+          unhoistableHeaders: new Set([
+            'content-type',
+            'x-amz-server-side-encryption',
+            'x-amz-checksum-sha256',
+          ]),
         },
       );
       return {

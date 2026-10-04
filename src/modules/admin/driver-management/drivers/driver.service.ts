@@ -51,10 +51,12 @@ export interface DriverDetailsDto extends DriverListItemDto {
     docType: string;
     docNumber?: string;
     fileUrl: string;
+    fileId?: string;
     expiryDate?: string;
     verifyStatus: string;
     comment?: string;
     verifiedAt?: string;
+    category?: 'driver' | 'vehicle';
   }>;
   vehicle?: {
     id: string;
@@ -278,21 +280,41 @@ export class AdminDriverService {
       ...(row.profile?.city ? { city: row.profile.city } : {}),
       ...(row.profile?.postalCode ? { postcode: row.profile.postalCode } : {}),
       ...(row.profile?.addressLine ? { addressLine1: row.profile.addressLine } : {}),
-      documents: row.documents.map((doc) => {
-        const comment = doc.rejectionReason ?? doc.verificationNotes ?? undefined;
-        return {
-          id: doc.id,
-          driverId: doc.driverId,
-          docType: doc.documentType.toLowerCase(),
-          ...(doc.documentNumber ? { docNumber: doc.documentNumber } : {}),
-          fileUrl: doc.fileUrl ?? '',
-          ...(doc.fileId ? { fileId: doc.fileId } : {}),
-          ...(doc.expiresAt ? { expiryDate: doc.expiresAt.toISOString().slice(0, 10) } : {}),
-          verifyStatus: mapDocStatus(doc.verificationStatus),
-          ...(comment ? { comment } : {}),
-          ...(doc.verifiedAt ? { verifiedAt: doc.verifiedAt.toISOString() } : {}),
-        };
-      }),
+      documents: [
+        ...row.documents.map((doc) => {
+          const comment = doc.rejectionReason ?? doc.verificationNotes ?? undefined;
+          return {
+            id: doc.id,
+            driverId: doc.driverId,
+            docType: doc.documentType.toLowerCase(),
+            ...(doc.documentNumber ? { docNumber: doc.documentNumber } : {}),
+            fileUrl: doc.fileUrl ?? '',
+            ...(doc.fileId ? { fileId: doc.fileId } : {}),
+            ...(doc.expiresAt ? { expiryDate: doc.expiresAt.toISOString().slice(0, 10) } : {}),
+            verifyStatus: mapDocStatus(doc.verificationStatus),
+            ...(comment ? { comment } : {}),
+            ...(doc.verifiedAt ? { verifiedAt: doc.verifiedAt.toISOString() } : {}),
+            category: 'driver' as const,
+          };
+        }),
+        ...(vehicle?.documents ?? []).map((doc) => {
+          const comment = doc.rejectionReason ?? undefined;
+          return {
+            id: doc.id,
+            driverId: row.id,
+            docType: doc.documentType.toLowerCase(),
+            ...(doc.documentNumber ? { docNumber: doc.documentNumber } : {}),
+            fileUrl: doc.fileUrl ?? '',
+            ...(doc.fileId ? { fileId: doc.fileId } : {}),
+            ...(doc.expiresAt ? { expiryDate: doc.expiresAt.toISOString().slice(0, 10) } : {}),
+            verifyStatus: mapDocStatus(doc.verificationStatus),
+            ...(comment ? { comment } : {}),
+            ...(doc.verifiedAt ? { verifiedAt: doc.verifiedAt.toISOString() } : {}),
+            category: 'vehicle' as const,
+          };
+        }),
+      ],
+
       ...(vehicle
         ? {
             vehicle: {

@@ -19,6 +19,7 @@ const deviceSchema = z
 export const sendOtpSchema = z.object({
   phoneNumber,
   device: deviceSchema,
+  userType: z.enum(['customer', 'driver']).optional(),
 });
 export const verifyOtpSchema = z.object({
   phoneNumber,
