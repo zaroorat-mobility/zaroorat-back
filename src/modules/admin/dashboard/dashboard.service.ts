@@ -1010,6 +1010,40 @@ export class AdminDashboardService {
     };
   }
 
+  private formatAuditSummaryToTitle(
+    summary?: string | null,
+    action?: string | null,
+    entityType?: string | null,
+  ): string {
+    if (!summary || !summary.trim()) {
+      const entity = (entityType || 'Action').replace(/_/g, ' ');
+      const act = (action || 'Updated').toLowerCase();
+      return `${entity.charAt(0).toUpperCase() + entity.slice(1)} ${act.charAt(0).toUpperCase() + act.slice(1)}`;
+    }
+
+    let text = summary
+      .trim()
+      .replace(/\bDRIVING_LICENSE\b/gi, 'Driving License')
+      .replace(/\bPOLICE_VERIFICATION\b/gi, 'Police Verification')
+      .replace(/\bPOLICE_CLEARANCE\b/gi, 'Police Clearance')
+      .replace(/\bPROFILE_PHOTO\b/gi, 'Profile Photo')
+      .replace(/\bPAN_CARD\b/gi, 'PAN Card')
+      .replace(/\bPAN\b/g, 'PAN Card')
+      .replace(/\bAADHAAR\b/gi, 'Aadhaar')
+      .replace(/\bPERMIT\b/gi, 'Permit')
+      .replace(/\bPUC\b/gi, 'PUC Certificate')
+      .replace(/\bINSURANCE\b/gi, 'Insurance')
+      .replace(/\bRC\b/gi, 'RC (Registration)');
+
+    if (/^driver document /i.test(text)) {
+      text = 'Driver ' + text.slice(16);
+    } else if (/^vehicle document /i.test(text)) {
+      text = 'Vehicle ' + text.slice(17);
+    }
+
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
   /**
    * Operational Activity Timeline API.
    * Sources: ride completions/cancellations (ride_status_events), driver
@@ -1169,7 +1203,7 @@ export class AdminDashboardService {
       items.push({
         id: `admin:${log.id}`,
         type: 'ADMIN_ACTION',
-        title: `Admin Action: ${log.action}`,
+        title: this.formatAuditSummaryToTitle(log.summary ?? undefined, log.action, log.entityType),
         description: log.summary || `${log.action} on ${log.entityType}`,
         entityType: 'system',
         ...(log.entityId ? { entityId: log.entityId } : {}),

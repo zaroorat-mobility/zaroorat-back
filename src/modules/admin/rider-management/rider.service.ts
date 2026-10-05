@@ -509,9 +509,7 @@ export class AdminRiderService {
             ? Number(
                 (driverReviews.reduce((sum, r) => sum + r.rating, 0) / totalRatings).toFixed(2),
               )
-            : row.customerRatingAggregate
-              ? Number(row.customerRatingAggregate.avgRating) || 5
-              : 5;
+            : 0;
 
         return {
           ratingBreakdown: {
@@ -834,9 +832,7 @@ export class AdminRiderService {
       ratingAvg:
         row.customerRatingAggregate && row.customerRatingAggregate.totalRatings > 0
           ? Number(row.customerRatingAggregate.avgRating)
-          : row.customerRatingAggregate
-            ? Number(row.customerRatingAggregate.avgRating) || 5
-            : 5,
+          : 0,
       totalRides: row._count.customerRides,
       walletBalance: row.customerWallet ? Number(row.customerWallet.balance) : 0,
       joinedAt: row.createdAt.toISOString(),
