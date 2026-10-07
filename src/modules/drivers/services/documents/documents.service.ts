@@ -12,7 +12,10 @@ import {
   SelfReviewForbiddenError,
 } from '../../errors/driver.errors.js';
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
+import { logger } from '@shared/logger/index.js';
 import type { DriverDocument, DriverDocumentType, VerificationStatus } from '../../types';
+import type { NotificationService } from '@modules/notifications/notification.service.js';
+import type { DatabaseService } from '@core/database';
 
 export class DocumentsService {
   constructor(
@@ -23,6 +26,8 @@ export class DocumentsService {
     private readonly fileService: FileService,
     private readonly statusRepo: DriverStatusRepository,
     private readonly statusService: StatusService,
+    private readonly notificationService: NotificationService,
+    private readonly databaseService: DatabaseService,
   ) {}
 
   async submitDocument(
@@ -154,8 +159,49 @@ export class DocumentsService {
         this.driverMetrics.documentVerified({ documentId, driverId });
       } else if (status === 'REJECTED') {
         this.driverMetrics.documentRejected({ documentId, driverId });
+        // Fire-and-forget: SMS failure must never surface to the HTTP caller.
+        void this.sendDocRejectedSms(driver, outcome.reviewed.documentType, rejectionReason);
       }
     }
     return outcome.reviewed;
+  }
+
+  /// Sends a rejection SMS to the driver's phone (fire-and-forget).
+  /// Fetches the phone number from the linked User record.
+  /// Any failure is logged and swallowed — never thrown.
+  private async sendDocRejectedSms(
+    driver: { id: string; userId: string },
+    documentType: string,
+    reason: string | undefined,
+  ): Promise<void> {
+    try {
+      const user = await this.databaseService.client.user.findUnique({
+        where: { id: driver.userId },
+        select: { phoneNumber: true },
+      });
+      if (!user?.phoneNumber) {
+        logger.warn(
+          { driverId: driver.id },
+          '[DocumentsService] doc-rejected SMS skipped — no phone on record',
+        );
+        return;
+      }
+      const result = await this.notificationService.sendDriverDocRejectedSms(
+        user.phoneNumber,
+        documentType,
+        reason ?? 'No reason provided',
+      );
+      if (!result.accepted) {
+        logger.warn(
+          { driverId: driver.id, error: result.error },
+          '[DocumentsService] doc-rejected SMS not accepted by provider',
+        );
+      }
+    } catch (err) {
+      logger.error(
+        { driverId: driver.id, err },
+        '[DocumentsService] doc-rejected SMS failed — skipping',
+      );
+    }
   }
 }

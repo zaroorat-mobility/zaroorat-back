@@ -32,30 +32,32 @@ export interface ApplicationListItemDto {
   vehicleType: string;
   applicationStatus: ApplicationStatusDto;
   source: ApplicationSourceDto;
+  documentsCount?: number | undefined;
+  totalDocuments?: number | undefined;
+  profilePhotoUrl?: string | undefined;
   submittedAt: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface ApplicationDetailsDto extends ApplicationListItemDto {
-  email?: string;
-  gender?: string;
-  dateOfBirth?: string;
-  profilePhotoUrl?: string;
+  email?: string | undefined;
+  gender?: string | undefined;
+  dateOfBirth?: string | undefined;
   onlineStatus: 'online' | 'offline';
   bgCheckStatus: 'not_started' | 'in_progress' | 'clear' | 'flagged';
   ratingAvg: number;
   totalTrips: number;
   isAvailable: boolean;
   isBlocked: boolean;
-  country?: string;
-  state?: string;
-  city?: string;
-  postcode?: string;
-  addressLine1?: string;
-  preferredLanguage?: string;
+  country?: string | undefined;
+  state?: string | undefined;
+  city?: string | undefined;
+  postcode?: string | undefined;
+  addressLine1?: string | undefined;
+  preferredLanguage?: string | undefined;
   documents: DriverDetailsDto['documents'];
-  vehicle?: DriverDetailsDto['vehicle'];
+  vehicle?: DriverDetailsDto['vehicle'] | undefined;
   bankAccounts: DriverDetailsDto['bankAccounts'];
   timeline: DriverDetailsDto['timeline'];
   auditLogs: DriverDetailsDto['auditLogs'];
@@ -108,6 +110,11 @@ function toListItem(
     vehicleType: driver.vehicleType,
     applicationStatus: toApplicationStatus(driver.verificationStatus),
     source,
+    ...(driver.documentsCount !== undefined ? { documentsCount: driver.documentsCount } : {}),
+    ...(driver.totalDocuments !== undefined
+      ? { totalDocuments: driver.totalDocuments }
+      : { totalDocuments: 11 }),
+    ...(driver.profilePhotoUrl ? { profilePhotoUrl: driver.profilePhotoUrl } : {}),
     submittedAt: driver.joinedAt || driver.createdAt,
     createdAt: driver.createdAt,
     updatedAt: driver.updatedAt,

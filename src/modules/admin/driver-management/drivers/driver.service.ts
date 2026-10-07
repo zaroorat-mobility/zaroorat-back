@@ -27,6 +27,11 @@ export interface DriverListItemDto {
   totalTrips: number;
   walletBalance: number;
   profilePhotoUrl?: string;
+  documentsCount?: number;
+  totalDocuments?: number;
+  licenseExpiry?: string;
+  insuranceExpiry?: string;
+  permitExpiry?: string;
   joinedAt: string;
   lastActiveAt?: string;
   isOnline: boolean;
@@ -194,6 +199,9 @@ export class AdminDriverService {
           wallet: true,
           onlineStatus: true,
           user: { include: { profile: true } },
+          documents: {
+            select: { id: true, documentType: true, expiresAt: true, verificationStatus: true },
+          },
           assignments: {
             where: { status: 'ACTIVE', releasedAt: null },
             take: 1,
@@ -586,6 +594,16 @@ export class AdminDriverService {
     );
     const name = displayName(row.profile, row.user.profile, row.user.phoneNumber);
     const isBlocked = row.user.status === 'DEACTIVATED';
+    const driverDocs = row.documents ?? [];
+    const vehicleDocs = vehicle?.documents ?? [];
+    const documentsCount = driverDocs.length + vehicleDocs.length;
+    const licenseDoc = driverDocs.find(
+      (d) =>
+        d.documentType === 'DRIVING_LICENSE' ||
+        (d as unknown as { documentType: string }).documentType === 'LICENSE',
+    );
+    const insuranceDoc = vehicleDocs.find((d) => d.documentType?.toUpperCase() === 'INSURANCE');
+    const permitDoc = vehicleDocs.find((d) => d.documentType?.toUpperCase() === 'PERMIT');
 
     return {
       id: row.id,
@@ -602,6 +620,17 @@ export class AdminDriverService {
       totalTrips: row.totalRides,
       walletBalance: row.wallet ? Number(row.wallet.balance) : 0,
       ...(row.profile?.profilePhoto ? { profilePhotoUrl: row.profile.profilePhoto } : {}),
+      documentsCount,
+      totalDocuments: 11,
+      ...(licenseDoc?.expiresAt
+        ? { licenseExpiry: licenseDoc.expiresAt.toISOString().slice(0, 10) }
+        : {}),
+      ...(insuranceDoc?.expiresAt
+        ? { insuranceExpiry: insuranceDoc.expiresAt.toISOString().slice(0, 10) }
+        : {}),
+      ...(permitDoc?.expiresAt
+        ? { permitExpiry: permitDoc.expiresAt.toISOString().slice(0, 10) }
+        : {}),
       joinedAt: row.createdAt.toISOString(),
       ...(row.lastRideAt ? { lastActiveAt: row.lastRideAt.toISOString() } : {}),
       isOnline: !isBlocked && (online === 'ONLINE' || online === 'ON_TRIP' || online === 'BUSY'),
@@ -609,6 +638,61 @@ export class AdminDriverService {
       isBlocked,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  async getExpiryAlerts(): Promise<{
+    expired: number;
+    d30: number;
+    d60: number;
+    d90: number;
+    total: number;
+  }> {
+    const now = new Date();
+
+    const [driverDocs, vehicleDocs] = await Promise.all([
+      this.databaseService.client.driverDocument.findMany({
+        where: { expiresAt: { not: null } },
+        select: { expiresAt: true },
+      }),
+      this.databaseService.client.vehicleDocument.findMany({
+        where: { expiresAt: { not: null } },
+        select: { expiresAt: true },
+      }),
+    ]);
+
+    let expired = 0;
+    let d30 = 0;
+    let d60 = 0;
+    let d90 = 0;
+
+    const allExpiries = [
+      ...driverDocs.map((d) => d.expiresAt!),
+      ...vehicleDocs.map((d) => d.expiresAt!),
+    ];
+
+    for (const exp of allExpiries) {
+      const expDate = new Date(exp);
+      const diffMs = expDate.getTime() - now.getTime();
+      const diffDays = Math.ceil(diffMs / 86400000);
+
+      if (diffDays < 0) {
+        expired++;
+      } else if (diffDays <= 30) {
+        d30++;
+      } else if (diffDays <= 60) {
+        d60++;
+      } else if (diffDays <= 90) {
+        d90++;
+      }
+    }
+
+    return {
+      expired,
+      d30,
+      d60,
+      d90,
+      total: allExpiries.length,
     };
   }
 }

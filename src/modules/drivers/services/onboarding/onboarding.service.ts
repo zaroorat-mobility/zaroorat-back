@@ -12,7 +12,10 @@ import {
 } from '../../errors/driver.errors.js';
 import { driverEvent, DRIVER_EVENT_CATALOG } from '../../events/catalog.js';
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
+import { logger } from '@shared/logger/index.js';
 import type { Driver, DriverVerificationStatus, VerificationStatus } from '../../types';
+import type { NotificationService } from '@modules/notifications/notification.service.js';
+import type { DatabaseService } from '@core/database';
 
 export class OnboardingService {
   constructor(
@@ -21,6 +24,8 @@ export class OnboardingService {
     private readonly eventPublisher: EventPublisher,
     private readonly driverMetrics: DriverMetrics,
     private readonly eligibilityService: DriverEligibilityService,
+    private readonly notificationService: NotificationService,
+    private readonly databaseService: DatabaseService,
   ) {}
 
   async onboardDriver(userId: string): Promise<Driver> {
@@ -135,6 +140,8 @@ export class OnboardingService {
         },
         result: 'SUCCESS',
       });
+      // Fire-and-forget: SMS failure must never surface to the HTTP caller.
+      void this.sendProfileRejectedSms(locked.userId, driverId, reason);
       return updated;
     });
   }
@@ -203,6 +210,8 @@ export class OnboardingService {
         }),
         tx,
       );
+      // Fire-and-forget: SMS failure must never surface to the HTTP caller.
+      void this.sendActivatedSms(locked.userId, driverId);
     }
 
     await recordAdminAction(tx, {
@@ -220,5 +229,65 @@ export class OnboardingService {
       result: 'SUCCESS',
     });
     return updated;
+  }
+
+  /// Sends an activation SMS to the driver when their profile is verified (fire-and-forget).
+  private async sendActivatedSms(userId: string, driverId: string): Promise<void> {
+    try {
+      const user = await this.databaseService.client.user.findUnique({
+        where: { id: userId },
+        select: { phoneNumber: true },
+      });
+      if (!user?.phoneNumber) {
+        logger.warn(
+          { driverId },
+          '[OnboardingService] activation SMS skipped — no phone on record',
+        );
+        return;
+      }
+      const result = await this.notificationService.sendDriverActivatedSms(user.phoneNumber);
+      if (!result.accepted) {
+        logger.warn(
+          { driverId, error: result.error },
+          '[OnboardingService] activation SMS not accepted by provider',
+        );
+      }
+    } catch (err) {
+      logger.error({ driverId, err }, '[OnboardingService] activation SMS failed — skipping');
+    }
+  }
+
+  /// Sends a profile-rejection SMS to the driver when resubmission is requested (fire-and-forget).
+  private async sendProfileRejectedSms(
+    userId: string,
+    driverId: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const user = await this.databaseService.client.user.findUnique({
+        where: { id: userId },
+        select: { phoneNumber: true },
+      });
+      if (!user?.phoneNumber) {
+        logger.warn(
+          { driverId },
+          '[OnboardingService] profile-rejected SMS skipped — no phone on record',
+        );
+        return;
+      }
+      const result = await this.notificationService.sendDriverDocRejectedSms(
+        user.phoneNumber,
+        'Profile',
+        reason,
+      );
+      if (!result.accepted) {
+        logger.warn(
+          { driverId, error: result.error },
+          '[OnboardingService] profile-rejected SMS not accepted by provider',
+        );
+      }
+    } catch (err) {
+      logger.error({ driverId, err }, '[OnboardingService] profile-rejected SMS failed — skipping');
+    }
   }
 }
