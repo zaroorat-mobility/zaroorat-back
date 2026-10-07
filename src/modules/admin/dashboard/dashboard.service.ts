@@ -218,7 +218,8 @@ export class AdminDashboardService {
           'ACCEPTED'::"RideStatus",
           'DRIVER_ARRIVING'::"RideStatus",
           'DRIVER_ARRIVED'::"RideStatus",
-          'IN_PROGRESS'::"RideStatus"
+          'IN_PROGRESS'::"RideStatus",
+          'DRIVER_AT_DROPOFF'::"RideStatus"
         )
 
         UNION
@@ -782,7 +783,7 @@ export class AdminDashboardService {
         SELECT
           COUNT(*) FILTER (WHERE "status" = 'COMPLETED'::"RideStatus")::int AS completed,
           COUNT(*) FILTER (WHERE "status" IN ('CANCELLED_BY_CUSTOMER'::"RideStatus", 'CANCELLED_BY_DRIVER'::"RideStatus", 'CANCELLED_BY_SYSTEM'::"RideStatus"))::int AS cancelled,
-          COUNT(*) FILTER (WHERE "status" IN ('ACCEPTED'::"RideStatus", 'DRIVER_ARRIVING'::"RideStatus", 'DRIVER_ARRIVED'::"RideStatus", 'IN_PROGRESS'::"RideStatus"))::int AS ongoing
+          COUNT(*) FILTER (WHERE "status" IN ('ACCEPTED'::"RideStatus", 'DRIVER_ARRIVING'::"RideStatus", 'DRIVER_ARRIVED'::"RideStatus", 'IN_PROGRESS'::"RideStatus", 'DRIVER_AT_DROPOFF'::"RideStatus"))::int AS ongoing
         FROM "rides"
         WHERE "created_at" >= ${w.todayStart}
           AND "created_at" < ${w.tomorrowStart}

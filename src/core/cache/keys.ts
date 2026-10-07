@@ -27,5 +27,9 @@ export const RedisKeys = {
   tripDistance: (driverId: string): string => `ride:distance:${driverId}`,
   /// One-shot flag so "driver nearby" push fires at most once per ride.
   driverNearbySent: (rideId: string): string => `ride:nearby-sent:${rideId}`,
+  arrivalFixCount: (rideId: string, target: 'pickup' | 'drop'): string =>
+    `ride:arrival:fixes:${rideId}:${target}`,
+  arrivalLock: (rideId: string, target: 'pickup' | 'drop'): string =>
+    `ride:arrival:lock:${rideId}:${target}`,
 } as const;
 export type RedisKeys = typeof RedisKeys;

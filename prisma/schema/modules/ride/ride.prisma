@@ -127,6 +127,7 @@ model Ride {
   dropAddress        String?                               @map("drop_address")
   acceptedAt         DateTime                              @default(now()) @map("accepted_at")
   arrivedAt          DateTime?                             @map("arrived_at")
+  dropoffArrivedAt   DateTime?                             @map("dropoff_arrived_at")
   startedAt          DateTime?                             @map("started_at")
   completedAt        DateTime?                             @map("completed_at")
   cancelledAt        DateTime?                             @map("cancelled_at")

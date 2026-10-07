@@ -100,6 +100,15 @@ export class RideStateController {
     const ride = await this.rideService.lifecycle.markDriverArrived(id, driverId);
     reply.send({ data: ride });
   }
+
+  async arriveDropoff(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const driverId = await this.actingDriverId(req);
+    const { id } = req.params as {
+      id: string;
+    };
+    const ride = await this.rideService.lifecycle.markDriverArrivedAtDropoff(id, driverId);
+    reply.send({ data: ride });
+  }
   async start(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
     const { id } = req.params as {

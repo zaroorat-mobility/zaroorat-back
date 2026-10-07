@@ -18,6 +18,12 @@ export const updateRideSettingsSchema = z.object({
   maxSearchRadiusMeters: z.number().int().min(1000).max(100000).optional(),
   cancellationGraceMinutes: z.number().int().min(0).max(30).optional(),
   defaultCancellationFee: z.number().min(0).max(10000).optional(),
+  pickupGeofenceMeters: z.number().int().min(10).max(500).optional(),
+  dropGeofenceMeters: z.number().int().min(10).max(500).optional(),
+  arrivalMaxAccuracyMeters: z.number().int().min(5).max(200).optional(),
+  arrivalRequiredFixes: z.number().int().min(1).max(10).optional(),
+  dispatchMaxRounds: z.number().int().min(1).max(20).optional(),
+  dispatchMaxAttemptedDrivers: z.number().int().min(1).max(100).optional(),
 });
 
 export const updateOtpSettingsSchema = z.object({

@@ -1,3 +1,4 @@
+import type { ArrivalDetectionService } from '@modules/rides/services/arrival/arrival-detection.service.js';
 import { driverConfig, rideConfig } from '@config';
 import { logger } from '@shared/logger/index.js';
 import {
@@ -32,6 +33,7 @@ export class LocationService {
     private readonly redisService: RedisService,
     private readonly rideRepository: RideRepository,
     private readonly eventPublisher: EventPublisher,
+    private readonly arrivalDetectionService?: ArrivalDetectionService,
   ) {}
 
   async updateLocation(input: UpdateDriverLocationInput): Promise<DriverLocation> {
@@ -80,6 +82,23 @@ export class LocationService {
     }
     await this.statusRepo.updateHeartbeat(input.driverId);
     await this.maybeNotifyDriverNearby(input);
+    if (this.arrivalDetectionService) {
+      try {
+        await this.arrivalDetectionService.evaluateFix({
+          driverId: input.driverId,
+          latitude: input.latitude,
+          longitude: input.longitude,
+          accuracyMeters: input.accuracyMeters,
+          isMockLocation: input.isMockLocation,
+          recordedAt: location.recordedAt,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, driverId: input.driverId },
+          '[drivers] arrival detection evaluation failed',
+        );
+      }
+    }
     return location;
   }
 

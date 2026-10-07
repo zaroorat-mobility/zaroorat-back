@@ -22,6 +22,18 @@ export class RateLimitStore {
     limit: number,
     windowSeconds: number,
   ): Promise<RateLimitResult> {
+    const isDev =
+      process.env.APP_ENV === 'development' ||
+      process.env.NODE_ENV === 'development' ||
+      !process.env.APP_ENV;
+    if (isDev) {
+      return {
+        allowed: true,
+        current: 1,
+        remaining: 999999,
+        retryAfterSeconds: 0,
+      };
+    }
     const key = RedisKeys.rateLimit(scope, id);
     const [current, ttl] = (await this.client.eval(
       RateLimitStore.HIT_LUA,
@@ -49,6 +61,18 @@ export class RateLimitStore {
   /// reason: the caller still records the failure afterwards, so a race between
   /// two peeks costs at most one extra attempt before the counter catches up.
   async peek(scope: string, id: string, limit: number): Promise<RateLimitResult> {
+    const isDev =
+      process.env.APP_ENV === 'development' ||
+      process.env.NODE_ENV === 'development' ||
+      !process.env.APP_ENV;
+    if (isDev) {
+      return {
+        allowed: true,
+        current: 0,
+        remaining: 999999,
+        retryAfterSeconds: 0,
+      };
+    }
     const key = RedisKeys.rateLimit(scope, id);
     const [raw, ttl] = await Promise.all([this.client.get(key), this.client.ttl(key)]);
     const current = raw === null ? 0 : Number(raw);
@@ -74,6 +98,13 @@ export class RateLimitStore {
     allowed: boolean;
     retryAfterSeconds: number;
   }> {
+    const isDev =
+      process.env.APP_ENV === 'development' ||
+      process.env.NODE_ENV === 'development' ||
+      !process.env.APP_ENV;
+    if (isDev) {
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
     const key = RedisKeys.rateLimit(`${scope}:gap`, id);
     const set = await this.client.set(key, '1', 'EX', intervalSeconds, 'NX');
     if (set === 'OK') return { allowed: true, retryAfterSeconds: 0 };

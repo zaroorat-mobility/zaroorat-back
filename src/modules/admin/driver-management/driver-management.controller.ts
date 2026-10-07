@@ -49,6 +49,11 @@ export class AdminDriverManagementController {
     reply.send({ data: driver });
   }
 
+  async getApplicationStats(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const stats = await this.adminApplicationService.getVerificationStats();
+    reply.send({ data: stats });
+  }
+
   async listApplications(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const query = listApplicationsQuerySchema.parse(req.query);
     const result = await this.adminApplicationService.list(query);

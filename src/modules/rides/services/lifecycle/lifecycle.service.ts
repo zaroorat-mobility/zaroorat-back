@@ -79,7 +79,8 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
     'CANCELLED_BY_DRIVER',
     'CANCELLED_BY_SYSTEM',
   ],
-  IN_PROGRESS: ['COMPLETED', 'CANCELLED_BY_SYSTEM'],
+  IN_PROGRESS: ['DRIVER_AT_DROPOFF', 'COMPLETED', 'CANCELLED_BY_SYSTEM'],
+  DRIVER_AT_DROPOFF: ['COMPLETED', 'CANCELLED_BY_SYSTEM'],
   COMPLETED: [],
   CANCELLED_BY_CUSTOMER: [],
   CANCELLED_BY_DRIVER: [],
@@ -698,6 +699,51 @@ export class LifecycleService {
     await this.resetTripMeter(driverId);
     return started;
   }
+  async markDriverArrivedAtDropoff(rideId: string, driverId: string): Promise<Ride> {
+    return this.txManager.execute(async (tx) => {
+      const ride = await this.lockAndValidate(
+        rideId,
+        { kind: 'driver', driverId },
+        'DRIVER_AT_DROPOFF',
+        tx,
+      );
+      const request = await this.requestRepo.findById(ride.requestId, tx);
+      await this.assertDriverNear(
+        driverId,
+        'drop',
+        request?.dropLat != null ? Number(request.dropLat) : null,
+        request?.dropLng != null ? Number(request.dropLng) : null,
+        rideConfig.dropGeofenceMeters,
+      );
+      const dropoffArrivedAt = new Date();
+      if (
+        !(await this.rideRepo.updateStatusIf(
+          rideId,
+          ride.status,
+          'DRIVER_AT_DROPOFF',
+          { dropoffArrivedAt },
+          tx,
+        ))
+      ) {
+        throw new InvalidRideStateTransitionError(ride.status, 'DRIVER_AT_DROPOFF');
+      }
+      await this.statusEventRepo.record(
+        {
+          rideId,
+          fromStatus: ride.status,
+          toStatus: 'DRIVER_AT_DROPOFF',
+          actorType: 'DRIVER',
+          actorId: driverId,
+        },
+        tx,
+      );
+      await this.eventPublisher.publish(
+        rideEvent(RIDE_EVENT_CATALOG.DRIVER_AT_DROPOFF, ride.customerId, { rideId, driverId }),
+        tx,
+      );
+      return { ...ride, status: 'DRIVER_AT_DROPOFF' as RideStatus, dropoffArrivedAt };
+    });
+  }
 
   /// Never allowed to fail a lifecycle transition. A meter that would not clear
   /// leaves the previous trip's distance in place, and `max(measured, quoted)`
@@ -766,7 +812,7 @@ export class LifecycleService {
       );
       const request = await this.requestRepo.findById(ride.requestId, tx);
       // Early-end reasons skip the drop geofence; otherwise the driver must be nearby.
-      if (!endReason?.endReasonCode) {
+      if (!endReason?.endReasonCode && ride.status !== 'DRIVER_AT_DROPOFF') {
         await this.assertDriverNear(
           driverId,
           'drop',

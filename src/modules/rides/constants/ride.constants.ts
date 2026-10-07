@@ -52,6 +52,7 @@ export const LIVE_RIDE_STATUSES = [
   'DRIVER_ARRIVING',
   'DRIVER_ARRIVED',
   'IN_PROGRESS',
+  'DRIVER_AT_DROPOFF',
 ] as const;
 
 /// Cancel reasons offered to drivers (and customers) when ending a booking.

@@ -90,13 +90,21 @@ export class RideRequestController {
   }
   async getActiveRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const request = await this.rideService.request.getActiveRequest(callerId(req));
-    reply.send({ data: toClientRideRequestView(request) });
+    if (!request) {
+      return reply.send({ data: null });
+    }
+    const stats = await this.rideService.request.getOfferStatsForRequest(request.id);
+    reply.send({ data: toClientRideRequestView(request, stats) });
   }
 
   async getRequestById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as { id: string };
     const request = await this.rideService.request.getRequestForCustomer(id, callerId(req));
-    reply.send({ data: toClientRideRequestView(request) });
+    if (!request) {
+      return reply.send({ data: null });
+    }
+    const stats = await this.rideService.request.getOfferStatsForRequest(request.id);
+    reply.send({ data: toClientRideRequestView(request, stats) });
   }
 
   async cancelRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {

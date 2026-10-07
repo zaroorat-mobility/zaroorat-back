@@ -67,6 +67,12 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     controller.state.arriving(req, reply),
   );
   fastify.post('/:id/arrive', driverOnlyById, (req, reply) => controller.state.arrive(req, reply));
+  fastify.post('/:id/arrived-dropoff', driverOnlyById, (req, reply) =>
+    controller.state.arriveDropoff(req, reply),
+  );
+  fastify.post('/:id/arrive-dropoff', driverOnlyById, (req, reply) =>
+    controller.state.arriveDropoff(req, reply),
+  );
   fastify.post('/:id/start', driverOnlyById, (req, reply) => controller.state.start(req, reply));
   fastify.post('/:id/complete', driverOnlyById, (req, reply) =>
     controller.state.complete(req, reply),

@@ -7,6 +7,7 @@ const ACTIVE_RIDE_STATES = [
   'DRIVER_ARRIVING',
   'DRIVER_ARRIVED',
   'IN_PROGRESS',
+  'DRIVER_AT_DROPOFF',
 ] as const;
 const OPEN_TICKET_STATES = ['OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'REOPENED'] as const;
 export interface Obligation {
