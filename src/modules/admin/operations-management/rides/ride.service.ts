@@ -773,9 +773,13 @@ export class AdminRideService {
       bearing: location.bearing ? Number(location.bearing) : null,
       speedKmh: location.speedKmh ? Number(location.speedKmh) : null,
       recordedAt: location.recordedAt?.toISOString() ?? null,
-      isLive: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'].includes(
-        ride.status,
-      ),
+      isLive: [
+        'ACCEPTED',
+        'DRIVER_ARRIVING',
+        'DRIVER_ARRIVED',
+        'IN_PROGRESS',
+        'DRIVER_AT_DROPOFF',
+      ].includes(ride.status),
     };
   }
 

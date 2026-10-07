@@ -17,6 +17,7 @@ export const RIDE_EVENT_CATALOG = {
   DRIVER_ARRIVING: 'ride.driver_arriving',
   DRIVER_ARRIVED: 'ride.driver_arrived',
   STARTED: 'ride.started',
+  DRIVER_AT_DROPOFF: 'ride.driver_at_dropoff',
   COMPLETED: 'ride.completed',
   CANCELLED: 'ride.cancelled',
   SCHEDULED_ACCEPTED: 'ride.scheduled.accepted',

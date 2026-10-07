@@ -22,6 +22,7 @@ export const SOCKET_EVENT = {
   DRIVER_NEARBY: 'ride.driver.nearby',
   DRIVER_ARRIVING: 'ride.driver.arriving',
   DRIVER_ARRIVED: 'ride.driver.arrived',
+  DRIVER_AT_DROPOFF: 'ride.driver.at_dropoff',
   RIDE_STARTED: 'ride.started',
   RIDE_COMPLETED: 'ride.completed',
   RIDE_CANCELLED: 'ride.cancelled',

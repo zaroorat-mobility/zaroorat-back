@@ -123,7 +123,9 @@ export class RideRepository {
     return client.ride.findFirst({
       where: {
         customerId,
-        status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+        status: {
+          in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS', 'DRIVER_AT_DROPOFF'],
+        },
       },
     });
   }
@@ -132,7 +134,9 @@ export class RideRepository {
     return client.ride.findFirst({
       where: {
         driverId,
-        status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+        status: {
+          in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS', 'DRIVER_AT_DROPOFF'],
+        },
       },
       include: {
         request: {
@@ -158,7 +162,9 @@ export class RideRepository {
     return client.ride.findFirst({
       where: {
         OR: [{ customerId: userId }, { driver: { userId } }],
-        status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+        status: {
+          in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS', 'DRIVER_AT_DROPOFF'],
+        },
       },
       // A user should never have two, but if they somehow do, the one they most
       // recently became part of is the one they are asking about.
@@ -171,6 +177,7 @@ export class RideRepository {
     status: RideStatus,
     extraData?: {
       arrivedAt?: Date;
+      dropoffArrivedAt?: Date;
       startedAt?: Date;
       completedAt?: Date;
       cancelledAt?: Date;
@@ -207,6 +214,7 @@ export class RideRepository {
     status: RideStatus,
     extraData: {
       arrivedAt?: Date;
+      dropoffArrivedAt?: Date;
       startedAt?: Date;
       completedAt?: Date;
       cancelledAt?: Date;

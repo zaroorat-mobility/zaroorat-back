@@ -10,3 +10,5 @@ export * from './chat/index.js';
 export * from './call/index.js';
 export * from './ride.service.js';
 export * from './pin/index.js';
+
+export * from './arrival/index.js';

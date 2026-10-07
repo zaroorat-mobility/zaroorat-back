@@ -139,10 +139,45 @@ export class DispatchService {
 
     const alreadyOffered = await this.dispatchRepo.findAllDriverIdsForRequest(requestId);
     const dispatchRound = (await this.dispatchRepo.highestRound(requestId)) + 1;
+
+    if (dispatchRound > rideConfig.dispatchMaxRounds) {
+      logger.info(
+        { requestId, dispatchRound, maxRounds: rideConfig.dispatchMaxRounds },
+        '[rides] dispatch max rounds limit reached',
+      );
+      if (live === 0 && request.status === 'SEARCHING') {
+        await this.expireRequestIfExhausted(requestId, request.customerId);
+      }
+      return 0;
+    }
+
+    if (alreadyOffered.length >= rideConfig.dispatchMaxAttemptedDrivers) {
+      logger.info(
+        {
+          requestId,
+          attempted: alreadyOffered.length,
+          maxDrivers: rideConfig.dispatchMaxAttemptedDrivers,
+        },
+        '[rides] dispatch max attempted drivers limit reached',
+      );
+      if (live === 0 && request.status === 'SEARCHING') {
+        await this.expireRequestIfExhausted(requestId, request.customerId);
+      }
+      return 0;
+    }
+
+    const availableSlots = Math.min(
+      slots,
+      rideConfig.dispatchMaxAttemptedDrivers - alreadyOffered.length,
+    );
+    if (availableSlots <= 0) {
+      if (live === 0 && request.status === 'SEARCHING') {
+        await this.expireRequestIfExhausted(requestId, request.customerId);
+      }
+      return 0;
+    }
+
     const origin = { latitude: Number(request.pickupLat), longitude: Number(request.pickupLng) };
-    // ponytail: the widening steps are searched one at a time, and only while
-    // each comes back empty — an empty result is the cheap query. Batch them
-    // into a single wide query if the extra round trips ever show up.
     let candidates: MatchCandidate[] = [];
     let searchRadiusMeters = 0;
     for (const radius of searchRadiiFrom(dispatchRound)) {
@@ -150,7 +185,7 @@ export class DispatchService {
       candidates = await this.matchingService.findEligibleCandidates(
         origin,
         alreadyOffered,
-        slots,
+        availableSlots,
         request.vehicleTypeId,
         radius,
       );
@@ -161,6 +196,9 @@ export class DispatchService {
         { requestId, alreadyOffered: alreadyOffered.length, dispatchRound, searchRadiusMeters },
         '[rides] no further eligible driver candidates for this request',
       );
+      if (live === 0 && alreadyOffered.length > 0 && request.status === 'SEARCHING') {
+        await this.expireRequestIfExhausted(requestId, request.customerId);
+      }
       return 0;
     }
 
@@ -294,5 +332,23 @@ export class DispatchService {
     });
 
     return { reopened: refreshed.length, newOffers };
+  }
+  private async expireRequestIfExhausted(requestId: string, customerId: string): Promise<boolean> {
+    try {
+      return await this.txManager.execute(async (tx) => {
+        const updated = await this.requestRepo.updateStatus(requestId, 'EXPIRED', tx);
+        if (updated) {
+          await this.eventPublisher.publish(
+            rideEvent(RIDE_EVENT_CATALOG.REQUEST_EXPIRED, customerId, { requestId, customerId }),
+            tx,
+          );
+          return true;
+        }
+        return false;
+      });
+    } catch (err) {
+      logger.error({ err, requestId }, '[rides] failed to expire exhausted ride request');
+      return false;
+    }
   }
 }

@@ -94,6 +94,7 @@ type RideInput = {
   pickupNotes?: string | null;
   acceptedAt?: Date | string | null;
   arrivedAt?: Date | string | null;
+  dropoffArrivedAt?: Date | string | null;
   startedAt?: Date | string | null;
   completedAt?: Date | string | null;
   cancelledAt?: Date | string | null;
@@ -105,6 +106,15 @@ type RideInput = {
   vehicleType?: VehicleTypeInput | null;
   request?: RideRequestInput | null;
   stops?: RideStopInput[] | null;
+  statusEvents?: Array<{
+    id?: string;
+    fromStatus?: string | null;
+    toStatus?: string;
+    actorType?: string | null;
+    actorId?: string | null;
+    reason?: string | null;
+    createdAt?: Date | string;
+  }> | null;
 };
 
 type OfferInput = {
@@ -272,6 +282,12 @@ export const CLIENT_REQUEST_INCLUDE = {
 
 export function toClientRideRequestView(
   request: RideRequestInput | null | undefined,
+  offerStats?: {
+    offersSent?: number;
+    offersRejected?: number;
+    driversNotified?: number;
+    driversRejected?: number;
+  } | null,
 ): Record<string, unknown> | null {
   if (!request?.id) return null;
 
@@ -312,6 +328,18 @@ export function toClientRideRequestView(
     createdAt: request.createdAt ?? null,
     expiresAt: request.expiresAt ?? null,
     scheduledFor: request.scheduledFor ?? null,
+    ...((offerStats?.driversNotified ?? offerStats?.offersSent) != null
+      ? {
+          driversNotified: offerStats?.driversNotified ?? offerStats?.offersSent,
+          offersSent: offerStats?.offersSent ?? offerStats?.driversNotified,
+        }
+      : {}),
+    ...((offerStats?.driversRejected ?? offerStats?.offersRejected) != null
+      ? {
+          driversRejected: offerStats?.driversRejected ?? offerStats?.offersRejected,
+          offersRejected: offerStats?.offersRejected ?? offerStats?.driversRejected,
+        }
+      : {}),
   };
 }
 
@@ -356,8 +384,19 @@ export function toClientRideView(
     boostAmount,
     totalOffered,
     stops,
+    timeline: ride.statusEvents
+      ? ride.statusEvents.map((e) => ({
+          id: e.id,
+          fromStatus: e.fromStatus,
+          toStatus: e.toStatus,
+          actorType: e.actorType,
+          reason: e.reason,
+          createdAt: e.createdAt,
+        }))
+      : undefined,
     acceptedAt: ride.acceptedAt,
     arrivedAt: ride.arrivedAt,
+    dropoffArrivedAt: ride.dropoffArrivedAt ?? null,
     startedAt: ride.startedAt,
     completedAt: ride.completedAt,
     cancelledAt: ride.cancelledAt,

@@ -177,7 +177,15 @@ export class AdminLiveService {
     ] = await Promise.all([
       this.client.ride.findMany({
         where: {
-          status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+          status: {
+            in: [
+              'ACCEPTED',
+              'DRIVER_ARRIVING',
+              'DRIVER_ARRIVED',
+              'IN_PROGRESS',
+              'DRIVER_AT_DROPOFF',
+            ],
+          },
         },
         select: { status: true, paymentStatus: true },
       }),
@@ -262,7 +270,9 @@ export class AdminLiveService {
   }> {
     const where: Prisma.RideWhereInput = {};
     if (query.status === 'all') {
-      where.status = { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] };
+      where.status = {
+        in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS', 'DRIVER_AT_DROPOFF'],
+      };
     } else {
       where.status = query.status;
     }
@@ -397,7 +407,9 @@ export class AdminLiveService {
   async getMap(query: LiveMapQuery): Promise<AdminLiveMapDto> {
     const activeRides = await this.client.ride.findMany({
       where: {
-        status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+        status: {
+          in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS', 'DRIVER_AT_DROPOFF'],
+        },
         ...(query.vehicleTypeId ? { vehicleTypeId: query.vehicleTypeId } : {}),
       },
       include: {

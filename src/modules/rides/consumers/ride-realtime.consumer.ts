@@ -23,6 +23,7 @@ const RIDE_EVENTS: Record<string, { socketEvent: SocketEventName; terminal?: boo
   [RIDE_EVENT_CATALOG.DRIVER_ARRIVING]: { socketEvent: SOCKET_EVENT.DRIVER_ARRIVING },
   [RIDE_EVENT_CATALOG.DRIVER_ARRIVED]: { socketEvent: SOCKET_EVENT.DRIVER_ARRIVED },
   [RIDE_EVENT_CATALOG.STARTED]: { socketEvent: SOCKET_EVENT.RIDE_STARTED },
+  [RIDE_EVENT_CATALOG.DRIVER_AT_DROPOFF]: { socketEvent: SOCKET_EVENT.DRIVER_AT_DROPOFF },
   [RIDE_EVENT_CATALOG.COMPLETED]: { socketEvent: SOCKET_EVENT.RIDE_COMPLETED, terminal: true },
   [RIDE_EVENT_CATALOG.CANCELLED]: { socketEvent: SOCKET_EVENT.RIDE_CANCELLED, terminal: true },
   // Collection outcomes land here rather than being emitted from the payment

@@ -173,6 +173,116 @@ export class AdminApplicationService {
     private readonly vehicleVerificationService: VehicleVerificationService,
   ) {}
 
+  async getVerificationStats(): Promise<{
+    total: number;
+    approved: number;
+    rejected: number;
+    pendingReview: number;
+    underReview: number;
+    suspended: number;
+    blocked: number;
+    recentRejections: Array<{
+      driverId: string;
+      driverCode: string;
+      driverName: string;
+      reason: string | null;
+      reviewerId: string | null;
+      reviewerName: string | null;
+      timestamp: string | null;
+    }>;
+  }> {
+    const [counts, suspendedCount, blockedCount, rejectedDrivers] = await Promise.all([
+      this.databaseService.client.driver.groupBy({
+        by: ['verificationStatus'],
+        _count: { _all: true },
+      }),
+      this.databaseService.client.driver.count({
+        where: { isSuspended: true, user: { status: { not: 'DEACTIVATED' } } },
+      }),
+      this.databaseService.client.driver.count({
+        where: { user: { status: 'DEACTIVATED' } },
+      }),
+      this.databaseService.client.driver.findMany({
+        where: { verificationStatus: 'REJECTED' },
+        select: {
+          id: true,
+          driverCode: true,
+          rejectionReason: true,
+          user: {
+            select: {
+              profile: { select: { firstName: true, lastName: true } },
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 50,
+      }),
+    ]);
+
+    const rejectionLogs =
+      rejectedDrivers.length > 0
+        ? await this.databaseService.client.adminActivityLog.findMany({
+            where: {
+              entityType: 'driver',
+              entityId: { in: rejectedDrivers.map((d) => d.id) },
+              action: 'REJECT',
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [];
+
+    const logByDriverId = new Map<string, (typeof rejectionLogs)[number]>();
+    for (const log of rejectionLogs) {
+      if (log.entityId && !logByDriverId.has(log.entityId)) {
+        logByDriverId.set(log.entityId, log);
+      }
+    }
+
+    let approved = 0;
+    let rejected = 0;
+    let pendingReview = 0;
+    let underReview = 0;
+    let total = 0;
+
+    for (const group of counts) {
+      const c = group._count._all;
+      total += c;
+      if (group.verificationStatus === 'VERIFIED') approved += c;
+      else if (group.verificationStatus === 'REJECTED') rejected += c;
+      else if (group.verificationStatus === 'DOCUMENT_REVIEW') underReview += c;
+      else if (group.verificationStatus === 'PENDING') pendingReview += c;
+    }
+
+    const recentRejections = rejectedDrivers.map((d) => {
+      const log = logByDriverId.get(d.id);
+      const nameParts = [d.user?.profile?.firstName, d.user?.profile?.lastName].filter(Boolean);
+      const reasonFromMeta =
+        log?.metadata && typeof log.metadata === 'object' && 'reason' in log.metadata
+          ? String((log.metadata as Record<string, unknown>).reason)
+          : null;
+      return {
+        driverId: d.id,
+        driverCode: d.driverCode,
+        driverName: nameParts.join(' ') || d.driverCode,
+        reason: d.rejectionReason ?? reasonFromMeta ?? log?.summary ?? null,
+        reviewerId: log?.actorId ?? null,
+        reviewerName: log?.summary ?? null,
+        timestamp: log?.createdAt?.toISOString() ?? null,
+      };
+    });
+
+    return {
+      total,
+      approved,
+      rejected,
+      pendingReview,
+      underReview,
+      suspended: suspendedCount,
+      blocked: blockedCount,
+      recentRejections,
+    };
+  }
+
   async list(query: ListApplicationsQuery): Promise<{
     data: ApplicationListItemDto[];
     meta: { currentPage: number; totalPages: number; pageSize: number; totalCount: number };
