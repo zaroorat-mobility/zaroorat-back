@@ -1,3 +1,5 @@
+import { decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
+import type { RideEtaSnapshot } from '@modules/location/services/ride-eta.service.js';
 /**
  * Shapes Prisma ride / offer rows for customer + driver mobile clients.
  * Backend never returns the Ride PIN plaintext — only party/vehicle details.
@@ -74,6 +76,28 @@ type RideRequestInput = {
   expiresAt?: Date | string | null;
   vehicleType?: VehicleTypeInput | null;
   stops?: RideRequestStopInput[] | null;
+};
+
+type FareInput = {
+  id?: string;
+  rideId?: string;
+  baseFare?: unknown;
+  distanceFare?: unknown;
+  timeFare?: unknown;
+  waitingFare?: unknown;
+  surgeAmount?: unknown;
+  discountAmount?: unknown;
+  platformFee?: unknown;
+  cgst?: unknown;
+  sgst?: unknown;
+  igst?: unknown;
+  tipAmount?: unknown;
+  tollAmount?: unknown;
+  totalFare?: unknown;
+  driverEarnings?: unknown;
+  currency?: string | null;
+  createdAt?: Date | string | null;
+  updatedAt?: Date | string | null;
 };
 
 type RideInput = {
@@ -192,6 +216,13 @@ export const CLIENT_RIDE_INCLUDE = {
   fare: true,
   cancellation: true,
   statusEvents: true,
+  routePlan: {
+    select: {
+      encodedPolyline: true,
+      plannedDistanceKm: true,
+      plannedDurationMin: true,
+    },
+  },
   driver: {
     select: {
       id: true,
@@ -292,8 +323,8 @@ export function toClientRideRequestView(
   if (!request?.id) return null;
 
   const quotedFare = dec(request.quotedFare);
-  const boostAmount = dec(request.boostAmount);
-  const totalOffered = quotedFare != null ? quotedFare + (boostAmount ?? 0) : null;
+  const boostAmount = dec(request.boostAmount) ?? 0;
+  const totalOffered = quotedFare != null ? quotedFare + boostAmount : null;
   const vehicleType = request.vehicleType ?? null;
 
   return {
@@ -345,6 +376,7 @@ export function toClientRideRequestView(
 
 export function toClientRideView(
   ride: RideInput | null | undefined,
+  eta?: RideEtaSnapshot | null,
 ): Record<string, unknown> | null {
   if (!ride) return null;
 
@@ -354,12 +386,25 @@ export function toClientRideView(
   const dropLat = dec(req?.dropLat);
   const dropLng = dec(req?.dropLng);
   const quotedFare = dec(req?.quotedFare);
-  const boostAmount = dec(req?.boostAmount);
-  const totalOffered = quotedFare != null ? quotedFare + (boostAmount ?? 0) : null;
+  const boostAmount = dec(req?.boostAmount) ?? 0;
+  const totalOffered = quotedFare != null ? quotedFare + boostAmount : null;
   const driver = driverDisplayProfile(ride.driver);
   const customer = customerDisplayProfile(ride.customer);
   const vehicleType = ride.vehicleType ?? ride.vehicle?.vehicleType ?? null;
   const stops = mapStops(req?.stops?.length ? req.stops : undefined);
+
+  const routePlan =
+    (ride as { routePlan?: { encodedPolyline?: string | null } | null }).routePlan ?? null;
+  const encodedPolyline = routePlan?.encodedPolyline ?? null;
+  let routePath: Array<{ latitude: number; longitude: number }> | null = null;
+  if (encodedPolyline) {
+    try {
+      const decoded = decodeEncodedPolyline(encodedPolyline);
+      routePath = decoded.map((p) => ({ latitude: p.latitude, longitude: p.longitude }));
+    } catch {
+      routePath = null;
+    }
+  }
 
   return {
     id: ride.id,
@@ -381,8 +426,22 @@ export function toClientRideView(
     passengerName: ride.passengerName ?? req?.passengerName ?? null,
     passengerPhone: ride.passengerPhone ?? req?.passengerPhone ?? null,
     pickupNotes: ride.pickupNotes ?? req?.pickupNotes ?? null,
+    quotedFare,
     boostAmount,
     totalOffered,
+    encodedPolyline,
+    routePath,
+    routeAvailable: routePath != null && routePath.length > 0,
+    eta: eta
+      ? {
+          destinationType: eta.destinationType,
+          remainingDistanceMeters: eta.remainingDistanceMeters,
+          remainingDurationSeconds: eta.remainingDurationSeconds,
+          providerName: eta.providerName,
+          stale: eta.stale,
+          computedAt: eta.computedAt,
+        }
+      : null,
     stops,
     timeline: ride.statusEvents
       ? ride.statusEvents.map((e) => ({
@@ -400,7 +459,28 @@ export function toClientRideView(
     startedAt: ride.startedAt,
     completedAt: ride.completedAt,
     cancelledAt: ride.cancelledAt,
-    fare: ride.fare ?? null,
+    fare: ride.fare
+      ? (() => {
+          const f = ride.fare as FareInput;
+          return {
+            ...(f as Record<string, unknown>),
+            baseFare: dec(f.baseFare),
+            distanceFare: dec(f.distanceFare),
+            timeFare: dec(f.timeFare),
+            waitingFare: dec(f.waitingFare),
+            surgeAmount: dec(f.surgeAmount),
+            discountAmount: dec(f.discountAmount),
+            platformFee: dec(f.platformFee),
+            cgst: dec(f.cgst),
+            sgst: dec(f.sgst),
+            igst: dec(f.igst),
+            tipAmount: dec(f.tipAmount),
+            tollAmount: dec(f.tollAmount),
+            totalFare: dec(f.totalFare),
+            driverEarnings: dec(f.driverEarnings),
+          };
+        })()
+      : null,
     cancellation: ride.cancellation ?? null,
     driver,
     customer,

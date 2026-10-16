@@ -86,7 +86,9 @@ export class RideRequestController {
           create,
         )
       : await create();
-    reply.send({ data: request });
+    const enriched = await this.rideService.request.getRequestForCustomer(request.id, customerId);
+    const stats = await this.rideService.request.getOfferStatsForRequest(request.id);
+    reply.send({ data: toClientRideRequestView(enriched, stats) });
   }
   async getActiveRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const request = await this.rideService.request.getActiveRequest(callerId(req));
@@ -110,8 +112,10 @@ export class RideRequestController {
   async cancelRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const customerId = callerId(req);
     const { id } = req.params as { id: string };
-    const request = await this.rideService.request.cancelRequest(id, customerId);
-    reply.send({ data: request });
+    await this.rideService.request.cancelRequest(id, customerId);
+    const updated = await this.rideService.request.getRequestForCustomer(id, customerId);
+    const stats = await this.rideService.request.getOfferStatsForRequest(id);
+    reply.send({ data: toClientRideRequestView(updated, stats) });
   }
 
   async nearbyDrivers(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -159,8 +163,10 @@ export class RideRequestController {
     const customerId = callerId(req);
     const { id } = req.params as { id: string };
     const body = boostRequestSchema.parse(req.body);
-    const result = await this.rideService.request.boostRequest(id, customerId, body.boostAmount);
-    reply.send({ data: result });
+    await this.rideService.request.boostRequest(id, customerId, body.boostAmount);
+    const updated = await this.rideService.request.getRequestForCustomer(id, customerId);
+    const stats = await this.rideService.request.getOfferStatsForRequest(id);
+    reply.send({ data: toClientRideRequestView(updated, stats) });
   }
   async quoteDestination(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const customerId = callerId(req);

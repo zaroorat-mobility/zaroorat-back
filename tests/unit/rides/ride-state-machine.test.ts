@@ -64,8 +64,12 @@ describe('Ride State Machine Tests', () => {
     assert.doesNotThrow(() => service.validateTransition('DRIVER_ARRIVED', 'CANCELLED_BY_SYSTEM'));
 
     assert.doesNotThrow(() => service.validateTransition('IN_PROGRESS', 'CANCELLED_BY_SYSTEM'));
+    assert.doesNotThrow(() => service.validateTransition('IN_PROGRESS', 'CANCELLED_BY_CUSTOMER'));
     assert.doesNotThrow(() =>
       service.validateTransition('DRIVER_AT_DROPOFF', 'CANCELLED_BY_SYSTEM'),
+    );
+    assert.doesNotThrow(() =>
+      service.validateTransition('DRIVER_AT_DROPOFF', 'CANCELLED_BY_CUSTOMER'),
     );
   });
 
@@ -114,10 +118,6 @@ describe('Ride State Machine Tests', () => {
       InvalidRideStateTransitionError,
     );
     assert.throws(
-      () => service.validateTransition('IN_PROGRESS', 'CANCELLED_BY_CUSTOMER'),
-      InvalidRideStateTransitionError,
-    );
-    assert.throws(
       () => service.validateTransition('IN_PROGRESS', 'CANCELLED_BY_DRIVER'),
       InvalidRideStateTransitionError,
     );
@@ -132,10 +132,6 @@ describe('Ride State Machine Tests', () => {
     );
     assert.throws(
       () => service.validateTransition('DRIVER_AT_DROPOFF', 'ACCEPTED'),
-      InvalidRideStateTransitionError,
-    );
-    assert.throws(
-      () => service.validateTransition('DRIVER_AT_DROPOFF', 'CANCELLED_BY_CUSTOMER'),
       InvalidRideStateTransitionError,
     );
     assert.throws(

@@ -136,39 +136,49 @@ export class LocationStreamService {
     }
 
     let etaEnvelope: SocketEnvelope | undefined;
-    const dropLat = activeRide?.request?.dropLat;
-    const dropLng = activeRide?.request?.dropLng;
-    if (
-      activeRide &&
-      LIVE_RIDE_STATUSES.has(activeRide.status) &&
-      dropLat != null &&
-      dropLng != null
-    ) {
-      const eta = await this.rideEtaService.refreshEta({
-        rideId: activeRide.id,
-        driverPosition: { latitude: frame.latitude, longitude: frame.longitude },
-        destination: {
-          latitude: Number(dropLat),
-          longitude: Number(dropLng),
-        },
-        ...(activeRide.mapProvider
-          ? { pinnedProvider: activeRide.mapProvider as MapProviderName }
-          : {}),
-      });
-      if (eta) {
-        etaEnvelope = socketEnvelope(
-          randomUUID(),
-          SOCKET_EVENT.ETA_UPDATED,
-          {
-            rideId: activeRide.id,
-            remainingDistanceMeters: eta.remainingDistanceMeters,
-            remainingDurationSeconds: eta.remainingDurationSeconds,
-            providerName: eta.providerName,
-            stale: eta.stale,
-            computedAt: eta.computedAt,
+    if (activeRide && LIVE_RIDE_STATUSES.has(activeRide.status)) {
+      const isBeforeTripStart =
+        activeRide.status === 'ACCEPTED' ||
+        activeRide.status === 'DRIVER_ARRIVING' ||
+        activeRide.status === 'DRIVER_ARRIVED';
+
+      const destinationType: 'PICKUP' | 'DROP' = isBeforeTripStart ? 'PICKUP' : 'DROP';
+      const targetLat = isBeforeTripStart
+        ? activeRide.request?.pickupLat
+        : activeRide.request?.dropLat;
+      const targetLng = isBeforeTripStart
+        ? activeRide.request?.pickupLng
+        : activeRide.request?.dropLng;
+
+      if (targetLat != null && targetLng != null) {
+        const eta = await this.rideEtaService.refreshEta({
+          rideId: activeRide.id,
+          driverPosition: { latitude: frame.latitude, longitude: frame.longitude },
+          destination: {
+            latitude: Number(targetLat),
+            longitude: Number(targetLng),
           },
-          new Date(recordedAtMs),
-        );
+          destinationType,
+          ...(activeRide.mapProvider
+            ? { pinnedProvider: activeRide.mapProvider as MapProviderName }
+            : {}),
+        });
+        if (eta) {
+          etaEnvelope = socketEnvelope(
+            randomUUID(),
+            SOCKET_EVENT.ETA_UPDATED,
+            {
+              rideId: activeRide.id,
+              destinationType,
+              remainingDistanceMeters: eta.remainingDistanceMeters,
+              remainingDurationSeconds: eta.remainingDurationSeconds,
+              providerName: eta.providerName,
+              stale: eta.stale,
+              computedAt: eta.computedAt,
+            },
+            new Date(recordedAtMs),
+          );
+        }
       }
     }
 

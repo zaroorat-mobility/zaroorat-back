@@ -48,7 +48,10 @@ export class CancellationService {
     const feeApplies =
       data.cancelledBy === 'CUSTOMER' &&
       !withinGrace &&
-      (data.ride.status === 'DRIVER_ARRIVED' || data.ride.arrivedAt !== null);
+      (data.ride.status === 'DRIVER_ARRIVED' ||
+        data.ride.status === 'IN_PROGRESS' ||
+        data.ride.status === 'DRIVER_AT_DROPOFF' ||
+        data.ride.arrivedAt !== null);
     // Was a hardcoded 50 while `RIDE_DEFAULT_CANCELLATION_FEE` — which exists
     // for exactly this and defaults to the same 50 — went unread, so an
     // operator changing it changed nothing.

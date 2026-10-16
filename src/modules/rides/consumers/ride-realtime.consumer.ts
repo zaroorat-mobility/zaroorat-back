@@ -8,6 +8,8 @@ import {
   type SocketEventName,
 } from '@modules/realtime/events.js';
 import { RideRepository } from '../repositories/ride.repository.js';
+import { RideRequestRepository } from '../repositories/ride-request.repository.js';
+import { RideDispatchRepository } from '../repositories/ride-dispatch.repository.js';
 import { RIDE_EVENT_CATALOG } from '../events/catalog.js';
 import { PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
 
@@ -55,11 +57,14 @@ export class RideRealtimeConsumer {
     private readonly eventBus: EventBus,
     private readonly rideRepository: RideRepository,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly rideRequestRepository?: RideRequestRepository,
+    private readonly rideDispatchRepository?: RideDispatchRepository,
   ) {}
 
   register(): Unsubscribe {
     const unsubscribes = [
       this.eventBus.on(RIDE_EVENT_CATALOG.REQUESTED, (e) => this.onRideRequested(e)),
+      this.eventBus.on(RIDE_EVENT_CATALOG.REQUEST_BOOSTED, (e) => this.onRequestBoosted(e)),
       this.eventBus.on(RIDE_EVENT_CATALOG.REQUEST_EXPIRED, (e) => this.onRequestExpired(e)),
       ...Object.keys(OFFER_EVENTS).map((type) =>
         this.eventBus.on(type, (e) => this.onOfferEvent(type, e)),
@@ -86,6 +91,20 @@ export class RideRealtimeConsumer {
     );
   }
 
+  private onRequestBoosted(envelope: EventEnvelope): void {
+    const customerId = envelope.data.customerId;
+    if (typeof customerId !== 'string') return;
+    this.realtimeGateway.emitToRoom(
+      room.user(customerId),
+      this.envelopeFor(envelope, SOCKET_EVENT.REQUEST_BOOSTED, {
+        requestId: envelope.data.requestId ?? null,
+        boostAmount: envelope.data.boostAmount ?? 0,
+        totalOffered: envelope.data.totalOffered ?? null,
+        expiresAt: envelope.data.expiresAt ?? null,
+      }),
+    );
+  }
+
   /// The end of that same search, and the counterpart to `onRideRequested`:
   /// same user room, same reason for it — a request that never matched has no
   /// ride room, because it has no ride.
@@ -100,19 +119,46 @@ export class RideRealtimeConsumer {
     );
   }
 
-  private onOfferEvent(type: string, envelope: EventEnvelope): void {
+  private async onOfferEvent(type: string, envelope: EventEnvelope): Promise<void> {
     const socketEvent = OFFER_EVENTS[type];
     const driverId = envelope.data.driverId;
-    if (!socketEvent || typeof driverId !== 'string') return;
-    this.realtimeGateway.emitToRoom(
-      room.driver(driverId),
-      this.envelopeFor(envelope, socketEvent, {
-        dispatchId: envelope.data.dispatchId ?? null,
-        requestId: envelope.data.requestId ?? null,
-        expiresAt: envelope.data.expiresAt ?? null,
-        ...(envelope.data.reason !== undefined ? { reason: envelope.data.reason } : {}),
-      }),
-    );
+    if (socketEvent && typeof driverId === 'string') {
+      this.realtimeGateway.emitToRoom(
+        room.driver(driverId),
+        this.envelopeFor(envelope, socketEvent, {
+          dispatchId: envelope.data.dispatchId ?? null,
+          requestId: envelope.data.requestId ?? null,
+          expiresAt: envelope.data.expiresAt ?? null,
+          ...(envelope.data.reason !== undefined ? { reason: envelope.data.reason } : {}),
+        }),
+      );
+    }
+
+    const requestId = envelope.data.requestId;
+    if (
+      typeof requestId === 'string' &&
+      this.rideRequestRepository &&
+      this.rideDispatchRepository
+    ) {
+      try {
+        const req = await this.rideRequestRepository.findById(requestId);
+        if (req?.customerId) {
+          const stats = await this.rideDispatchRepository.countOfferStatsForRequest(requestId);
+          this.realtimeGateway.emitToRoom(
+            room.user(req.customerId),
+            this.envelopeFor(envelope, SOCKET_EVENT.REQUEST_STATS, {
+              requestId,
+              driversNotified: stats.driversNotified,
+              driversRejected: stats.driversRejected,
+              offersSent: stats.offersSent,
+              offersRejected: stats.offersRejected,
+            }),
+          );
+        }
+      } catch (err) {
+        logger.warn({ err, requestId }, '[realtime] failed to emit request stats');
+      }
+    }
   }
 
   private async onRideEvent(type: string, envelope: EventEnvelope): Promise<void> {
@@ -147,7 +193,11 @@ export class RideRealtimeConsumer {
         ...(envelope.data.cancelledBy !== undefined
           ? { cancelledBy: envelope.data.cancelledBy }
           : {}),
-        ...(envelope.data.totalFare !== undefined ? { totalFare: envelope.data.totalFare } : {}),
+        ...(envelope.data.totalFare !== undefined
+          ? { totalFare: envelope.data.totalFare }
+          : (ride as { fare?: { totalFare?: unknown } | null }).fare?.totalFare != null
+            ? { totalFare: Number((ride as { fare?: { totalFare?: unknown } }).fare!.totalFare) }
+            : {}),
       }),
     );
 

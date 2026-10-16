@@ -1,3 +1,6 @@
+import { RideNotFoundError, RideCustomerMismatchError } from '../errors/ride.errors.js';
+import { RIDE_REQUEST_IDEMPOTENCY_TTL_SECONDS } from '../constants/ride.constants.js';
+import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
 import { DatabaseService } from '@core/database';
@@ -24,6 +27,7 @@ export class RideStateController {
     private readonly dispatchService: DispatchService,
     private readonly rideRepo: RideRepository,
     private readonly db: DatabaseService,
+    private readonly redisService?: RedisService,
   ) {}
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
@@ -89,16 +93,18 @@ export class RideStateController {
     const { id } = req.params as {
       id: string;
     };
-    const ride = await this.rideService.lifecycle.markDriverArriving(id, driverId);
-    reply.send({ data: ride });
+    await this.rideService.lifecycle.markDriverArriving(id, driverId);
+    const enriched = await this.rideRepo.findById(id);
+    reply.send({ data: enriched ? toClientRideView(enriched) : null });
   }
   async arrive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
     const { id } = req.params as {
       id: string;
     };
-    const ride = await this.rideService.lifecycle.markDriverArrived(id, driverId);
-    reply.send({ data: ride });
+    await this.rideService.lifecycle.markDriverArrived(id, driverId);
+    const enriched = await this.rideRepo.findById(id);
+    reply.send({ data: enriched ? toClientRideView(enriched) : null });
   }
 
   async arriveDropoff(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -106,8 +112,9 @@ export class RideStateController {
     const { id } = req.params as {
       id: string;
     };
-    const ride = await this.rideService.lifecycle.markDriverArrivedAtDropoff(id, driverId);
-    reply.send({ data: ride });
+    await this.rideService.lifecycle.markDriverArrivedAtDropoff(id, driverId);
+    const enriched = await this.rideRepo.findById(id);
+    reply.send({ data: enriched ? toClientRideView(enriched) : null });
   }
   async start(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -115,8 +122,9 @@ export class RideStateController {
       id: string;
     };
     const body = startRideSchema.parse(req.body);
-    const ride = await this.rideService.lifecycle.startRide(id, driverId, body.pin);
-    reply.send({ data: ride });
+    await this.rideService.lifecycle.startRide(id, driverId, body.pin);
+    const enriched = await this.rideRepo.findById(id);
+    reply.send({ data: enriched ? toClientRideView(enriched) : null });
   }
   async complete(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -124,7 +132,7 @@ export class RideStateController {
       id: string;
     };
     const body = completeRideSchema.parse(req.body);
-    const ride = await this.rideService.lifecycle.completeRide(
+    await this.rideService.lifecycle.completeRide(
       id,
       driverId,
       body.actualDistanceKm,
@@ -134,7 +142,8 @@ export class RideStateController {
         ...(body.endReasonText !== undefined ? { endReasonText: body.endReasonText } : {}),
       },
     );
-    reply.send({ data: ride });
+    const enriched = await this.rideRepo.findById(id);
+    reply.send({ data: enriched ? toClientRideView(enriched) : null });
   }
   /// Which side of the ride is cancelling comes from the ride, not from the
   /// caller's roles.
@@ -156,23 +165,46 @@ export class RideStateController {
     };
     const body = cancelRideSchema.parse(req.body);
     const ride = await this.rideRepo.findById(id);
-    if (ride && rideParty(callerId(req), ride) === 'DRIVER') {
-      const cancelled = await this.rideService.lifecycle.cancelRide(
+    if (!ride) throw new RideNotFoundError(id);
+
+    const party = rideParty(callerId(req), ride);
+    if (party !== 'DRIVER' && party !== 'CUSTOMER') {
+      throw new RideCustomerMismatchError(id);
+    }
+
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    const cancelFn = async () => {
+      if (party === 'DRIVER') {
+        const driverId = await this.actingDriverId(req);
+        return this.rideService.lifecycle.cancelRide(
+          id,
+          'DRIVER',
+          driverId,
+          body.reasonCode,
+          body.reasonText,
+        );
+      }
+      return this.rideService.lifecycle.cancelRide(
         id,
-        'DRIVER',
-        await this.actingDriverId(req),
+        'CUSTOMER',
+        callerId(req),
         body.reasonCode,
         body.reasonText,
       );
-      return reply.send({ data: cancelled });
+    };
+
+    if (this.redisService && idempotencyKey) {
+      await this.redisService.idempotency.runOnce(
+        IDEMPOTENCY_OPERATIONS.RIDE_CANCEL,
+        `cancel:${callerId(req)}:${idempotencyKey}`,
+        RIDE_REQUEST_IDEMPOTENCY_TTL_SECONDS,
+        cancelFn,
+      );
+    } else {
+      await cancelFn();
     }
-    const cancelled = await this.rideService.lifecycle.cancelRide(
-      id,
-      'CUSTOMER',
-      callerId(req),
-      body.reasonCode,
-      body.reasonText,
-    );
-    return reply.send({ data: cancelled });
+
+    const enriched = await this.rideRepo.findById(id);
+    return reply.send({ data: enriched ? toClientRideView(enriched) : null });
   }
 }

@@ -1,24 +1,30 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { assertRideParty, callerId } from '@core/auth';
 import { GeoService } from '@modules/location';
+import type { RideEtaService } from '@modules/location/services/ride-eta.service.js';
 import { RideRepository } from '../repositories/ride.repository.js';
 import { ReceiptService } from '../services/receipt/receipt.service.js';
 import { RideNotFoundError } from '../errors/ride.errors.js';
 import { RIDE_CANCEL_REASONS } from '../constants/ride.constants.js';
 import { ridePartyIds } from '../types/ride-party.js';
 import { toClientRideView } from '../presenters/ride-client.presenter.js';
+
 const LIVE_TRACKING_STATUSES = new Set([
   'ACCEPTED',
   'DRIVER_ARRIVING',
   'DRIVER_ARRIVED',
   'IN_PROGRESS',
+  'DRIVER_AT_DROPOFF',
 ]);
+
 export class RideQueryController {
   constructor(
     private readonly rideRepo: RideRepository,
     private readonly receiptService: ReceiptService,
     private readonly geoService: GeoService,
+    private readonly rideEtaService?: RideEtaService,
   ) {}
+
   /// The caller's live ride, whichever side of it they are on.
   ///
   /// This used to branch on `callerHasRole(req, 'driver')` and look the caller
@@ -28,7 +34,9 @@ export class RideQueryController {
   /// in one. One query over both sides needs no such guess.
   async getActive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const activeRide = await this.rideRepo.findActiveForUser(callerId(req));
-    return reply.send({ data: toClientRideView(activeRide) });
+    const eta =
+      activeRide && this.rideEtaService ? this.rideEtaService.getEta(activeRide.id) : null;
+    return reply.send({ data: toClientRideView(activeRide, eta) });
   }
 
   /// Static list of cancel reasons. Filtered by optional `?actor=DRIVER|CUSTOMER`.
@@ -41,6 +49,7 @@ export class RideQueryController {
     }).map(({ code, label }) => ({ code, label }));
     reply.send({ data: reasons });
   }
+
   async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as {
       id: string;
@@ -48,8 +57,10 @@ export class RideQueryController {
     const ride = await this.rideRepo.findById(id);
     if (!ride) throw new RideNotFoundError(id);
     assertRideParty(req, ridePartyIds(ride));
-    reply.send({ data: toClientRideView(ride) });
+    const eta = this.rideEtaService ? this.rideEtaService.getEta(ride.id) : null;
+    reply.send({ data: toClientRideView(ride, eta) });
   }
+
   async getReceipt(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as {
       id: string;
@@ -60,6 +71,7 @@ export class RideQueryController {
     const receipt = await this.receiptService.generateReceipt(id);
     reply.send({ data: receipt });
   }
+
   /// The only sanctioned way for a customer to see a driver's live position:
   /// scoped to their own active ride with that exact driver, not the
   /// driver-owned `GET /drivers/:id/location` endpoint, which correctly
@@ -79,6 +91,7 @@ export class RideQueryController {
       reply.send({ data: null });
       return;
     }
+    const eta = this.rideEtaService ? this.rideEtaService.getEta(ride.id) : null;
     reply.send({
       data: {
         lat: position.latitude,
@@ -86,9 +99,22 @@ export class RideQueryController {
         latitude: position.latitude,
         longitude: position.longitude,
         recordedAt: position.updatedAt ?? null,
+        ...(eta
+          ? {
+              eta: {
+                destinationType: eta.destinationType,
+                remainingDistanceMeters: eta.remainingDistanceMeters,
+                remainingDurationSeconds: eta.remainingDurationSeconds,
+                providerName: eta.providerName,
+                stale: eta.stale,
+                computedAt: eta.computedAt,
+              },
+            }
+          : {}),
       },
     });
   }
+
   async listHistory(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const rides = await this.rideRepo.listCustomerRides(callerId(req));
     reply.send({ data: rides });

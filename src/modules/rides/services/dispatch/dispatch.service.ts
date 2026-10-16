@@ -336,8 +336,14 @@ export class DispatchService {
   private async expireRequestIfExhausted(requestId: string, customerId: string): Promise<boolean> {
     try {
       return await this.txManager.execute(async (tx) => {
-        const updated = await this.requestRepo.updateStatus(requestId, 'EXPIRED', tx);
-        if (updated) {
+        const { count } = await tx.rideRequest.updateMany({
+          where: {
+            id: requestId,
+            status: { in: ['CREATED', 'SEARCHING'] },
+          },
+          data: { status: 'EXPIRED' },
+        });
+        if (count === 1) {
           await this.eventPublisher.publish(
             rideEvent(RIDE_EVENT_CATALOG.REQUEST_EXPIRED, customerId, { requestId, customerId }),
             tx,

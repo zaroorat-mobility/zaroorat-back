@@ -5,6 +5,7 @@ export const IDEMPOTENCY_OPERATIONS = Object.freeze({
   PHONE_CHANGE_VERIFY: 'phone-change-verify',
   PAYMENT: 'payment',
   RIDE_REQUEST: 'ride-request',
+  RIDE_CANCEL: 'ride-cancel',
 } as const);
 export type IdempotencyOperation =
   (typeof IDEMPOTENCY_OPERATIONS)[keyof typeof IDEMPOTENCY_OPERATIONS];
