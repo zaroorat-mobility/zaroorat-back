@@ -103,6 +103,8 @@ export const submitDriverDocumentSchema = z.object({
     'PROFILE_PHOTO',
   ]),
   fileId: z.string().uuid(),
+  /// The back of a two-sided card (licence, Aadhaar); `fileId` is then the front.
+  backFileId: z.string().uuid().optional(),
   documentNumber: z.string().max(100).optional(),
   expiresAt: z.string().datetime().optional(),
 });
@@ -144,3 +146,26 @@ export const selectPaymentModelSchema = z.object({
   model: z.enum(['SUBSCRIPTION', 'COMMISSION']),
 });
 export type SelectPaymentModelBody = z.infer<typeof selectPaymentModelSchema>;
+
+export const submitDriverBankAccountSchema = z
+  .object({
+    accountHolderName: z.string().min(2).max(100),
+    bankName: z.string().min(2).max(100),
+    accountNumber: z.string().min(8).max(30),
+    confirmAccountNumber: z.string().min(8).max(30),
+    ifscCode: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code format (e.g. SBIN0001234)'),
+    upiId: z
+      .string()
+      .trim()
+      .regex(/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/, 'Invalid UPI ID format')
+      .optional(),
+  })
+  .refine((data) => data.accountNumber === data.confirmAccountNumber, {
+    message: 'Bank account number and confirm account number must match',
+    path: ['confirmAccountNumber'],
+  });
+export type SubmitDriverBankAccountBody = z.infer<typeof submitDriverBankAccountSchema>;

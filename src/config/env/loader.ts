@@ -12,14 +12,18 @@ export function loadEnvironment(): void {
   if (!envFile) {
     return;
   }
-  const envPath = path.resolve(process.cwd(), envFile);
+  let envPath = path.resolve(process.cwd(), envFile);
   if (!fs.existsSync(envPath)) {
-    if (REQUIRES_ENV_FILE.has(appEnv)) {
+    const fallbackPath = path.resolve(__dirname, '../../..', envFile);
+    if (fs.existsSync(fallbackPath)) {
+      envPath = fallbackPath;
+    } else if (REQUIRES_ENV_FILE.has(appEnv)) {
       throw new Error(
         `Environment file "${envFile}" not found. Copy .env.example to ${envFile} to get started.`,
       );
+    } else {
+      return;
     }
-    return;
   }
   dotenv.config({
     path: envPath,

@@ -1300,11 +1300,10 @@ describe('ride dispatch, offers and assignment (integration)', () => {
     });
   });
 
-  /// `Promotion` and `PromotionRedemption` are fully modelled and referenced
-  /// nowhere in `src`. Redeeming them is out of scope by decision, but the API
-  /// accepted a code anyway, stored it on the request and billed the customer
-  /// in full — a rider who typed a code was quietly charged the undiscounted
-  /// fare with nothing in the response to tell them.
+  /// The API once accepted any code, stored it on the request and billed the
+  /// customer in full — a rider who typed a code was quietly charged the
+  /// undiscounted fare. Promotions are redeemed now (PromotionService), so a code
+  /// that resolves to nothing must still refuse the booking, not book at full price.
   describe('a promo code the platform cannot honour (M-3)', () => {
     it('refuses the booking rather than charging full price in silence', async () => {
       const vehicleTypeId = await makeVehicleType({ code: `PROMO_${randomUUID().slice(0, 6)}` });
@@ -1317,8 +1316,8 @@ describe('ride dispatch, offers and assignment (integration)', () => {
         payload: { vehicleTypeId, ...TRIP, promoCode: 'SUMMER50' },
       });
 
-      assert.equal(response.statusCode, 422, response.payload);
-      assert.equal(response.json().error.code, 'PROMOTIONS_UNAVAILABLE');
+      assert.equal(response.statusCode, 404, response.payload);
+      assert.equal(response.json().error.code, 'PROMO_NOT_FOUND');
       assert.equal(await db().client.rideRequest.count(), 0, 'nothing may be written');
     });
 

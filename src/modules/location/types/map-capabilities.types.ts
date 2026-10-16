@@ -16,13 +16,6 @@ export type MapCapability = (typeof MAP_CAPABILITY)[keyof typeof MAP_CAPABILITY]
 export const ALL_MAP_CAPABILITIES: readonly MapCapability[] = Object.values(MAP_CAPABILITY);
 
 export const DEFAULT_PROVIDER_CAPABILITIES: Record<MapProviderName, readonly MapCapability[]> = {
-  ola: [
-    MAP_CAPABILITY.AUTOCOMPLETE,
-    MAP_CAPABILITY.GEOCODE,
-    MAP_CAPABILITY.REVERSE_GEOCODE,
-    MAP_CAPABILITY.ROUTE,
-    MAP_CAPABILITY.ROUTE_MATRIX,
-  ],
   google: [
     MAP_CAPABILITY.AUTOCOMPLETE,
     MAP_CAPABILITY.GEOCODE,
@@ -76,7 +69,7 @@ export interface MapPolicySettings {
 }
 
 export const DEFAULT_MAP_POLICY: MapPolicySettings = {
-  primaryProvider: 'ola',
-  enabledProviders: ['ola'],
+  primaryProvider: 'google',
+  enabledProviders: ['google'],
   configVersion: 0,
 };

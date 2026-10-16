@@ -8,4 +8,6 @@ export * from './driver-commission-wallet.controller.js';
 export * from './driver-earnings.controller.js';
 export * from './driver-withdrawal.controller.js';
 export * from './driver-scheduled.controller.js';
+export * from './driver-map-zones.controller.js';
+export * from './driver-bank.controller.js';
 export * from './driver.controller.js';

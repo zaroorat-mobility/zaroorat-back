@@ -3,12 +3,20 @@ import type {
   Vehicle,
   VehicleAssignment,
   VehicleDocument,
+  VehicleImage,
   VehicleType,
   VerificationStatus,
 } from '../../../generated/prisma/index.js';
 export type Decimal = Prisma.Decimal;
 export const Decimal = Prisma.Decimal;
-export type { Vehicle, VehicleAssignment, VehicleDocument, VehicleType, VerificationStatus };
+export type {
+  Vehicle,
+  VehicleAssignment,
+  VehicleDocument,
+  VehicleImage,
+  VehicleType,
+  VerificationStatus,
+};
 
 /// Mirrors `DocumentEligibilityResult` in the drivers module so the two gates
 /// report their outcome in the same shape.

@@ -39,12 +39,14 @@ export const DRIVERS: Readonly<Record<string, { userId: string }>> = {
   [DRIVER]: { userId: DRIVER_USER },
 };
 
-/// The ten events the consumer subscribes to.
+/// The twelve events the consumer subscribes to.
 export const NOTIFICATION_EVENT_TYPES = [
   'ride.dispatch.offered',
   'ride.accepted',
+  'ride.driver_nearby',
   'ride.driver_arriving',
   'ride.driver_arrived',
+  'ride.driver_at_dropoff',
   'ride.started',
   'ride.cancelled',
   'ride.completed',

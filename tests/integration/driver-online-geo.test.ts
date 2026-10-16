@@ -4,6 +4,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
+import { driverConfig } from '../../src/config/driver/driver.config.js';
 import { grantRole, makeAssignedVehicle, makeDriver } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
@@ -17,7 +18,7 @@ function png(): Buffer {
 }
 
 const CENTRE = { latitude: 12.9716, longitude: 77.5946 };
-const REQUIRED_TYPES = ['DRIVING_LICENSE', 'RC', 'INSURANCE'];
+const REQUIRED_TYPES: readonly string[] = driverConfig.requiredDocumentTypes;
 
 function driverIdsOf(result: NearbyDriversResult): string[] {
   return result.outcome === 'no-live-candidates' ? [] : result.drivers.map((d) => d.driverId);
@@ -106,8 +107,16 @@ describe('driver online activation and geo safety (integration)', () => {
     });
     assert.equal(approved.statusCode, 200, approved.payload);
     // Going online gates on the vehicle as well as the driver: an operable
-    // driver needs an active, VERIFIED vehicle with its own papers in order.
+    // driver needs an active, VERIFIED vehicle with its own papers in order,
+    // and a chosen payment plan.
     await makeAssignedVehicle(driverId);
+    const plan = await app.inject({
+      method: 'POST',
+      url: '/api/v1/drivers/payment-model',
+      headers: user.authHeader,
+      payload: { model: 'COMMISSION' },
+    });
+    assert.ok([200, 201].includes(plan.statusCode), plan.payload);
     return user;
   }
 

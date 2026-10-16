@@ -12,21 +12,24 @@ export class FileLifecycleService {
     private readonly transactionManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
   ) {}
+  /// The reference check and the delete run under the file's row lock, the one attaching
+  /// takes: a delete either waits for an in-flight attach and then sees its reference, or
+  /// completes first and the attach finds the file gone.
   async remove(
     fileId: string,
     ownerUserId: string,
     requestId: string | null = null,
   ): Promise<void> {
-    const file = await this.fileRepository.findOwned(fileId, ownerUserId);
-    if (!file) throw new FileNotFoundError();
-    if (file.status === 'DELETED') return;
-    if (file.status !== 'READY') throw new FileNotFoundError();
-    const purpose = file.purpose as FilePurposeName;
-    const holder = await findLiveReference(purpose, file.id);
-    if (holder) throw new FileInUseError(holder);
-    const deletedAt = new Date();
     await this.transactionManager.execute(async (tx) => {
-      const won = await this.fileRepository.softDelete(file.id, deletedAt, tx);
+      await this.fileRepository.lockForUpdate([fileId], tx);
+      const file = await this.fileRepository.findOwned(fileId, ownerUserId, tx);
+      if (!file) throw new FileNotFoundError();
+      if (file.status === 'DELETED') return;
+      if (file.status !== 'READY') throw new FileNotFoundError();
+      const purpose = file.purpose as FilePurposeName;
+      const holder = await findLiveReference(purpose, file.id, tx);
+      if (holder) throw new FileInUseError(holder);
+      const won = await this.fileRepository.softDelete(file.id, new Date(), tx);
       if (!won) return;
       await this.eventPublisher.publish(
         fileEvent('file.deleted', {
@@ -44,6 +47,9 @@ export class FileLifecycleService {
         tx,
       );
     });
+  }
+  lockForAttach(fileIds: string[], tx: TransactionClient): Promise<void> {
+    return this.fileRepository.lockForUpdate(fileIds, tx);
   }
   async releaseInTransaction(
     fileId: string,
@@ -72,12 +78,15 @@ export class FileLifecycleService {
     );
     return true;
   }
+  /// Locks the file first, so concurrent attaches of one file serialise: the second waits
+  /// for the first to commit, then sees its reference and is refused.
   async assertReferenceable(
     fileId: string,
     ownerUserId: string,
     purpose: FilePurposeName,
     tx: TransactionClient,
   ): Promise<void> {
+    await this.fileRepository.lockForUpdate([fileId], tx);
     const file = await this.fileRepository.findOwned(fileId, ownerUserId, tx);
     if (!file || file.purpose !== purpose) throw new FileNotFoundError();
     if (file.status !== 'READY' || file.deletedAt !== null) {

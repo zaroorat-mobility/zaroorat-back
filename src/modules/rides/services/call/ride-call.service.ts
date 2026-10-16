@@ -14,9 +14,13 @@ export class RideCallService {
     const ride = await this.rideRepository.findById(rideId);
     if (!ride) throw new RideError(`Ride '${rideId}' was not found`, 'RIDE_NOT_FOUND', 404);
 
-    const active = ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'].includes(
-      ride.status,
-    );
+    const active = [
+      'ACCEPTED',
+      'DRIVER_ARRIVING',
+      'DRIVER_ARRIVED',
+      'IN_PROGRESS',
+      'DRIVER_AT_DROPOFF',
+    ].includes(ride.status);
     if (!active) {
       throw new RideError(
         'Calling is only available during an active ride',

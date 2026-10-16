@@ -24,8 +24,6 @@ export function buildMapSettingsFromEnv(): CachedMapSettings {
     .trim()
     .toLowerCase() as MapProviderName;
   const enabled: MapProviderName[] = [];
-  if (resolveMapCredential(process.env.OLA_MAPS_API_KEY, process.env.MAPS_API_KEY))
-    enabled.push('ola');
   if (resolveMapCredential(process.env.GOOGLE_MAPS_API_KEY)) enabled.push('google');
   if (
     resolveMapCredential(process.env.MAPPLS_REST_API_KEY) ||

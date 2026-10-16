@@ -37,6 +37,15 @@ const SANCTIONED_PUBLIC: ReadonlyMap<string, string> = new Map([
     'POST /api/v1/payments/webhooks/stripe',
     "A payment gateway holds no bearer token. Authenticated by Stripe's t=/v1= Stripe-Signature scheme.",
   ],
+  [
+    'GET /api/v1/rides/share/:token',
+    'Trip-sharing link a rider sends to family, who hold no account. The bearer is the link ' +
+      'itself: 24 random bytes (192-bit), per-ride, revocable, expiring after ' +
+      'RIDE_SHARE_TOKEN_TTL_HOURS (default 12). Returns driver first name and rating, vehicle, ' +
+      'pickup/drop and the driver position only while the ride is live (an ended ride shows ' +
+      'neither); never phone numbers or rider identity. IP rate limited by ' +
+      'rateLimits.rideShareView.',
+  ],
   ['GET /health', 'Load-balancer probe.'],
   ['GET /api/v1/health', 'Load-balancer probe (prefixed).'],
   ['GET /ready', 'Kubernetes readiness probe.'],

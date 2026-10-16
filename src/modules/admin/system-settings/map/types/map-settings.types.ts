@@ -1,6 +1,6 @@
 import type { MapCapability } from '@modules/location/types/map-capabilities.types.js';
 
-export type MapProviderName = 'ola' | 'google' | 'mappls';
+export type MapProviderName = 'google' | 'mappls';
 
 /** Admin GET view — never includes secret values, only configured flags. */
 export interface MapProviderConfigView {
@@ -15,9 +15,9 @@ export interface MapProviderConfigView {
 export interface MapSettingsView {
   primaryProvider: string;
   providers: {
-    ola: MapProviderConfigView;
     google: MapProviderConfigView;
     mappls: MapProviderConfigView;
+    ola?: MapProviderConfigView;
   };
   version: number;
 }

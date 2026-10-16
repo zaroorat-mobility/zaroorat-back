@@ -58,7 +58,7 @@ export interface VehicleListItemDto {
 }
 
 export interface VehicleDetailsDto extends VehicleListItemDto {
-  seatsCapacity: number;
+  seatsCapacity?: number;
   rcNumber?: string;
   insuranceNo?: string;
   permitNo?: string;
@@ -83,8 +83,9 @@ export interface VehicleDetailsDto extends VehicleListItemDto {
     model?: string;
     registrationPlate: string;
     color?: string;
-    seatsCapacity: number;
+    seatsCapacity?: number;
     manufacturingYear?: number;
+    photoUrl?: string;
     rcNumber?: string;
     insuranceNo?: string;
     insuranceExpiry?: string;
@@ -245,6 +246,7 @@ export class AdminVehicleService {
       where: { id },
       include: {
         vehicleType: true,
+        images: { orderBy: { uploadedAt: 'desc' }, take: 1 },
         documents: { orderBy: { createdAt: 'asc' } },
         assignments: {
           where: { status: 'ACTIVE', releasedAt: null },
@@ -325,8 +327,9 @@ export class AdminVehicleService {
       ...(row.model ? { model: row.model } : {}),
       registrationPlate: row.registrationNumber,
       ...(row.color ? { color: row.color } : {}),
-      seatsCapacity: row.seatingCapacity ?? 4,
+      ...(row.seatingCapacity != null ? { seatsCapacity: row.seatingCapacity } : {}),
       ...(row.manufacturingYear ? { manufacturingYear: row.manufacturingYear } : {}),
+      ...(row.images?.[0]?.imageUrl ? { photoUrl: row.images[0].imageUrl } : {}),
       ...(rc.no ? { rcNumber: rc.no } : {}),
       ...(insurance.no ? { insuranceNo: insurance.no } : {}),
       ...(insurance.expiry ? { insuranceExpiry: insurance.expiry } : {}),
@@ -340,7 +343,7 @@ export class AdminVehicleService {
 
     return {
       ...base,
-      seatsCapacity: row.seatingCapacity ?? 4,
+      ...(row.seatingCapacity != null ? { seatsCapacity: row.seatingCapacity } : {}),
       ...(rc.no ? { rcNumber: rc.no } : {}),
       ...(insurance.no ? { insuranceNo: insurance.no } : {}),
       ...(permit.no ? { permitNo: permit.no } : {}),

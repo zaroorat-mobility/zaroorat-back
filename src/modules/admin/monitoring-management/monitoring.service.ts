@@ -469,12 +469,11 @@ export class AdminMonitoringService {
     };
   }
 
-  private async resolveActiveMapProvider(): Promise<'ola' | 'google' | 'mappls' | null> {
+  private async resolveActiveMapProvider(): Promise<'google' | 'mappls' | null> {
     const provider =
       (await this.systemSettingService.getSettingValue(MAP_SETTING_KEYS.PRIMARY_PROVIDER)) ??
       DEFAULT_MAP_PROVIDERS.PRIMARY;
-    if (provider === 'ola' || provider === 'google' || provider === 'mappls') return provider;
-    if (await this.systemSettingService.getSettingValue(MAP_SETTING_KEYS.OLA_API_KEY)) return 'ola';
+    if (provider === 'google' || provider === 'mappls') return provider;
     if (await this.systemSettingService.getSettingValue(MAP_SETTING_KEYS.GOOGLE_API_KEY)) {
       return 'google';
     }

@@ -156,6 +156,36 @@ export class AdminPlatformSettingsService {
         rideConfig.defaultCancellationFee,
         Number.parseFloat,
       ),
+      pickupGeofenceMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.PICKUP_GEOFENCE_METERS)?.value,
+        rideConfig.pickupGeofenceMeters,
+        Number.parseInt,
+      ),
+      dropGeofenceMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.DROP_GEOFENCE_METERS)?.value,
+        rideConfig.dropGeofenceMeters,
+        Number.parseInt,
+      ),
+      arrivalMaxAccuracyMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.ARRIVAL_MAX_ACCURACY_METERS)?.value,
+        rideConfig.arrivalMaxAccuracyMeters,
+        Number.parseInt,
+      ),
+      arrivalRequiredFixes: withSource(
+        s.get(RIDE_SETTING_KEYS.ARRIVAL_REQUIRED_FIXES)?.value,
+        rideConfig.arrivalRequiredFixes,
+        Number.parseInt,
+      ),
+      dispatchMaxRounds: withSource(
+        s.get(RIDE_SETTING_KEYS.DISPATCH_MAX_ROUNDS)?.value,
+        rideConfig.dispatchMaxRounds,
+        Number.parseInt,
+      ),
+      dispatchMaxAttemptedDrivers: withSource(
+        s.get(RIDE_SETTING_KEYS.DISPATCH_MAX_ATTEMPTED_DRIVERS)?.value,
+        rideConfig.dispatchMaxAttemptedDrivers,
+        Number.parseInt,
+      ),
     };
   }
 
@@ -184,6 +214,30 @@ export class AdminPlatformSettingsService {
         {
           key: RIDE_SETTING_KEYS.DEFAULT_CANCELLATION_FEE,
           value: body.defaultCancellationFee?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.PICKUP_GEOFENCE_METERS,
+          value: body.pickupGeofenceMeters?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DROP_GEOFENCE_METERS,
+          value: body.dropGeofenceMeters?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.ARRIVAL_MAX_ACCURACY_METERS,
+          value: body.arrivalMaxAccuracyMeters?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.ARRIVAL_REQUIRED_FIXES,
+          value: body.arrivalRequiredFixes?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DISPATCH_MAX_ROUNDS,
+          value: body.dispatchMaxRounds?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DISPATCH_MAX_ATTEMPTED_DRIVERS,
+          value: body.dispatchMaxAttemptedDrivers?.toString(),
         },
       ],
       actorId,

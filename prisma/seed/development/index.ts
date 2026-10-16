@@ -432,8 +432,6 @@ async function seedCities(prisma: Prisma) {
     { code: 'SGR', name: 'Srinagar', state: 'Jammu & Kashmir' },
     { code: 'BLR', name: 'Bengaluru', state: 'Karnataka' },
     { code: 'PNQ', name: 'Pune', state: 'Maharashtra' },
-    // Admin / live DBs often use PUN; seed both so either code gets coverage.
-    { code: 'PUN', name: 'Pune', state: 'Maharashtra' },
     { code: 'GLOBAL', name: 'All cities (global)', state: null as string | null },
   ];
   for (const city of cities) {
@@ -494,7 +492,6 @@ async function seedGeographicReference(prisma: Prisma) {
     SGR: { boundary: SGR_BOUNDARY, center: [74.85, 34.1] },
     BLR: { boundary: BLR_BOUNDARY, center: [77.5946, 12.9716] },
     PNQ: { boundary: PNQ_BOUNDARY, center: [73.8567, 18.5204] },
-    PUN: { boundary: PNQ_BOUNDARY, center: [73.8567, 18.5204] },
   };
 
   for (const [code, geo] of Object.entries(cityBoundaries)) {
@@ -503,7 +500,7 @@ async function seedGeographicReference(prisma: Prisma) {
     const stateId =
       code === 'SGR'
         ? stateByCode.get('JK')
-        : code === 'PNQ' || code === 'PUN'
+        : code === 'PNQ'
           ? stateByCode.get('MH')
           : stateByCode.get('KA');
     await prisma.city.update({
@@ -585,17 +582,6 @@ async function seedServiceZones(prisma: Prisma) {
       zones: [
         {
           code: 'PNQ_CITYWIDE',
-          name: 'Pune Citywide',
-          zoneType: 'SERVICE',
-          coordinates: PNQ_BOUNDARY,
-        },
-      ],
-    },
-    {
-      cityCode: 'PUN',
-      zones: [
-        {
-          code: 'PUN_CITYWIDE',
           name: 'Pune Citywide',
           zoneType: 'SERVICE',
           coordinates: PNQ_BOUNDARY,
@@ -867,16 +853,12 @@ async function seedPricingFixtures(prisma: Prisma) {
   if (zoneId) {
     const cab = byCode['CAB_ECONOMY'];
     const auto = byCode['AUTO'];
-    const tomorrow = new Date();
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-    tomorrow.setUTCHours(8, 0, 0, 0);
-    const tomorrowEnd = new Date(tomorrow);
-    tomorrowEnd.setUTCHours(11, 0, 0, 0);
-    const evening = new Date();
-    evening.setUTCDate(evening.getUTCDate() + 1);
-    evening.setUTCHours(17, 0, 0, 0);
-    const eveningEnd = new Date(evening);
-    eveningEnd.setUTCHours(20, 0, 0, 0);
+    // The daily hours live in peakHourStart/End, read in the city's timezone
+    // (pricing/utils/peak-window.ts). startsAt/endsAt only bound validity: pinning
+    // them to "tomorrow 08:00 UTC" (13:30 IST) never overlapped the 08:00 IST peak
+    // and expired a day after seeding.
+    const validFrom = new Date();
+    const validUntil = new Date(validFrom.getTime() + 90 * 86400000);
 
     const windowCount = await prisma.surgeWindow.count({ where: { zoneId } });
     if (windowCount === 0) {
@@ -886,8 +868,8 @@ async function seedPricingFixtures(prisma: Prisma) {
             zoneId,
             vehicleTypeId: cab.id,
             multiplier: 1.5,
-            startsAt: tomorrow,
-            endsAt: tomorrowEnd,
+            startsAt: validFrom,
+            endsAt: validUntil,
             reason: 'Morning Peak Cab Surge',
             source: 'MANUAL',
             isActive: true,
@@ -905,8 +887,8 @@ async function seedPricingFixtures(prisma: Prisma) {
             zoneId,
             vehicleTypeId: auto.id,
             multiplier: 1.2,
-            startsAt: evening,
-            endsAt: eveningEnd,
+            startsAt: validFrom,
+            endsAt: validUntil,
             reason: 'Evening Peak Auto Surge',
             source: 'MANUAL',
             isActive: true,

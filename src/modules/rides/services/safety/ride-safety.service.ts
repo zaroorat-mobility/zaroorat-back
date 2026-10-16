@@ -191,11 +191,16 @@ export class RideSafetyService {
     };
     const live = isLive(ride.status);
     const position = live ? await this.geoService.liveDriverPosition(ride.driverId) : null;
+    // Once the trip is over there is nothing left to track, and where the rider was
+    // picked up and dropped (often home) stops being shown — even though the link
+    // itself stays valid until it expires.
+    const place = (address: string | null, latitude: number | null, longitude: number | null) =>
+      live ? { address, latitude, longitude } : null;
     return {
       status: view.status,
       isLive: live,
-      pickup: { address: view.pickupAddress, latitude: view.pickupLat, longitude: view.pickupLng },
-      drop: { address: view.dropAddress, latitude: view.dropLat, longitude: view.dropLng },
+      pickup: place(view.pickupAddress, view.pickupLat, view.pickupLng),
+      drop: place(view.dropAddress, view.dropLat, view.dropLng),
       startedAt: view.startedAt,
       completedAt: view.completedAt,
       driver: view.driver

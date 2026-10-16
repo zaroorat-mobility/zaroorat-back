@@ -22,6 +22,7 @@ export const SOCKET_EVENT = {
   DRIVER_NEARBY: 'ride.driver.nearby',
   DRIVER_ARRIVING: 'ride.driver.arriving',
   DRIVER_ARRIVED: 'ride.driver.arrived',
+  DRIVER_AT_DROPOFF: 'ride.driver.at_dropoff',
   RIDE_STARTED: 'ride.started',
   RIDE_COMPLETED: 'ride.completed',
   RIDE_CANCELLED: 'ride.cancelled',
@@ -101,8 +102,10 @@ export const room = {
   /// Every socket opened with a session's token, so revoking the session can end
   /// them. Joined by the server at connect; never reported to or requested by a client.
   session: (sessionId: string): string => `session:${sessionId}`,
-  /// Admin dashboard: operational hints (operations:read) and financial hints
-  /// (finance:read) are separate rooms so neither permission implies the other.
+  /// Admin dashboard: operational hints (operations:read), financial hints
+  /// (finance:read) and driver hints (drivers:read / drivers:write) are separate
+  /// rooms so no permission implies another. Driver hints also reach the ops room.
   opsDashboard: (): string => 'dashboard:ops',
   financeDashboard: (): string => 'dashboard:finance',
+  driversDashboard: (): string => 'dashboard:drivers',
 } as const;

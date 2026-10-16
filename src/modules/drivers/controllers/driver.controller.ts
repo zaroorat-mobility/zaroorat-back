@@ -8,6 +8,8 @@ import { DriverCommissionWalletController } from './driver-commission-wallet.con
 import { DriverEarningsController } from './driver-earnings.controller.js';
 import { DriverWithdrawalController } from './driver-withdrawal.controller.js';
 import { DriverScheduledController } from './driver-scheduled.controller.js';
+import { DriverMapZonesController } from './driver-map-zones.controller.js';
+import { DriverBankController } from './driver-bank.controller.js';
 
 export class DriverController {
   constructor(
@@ -21,5 +23,7 @@ export class DriverController {
     public readonly earnings: DriverEarningsController,
     public readonly withdrawals: DriverWithdrawalController,
     public readonly scheduled: DriverScheduledController,
+    public readonly mapZones: DriverMapZonesController,
+    public readonly bank: DriverBankController,
   ) {}
 }

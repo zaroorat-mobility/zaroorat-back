@@ -12,6 +12,15 @@ import { PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
 
 type Hint = { socketEvent: SocketEventName; idField: string; fields: Record<string, string> };
 
+/// Driver hints also reach `dashboard:drivers`, for staff who hold drivers:read
+/// but not operations:read — the ops room carries ride traffic they may not see.
+/// One emit to both rooms, so a member of both hears it once.
+const DRIVER_HINT_ROOMS = [room.opsDashboard(), room.driversDashboard()];
+const DRIVER_SOCKET_EVENTS: ReadonlySet<SocketEventName> = new Set([
+  SOCKET_EVENT.DASHBOARD_DRIVER_STATUS_CHANGED,
+  SOCKET_EVENT.DASHBOARD_DRIVER_REGISTRATION_CHANGED,
+]);
+
 /// Operational domain events → the hint the ops dashboard room hears. Only
 /// events that change a dashboard number are bridged (arriving / arrived /
 /// started move nothing the dashboard counts). The hint carries the entity id
@@ -57,6 +66,31 @@ const OPS_HINTS: Record<string, Hint> = {
     idField: 'driverId',
     fields: { change: 'VERIFIED' },
   },
+  [DRIVER_EVENT_CATALOG.VERIFICATION_REJECTED]: {
+    socketEvent: SOCKET_EVENT.DASHBOARD_DRIVER_REGISTRATION_CHANGED,
+    idField: 'driverId',
+    fields: { change: 'REJECTED' },
+  },
+  [DRIVER_EVENT_CATALOG.RESUBMISSION_REQUESTED]: {
+    socketEvent: SOCKET_EVENT.DASHBOARD_DRIVER_REGISTRATION_CHANGED,
+    idField: 'driverId',
+    fields: { change: 'RESUBMISSION_REQUESTED' },
+  },
+  [DRIVER_EVENT_CATALOG.DOCUMENT_SUBMITTED]: {
+    socketEvent: SOCKET_EVENT.DASHBOARD_DRIVER_REGISTRATION_CHANGED,
+    idField: 'driverId',
+    fields: { change: 'DOCUMENT_SUBMITTED' },
+  },
+  [DRIVER_EVENT_CATALOG.PROFILE_UPDATED]: {
+    socketEvent: SOCKET_EVENT.DASHBOARD_DRIVER_REGISTRATION_CHANGED,
+    idField: 'driverId',
+    fields: { change: 'UPDATED' },
+  },
+  [DRIVER_EVENT_CATALOG.SUSPENDED]: {
+    socketEvent: SOCKET_EVENT.DASHBOARD_DRIVER_STATUS_CHANGED,
+    idField: 'driverId',
+    fields: { status: 'SUSPENDED' },
+  },
 };
 
 /// `driver.status_changed` is published only for ONLINE and OFFLINE
@@ -75,7 +109,7 @@ const FINANCE_EVENTS = [
 /// Outbox → admin dashboard bridge. Runs beside `RideRealtimeConsumer` on the
 /// same committed events, so a hint is never sent for work that rolled back.
 /// Rooms are joined only through `dashboard.subscribe`, which checks
-/// `operations:read` / `finance:read` server-side.
+/// `operations:read` / `finance:read` / `drivers:read|write` server-side.
 export class DashboardRealtimeConsumer {
   constructor(
     private readonly eventBus: EventBus,
@@ -97,7 +131,10 @@ export class DashboardRealtimeConsumer {
     const hint = OPS_HINTS[type];
     const id = hint ? envelope.data[hint.idField] : undefined;
     if (!hint || typeof id !== 'string') return;
-    this.emit(room.opsDashboard(), envelope, hint.socketEvent, {
+    const rooms = DRIVER_SOCKET_EVENTS.has(hint.socketEvent)
+      ? DRIVER_HINT_ROOMS
+      : room.opsDashboard();
+    this.emit(rooms, envelope, hint.socketEvent, {
       [hint.idField]: id,
       ...hint.fields,
     });
@@ -107,7 +144,7 @@ export class DashboardRealtimeConsumer {
     const { driverId, status } = envelope.data;
     if (typeof driverId !== 'string' || typeof status !== 'string' || !DRIVER_STATUSES.has(status))
       return;
-    this.emit(room.opsDashboard(), envelope, SOCKET_EVENT.DASHBOARD_DRIVER_STATUS_CHANGED, {
+    this.emit(DRIVER_HINT_ROOMS, envelope, SOCKET_EVENT.DASHBOARD_DRIVER_STATUS_CHANGED, {
       driverId,
       status,
     });
@@ -120,7 +157,7 @@ export class DashboardRealtimeConsumer {
   /// The outbox `eventId` is carried through, as the ride bridge does, so a
   /// client can discard a hint it has already applied.
   private emit(
-    roomName: string,
+    roomName: string | string[],
     envelope: EventEnvelope,
     socketEvent: SocketEventName,
     data: Record<string, unknown>,

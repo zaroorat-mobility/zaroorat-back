@@ -6,6 +6,7 @@ import { VehicleDocumentRepository } from '../repositories/vehicle-document.repo
 import { VehicleAssignmentRepository } from '../repositories/vehicle-assignment.repository.js';
 import {
   UnknownVehicleDocumentTypeError,
+  VehicleError,
   VehicleNotFoundError,
   VehicleNotOwnedError,
 } from '../errors/vehicle.errors.js';
@@ -17,6 +18,7 @@ export interface SubmitVehicleDocumentInput {
   ownerUserId: string;
   documentType: string;
   fileId: string;
+  backFileId?: string;
   documentNumber?: string;
   issuedAt?: Date;
   expiresAt?: Date;
@@ -59,6 +61,17 @@ export class VehicleDocumentService {
       throw new UnknownVehicleDocumentTypeError(input.documentType, VEHICLE_DOCUMENT_TYPES);
     }
     await this.assertManageable(input.vehicleId, input.driverId);
+    if (input.backFileId === input.fileId) {
+      throw new VehicleError(
+        'The back of a document must be a different file from its front',
+        'DOCUMENT_BACK_IS_FRONT',
+        422,
+      );
+    }
+    // Eligibility's own `<= now` test: an already-expired document could never be approved.
+    if (input.expiresAt && input.expiresAt.getTime() <= Date.now()) {
+      throw new VehicleError('This document has already expired', 'DOCUMENT_EXPIRED', 422);
+    }
 
     const isRequired = vehicleConfig.requiredDocumentTypes.includes(input.documentType);
 
@@ -67,18 +80,32 @@ export class VehicleDocumentService {
         await this.vehicleDocumentRepository.findByVehicleId(input.vehicleId, tx)
       ).find((document) => document.documentType === input.documentType);
 
+      // Both sides locked together, in a fixed order, before either is checked.
+      await this.fileService.lockForAttach(
+        [input.fileId, ...(input.backFileId ? [input.backFileId] : [])],
+        tx,
+      );
       await this.fileService.assertReferenceable(
         input.fileId,
         input.ownerUserId,
         'VEHICLE_DOCUMENT',
         tx,
       );
+      if (input.backFileId) {
+        await this.fileService.assertReferenceable(
+          input.backFileId,
+          input.ownerUserId,
+          'VEHICLE_DOCUMENT',
+          tx,
+        );
+      }
 
       const created = await this.vehicleDocumentRepository.upsertDocument(
         {
           vehicleId: input.vehicleId,
           documentType: input.documentType,
           fileId: input.fileId,
+          ...(input.backFileId !== undefined ? { backFileId: input.backFileId } : {}),
           ...(input.documentNumber !== undefined ? { documentNumber: input.documentNumber } : {}),
           ...(input.issuedAt !== undefined ? { issuedAt: input.issuedAt } : {}),
           ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
@@ -91,12 +118,84 @@ export class VehicleDocumentService {
       if (existing?.fileId && existing.fileId !== input.fileId) {
         await this.fileService.supersede(existing.fileId, input.fileId, tx, requestId);
       }
+      // As for driver documents: the old back follows the new one or is retired with it.
+      if (existing?.backFileId && existing.backFileId !== input.backFileId) {
+        if (input.backFileId) {
+          await this.fileService.supersede(existing.backFileId, input.backFileId, tx, requestId);
+        } else {
+          await this.fileService.releaseInTransaction(
+            existing.backFileId,
+            input.ownerUserId,
+            tx,
+            requestId,
+          );
+        }
+      }
 
       // A re-submitted required document invalidates the approval the vehicle
       // already holds: the operator approved a different set of papers.
       const vehicle = await this.vehicleRepository.findById(input.vehicleId, tx);
       if (isRequired && vehicle?.verificationStatus === 'VERIFIED') {
         await this.vehicleRepository.resetVerification(input.vehicleId, tx);
+      }
+
+      // If this is VEHICLE_PHOTOS, sync the front and back photos into vehicle_images table
+      if (input.documentType === 'VEHICLE_PHOTOS') {
+        const existingFront = await tx.vehicleImage.findFirst({
+          where: { vehicleId: input.vehicleId, imageType: 'FRONT' },
+        });
+        if (existingFront) {
+          await tx.vehicleImage.update({
+            where: { id: existingFront.id },
+            data: { imageUrl: input.fileId, uploadedAt: new Date() },
+          });
+        } else {
+          await tx.vehicleImage.create({
+            data: {
+              vehicleId: input.vehicleId,
+              imageType: 'FRONT',
+              imageUrl: input.fileId,
+            },
+          });
+        }
+
+        const existingExt = await tx.vehicleImage.findFirst({
+          where: { vehicleId: input.vehicleId, imageType: 'EXTERIOR' },
+        });
+        if (existingExt) {
+          await tx.vehicleImage.update({
+            where: { id: existingExt.id },
+            data: { imageUrl: input.fileId, uploadedAt: new Date() },
+          });
+        } else {
+          await tx.vehicleImage.create({
+            data: {
+              vehicleId: input.vehicleId,
+              imageType: 'EXTERIOR',
+              imageUrl: input.fileId,
+            },
+          });
+        }
+
+        if (input.backFileId) {
+          const existingBack = await tx.vehicleImage.findFirst({
+            where: { vehicleId: input.vehicleId, imageType: 'BACK' },
+          });
+          if (existingBack) {
+            await tx.vehicleImage.update({
+              where: { id: existingBack.id },
+              data: { imageUrl: input.backFileId, uploadedAt: new Date() },
+            });
+          } else {
+            await tx.vehicleImage.create({
+              data: {
+                vehicleId: input.vehicleId,
+                imageType: 'BACK',
+                imageUrl: input.backFileId,
+              },
+            });
+          }
+        }
       }
 
       return created;

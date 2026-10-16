@@ -193,6 +193,20 @@ export async function acceptRide(
   return accepted.json().data.ride.id;
 }
 
+/// Puts the driver's last fix at a point, as if they had driven there. Arrive
+/// and complete enforce the pickup/drop geofences against `driver_locations`;
+/// posting the move through /drivers/location would (rightly) be refused as an
+/// implausible jump, since the test does not wait out the trip's real duration.
+export async function placeDriverAt(driverId: string, lat: unknown, lng: unknown): Promise<void> {
+  await db().client.$executeRaw`
+    INSERT INTO driver_locations (driver_id, latitude, longitude, location, recorded_at)
+    VALUES (${driverId}::uuid, ${lat}::numeric, ${lng}::numeric,
+            ST_SetSRID(ST_MakePoint(${lng}::float8, ${lat}::float8), 4326)::geography, now())
+    ON CONFLICT (driver_id) DO UPDATE
+      SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
+          location = EXCLUDED.location, recorded_at = EXCLUDED.recorded_at`;
+}
+
 /// Arrives, starts and completes an already-accepted ride over real HTTP,
 /// returning the fare the server priced it at.
 export async function finishRide(
@@ -201,6 +215,15 @@ export async function finishRide(
   rideId: string,
   options: { distanceKm: number; durationMin: number },
 ): Promise<FareRow> {
+  const [route] = await db().client.$queryRaw<
+    { pickupLat: unknown; pickupLng: unknown; dropLat: unknown; dropLng: unknown }[]
+  >`SELECT rr.pickup_lat AS "pickupLat", rr.pickup_lng AS "pickupLng",
+           rr.drop_lat AS "dropLat", rr.drop_lng AS "dropLng"
+      FROM rides r JOIN ride_requests rr ON rr.id = r.request_id
+     WHERE r.id = ${rideId}::uuid`;
+  assert.ok(route, `ride ${rideId} has no request`);
+
+  await placeDriverAt(world.driverId, route.pickupLat, route.pickupLng);
   const arrived = await app.inject({
     method: 'POST',
     url: `/api/v1/rides/${rideId}/arrive`,
@@ -217,6 +240,9 @@ export async function finishRide(
   });
   assert.equal(started.statusCode, 200, started.payload);
 
+  if (route.dropLat != null && route.dropLng != null) {
+    await placeDriverAt(world.driverId, route.dropLat, route.dropLng);
+  }
   const completed = await app.inject({
     method: 'POST',
     url: `/api/v1/rides/${rideId}/complete`,

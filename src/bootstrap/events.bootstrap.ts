@@ -12,6 +12,7 @@ import type { RideCollectionConsumer } from '@modules/payments';
 import type { SubscriptionPaymentConsumer } from '@modules/subscriptions';
 import type { DashboardRealtimeConsumer } from '@modules/admin/dashboard/index.js';
 import type { RealtimeRevocationConsumer } from '@modules/realtime';
+import type { DriverDecisionSmsConsumer } from '@modules/notifications';
 import type {
   ReferralRideCompletedConsumer,
   ReferralDriverVerifiedConsumer,
@@ -31,6 +32,7 @@ const CONSUMER_KEYS = [
   'referralRideCompletedConsumer',
   'referralDriverVerifiedConsumer',
   'subscriptionPaymentConsumer',
+  'driverDecisionSmsConsumer',
 ] as const;
 
 type Consumer =
@@ -45,7 +47,8 @@ type Consumer =
   | RideCollectionConsumer
   | ReferralRideCompletedConsumer
   | ReferralDriverVerifiedConsumer
-  | SubscriptionPaymentConsumer;
+  | SubscriptionPaymentConsumer
+  | DriverDecisionSmsConsumer;
 
 /// Subscribing consumers to the in-process bus, and nothing else.
 ///

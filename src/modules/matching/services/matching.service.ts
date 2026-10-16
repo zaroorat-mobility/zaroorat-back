@@ -80,7 +80,15 @@ export class MatchingService {
         onlineStatus: { status: 'ONLINE' },
         rides: {
           none: {
-            status: { in: ['ACCEPTED', 'DRIVER_ARRIVING', 'DRIVER_ARRIVED', 'IN_PROGRESS'] },
+            status: {
+              in: [
+                'ACCEPTED',
+                'DRIVER_ARRIVING',
+                'DRIVER_ARRIVED',
+                'IN_PROGRESS',
+                'DRIVER_AT_DROPOFF',
+              ],
+            },
           },
         },
         assignments: {

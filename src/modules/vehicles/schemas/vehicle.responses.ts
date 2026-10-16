@@ -71,6 +71,7 @@ const vehicleDocumentView = {
     documentType: { type: 'string', enum: [...VEHICLE_DOCUMENT_TYPES] },
     documentNumber: { type: ['string', 'null'] },
     fileId: { type: ['string', 'null'], format: 'uuid' },
+    backFileId: { type: ['string', 'null'], format: 'uuid' },
     issuedAt: { type: ['string', 'null'], format: 'date-time' },
     expiresAt: { type: ['string', 'null'], format: 'date-time' },
     verificationStatus: { type: 'string', enum: ['PENDING', 'VERIFIED', 'REJECTED'] },
@@ -99,6 +100,7 @@ const vehicleView = {
     rejectionReason: { type: ['string', 'null'] },
     verifiedAt: { type: ['string', 'null'], format: 'date-time' },
     isActive: { type: 'boolean' },
+    photoUrl: { type: ['string', 'null'] },
     documents: { type: 'array', items: vehicleDocumentView },
   },
   required: ['id', 'registrationNumber', 'vehicleTypeId', 'verificationStatus', 'isActive'],
@@ -156,6 +158,9 @@ export const claimVehicleBodySchema = {
     model: { type: 'string', maxLength: 50 },
     color: { type: 'string', maxLength: 30 },
     seatingCapacity: { type: 'integer', minimum: 1, maximum: 20 },
+    fuelType: { type: 'string', maxLength: 30 },
+    manufacturingYear: { type: 'integer', minimum: 1900 },
+    photoUrl: { type: 'string' },
   },
   required: ['registrationNumber', 'vehicleTypeId'],
 } as const;
@@ -171,6 +176,7 @@ export const updateVehicleBodySchema = {
     registrationState: { type: 'string', maxLength: 50 },
     fuelType: { type: 'string', maxLength: 30 },
     manufacturingYear: { type: 'integer', minimum: 1900 },
+    photoUrl: { type: 'string' },
   },
 } as const;
 
@@ -182,6 +188,11 @@ export const submitVehicleDocumentBodySchema = {
       type: 'string',
       format: 'uuid',
       description: 'A READY file owned by the caller with purpose VEHICLE_DOCUMENT.',
+    },
+    backFileId: {
+      type: 'string',
+      format: 'uuid',
+      description: 'The back of a two-sided card (RC), under the same rules as fileId.',
     },
     documentNumber: { type: 'string', maxLength: 60 },
     issuedAt: { type: 'string', format: 'date-time' },

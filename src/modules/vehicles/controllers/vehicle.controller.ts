@@ -8,11 +8,12 @@ import {
 } from '../services/vehicle-assignment.service.js';
 import { claimVehicleSchema, updateVehicleSchema } from '../schemas/vehicle.schemas.js';
 import { toVehicleTypeView } from './vehicle-type.controller.js';
-import type { Vehicle, VehicleDocument, VehicleType } from '../types/index.js';
+import type { Vehicle, VehicleDocument, VehicleImage, VehicleType } from '../types/index.js';
 
 type VehicleWithRelations = Vehicle & {
   vehicleType?: VehicleType | null;
   documents?: VehicleDocument[];
+  images?: VehicleImage[];
 };
 
 export function toVehicleView(vehicle: VehicleWithRelations): Record<string, unknown> {
@@ -33,6 +34,7 @@ export function toVehicleView(vehicle: VehicleWithRelations): Record<string, unk
     rejectionReason: vehicle.rejectionReason,
     verifiedAt: vehicle.verifiedAt,
     isActive: vehicle.isActive,
+    ...(vehicle.images?.[0]?.imageUrl ? { photoUrl: vehicle.images[0].imageUrl } : {}),
     ...(vehicle.documents ? { documents: vehicle.documents } : {}),
   };
 }
@@ -64,6 +66,11 @@ export class VehicleController {
       ...(body.model !== undefined ? { model: body.model } : {}),
       ...(body.color !== undefined ? { color: body.color } : {}),
       ...(body.seatingCapacity !== undefined ? { seatingCapacity: body.seatingCapacity } : {}),
+      ...(body.fuelType !== undefined ? { fuelType: body.fuelType } : {}),
+      ...(body.manufacturingYear !== undefined
+        ? { manufacturingYear: body.manufacturingYear }
+        : {}),
+      ...(body.photoUrl !== undefined ? { photoUrl: body.photoUrl } : {}),
     });
     reply.send({ data: toVehicleView(vehicle) });
   }

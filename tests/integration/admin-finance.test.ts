@@ -252,6 +252,12 @@ describe('admin financial operations (integration)', () => {
     assert.ok(
       rejected.json().data.timeline.some((e: { action: string }) => e.action.includes('Reject')),
     );
+    // The reviewer is the signed-in admin; a name in the request body never reaches the record.
+    assert.ok(rejected.json().data.reviewedBy);
+    assert.notEqual(rejected.json().data.reviewedBy, 'Finance Manager');
+    assert.ok(
+      rejected.json().data.timeline.every((e: { actor: string }) => e.actor !== 'Finance Manager'),
+    );
   });
 
   it('creates, assigns, resolves, and closes a payment dispute', async () => {

@@ -1,6 +1,6 @@
 import type { MapSettingsView, UpdateMapSettingsBody } from '../types/map-settings.types.js';
 
-const ALLOWED_PROVIDERS = ['ola', 'google', 'mappls'] as const;
+const ALLOWED_PROVIDERS = ['google', 'mappls'] as const;
 
 /// Exactly one map provider is active at a time.
 ///

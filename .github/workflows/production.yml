@@ -56,6 +56,16 @@ jobs:
     needs: [verify]
     outputs:
       digest: ${{ steps.push.outputs.digest }}
+    # For the OTP release check below: an isolated Redis, never production's.
+    services:
+      redis:
+        image: redis:8
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
         with:
@@ -81,6 +91,26 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.event.release.tag_name }}
             type=raw,value=production
             type=sha,format=long
+
+      # Verify the image before it can be pushed: built from this commit's source (the
+      # Dockerfile compiles dist/ itself; .dockerignore keeps any host build out), then the
+      # compiled job browser is driven with real auth-otp jobs and must not expose a code
+      # or phone. The push below reuses this build's layers.
+      - name: Build for release check
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: zaroorat-backend:release-check
+          cache-from: type=gha
+
+      - name: Release check — job browser never exposes auth-otp payloads
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/scripts/release:/release:ro" \
+            -e RELEASE_CHECK_REDIS_URL=redis://127.0.0.1:6379/9 \
+            zaroorat-backend:release-check node /release/verify-otp-job-browser.js
 
       - name: Build & push
         id: push
@@ -121,14 +151,23 @@ jobs:
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
 
+      # The schema owner, for migrations only — never the app's DATABASE_URL, which the Helm
+      # secret fills with the restricted runtime login. Two names, so one value cannot serve
+      # both (docs/15_Security/database-roles.md).
       - name: Run database migrations
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
+          if [ -z "$MIGRATION_DATABASE_URL" ]; then
+            echo "::error::secrets.MIGRATION_DATABASE_URL (schema owner) is not set."
+            exit 1
+          fi
           kubectl run prisma-migrate-${{ github.run_id }} \
             --namespace production \
             --image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" \
             --restart=Never \
             --rm -i \
-            --env="DATABASE_URL=${{ secrets.DATABASE_URL }}" \
+            --env="MIGRATION_DATABASE_URL=$MIGRATION_DATABASE_URL" \
             --command -- npx prisma migrate deploy
 
       # Rolling update; readiness gates each pod (docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys").

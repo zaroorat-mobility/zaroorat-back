@@ -18,19 +18,13 @@ import {
   listFinanceTransactionsQuerySchema,
   listSettlementsQuerySchema,
   markRefundCompletedBodySchema,
-  markRefundProcessingBodySchema,
   reconcileTransactionBodySchema,
   rejectRefundBodySchema,
   resolveDisputeBodySchema,
   searchDriversQuerySchema,
   settlementStatusBodySchema,
-  startRefundReviewBodySchema,
   updateDisputeStatusBodySchema,
 } from './finance.schemas.js';
-
-function actorName(_req: FastifyRequest): string | undefined {
-  return undefined;
-}
 
 export class AdminFinanceController {
   constructor(private readonly adminFinanceService: AdminFinanceService) {}
@@ -53,12 +47,7 @@ export class AdminFinanceController {
     const { id } = financeIdParamSchema.parse(req.params);
     const body = reconcileTransactionBodySchema.parse(req.body);
     reply.send({
-      data: await this.adminFinanceService.reconcileTransaction(
-        id,
-        body,
-        callerId(req),
-        actorName(req),
-      ),
+      data: await this.adminFinanceService.reconcileTransaction(id, body, callerId(req)),
     });
   }
 
@@ -75,19 +64,14 @@ export class AdminFinanceController {
   async createRefund(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createFinanceRefundBodySchema.parse(req.body);
     reply.status(201).send({
-      data: await this.adminFinanceService.createRefund(body, callerId(req), actorName(req)),
+      data: await this.adminFinanceService.createRefund(body, callerId(req)),
     });
   }
 
   async startRefundReview(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = financeIdParamSchema.parse(req.params);
-    const body = startRefundReviewBodySchema.parse(req.body ?? {});
     reply.send({
-      data: await this.adminFinanceService.startRefundReview(
-        id,
-        callerId(req),
-        body.reviewerName ?? actorName(req),
-      ),
+      data: await this.adminFinanceService.startRefundReview(id, callerId(req)),
     });
   }
 
@@ -100,7 +84,6 @@ export class AdminFinanceController {
         callerId(req),
         body.approvedAmount,
         body.notes,
-        body.reviewerName ?? actorName(req),
       ),
     });
   }
@@ -109,24 +92,14 @@ export class AdminFinanceController {
     const { id } = financeIdParamSchema.parse(req.params);
     const body = rejectRefundBodySchema.parse(req.body);
     reply.send({
-      data: await this.adminFinanceService.rejectRefund(
-        id,
-        callerId(req),
-        body.reason,
-        body.reviewerName ?? actorName(req),
-      ),
+      data: await this.adminFinanceService.rejectRefund(id, callerId(req), body.reason),
     });
   }
 
   async markRefundProcessing(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = financeIdParamSchema.parse(req.params);
-    const body = markRefundProcessingBodySchema.parse(req.body ?? {});
     reply.send({
-      data: await this.adminFinanceService.markRefundProcessing(
-        id,
-        callerId(req),
-        body.actorName ?? actorName(req),
-      ),
+      data: await this.adminFinanceService.markRefundProcessing(id, callerId(req)),
     });
   }
 
@@ -134,12 +107,7 @@ export class AdminFinanceController {
     const { id } = financeIdParamSchema.parse(req.params);
     const body = markRefundCompletedBodySchema.parse(req.body ?? {});
     reply.send({
-      data: await this.adminFinanceService.markRefundCompleted(
-        id,
-        callerId(req),
-        body.actorName ?? actorName(req),
-        body.notes,
-      ),
+      data: await this.adminFinanceService.markRefundCompleted(id, callerId(req), body.notes),
     });
   }
 
@@ -161,11 +129,7 @@ export class AdminFinanceController {
   async generateSettlement(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = generateSettlementBodySchema.parse(req.body);
     reply.status(201).send({
-      data: await this.adminFinanceService.generateSettlement(
-        body,
-        auditActor(req),
-        actorName(req),
-      ),
+      data: await this.adminFinanceService.generateSettlement(body, auditActor(req)),
     });
   }
 
@@ -173,12 +137,7 @@ export class AdminFinanceController {
     const { id } = financeIdParamSchema.parse(req.params);
     const body = settlementStatusBodySchema.parse(req.body);
     reply.send({
-      data: await this.adminFinanceService.updateSettlementStatus(
-        id,
-        body,
-        callerId(req),
-        actorName(req),
-      ),
+      data: await this.adminFinanceService.updateSettlementStatus(id, body, callerId(req)),
     });
   }
 
@@ -217,7 +176,7 @@ export class AdminFinanceController {
   async createDispute(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createDisputeBodySchema.parse(req.body);
     reply.status(201).send({
-      data: await this.adminFinanceService.createDispute(body, callerId(req), actorName(req)),
+      data: await this.adminFinanceService.createDispute(body, callerId(req)),
     });
   }
 
@@ -225,12 +184,7 @@ export class AdminFinanceController {
     const { id } = financeIdParamSchema.parse(req.params);
     const body = assignDisputeBodySchema.parse(req.body);
     reply.send({
-      data: await this.adminFinanceService.assignDispute(
-        id,
-        body.agentName,
-        callerId(req),
-        actorName(req),
-      ),
+      data: await this.adminFinanceService.assignDispute(id, body.agentName, callerId(req)),
     });
   }
 
@@ -243,7 +197,6 @@ export class AdminFinanceController {
         body.status,
         callerId(req),
         body.notes,
-        actorName(req),
       ),
     });
   }
@@ -260,10 +213,8 @@ export class AdminFinanceController {
           ...(body.adjustmentAmount !== undefined
             ? { adjustmentAmount: body.adjustmentAmount }
             : {}),
-          ...(body.resolvedBy !== undefined ? { resolvedBy: body.resolvedBy } : {}),
         },
         callerId(req),
-        actorName(req),
       ),
     });
   }
@@ -272,12 +223,7 @@ export class AdminFinanceController {
     const { id } = financeIdParamSchema.parse(req.params);
     const body = closeDisputeBodySchema.parse(req.body ?? {});
     reply.send({
-      data: await this.adminFinanceService.closeDispute(
-        id,
-        callerId(req),
-        body.notes,
-        actorName(req),
-      ),
+      data: await this.adminFinanceService.closeDispute(id, callerId(req), body.notes),
     });
   }
 

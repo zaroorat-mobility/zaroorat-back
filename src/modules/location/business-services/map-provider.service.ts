@@ -17,7 +17,6 @@ import {
 } from '../errors/location.errors.js';
 import type { SystemSettingService } from '@modules/admin/system-settings/services/system-setting.service.js';
 import type { RedisService } from '@core/cache';
-import { OlaMapsProvider } from '../providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '../providers/google-maps.provider.js';
 import { MapplsProvider } from '../providers/mappls.provider.js';
 import {
@@ -124,18 +123,7 @@ export class MapProviderService {
     let provider = this.registry[name];
     if (provider?.isConfigured()) return provider;
 
-    if (name === 'ola') {
-      const apiKey = resolveMapCredential(
-        policy.keys?.olaKey,
-        process.env.OLA_MAPS_API_KEY,
-        process.env.MAPS_API_KEY,
-      );
-      if (apiKey) {
-        const baseUrl = policy.baseUrls?.olaUrl || process.env.OLA_MAPS_BASE_URL;
-        provider = new OlaMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
-        this.registry['ola'] = provider;
-      }
-    } else if (name === 'google') {
+    if (name === 'google') {
       const apiKey = resolveMapCredential(policy.keys?.googleKey, process.env.GOOGLE_MAPS_API_KEY);
       if (apiKey) {
         const baseUrl = policy.baseUrls?.googleUrl || process.env.GOOGLE_MAPS_BASE_URL;

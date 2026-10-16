@@ -38,6 +38,10 @@ import type { EpochService } from '../../src/modules/auth/services/token/epoch.s
 import type { AdminPlatformSettingsService } from '../../src/modules/admin/system-settings/platform/services/admin-platform-settings.service.js';
 import type { AdminMapSettingsService } from '../../src/modules/admin/system-settings/map/services/admin-map-settings.service.js';
 import type { AdminSmsSettingsService } from '../../src/modules/admin/system-settings/integrations/services/admin-sms-settings.service.js';
+import {
+  assertRestrictedDatabaseRole,
+  auditTrailRewriteRights,
+} from '../../src/bootstrap/database.bootstrap.js';
 
 const ADMIN_PHONE = '+919876549001';
 const OTHER_ADMIN_PHONE = '+919876549002';
@@ -540,7 +544,8 @@ describe('admin audit remediation (integration)', () => {
       const res = await as(admin, resubmit(driverId, 'Upload a sharper licence photo'));
       assert.equal(res.statusCode, 200, res.payload);
       const row = await driver(driverId);
-      assert.equal(row.verificationStatus, 'REJECTED');
+      // Sent back = PENDING with the instructions; REJECTED is reserved for a final rejection.
+      assert.equal(row.verificationStatus, 'PENDING');
       assert.equal(row.rejectionReason, 'Upload a sharper licence photo');
 
       const rows = await auditRows('driver', driverId);
@@ -554,7 +559,7 @@ describe('admin audit remediation (integration)', () => {
         rejectionReason: null,
       });
       assert.deepEqual(meta(rows[0]!).after, {
-        verificationStatus: 'REJECTED',
+        verificationStatus: 'PENDING',
         rejectionReason: 'Upload a sharper licence photo',
         decision: 'RESUBMISSION_REQUESTED',
       });
@@ -1061,7 +1066,7 @@ describe('admin audit remediation (integration)', () => {
         where: { category: 'maps' },
       });
       await assert.rejects(
-        maps.updateMapSettings({ primaryProvider: 'ola' } as Parameters<
+        maps.updateMapSettings({ primaryProvider: 'google' } as Parameters<
           AdminMapSettingsService['updateMapSettings']
         >[0]),
         MissingAuditActorError,
@@ -1427,6 +1432,42 @@ describe('admin audit remediation (integration)', () => {
         );
       });
     }
+
+    it('staging and production refuse to boot as a role that can rewrite the audit trail', async () => {
+      // This suite connects as the owner, a superuser: exactly the misconfiguration.
+      const rights = await auditTrailRewriteRights(db().client);
+      assert.ok(
+        rights.some((r) => /superuser/.test(r)),
+        rights.join('; '),
+      );
+      assert.ok(
+        rights.some((r) => /owns the audit tables/.test(r)),
+        rights.join('; '),
+      );
+      assert.ok(
+        rights.some((r) => /UPDATE, DELETE or TRUNCATE/.test(r)),
+        rights.join('; '),
+      );
+      for (const environment of ['production', 'staging']) {
+        await assert.rejects(
+          assertRestrictedDatabaseRole(db().client, environment),
+          new RegExp(
+            `Refusing to start in ${environment}: DATABASE_URL connects as a role that can rewrite`,
+          ),
+        );
+      }
+      // Development and test connect as the owner on purpose.
+      await assertRestrictedDatabaseRole(db().client, 'development');
+      await assertRestrictedDatabaseRole(db().client, 'test');
+
+      // The restricted runtime role boots in production.
+      const asRuntime = await db().client.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL ROLE ${RUNTIME}`);
+        await assertRestrictedDatabaseRole(tx, 'production');
+        return auditTrailRewriteRights(tx);
+      });
+      assert.deepEqual(asRuntime, []);
+    });
 
     it('the runtime role is no superuser, owns nothing, holds no TRUNCATE, and can run the app', async () => {
       const [role] = await db().client.$queryRawUnsafe<

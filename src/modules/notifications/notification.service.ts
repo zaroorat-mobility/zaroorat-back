@@ -10,6 +10,11 @@ export interface SendOtpOptions {
   templateId?: string | undefined;
   message?: string | undefined;
 }
+export interface SendOtpOptions {
+  userType?: 'customer' | 'driver' | string | undefined;
+  templateId?: string | undefined;
+  message?: string | undefined;
+}
 export class NotificationService {
   /// The push provider is resolved on first use, not injected: OTP (API and
   /// worker) builds this service, and a push misconfiguration — PUSH_PROVIDER
@@ -71,6 +76,33 @@ export class NotificationService {
     const body =
       this.notificationConfig.driverActivatedMessage ??
       'Congratulations! Your Zaroorat Driver profile is now verified and activated. You can start accepting rides.';
+    return this.smsProvider.sendSms({
+      to,
+      body,
+      ...(templateId ? { templateId } : {}),
+    });
+  }
+
+  /// Sends an SMS when an admin finally rejects a driver application.
+  /// Uses AIRTEL_DRIVER_APPLICATION_REJECTED_TEMPLATE_ID / _MESSAGE. The doc-rejected
+  /// template asks the driver to resubmit, so it is never reused here. A delivering provider
+  /// without a registered template sends nothing — an unregistered body would not pass DLT —
+  /// and reports a permanent failure for the caller to record.
+  async sendDriverApplicationRejectedSms(to: string): Promise<SmsSendResult> {
+    const templateId = this.notificationConfig.driverApplicationRejectedTemplateId;
+    const body =
+      this.notificationConfig.driverApplicationRejectedMessage ??
+      (this.notificationConfig.smsProvider === 'mock'
+        ? 'Your Zaroorat Driver application was not approved. Please contact Zaroorat support for details.'
+        : undefined);
+    if (!body) {
+      return {
+        accepted: false,
+        provider: this.smsProvider.name,
+        retryable: false,
+        error: 'TEMPLATE_NOT_CONFIGURED: AIRTEL_DRIVER_APPLICATION_REJECTED_MESSAGE is not set',
+      };
+    }
     return this.smsProvider.sendSms({
       to,
       body,

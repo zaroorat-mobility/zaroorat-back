@@ -108,6 +108,9 @@ export class S3StorageProvider implements StorageProvider {
           Bucket: this.quarantineBucket,
           Key: input.key,
           ContentType: input.contentType,
+          // Signed below, so S3 refuses a body of any other size: without it a client could
+          // declare 1 KB (passing the size and quota checks at init) and PUT gigabytes.
+          ContentLength: input.contentLength,
           ServerSideEncryption: this.storageConfig.serverSideEncryption,
           ...(this.storageConfig.kmsKeyId != null
             ? { SSEKMSKeyId: this.storageConfig.kmsKeyId }
@@ -118,16 +121,12 @@ export class S3StorageProvider implements StorageProvider {
         }),
         {
           expiresIn: input.ttlSeconds,
-          // SDK v3.1101+ no longer serialises ContentType from PutObjectCommand
-          // as an HTTP header during presigned URL generation; signableHeaders
-          // therefore signed an empty content-type value, causing a 403 on any
-          // real upload. unhoistableHeaders keeps the actual value attached so
-          // the signature matches what the client sends.
-          unhoistableHeaders: new Set([
-            'content-type',
-            'x-amz-server-side-encryption',
-            'x-amz-checksum-sha256',
-          ]),
+          // The presigner always marks content-type unsignable; signableHeaders
+          // overrides that so the URL only accepts the declared type (R-FILE-2).
+          // The value is present at presign time — the earlier upload 403 was the
+          // default CRC32 checksum, fixed by requestChecksumCalculation above.
+          signableHeaders: new Set(['content-type', 'content-length']),
+          unhoistableHeaders: new Set(['x-amz-server-side-encryption', 'x-amz-checksum-sha256']),
         },
       );
       return {
@@ -209,12 +208,10 @@ export class S3StorageProvider implements StorageProvider {
     } catch (error) {
       throw this.wrap('promote', error);
     }
-    try {
-      await this.delete(key, 'quarantine');
-    } catch {
-      // Best effort: the object is already promoted, and a quarantine copy that
-      // will not delete is a stray file rather than a failed promotion.
-    }
+    // Best effort, and off the caller's path (one S3 round trip, ~20% of a completion):
+    // the object is already promoted, and a quarantine copy that will not delete is a
+    // stray file rather than a failed promotion.
+    void this.delete(key, 'quarantine').catch(() => undefined);
   }
   async delete(key: string, area: StorageArea = 'trusted'): Promise<void> {
     try {

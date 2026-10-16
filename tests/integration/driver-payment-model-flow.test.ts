@@ -16,6 +16,7 @@ import {
   accountBalance,
   bookRideRequest,
   finishRide,
+  placeDriverAt,
   rideWorld,
   type RideWorld,
 } from './helpers/ride-flow.js';
@@ -192,6 +193,7 @@ describe('COMMISSION driver — real PostgreSQL financial flow (004-driver-subsc
     // of its own transaction (so a new trip starts from zero) — so the meter
     // has to be seeded *after* `/start`, not before `/arrive`, or `/start`
     // wipes it before `/complete` ever reads it.
+    await placeDriverAt(w.driverId, 12.9716, 77.5946);
     const arrived = await app.inject({
       method: 'POST',
       url: `/api/v1/rides/${rideId}/arrive`,
@@ -226,6 +228,8 @@ describe('COMMISSION driver — real PostgreSQL financial flow (004-driver-subsc
       data: { startedAt: new Date(Date.now() - 100 * 60_000) },
     });
 
+    // At the drop bookRideRequest quoted (5km north), so the drop geofence passes.
+    await placeDriverAt(w.driverId, 12.9716 + 5 * 0.009, 77.5946);
     const completed = await app.inject({
       method: 'POST',
       url: `/api/v1/rides/${rideId}/complete`,

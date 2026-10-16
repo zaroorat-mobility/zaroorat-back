@@ -12,16 +12,16 @@ export class AppConfigController {
 
   async getConfig(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const query = getAppConfigQuerySchema.parse(req.query);
-    const data = await this.appConfigService.getPublicBundle(query.app, query.locale);
-    const etag = etagForVersion(data.version);
-    const ifNoneMatch = req.headers['if-none-match'];
-
-    reply.header('ETag', etag);
-    if (ifNoneMatch && ifNoneMatch === etag) {
-      reply.status(304).send();
+    // The ETag is the version alone, so a revalidation is answered from one
+    // settings lookup instead of assembling (and discarding) the whole bundle.
+    const current = etagForVersion(await this.appConfigService.getVersion());
+    if (req.headers['if-none-match'] === current) {
+      reply.header('ETag', current).status(304).send();
       return;
     }
 
+    const data = await this.appConfigService.getPublicBundle(query.app, query.locale);
+    reply.header('ETag', etagForVersion(data.version));
     reply.header('Cache-Control', 'public, max-age=300');
     reply.send({ data });
   }

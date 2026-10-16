@@ -6,6 +6,7 @@ export interface UpsertVehicleDocumentInput {
   vehicleId: string;
   documentType: string;
   fileId: string;
+  backFileId?: string;
   documentNumber?: string;
   issuedAt?: Date;
   expiresAt?: Date;
@@ -32,6 +33,7 @@ export class VehicleDocumentRepository {
         vehicleId: data.vehicleId,
         documentType: data.documentType,
         fileId: data.fileId,
+        backFileId: data.backFileId ?? null,
         documentNumber: data.documentNumber ?? null,
         issuedAt: data.issuedAt ?? null,
         expiresAt: data.expiresAt ?? null,
@@ -39,6 +41,7 @@ export class VehicleDocumentRepository {
       },
       update: {
         fileId: data.fileId,
+        backFileId: data.backFileId ?? null,
         documentNumber: data.documentNumber ?? null,
         issuedAt: data.issuedAt ?? null,
         expiresAt: data.expiresAt ?? null,
@@ -64,7 +67,9 @@ export class VehicleDocumentRepository {
   /// referenced by a vehicle document must not be soft-deletable.
   async isDocumentFile(fileId: string, tx?: TransactionClient): Promise<boolean> {
     const client = tx ?? this.db.client;
-    const count = await client.vehicleDocument.count({ where: { fileId } });
+    const count = await client.vehicleDocument.count({
+      where: { OR: [{ fileId }, { backFileId: fileId }] },
+    });
     return count > 0;
   }
 

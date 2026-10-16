@@ -32,6 +32,7 @@ export const NOTIFICATION_EVENT_TYPES = [
   RIDE_EVENT_CATALOG.DRIVER_NEARBY,
   RIDE_EVENT_CATALOG.DRIVER_ARRIVING,
   RIDE_EVENT_CATALOG.DRIVER_ARRIVED,
+  RIDE_EVENT_CATALOG.DRIVER_AT_DROPOFF,
   RIDE_EVENT_CATALOG.STARTED,
   RIDE_EVENT_CATALOG.COMPLETED,
   RIDE_EVENT_CATALOG.CANCELLED,
@@ -169,6 +170,13 @@ export async function planNotifications(
         lookups,
         'Your driver has arrived',
         'Your driver is waiting at the pickup point.',
+      );
+    case RIDE_EVENT_CATALOG.DRIVER_AT_DROPOFF:
+      return toRideCustomerOf(
+        envelope,
+        lookups,
+        'Arrived at destination',
+        'Your driver has reached the drop-off location.',
       );
     case RIDE_EVENT_CATALOG.STARTED:
       return toRideCustomerOf(envelope, lookups, 'Trip started', 'Your trip is now in progress.');

@@ -12,6 +12,7 @@ export const VEHICLE_DOCUMENT_TYPE = {
   PUC: 'PUC',
   FITNESS: 'FITNESS',
   PERMIT: 'PERMIT',
+  VEHICLE_PHOTOS: 'VEHICLE_PHOTOS',
 } as const;
 
 export type VehicleDocumentTypeEnum =

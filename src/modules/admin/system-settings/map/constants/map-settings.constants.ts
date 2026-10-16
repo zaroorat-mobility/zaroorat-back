@@ -22,7 +22,7 @@ export const MAP_SETTING_KEYS = {
 } as const;
 
 export const DEFAULT_MAP_PROVIDERS = {
-  PRIMARY: 'ola',
+  PRIMARY: 'google',
 } as const;
 
 export const DEFAULT_BASE_URLS = {
@@ -48,4 +48,9 @@ export function buildMapplsTileUrl(
   const base = tilesBase.replace(/\/+$/, '');
   const layer = tileLayer.replace(/^\/+|\/+$/g, '');
   return `${base}/${encodeURIComponent(licenseKey.trim())}/${layer}/{z}/{x}/{y}.png`;
+}
+
+export function buildGoogleTileUrl(clientSdkKey?: string): string {
+  const keyParam = clientSdkKey?.trim() ? `&key=${encodeURIComponent(clientSdkKey.trim())}` : '';
+  return `https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}${keyParam}`;
 }

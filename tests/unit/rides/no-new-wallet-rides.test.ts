@@ -58,6 +58,9 @@ function makeWorld() {
   };
 
   const requestRepo = {
+    async findStops() {
+      return [];
+    },
     async lockForUpdate(id: string) {
       return requests.get(id) ? { ...requests.get(id) } : null;
     },
@@ -210,7 +213,7 @@ function makeWorld() {
     } as never,
     commissionWalletService as never,
     driverSubscriptionRepository as never,
-    {} as never,
+    { async ensureConversationForRide() {} } as never, // RideChatService
   );
 
   function offer(requestId: string, driverId: string, overrides: Record<string, unknown> = {}) {

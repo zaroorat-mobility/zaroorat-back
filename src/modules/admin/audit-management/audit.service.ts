@@ -3,6 +3,7 @@ import { DatabaseService } from '@core/database';
 export interface AuditLogDto {
   id: string;
   actorId: string | null;
+  actorName: string | null;
   action: string;
   entityType: string | null;
   entityId: string | null;
@@ -38,6 +39,11 @@ export class AdminAuditService {
     const [rows, total] = await Promise.all([
       this.client.adminActivityLog.findMany({
         where,
+        include: {
+          actor: {
+            select: { phoneNumber: true, profile: { select: { firstName: true, lastName: true } } },
+          },
+        },
         orderBy: { createdAt: 'desc' },
         skip: (input.page - 1) * input.limit,
         take: input.limit,
@@ -49,6 +55,10 @@ export class AdminAuditService {
       data: rows.map((row) => ({
         id: row.id,
         actorId: row.actorId,
+        actorName: row.actor
+          ? [row.actor.profile?.firstName, row.actor.profile?.lastName].filter(Boolean).join(' ') ||
+            row.actor.phoneNumber
+          : null,
         action: row.action,
         entityType: row.entityType,
         entityId: row.entityId,

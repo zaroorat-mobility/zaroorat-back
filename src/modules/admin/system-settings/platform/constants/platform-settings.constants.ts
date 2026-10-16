@@ -24,6 +24,12 @@ export const RIDE_SETTING_KEYS = Object.freeze({
   MAX_SEARCH_RADIUS_METERS: 'ride.max_search_radius_meters',
   CANCELLATION_GRACE_MINUTES: 'ride.cancellation_grace_minutes',
   DEFAULT_CANCELLATION_FEE: 'ride.default_cancellation_fee',
+  PICKUP_GEOFENCE_METERS: 'ride.pickup_geofence_meters',
+  DROP_GEOFENCE_METERS: 'ride.drop_geofence_meters',
+  ARRIVAL_MAX_ACCURACY_METERS: 'ride.arrival_max_accuracy_meters',
+  ARRIVAL_REQUIRED_FIXES: 'ride.arrival_required_fixes',
+  DISPATCH_MAX_ROUNDS: 'ride.dispatch_max_rounds',
+  DISPATCH_MAX_ATTEMPTED_DRIVERS: 'ride.dispatch_max_attempted_drivers',
 } as const);
 
 export const OTP_SETTING_KEYS = Object.freeze({

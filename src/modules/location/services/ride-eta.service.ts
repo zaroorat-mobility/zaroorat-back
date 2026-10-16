@@ -19,10 +19,27 @@ interface EtaCacheEntry {
   lastOrigin: Coordinate;
 }
 
+/// The cache is per-instance soft state: losing an entry costs one provider call.
+/// A streaming ride recomputes at least every `etaRefreshMinIntervalMs`, so an
+/// entry idle this long belongs to a finished ride — or to a driver now streaming
+/// to another instance, which is why this is a sweep and not an end-of-ride
+/// event (that event is handled by whichever instance claims it). Without it the
+/// map kept one entry per ride for the life of the process.
+const ETA_CACHE_IDLE_MS = 10 * 60_000;
+
 export class RideEtaService {
   private readonly cache = new Map<string, EtaCacheEntry>();
+  private lastSweepAtMs = 0;
 
   constructor(private readonly mapProviderService: MapProviderService) {}
+
+  private sweep(now: number): void {
+    if (now - this.lastSweepAtMs < ETA_CACHE_IDLE_MS) return;
+    this.lastSweepAtMs = now;
+    for (const [rideId, entry] of this.cache) {
+      if (now - entry.lastComputedAtMs >= ETA_CACHE_IDLE_MS) this.cache.delete(rideId);
+    }
+  }
 
   async refreshEta(input: {
     rideId: string;
@@ -30,8 +47,9 @@ export class RideEtaService {
     destination: Coordinate;
     pinnedProvider?: MapProviderName;
   }): Promise<RideEtaSnapshot | null> {
-    const previous = this.cache.get(input.rideId);
     const now = Date.now();
+    this.sweep(now);
+    const previous = this.cache.get(input.rideId);
 
     if (previous) {
       const movedEnough =
@@ -68,10 +86,6 @@ export class RideEtaService {
       if (previous) return { ...previous.snapshot, stale: true };
       return null;
     }
-  }
-
-  forget(rideId: string): void {
-    this.cache.delete(rideId);
   }
 }
 

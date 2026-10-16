@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const mapProviderNameSchema = z.enum(['ola', 'google', 'mappls']);
+export const mapProviderNameSchema = z.enum(['google', 'mappls']);
 
 export const updateMapSettingsBodySchema = z.object({
   primaryProvider: mapProviderNameSchema,

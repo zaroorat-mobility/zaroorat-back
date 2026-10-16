@@ -106,6 +106,30 @@ describe('admin drivers (integration)', () => {
     assert.ok(Array.isArray(body.timeline));
   });
 
+  it('reports the payment model only once the driver has chosen it in the app', async () => {
+    const admin = await loginStaff(ADMIN_PHONE, 'system_admin');
+    const user = await loginAs(app, DRIVER_PHONE);
+    // Just approved: verified, but the driver has not picked Commission or Subscription yet.
+    const driverId = await makeDriver(user.userId, { verified: true, paymentModel: null });
+    const detail = async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/drivers/${driverId}`,
+        headers: admin.authHeader,
+      });
+      assert.equal(res.statusCode, 200, res.payload);
+      return res.json().data as { paymentModel?: string };
+    };
+
+    assert.equal((await detail()).paymentModel, undefined, 'no choice is not Commission');
+
+    await db().client.driver.update({
+      where: { id: driverId },
+      data: { paymentModel: 'COMMISSION' },
+    });
+    assert.equal((await detail()).paymentModel, 'COMMISSION');
+  });
+
   it('suspends, blocks, and activates a driver with drivers:write', async () => {
     const admin = await loginStaff(ADMIN_PHONE, 'system_admin');
     const driver = await seedDriverUser();

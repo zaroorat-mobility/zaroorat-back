@@ -32,6 +32,11 @@ export class DriverMetrics {
   implausibleLocationRejected(fields?: DriverMetricFields): void {
     this.emit('implausible_location_rejected_total', fields);
   }
+  /// A jump accepted because the last fix was too old to speed-check against —
+  /// distinct from a rejected jump, so the two can be alerted on separately.
+  staleLocationBaselineReset(fields?: DriverMetricFields): void {
+    this.emit('stale_location_baseline_reset_total', fields);
+  }
   documentExpired(fields?: DriverMetricFields): void {
     this.emit('document_expired_total', fields);
   }

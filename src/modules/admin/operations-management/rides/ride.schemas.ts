@@ -13,6 +13,7 @@ export const listAdminRidesQuerySchema = z.object({
       'DRIVER_ARRIVING',
       'DRIVER_ARRIVED',
       'IN_PROGRESS',
+      'DRIVER_AT_DROPOFF',
       'COMPLETED',
       'CANCELLED_BY_CUSTOMER',
       'CANCELLED_BY_DRIVER',

@@ -52,10 +52,12 @@ model File {
 
   profileOf UserProfile? @relation("ProfileImage")
 
-  driverDocuments DriverDocument[]
+  driverDocuments     DriverDocument[] @relation("DriverDocumentFile")
+  driverDocumentBacks DriverDocument[] @relation("DriverDocumentBackFile")
 
-  vehicleDocuments VehicleDocument[]
-  promoBannerImage PromoBanner?      @relation("BannerImage")
+  vehicleDocuments     VehicleDocument[] @relation("VehicleDocumentFile")
+  vehicleDocumentBacks VehicleDocument[] @relation("VehicleDocumentBackFile")
+  promoBannerImage     PromoBanner?      @relation("BannerImage")
 
   @@unique([storageKey], map: "uq_files_storage_key")
   @@index([ownerUserId], map: "ix_files_owner")

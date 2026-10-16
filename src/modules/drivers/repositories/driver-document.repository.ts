@@ -8,6 +8,7 @@ export class DriverDocumentRepository {
       driverId: string;
       documentType: DriverDocumentType;
       fileId: string;
+      backFileId?: string;
       documentNumber?: string;
       issuedAt?: Date;
       expiresAt?: Date;
@@ -26,6 +27,7 @@ export class DriverDocumentRepository {
         driverId: data.driverId,
         documentType: data.documentType,
         fileId: data.fileId,
+        backFileId: data.backFileId ?? null,
         documentNumber: data.documentNumber ?? null,
         issuedAt: data.issuedAt ?? null,
         expiresAt: data.expiresAt ?? null,
@@ -33,6 +35,7 @@ export class DriverDocumentRepository {
       },
       update: {
         fileId: data.fileId,
+        backFileId: data.backFileId ?? null,
         documentNumber: data.documentNumber ?? null,
         issuedAt: data.issuedAt ?? null,
         expiresAt: data.expiresAt ?? null,
@@ -56,7 +59,9 @@ export class DriverDocumentRepository {
   }
   async isDocumentFile(fileId: string, tx?: TransactionClient): Promise<boolean> {
     const client = tx ?? this.db.client;
-    const count = await client.driverDocument.count({ where: { fileId } });
+    const count = await client.driverDocument.count({
+      where: { OR: [{ fileId }, { backFileId: fileId }] },
+    });
     return count > 0;
   }
   async updateVerificationStatus(

@@ -3,6 +3,7 @@ import { redis } from '@core/cache/client.js';
 import { geoConfig, realtimeConfig } from '@config';
 import { allManagedQueues, resolveQueue } from '../../../jobs/queues/index.js';
 import type { RealtimeGateway } from '@modules/realtime/index.js';
+import { LIVE_RIDE_STATUSES } from '@modules/rides/constants/ride.constants.js';
 import type { Prisma } from '../../../generated/prisma/index.js';
 import {
   DashboardOverviewDto,
@@ -60,12 +61,7 @@ export interface DashboardStatsDto {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const ACTIVE_RIDE_STATUSES = [
-  'ACCEPTED',
-  'DRIVER_ARRIVING',
-  'DRIVER_ARRIVED',
-  'IN_PROGRESS',
-] as const;
+const ACTIVE_RIDE_STATUSES = LIVE_RIDE_STATUSES;
 const CANCELLED_RIDE_STATUSES = [
   'CANCELLED_BY_CUSTOMER',
   'CANCELLED_BY_DRIVER',
@@ -218,7 +214,8 @@ export class AdminDashboardService {
           'ACCEPTED'::"RideStatus",
           'DRIVER_ARRIVING'::"RideStatus",
           'DRIVER_ARRIVED'::"RideStatus",
-          'IN_PROGRESS'::"RideStatus"
+          'IN_PROGRESS'::"RideStatus",
+          'DRIVER_AT_DROPOFF'::"RideStatus"
         )
 
         UNION
@@ -782,7 +779,7 @@ export class AdminDashboardService {
         SELECT
           COUNT(*) FILTER (WHERE "status" = 'COMPLETED'::"RideStatus")::int AS completed,
           COUNT(*) FILTER (WHERE "status" IN ('CANCELLED_BY_CUSTOMER'::"RideStatus", 'CANCELLED_BY_DRIVER'::"RideStatus", 'CANCELLED_BY_SYSTEM'::"RideStatus"))::int AS cancelled,
-          COUNT(*) FILTER (WHERE "status" IN ('ACCEPTED'::"RideStatus", 'DRIVER_ARRIVING'::"RideStatus", 'DRIVER_ARRIVED'::"RideStatus", 'IN_PROGRESS'::"RideStatus"))::int AS ongoing
+          COUNT(*) FILTER (WHERE "status" IN ('ACCEPTED'::"RideStatus", 'DRIVER_ARRIVING'::"RideStatus", 'DRIVER_ARRIVED'::"RideStatus", 'IN_PROGRESS'::"RideStatus", 'DRIVER_AT_DROPOFF'::"RideStatus"))::int AS ongoing
         FROM "rides"
         WHERE "created_at" >= ${w.todayStart}
           AND "created_at" < ${w.tomorrowStart}

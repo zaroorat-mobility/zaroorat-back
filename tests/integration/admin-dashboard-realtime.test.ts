@@ -131,7 +131,7 @@ describe('admin dashboard realtime rooms (integration)', () => {
     });
     assert.deepEqual(await command(admin, 'dashboard.subscribe'), {
       ok: true,
-      rooms: ['dashboard:ops', 'dashboard:finance'],
+      rooms: ['dashboard:ops', 'dashboard:finance', 'dashboard:drivers'],
     });
   });
 

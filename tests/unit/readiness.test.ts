@@ -3,6 +3,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import {
   clearReadinessChecks,
+  markDraining,
   registerReadinessCheck,
   runReadinessChecks,
 } from '../../src/core/health/index.js';
@@ -75,5 +76,17 @@ describe('readiness checks', () => {
 
     assert.equal(report.checks.length, 1);
     assert.equal(report.ready, true);
+  });
+
+  it('reports not ready once draining, without probing healthy dependencies', async () => {
+    let probed = false;
+    registerReadinessCheck({ name: 'database', probe: () => void (probed = true) });
+    markDraining();
+
+    const report = await runReadinessChecks();
+
+    assert.equal(report.ready, false);
+    assert.deepEqual(report.checks, [{ name: 'draining', ok: false, error: 'shutting down' }]);
+    assert.equal(probed, false);
   });
 });

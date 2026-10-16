@@ -4,6 +4,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
+import { driverConfig } from '../../src/config/driver/driver.config.js';
 import { grantRole } from './helpers/fixtures.js';
 import { container } from '../../src/core/di.js';
 import { png as image } from '../helpers/image-fixtures.js';
@@ -16,7 +17,7 @@ function png(): Buffer {
   return image({ width: 400, height: 300 });
 }
 
-const REQUIRED_TYPES = ['DRIVING_LICENSE', 'RC', 'INSURANCE'];
+const REQUIRED_TYPES: readonly string[] = driverConfig.requiredDocumentTypes;
 
 describe('driver approval eligibility gate and role propagation (integration)', () => {
   let app: FastifyInstance;
@@ -149,9 +150,11 @@ describe('driver approval eligibility gate and role propagation (integration)', 
     for (const documentType of REQUIRED_TYPES) {
       documentIds.push(await submitDocument(user, driverId, documentType));
     }
-    await reviewDocument(admin, driverId, documentIds[0]!, 'REJECTED');
-    await reviewDocument(admin, driverId, documentIds[1]!, 'VERIFIED');
-    await reviewDocument(admin, driverId, documentIds[2]!, 'VERIFIED');
+    const [rejected, ...others] = documentIds;
+    await reviewDocument(admin, driverId, rejected!, 'REJECTED');
+    for (const documentId of others) {
+      await reviewDocument(admin, driverId, documentId, 'VERIFIED');
+    }
 
     const response = await approve(admin, driverId);
 
@@ -164,24 +167,43 @@ describe('driver approval eligibility gate and role propagation (integration)', 
     const driverId = await onboard(user);
     const admin = await makeAdmin('+919876670008');
     const documentIds: string[] = [];
-    documentIds.push(
-      await submitDocument(
-        user,
-        driverId,
-        'DRIVING_LICENSE',
-        new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-      ),
-    );
+    documentIds.push(await submitDocument(user, driverId, 'DRIVING_LICENSE'));
     documentIds.push(await submitDocument(user, driverId, 'RC'));
     documentIds.push(await submitDocument(user, driverId, 'INSURANCE'));
     for (const documentId of documentIds) {
       await reviewDocument(admin, driverId, documentId, 'VERIFIED');
     }
+    // Submission refuses a past expiry, so the licence lapses after it was verified.
+    await db().client.driverDocument.update({
+      where: { id: documentIds[0] },
+      data: { expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    });
 
     const response = await approve(admin, driverId);
 
     assert.equal(response.statusCode, 422, response.payload);
     assert.equal(response.json().error.details.expired.length, 1);
+  });
+
+  it('refuses a document submitted with an expiry already past (422 DOCUMENT_EXPIRED)', async () => {
+    const user = await loginAs(app, '+919876670021');
+    const driverId = await onboard(user);
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/drivers/${driverId}/documents`,
+      headers: user.authHeader,
+      payload: {
+        documentType: 'DRIVING_LICENSE',
+        fileId: await uploadFile(user.authHeader),
+        expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    });
+
+    assert.equal(response.statusCode, 422, response.payload);
+    assert.equal(response.json().error.code, 'DOCUMENT_EXPIRED');
+    assert.equal(await db().client.driverDocument.count({ where: { driverId } }), 0);
+    const driver = await db().client.driver.findUniqueOrThrow({ where: { id: driverId } });
+    assert.equal(driver.verificationStatus, 'PENDING');
   });
 
   it('approves, propagates the driver role via the outbox, and survives duplicate delivery', async () => {

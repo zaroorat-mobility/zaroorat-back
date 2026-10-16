@@ -311,6 +311,29 @@ describe('driver vehicle management, documents and verification (integration)', 
       assert.equal(response.json().data.verificationStatus, 'PENDING');
     });
 
+    it('keeps the back of a two-sided document and guards it like the front', async () => {
+      const { user, vehicleId } = await driverWithVehicle(DRIVER_A);
+      const front = await uploadFile(user);
+      const back = await uploadFile(user);
+
+      const response = await post(`/api/v1/vehicles/${vehicleId}/documents`, user, {
+        documentType: 'RC',
+        fileId: front,
+        backFileId: back,
+      });
+      assert.equal(response.statusCode, 201, response.payload);
+      assert.deepEqual(
+        [response.json().data.fileId, response.json().data.backFileId],
+        [front, back],
+      );
+
+      const reused = await post(`/api/v1/vehicles/${vehicleId}/documents`, user, {
+        documentType: 'INSURANCE',
+        fileId: back,
+      });
+      assert.equal(reused.statusCode, 409, reused.payload);
+    });
+
     it('refuses a file the caller does not own', async () => {
       const a = await driverWithVehicle(DRIVER_A);
       const b = await driverWithVehicle(DRIVER_B);

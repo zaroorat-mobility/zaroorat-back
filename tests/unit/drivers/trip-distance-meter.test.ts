@@ -17,13 +17,21 @@ function makeWorld(previous: { latitude: number; longitude: number } | null = BL
   const stored = { ...BLR };
 
   const locationRepo = {
+    async withDriverLock<T>(_driverId: string, fn: (tx: never) => Promise<T>): Promise<T> {
+      return fn({} as never);
+    },
     async getLocation() {
       return previous === null ? null : { ...previous, recordedAt: new Date(Date.now() - 30_000) };
     },
-    async updateLocation(input: { latitude: number; longitude: number }) {
+    async updateLocation(
+      input: { latitude: number; longitude: number },
+      _tx?: unknown,
+      recordedAt: Date = new Date(),
+    ) {
       stored.latitude = input.latitude;
       stored.longitude = input.longitude;
-      return { ...input, recordedAt: new Date() };
+      // Like the repository: the stored row carries the server time it was written with.
+      return { ...input, recordedAt };
     },
   };
 

@@ -59,27 +59,16 @@ export const createFinanceRefundBodySchema = z
     message: 'Either transactionId or rideId is required',
   });
 
-export const startRefundReviewBodySchema = z.object({
-  reviewerName: z.string().trim().min(1).max(200).optional(),
-});
-
 export const approveRefundBodySchema = z.object({
   approvedAmount: z.coerce.number().positive(),
   notes: z.string().trim().max(2000).optional(),
-  reviewerName: z.string().trim().min(1).max(200).optional(),
 });
 
 export const rejectRefundBodySchema = z.object({
   reason: z.string().trim().min(1).max(2000),
-  reviewerName: z.string().trim().min(1).max(200).optional(),
-});
-
-export const markRefundProcessingBodySchema = z.object({
-  actorName: z.string().trim().min(1).max(200).optional(),
 });
 
 export const markRefundCompletedBodySchema = z.object({
-  actorName: z.string().trim().min(1).max(200).optional(),
   notes: z.string().trim().max(2000).optional(),
 });
 
@@ -152,7 +141,6 @@ export const resolveDisputeBodySchema = z.object({
   ]),
   resolutionNotes: z.string().trim().max(4000).optional(),
   adjustmentAmount: z.coerce.number().optional(),
-  resolvedBy: z.string().trim().min(1).max(200).optional(),
 });
 
 export const closeDisputeBodySchema = z.object({

@@ -5,6 +5,7 @@ import { MapProviderHealthService } from './map-provider-health.service.js';
 import type { IntegrationHealthService } from '../../integrations/services/integration-health.service.js';
 import { MapSettingsValidator } from '../validators/map-settings.validator.js';
 import {
+  buildGoogleTileUrl,
   buildMapplsTileUrl,
   DEFAULT_BASE_URLS,
   DEFAULT_MAP_PROVIDERS,
@@ -47,11 +48,6 @@ export class AdminMapSettingsService {
     const configVersion =
       Number(settings.get(MAP_SETTING_KEYS.CONFIG_VERSION)?.value ?? maxVersion) || maxVersion;
 
-    const olaKey = resolveMapCredential(
-      settings.get(MAP_SETTING_KEYS.OLA_API_KEY)?.value,
-      process.env.OLA_MAPS_API_KEY,
-      process.env.MAPS_API_KEY,
-    );
     const googleKey = resolveMapCredential(
       settings.get(MAP_SETTING_KEYS.GOOGLE_API_KEY)?.value,
       process.env.GOOGLE_MAPS_API_KEY,
@@ -72,7 +68,6 @@ export class AdminMapSettingsService {
       mapplsRestKey.trim() || (mapplsId.trim() && mapplsSecret.trim()) || mapplsId.trim(),
     );
 
-    const olaEnabled = primaryProvider === 'ola';
     const googleEnabled = primaryProvider === 'google';
     const mapplsEnabled = primaryProvider === 'mappls';
 
@@ -80,15 +75,6 @@ export class AdminMapSettingsService {
       primaryProvider,
       version: configVersion,
       providers: {
-        ola: {
-          enabled: olaEnabled,
-          configured: Boolean(olaKey),
-          baseUrl:
-            settings.get(MAP_SETTING_KEYS.OLA_BASE_URL)?.value ??
-            process.env.OLA_MAPS_BASE_URL ??
-            DEFAULT_BASE_URLS.OLA,
-          capabilities: [...providerCapabilities('ola')],
-        },
         google: {
           enabled: googleEnabled,
           configured: Boolean(googleKey),
@@ -119,40 +105,24 @@ export class AdminMapSettingsService {
 
     /// The browser-facing tile key: the platform-restricted client SDK key, and
     /// nothing else.
-    ///
-    /// This used to fall through to the backend REST key when no SDK key was
-    /// configured — `map.ola.api_key`, `map.google.api_key`, the Mappls REST key.
-    /// That key reached the admin bundle as the provider's browser key, and for
-    /// Mappls it was embedded in the raster tile URL path, so it also travelled
-    /// through every proxy and CDN log between the browser and Mappls. A server
-    /// credential with full account quota and no referrer restriction is not a
-    /// tile key; an unconfigured SDK key now yields no tiles instead.
     const resolveTileKey = (name: MapProviderName): string =>
       resolveMapCredential(
         settingsMap.get(
-          name === 'ola'
-            ? MAP_SETTING_KEYS.OLA_CLIENT_SDK_KEY
-            : name === 'google'
-              ? MAP_SETTING_KEYS.GOOGLE_CLIENT_SDK_KEY
-              : MAP_SETTING_KEYS.MAPPLS_CLIENT_SDK_KEY,
+          name === 'google'
+            ? MAP_SETTING_KEYS.GOOGLE_CLIENT_SDK_KEY
+            : MAP_SETTING_KEYS.MAPPLS_CLIENT_SDK_KEY,
         )?.value,
-        name === 'ola'
-          ? process.env.OLA_MAPS_CLIENT_SDK_KEY
-          : name === 'google'
-            ? process.env.GOOGLE_MAPS_CLIENT_SDK_KEY
-            : process.env.MAPPLS_CLIENT_SDK_KEY,
+        name === 'google'
+          ? process.env.GOOGLE_MAPS_CLIENT_SDK_KEY
+          : process.env.MAPPLS_CLIENT_SDK_KEY,
       );
 
     const buildProvider = (name: MapProviderName) => {
       const isPrimary = name === primary;
-      const enabled = isPrimary && settings.providers[name].enabled;
+      const enabled = isPrimary && (settings.providers[name]?.enabled ?? false);
       const providerBase =
-        settings.providers[name].baseUrl ??
-        (name === 'ola'
-          ? DEFAULT_BASE_URLS.OLA
-          : name === 'google'
-            ? DEFAULT_BASE_URLS.GOOGLE
-            : DEFAULT_BASE_URLS.MAPPLS);
+        settings.providers[name]?.baseUrl ??
+        (name === 'google' ? DEFAULT_BASE_URLS.GOOGLE : DEFAULT_BASE_URLS.MAPPLS);
       const baseUrl = (name === 'mappls' ? DEFAULT_BASE_URLS.MAPPLS_TILES : providerBase).replace(
         /\/+$/,
         '',
@@ -176,9 +146,8 @@ export class AdminMapSettingsService {
       }
 
       config.clientSdkKey = tileKey;
-      if (name === 'ola') {
-        config.baseUrl = providerBase.replace(/\/+$/, '');
-        config.tileUrl = `${config.baseUrl}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;
+      if (name === 'google') {
+        config.tileUrl = buildGoogleTileUrl(tileKey);
       } else if (name === 'mappls') {
         config.tileUrl = buildMapplsTileUrl(tileKey);
       }
@@ -189,7 +158,6 @@ export class AdminMapSettingsService {
     return {
       primaryProvider: primary,
       providers: {
-        ola: buildProvider('ola'),
         google: buildProvider('google'),
         mappls: buildProvider('mappls'),
       },
@@ -203,10 +171,6 @@ export class AdminMapSettingsService {
     const primary = settings.primaryProvider as MapProviderName;
 
     const clientSdk = {
-      ola: resolveMapCredential(
-        settingsMap.get(MAP_SETTING_KEYS.OLA_CLIENT_SDK_KEY)?.value,
-        process.env.OLA_MAPS_CLIENT_SDK_KEY,
-      ),
       google: resolveMapCredential(
         settingsMap.get(MAP_SETTING_KEYS.GOOGLE_CLIENT_SDK_KEY)?.value,
         process.env.GOOGLE_MAPS_CLIENT_SDK_KEY,
@@ -217,27 +181,17 @@ export class AdminMapSettingsService {
       ),
     };
 
-    const olaBase = settings.providers.ola.baseUrl ?? DEFAULT_BASE_URLS.OLA;
-
     const buildProvider = (name: MapProviderName) => {
-      const enabled = settings.providers[name].enabled;
+      const enabled = settings.providers[name]?.enabled ?? false;
       const sdkKey = clientSdk[name];
-      const baseUrl = settings.providers[name].baseUrl;
+      const baseUrl = settings.providers[name]?.baseUrl;
       const out: PublicMapConfigView['providers'][MapProviderName] = { enabled };
       if (baseUrl) out.baseUrl = baseUrl.replace(/\/+$/, '');
       if (enabled && sdkKey) {
         out.clientSdkKey = sdkKey;
-        if (name === 'ola') {
-          out.tileUrl = `${olaBase.replace(/\/+$/, '')}/tiles/v1/styles/default-light-standard/{z}/{x}/{y}.png`;
+        if (name === 'google') {
+          out.tileUrl = buildGoogleTileUrl(sdkKey);
         } else if (name === 'mappls') {
-          /// The Mappls raster licence key is the client SDK key and nothing
-          /// else. This used to fall back to the server REST key, decrypting it
-          /// on every call to build a tile url that embeds the key in the path
-          /// -- so it would have travelled through every proxy and CDN log
-          /// between the browser and Mappls. The surrounding guard already
-          /// required `sdkKey`, so that fallback could never actually be
-          /// reached; it is removed rather than left as a trap for the next
-          /// edit of the guard.
           out.tileUrl = buildMapplsTileUrl(sdkKey);
           out.baseUrl = DEFAULT_BASE_URLS.MAPPLS_TILES;
         }
@@ -245,12 +199,7 @@ export class AdminMapSettingsService {
       return out;
     };
 
-    const attribution =
-      primary === 'google'
-        ? { text: '© Google' }
-        : primary === 'mappls'
-          ? { text: 'Powered by Mappls' }
-          : { text: '© Ola Maps' };
+    const attribution = primary === 'google' ? { text: '© Google' } : { text: 'Powered by Mappls' };
 
     return {
       primaryProvider: primary,
@@ -259,7 +208,6 @@ export class AdminMapSettingsService {
       attribution,
       minClientAdapterVersion: '1.0.0',
       providers: {
-        ola: buildProvider('ola'),
         google: buildProvider('google'),
         mappls: buildProvider('mappls'),
       },
@@ -291,10 +239,7 @@ export class AdminMapSettingsService {
 
     const healthInput: TestProviderHealthInput = { providerName: primaryProvider };
 
-    if (primaryProvider === 'ola' && input.providers?.ola) {
-      if (input.providers.ola.apiKey) healthInput.apiKey = input.providers.ola.apiKey;
-      if (input.providers.ola.baseUrl) healthInput.baseUrl = input.providers.ola.baseUrl;
-    } else if (primaryProvider === 'google' && input.providers?.google) {
+    if (primaryProvider === 'google' && input.providers?.google) {
       if (input.providers.google.apiKey) healthInput.apiKey = input.providers.google.apiKey;
       if (input.providers.google.baseUrl) healthInput.baseUrl = input.providers.google.baseUrl;
     } else if (primaryProvider === 'mappls') {
@@ -353,22 +298,12 @@ export class AdminMapSettingsService {
       await saveSetting(MAP_SETTING_KEYS.PRIMARY_PROVIDER, primaryProvider);
       await saveSetting(MAP_SETTING_KEYS.CONFIG_VERSION, String(nextVersion));
 
-      const olaEnabled = primaryProvider === 'ola';
       const googleEnabled = primaryProvider === 'google';
       const mapplsEnabled = primaryProvider === 'mappls';
 
-      await saveSetting(MAP_SETTING_KEYS.OLA_ENABLED, String(olaEnabled));
+      await saveSetting(MAP_SETTING_KEYS.OLA_ENABLED, 'false');
       await saveSetting(MAP_SETTING_KEYS.GOOGLE_ENABLED, String(googleEnabled));
       await saveSetting(MAP_SETTING_KEYS.MAPPLS_ENABLED, String(mapplsEnabled));
-
-      if (input.providers?.ola) {
-        const p = input.providers.ola;
-        if (p.apiKey && !p.apiKey.startsWith('***'))
-          await saveSetting(MAP_SETTING_KEYS.OLA_API_KEY, p.apiKey, true);
-        if (p.clientSdkKey && !p.clientSdkKey.startsWith('***'))
-          await saveSetting(MAP_SETTING_KEYS.OLA_CLIENT_SDK_KEY, p.clientSdkKey, true);
-        if (p.baseUrl) await saveSetting(MAP_SETTING_KEYS.OLA_BASE_URL, p.baseUrl);
-      }
 
       if (input.providers?.google) {
         const p = input.providers.google;

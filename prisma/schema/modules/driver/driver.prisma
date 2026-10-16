@@ -86,6 +86,9 @@ model DriverDocument {
   documentNumber     String?            @map("document_number")
   fileUrl            String?            @map("file_url")
   fileId             String?            @map("file_id") @db.Uuid
+  /// Back of a two-sided card (licence, Aadhaar); `fileId` is the front. Null for one-sided
+  /// documents and for uploads made before the back was collected.
+  backFileId         String?            @map("back_file_id") @db.Uuid
   issuedAt           DateTime?          @map("issued_at") @db.Date
   expiresAt          DateTime?          @map("expires_at") @db.Date
   verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
@@ -98,8 +101,9 @@ model DriverDocument {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  driver Driver @relation(fields: [driverId], references: [id])
-  file   File?  @relation(fields: [fileId], references: [id])
+  driver   Driver @relation(fields: [driverId], references: [id])
+  file     File?  @relation("DriverDocumentFile", fields: [fileId], references: [id])
+  backFile File?  @relation("DriverDocumentBackFile", fields: [backFileId], references: [id])
 
   @@unique([driverId, documentType], map: "driver_documents_driver_id_document_type_key")
   @@index([driverId])

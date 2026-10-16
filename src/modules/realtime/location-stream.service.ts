@@ -7,6 +7,7 @@ import { RideRepository } from '@modules/rides/repositories/ride.repository.js';
 import { RideLocationHistoryService } from '@modules/location/services/ride-location-history.service.js';
 import { RideEtaService } from '@modules/location/services/ride-eta.service.js';
 import type { MapProviderName } from '@modules/admin/system-settings/map/types/map-settings.types.js';
+import type { ArrivalDetectionService } from '@modules/rides/services/arrival/arrival-detection.service.js';
 import { SOCKET_EVENT, socketEnvelope, type SocketEnvelope } from './events.js';
 import {
   InvalidSocketPayloadError,
@@ -42,6 +43,7 @@ const LIVE_RIDE_STATUSES = new Set([
   'DRIVER_ARRIVING',
   'DRIVER_ARRIVED',
   'IN_PROGRESS',
+  'DRIVER_AT_DROPOFF',
 ]);
 
 export class LocationStreamService {
@@ -52,6 +54,7 @@ export class LocationStreamService {
     private readonly rideRepository: RideRepository,
     private readonly rideLocationHistoryService: RideLocationHistoryService,
     private readonly rideEtaService: RideEtaService,
+    private readonly arrivalDetectionService?: ArrivalDetectionService,
   ) {}
 
   parse(payload: unknown): LocationFrame {
@@ -166,6 +169,24 @@ export class LocationStreamService {
           },
           new Date(recordedAtMs),
         );
+      }
+    }
+
+    if (this.arrivalDetectionService) {
+      try {
+        await this.arrivalDetectionService.evaluateFix(
+          {
+            driverId,
+            latitude: frame.latitude,
+            longitude: frame.longitude,
+            accuracyMeters: frame.accuracyMeters,
+            isMockLocation: frame.isMockLocation,
+            recordedAt: recordedAtMs,
+          },
+          now,
+        );
+      } catch (_err) {
+        // Handled silently
       }
     }
 

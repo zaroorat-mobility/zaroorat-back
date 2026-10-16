@@ -18,6 +18,7 @@ import {
   completeRide as flowCompleteRide,
   declineGateway as declineGatewayHelper,
   fundWallet,
+  placeDriverAt,
   rideWorld,
   type FareRow,
   type RideWorld,
@@ -812,18 +813,24 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.equal(accepted.statusCode, 200, accepted.payload);
       const rideId = accepted.json().data.ride.id;
 
-      await app.inject({
+      await placeDriverAt(world.driverId, 12.9716, 77.5946);
+      const arrived = await app.inject({
         method: 'POST',
         url: `/api/v1/rides/${rideId}/arrive`,
         headers: world.driver.authHeader,
         payload: {},
       });
-      await app.inject({
+      assert.equal(arrived.statusCode, 200, arrived.payload);
+      const started = await app.inject({
         method: 'POST',
         url: `/api/v1/rides/${rideId}/start`,
         headers: world.driver.authHeader,
         payload: { pin: RIDE_PIN },
       });
+      assert.equal(started.statusCode, 200, started.payload);
+
+      // At the drop, so the only thing wrong with this completion is the duration.
+      await placeDriverAt(world.driverId, 12.9716 + 8 * 0.009, 77.5946);
 
       const completed = await app.inject({
         method: 'POST',

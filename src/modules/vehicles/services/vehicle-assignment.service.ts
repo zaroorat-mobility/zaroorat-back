@@ -20,6 +20,9 @@ export interface ClaimVehicleInput {
   model?: string;
   color?: string;
   seatingCapacity?: number;
+  fuelType?: string;
+  manufacturingYear?: number;
+  photoUrl?: string;
 }
 
 /// Fields a driver may edit on their own vehicle. Deliberately excludes
@@ -66,17 +69,56 @@ export class VehicleAssignmentService {
             ...(input.seatingCapacity !== undefined
               ? { seatingCapacity: input.seatingCapacity }
               : {}),
+            ...(input.fuelType !== undefined ? { fuelType: input.fuelType } : {}),
+            ...(input.manufacturingYear !== undefined
+              ? { manufacturingYear: input.manufacturingYear }
+              : {}),
           },
           tx,
         );
-      } else if (vehicle.vehicleTypeId !== input.vehicleTypeId) {
-        // Re-claiming an existing plate under a different category changes what
-        // the vehicle is: whatever an operator approved no longer describes it.
-        await tx.vehicle.update({
-          where: { id: vehicle.id },
-          data: { vehicleTypeId: input.vehicleTypeId },
+      } else {
+        const typeChanged = vehicle.vehicleTypeId !== input.vehicleTypeId;
+        const updateData: Record<string, unknown> = {};
+        if (typeChanged) updateData.vehicleTypeId = input.vehicleTypeId;
+        if (input.make !== undefined) updateData.make = input.make;
+        if (input.model !== undefined) updateData.model = input.model;
+        if (input.color !== undefined) updateData.color = input.color;
+        if (input.seatingCapacity !== undefined) updateData.seatingCapacity = input.seatingCapacity;
+        if (input.fuelType !== undefined) updateData.fuelType = input.fuelType;
+        if (input.manufacturingYear !== undefined)
+          updateData.manufacturingYear = input.manufacturingYear;
+
+        if (Object.keys(updateData).length > 0) {
+          vehicle = await tx.vehicle.update({
+            where: { id: vehicle.id },
+            data: updateData,
+          });
+        }
+        if (typeChanged) {
+          // Re-claiming an existing plate under a different category changes what
+          // the vehicle is: whatever an operator approved no longer describes it.
+          vehicle = await this.vehicleRepo.resetVerification(vehicle.id, tx);
+        }
+      }
+
+      if (input.photoUrl) {
+        const existingImage = await tx.vehicleImage.findFirst({
+          where: { vehicleId: vehicle.id, imageType: 'EXTERIOR' },
         });
-        vehicle = await this.vehicleRepo.resetVerification(vehicle.id, tx);
+        if (existingImage) {
+          await tx.vehicleImage.update({
+            where: { id: existingImage.id },
+            data: { imageUrl: input.photoUrl, uploadedAt: new Date() },
+          });
+        } else {
+          await tx.vehicleImage.create({
+            data: {
+              vehicleId: vehicle.id,
+              imageType: 'EXTERIOR',
+              imageUrl: input.photoUrl,
+            },
+          });
+        }
       }
 
       // Release whatever this driver was previously assigned to — a driver
@@ -91,7 +133,11 @@ export class VehicleAssignmentService {
       await this.vehicleRepo.setCurrentDriver(vehicle.id, input.driverId, tx);
       await this.driverRepository.updateCurrentVehicle(input.driverId, vehicle.id, tx);
       await this.assignmentRepo.create({ driverId: input.driverId, vehicleId: vehicle.id }, tx);
-      return { ...vehicle, currentDriverId: input.driverId };
+      const images = await tx.vehicleImage.findMany({
+        where: { vehicleId: vehicle.id },
+        orderBy: { uploadedAt: 'desc' },
+      });
+      return { ...vehicle, currentDriverId: input.driverId, images } as unknown as Vehicle;
     });
   }
 
@@ -122,12 +168,40 @@ export class VehicleAssignmentService {
     return this.txManager.execute(async (tx) => {
       const locked = await this.vehicleRepo.lockForUpdate(vehicleId, tx);
       if (!locked) throw new VehicleNotOwnedError(vehicleId);
-      const updated = await this.vehicleRepo.update(vehicleId, changes, tx);
+      const { photoUrl, ...vehicleChanges } = changes;
+      let updated = vehicle;
+      if (Object.keys(vehicleChanges).length > 0) {
+        updated = await this.vehicleRepo.update(vehicleId, vehicleChanges, tx);
+      }
+      if (photoUrl) {
+        const existingImage = await tx.vehicleImage.findFirst({
+          where: { vehicleId, imageType: 'EXTERIOR' },
+        });
+        if (existingImage) {
+          await tx.vehicleImage.update({
+            where: { id: existingImage.id },
+            data: { imageUrl: photoUrl, uploadedAt: new Date() },
+          });
+        } else {
+          await tx.vehicleImage.create({
+            data: {
+              vehicleId,
+              imageType: 'EXTERIOR',
+              imageUrl: photoUrl,
+            },
+          });
+        }
+      }
+      const images = await tx.vehicleImage.findMany({
+        where: { vehicleId },
+        orderBy: { uploadedAt: 'desc' },
+      });
       // Editing the details an operator signed off on retires that approval.
       if (locked.verificationStatus === 'VERIFIED') {
-        return this.vehicleRepo.resetVerification(vehicleId, tx);
+        const reset = await this.vehicleRepo.resetVerification(vehicleId, tx);
+        return { ...reset, images } as unknown as Vehicle;
       }
-      return updated;
+      return { ...updated, images } as unknown as Vehicle;
     });
   }
 

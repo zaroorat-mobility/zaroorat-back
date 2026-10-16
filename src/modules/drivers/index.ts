@@ -34,8 +34,12 @@ import {
   DriverEarningsController,
   DriverWithdrawalController,
   DriverScheduledController,
+  DriverMapZonesController,
+  DriverBankController,
   DriverController,
 } from './controllers/index.js';
+import { DriverMapZonesRepository } from './services/map-zones/map-zones.repository.js';
+import { DriverMapZonesService } from './services/map-zones/map-zones.service.js';
 import { HeartbeatTimeoutJob, DocExpirationJob } from './jobs/index.js';
 export * from './controllers/index.js';
 export * from './routes/index.js';
@@ -91,6 +95,17 @@ export function registerDriversModule(container: AwilixContainer): void {
     driverEarningsController: asClass(DriverEarningsController).singleton(),
     driverWithdrawalController: asClass(DriverWithdrawalController).singleton(),
     driverScheduledController: asClass(DriverScheduledController).singleton(),
+    driverMapZonesRepository: asClass(DriverMapZonesRepository).singleton(),
+    driverMapZonesService: asClass(DriverMapZonesService).singleton(),
+    driverMapZonesController: asClass(DriverMapZonesController).singleton(),
+    driverBankController: asClass(DriverBankController)
+      .singleton()
+      .inject((c) => ({
+        driverRepository: c.resolve('driverRepository'),
+        driverBankRepository: c.resolve('driverBankRepository'),
+        eventPublisher: c.resolve('eventPublisher'),
+        realtimeGateway: c.resolve('realtimeGateway'),
+      })),
     driverController: asClass(DriverController)
       .singleton()
       .inject((c) => ({
@@ -104,6 +119,8 @@ export function registerDriversModule(container: AwilixContainer): void {
         earnings: c.resolve('driverEarningsController'),
         withdrawals: c.resolve('driverWithdrawalController'),
         scheduled: c.resolve('driverScheduledController'),
+        mapZones: c.resolve('driverMapZonesController'),
+        bank: c.resolve('driverBankController'),
       })),
     heartbeatTimeoutJob: asClass(HeartbeatTimeoutJob).singleton(),
     driverRepo: aliasTo('driverRepository'),

@@ -28,6 +28,7 @@ import { hashPassword } from '../../src/modules/auth/utils/password.js';
 
 const OPS = 'dashboard:ops';
 const FINANCE = 'dashboard:finance';
+const DRIVERS = 'dashboard:drivers';
 const CENTRE = { latitude: 12.9716, longitude: 77.5946 };
 
 interface Ack {
@@ -264,7 +265,7 @@ describe('realtime revocation lifecycle (integration)', () => {
       const active = await connect(target.accessToken);
       assert.deepEqual(await command(idle, 'dashboard.subscribe'), {
         ok: true,
-        rooms: [OPS, FINANCE],
+        rooms: [OPS, FINANCE, DRIVERS],
       });
       const heard = record(idle);
 
@@ -295,7 +296,7 @@ describe('realtime revocation lifecycle (integration)', () => {
       const active = await connect(target.accessToken);
       assert.deepEqual(await command(idle, 'dashboard.subscribe'), {
         ok: true,
-        rooms: [OPS, FINANCE],
+        rooms: [OPS, FINANCE, DRIVERS],
       });
       const heard = record(idle);
 
@@ -501,8 +502,8 @@ describe('realtime revocation lifecycle (integration)', () => {
     };
     await expectRooms((await staff('support')).accessToken, [OPS]);
     await expectRooms((await staff('finance')).accessToken, [FINANCE]);
-    await expectRooms((await staff('admin')).accessToken, [OPS, FINANCE]);
-    await expectRooms(actor.accessToken, [OPS, FINANCE]);
+    await expectRooms((await staff('admin')).accessToken, [OPS, FINANCE, DRIVERS]);
+    await expectRooms(actor.accessToken, [OPS, FINANCE, DRIVERS]);
     await expectRooms((await staff(financeOnly)).accessToken, [FINANCE]);
     await expectRooms((await loginAs(server.app, nextPhone())).accessToken, null);
     await expectRooms((await onlineDriver()).accessToken, null);
@@ -610,7 +611,7 @@ describe('realtime revocation lifecycle (integration)', () => {
     // Nothing has committed: the old grant is still the truth, and is honoured.
     assert.deepEqual(await command(active, 'dashboard.subscribe'), {
       ok: true,
-      rooms: [OPS, FINANCE],
+      rooms: [OPS, FINANCE, DRIVERS],
     });
 
     release();

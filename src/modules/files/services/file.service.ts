@@ -34,6 +34,11 @@ export class FileService {
   ): Promise<FileReadUrl> {
     return this.fileAccessService.getReadUrl(fileId, caller, disposition, requestId);
   }
+  /// Locks several files at once, in a fixed order, before they are checked and attached
+  /// (a document's front and back), so two requests swapping the same pair cannot deadlock.
+  lockForAttach(fileIds: string[], tx: TransactionClient): Promise<void> {
+    return this.fileLifecycleService.lockForAttach(fileIds, tx);
+  }
   getMetadata(fileId: string, caller: FileCaller): Promise<CompleteUploadResult> {
     return this.fileAccessService.getMetadata(fileId, caller);
   }

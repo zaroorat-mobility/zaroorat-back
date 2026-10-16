@@ -25,6 +25,7 @@ function metricsSpy() {
     ridePinVerified: record('verified'),
     ridePinFailed: record('failed'),
     ridePinLocked: record('locked'),
+    rideStarted: record('started'),
   };
 }
 
@@ -400,7 +401,7 @@ describe('Duplicate Ride PIN Customer-Binding & Concurrency Integration Test', (
       {} as never,
     );
 
-    return { lifecycle, rides, users, callsToFindRidePin };
+    return { lifecycle, rides, users, callsToFindRidePin, redisService };
   }
 
   it('Customer A + 8274 (Ride A, Driver A) -> SUCCESS', async () => {
@@ -453,6 +454,14 @@ describe('Duplicate Ride PIN Customer-Binding & Concurrency Integration Test', (
       (err: unknown) => err instanceof RidePinInvalidError,
     );
     assert.equal(world.rides.get('ride-A')?.status, 'DRIVER_ARRIVED');
+
+    // An immediate retry is held by the per-ride cooldown, even with the right PIN.
+    await assert.rejects(
+      () => world.lifecycle.startRide('ride-A', 'drv-A', '8274'),
+      (err: unknown) => err instanceof RidePinThrottledError,
+    );
+    // The fake's gap keys never expire; real Redis drops them after the cooldown.
+    world.redisService.gaps.clear();
 
     const result = await world.lifecycle.startRide('ride-A', 'drv-A', '8274');
     assert.equal(result.status, 'IN_PROGRESS');
