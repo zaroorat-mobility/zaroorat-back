@@ -31,6 +31,7 @@ interface GoogleDirectionsResponse {
     }>;
   }>;
   status?: string;
+  error_message?: string;
 }
 
 interface GooglePlacesAutocompleteResponse {
@@ -40,6 +41,7 @@ interface GooglePlacesAutocompleteResponse {
     structured_formatting?: { main_text?: string; secondary_text?: string };
   }>;
   status?: string;
+  error_message?: string;
 }
 
 interface GoogleGeocodeResponse {
@@ -49,6 +51,7 @@ interface GoogleGeocodeResponse {
     address_components?: Array<{ long_name: string; short_name: string; types: string[] }>;
   }>;
   status?: string;
+  error_message?: string;
 }
 
 interface GoogleMatrixResponse {
@@ -60,6 +63,7 @@ interface GoogleMatrixResponse {
     }>;
   }>;
   status?: string;
+  error_message?: string;
 }
 
 export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider {
@@ -83,6 +87,10 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
 
   async forwardGeocode(address: string): Promise<ForwardGeocodeResult> {
     const response = await this.get<GoogleGeocodeResponse>('geocode/json', { address });
+    if (response.status && response.status !== 'OK' && response.status !== 'ZERO_RESULTS') {
+      const msg = response.error_message ? `: ${response.error_message}` : '';
+      throw new Error(`[GoogleMaps] forwardGeocode failed (${response.status})${msg}`);
+    }
     if (!response.results?.length) {
       throw new Error('[GoogleMaps] forwardGeocode: no result');
     }
@@ -118,6 +126,11 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
         params,
       );
 
+      if (response.status && response.status !== 'OK' && response.status !== 'ZERO_RESULTS') {
+        const msg = response.error_message ? `: ${response.error_message}` : '';
+        logger.warn({ status: response.status, msg }, '[GoogleMaps] autocomplete status not OK');
+      }
+
       if (!response.predictions || response.predictions.length === 0) {
         return { status: 'no_results', predictions: [], providerName: this.providerName };
       }
@@ -139,6 +152,11 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
     const response = await this.get<GoogleGeocodeResponse>('geocode/json', {
       latlng: `${coordinate.latitude},${coordinate.longitude}`,
     });
+
+    if (response.status && response.status !== 'OK' && response.status !== 'ZERO_RESULTS') {
+      const msg = response.error_message ? `: ${response.error_message}` : '';
+      throw new Error(`[GoogleMaps] reverseGeocode failed (${response.status})${msg}`);
+    }
 
     if (!response.results || response.results.length === 0) {
       throw new Error(
@@ -176,6 +194,11 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
       destination: `${destination.latitude},${destination.longitude}`,
       mode: 'driving',
     });
+
+    if (response.status && response.status !== 'OK') {
+      const msg = response.error_message ? `: ${response.error_message}` : '';
+      throw new Error(`[GoogleMaps] getDirections failed (${response.status})${msg}`);
+    }
 
     if (!response.routes || response.routes.length === 0) {
       throw new Error('[GoogleMaps] getDirections: no route found');
@@ -218,6 +241,11 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
         destinations: destinations.map((d) => `${d.latitude},${d.longitude}`).join('|'),
         mode: 'driving',
       });
+
+      if (response.status && response.status !== 'OK') {
+        const msg = response.error_message ? `: ${response.error_message}` : '';
+        throw new Error(`[GoogleMaps] getDistanceMatrix failed (${response.status})${msg}`);
+      }
 
       if (!response.rows || response.rows.length === 0) {
         return { status: 'unavailable', cells: [], providerName: this.providerName };

@@ -66,6 +66,7 @@ export class DriverRepository {
       alternatePhone: string;
       drivingExperienceYears: number;
       email: string | null;
+      profilePhoto: string;
     }>,
     tx?: TransactionClient,
   ): Promise<DriverProfile> {

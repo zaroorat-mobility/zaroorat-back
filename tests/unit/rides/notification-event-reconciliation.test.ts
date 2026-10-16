@@ -27,7 +27,7 @@ function known(code: string): Prisma.PrismaClientKnownRequestError {
 }
 
 describe('which events are reconciled', () => {
-  it('the nine notification events other than ride offers', () => {
+  it('the eleven notification events other than ride offers', () => {
     assert.deepEqual([...RECONCILED_EVENT_TYPES].sort(), [
       'payment.ride.collected',
       'payment.ride.collection_failed',
@@ -36,6 +36,8 @@ describe('which events are reconciled', () => {
       'ride.completed',
       'ride.driver_arrived',
       'ride.driver_arriving',
+      'ride.driver_at_dropoff',
+      'ride.driver_nearby',
       'ride.request.expired',
       'ride.started',
     ]);

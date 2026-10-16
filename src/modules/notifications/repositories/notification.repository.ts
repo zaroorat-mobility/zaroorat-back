@@ -352,6 +352,9 @@ export class NotificationRepository extends BaseRepository {
       where: {
         status: 'QUEUED',
         createdAt: { lt: createdBefore },
+        // The sweep re-enqueues push work. SMS deliveries are retried by the outbox event
+        // that created them, so a QUEUED SMS row is not this sweep's to touch.
+        deliveries: { some: { channel: 'PUSH' } },
         ...(after
           ? {
               OR: [

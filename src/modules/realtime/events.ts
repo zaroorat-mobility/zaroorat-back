@@ -102,8 +102,10 @@ export const room = {
   /// Every socket opened with a session's token, so revoking the session can end
   /// them. Joined by the server at connect; never reported to or requested by a client.
   session: (sessionId: string): string => `session:${sessionId}`,
-  /// Admin dashboard: operational hints (operations:read) and financial hints
-  /// (finance:read) are separate rooms so neither permission implies the other.
+  /// Admin dashboard: operational hints (operations:read), financial hints
+  /// (finance:read) and driver hints (drivers:read / drivers:write) are separate
+  /// rooms so no permission implies another. Driver hints also reach the ops room.
   opsDashboard: (): string => 'dashboard:ops',
   financeDashboard: (): string => 'dashboard:finance',
+  driversDashboard: (): string => 'dashboard:drivers',
 } as const;

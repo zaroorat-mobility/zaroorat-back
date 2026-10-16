@@ -43,6 +43,11 @@ export class AdminDriverManagementController {
     reply.send(result);
   }
 
+  async getExpiryAlerts(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const result = await this.adminDriverService.getExpiryAlerts();
+    reply.send({ data: result });
+  }
+
   async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = driverIdParamSchema.parse(req.params);
     const driver = await this.adminDriverService.getById(id);

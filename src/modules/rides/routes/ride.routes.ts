@@ -59,8 +59,10 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     controller.scheduled.decline(req, reply),
   );
 
-  fastify.get('/share/:token', { config: { public: true } }, (req, reply) =>
-    controller.safety.viewShared(req, reply),
+  fastify.get(
+    '/share/:token',
+    { config: { public: true }, preHandler: fastify.rateLimit(rateLimits.rideShareView) },
+    (req, reply) => controller.safety.viewShared(req, reply),
   );
 
   fastify.post('/:id/arriving', driverOnlyById, (req, reply) =>

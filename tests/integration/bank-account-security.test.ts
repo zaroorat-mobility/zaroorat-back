@@ -119,6 +119,14 @@ describe('driver bank-account security (integration, real HTTP)', () => {
     });
     assert.equal(created.statusCode, 201, created.payload);
     const driverId = created.json().data.id as string;
+    for (const document of created.json().data.documents as Array<{ id: string }>) {
+      const reviewed = await post(
+        admin,
+        `/api/v1/admin/applications/${driverId}/documents/${document.id}/review`,
+        { status: 'VERIFIED' },
+      );
+      assert.equal(reviewed.statusCode, 200, reviewed.payload);
+    }
     const approved = await post(admin, `/api/v1/admin/applications/${driverId}/approve`, {
       notes: 'KYC clear',
     });

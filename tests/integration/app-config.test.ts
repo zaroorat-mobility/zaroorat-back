@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import './helpers/load-test-env.js';
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
+import { container } from '../../src/core/di.js';
+import type { AppConfigService } from '../../src/modules/app-config/services/app-config.service.js';
 import { grantRole } from './helpers/fixtures.js';
 import { hashPassword } from '../../src/modules/auth/utils/password.js';
 import { seedAppConfig } from '../../prisma/seed/shared/app-config.js';
@@ -77,12 +79,23 @@ describe('app-config (integration)', () => {
     assert.ok(etag);
     assert.match(String(etag), /W\/"app-config-v\d+"/);
 
-    const second = await app.inject({
-      method: 'GET',
-      url: '/api/v1/app-config?app=driver&locale=en',
-      headers: { 'if-none-match': String(etag) },
-    });
-    assert.equal(second.statusCode, 304);
+    // A revalidation must not assemble the bundle: the ETag is the version alone.
+    const build = mock.method(
+      container.resolve<AppConfigService>('appConfigService'),
+      'getPublicBundle',
+    );
+    try {
+      const second = await app.inject({
+        method: 'GET',
+        url: '/api/v1/app-config?app=driver&locale=en',
+        headers: { 'if-none-match': String(etag) },
+      });
+      assert.equal(second.statusCode, 304);
+      assert.equal(second.headers.etag, etag);
+      assert.equal(build.mock.callCount(), 0);
+    } finally {
+      build.mock.restore();
+    }
   });
 
   it('admin GET /api/v1/admin/app-config/themes requires auth', async () => {

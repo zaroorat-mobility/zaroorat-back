@@ -1,6 +1,7 @@
 import { DatabaseService } from '@core/database';
 import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type { UserStatus } from '@core/database/types';
+import type { Prisma } from '../../../../generated/prisma/index.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { SessionService } from '@modules/auth/services/session/session.service.js';
 import type { EpochService } from '@modules/auth/services/token/epoch.service.js';
@@ -23,10 +24,18 @@ export interface DriverListItemDto {
   registrationPlate?: string;
   driverStatus: DriverStatusDto;
   verificationStatus: string;
+  /// The operator's last reason or instructions. With PENDING it marks an application sent
+  /// back for corrections.
+  rejectionReason?: string;
   ratingAvg: number;
   totalTrips: number;
   walletBalance: number;
   profilePhotoUrl?: string;
+  documentsCount?: number;
+  totalDocuments?: number;
+  licenseExpiry?: string;
+  insuranceExpiry?: string;
+  permitExpiry?: string;
   joinedAt: string;
   lastActiveAt?: string;
   isOnline: boolean;
@@ -37,6 +46,15 @@ export interface DriverListItemDto {
 }
 
 export interface DriverDetailsDto extends DriverListItemDto {
+  emergencyContactName?: string;
+  emergencyContactNumber?: string;
+  emergencyContactRelationship?: string;
+  emergencyContacts?: Array<{
+    id: string;
+    contactName: string;
+    phoneNumber: string;
+    relationship?: string | null;
+  }>;
   gender?: string;
   dateOfBirth?: string;
   preferredLanguage?: string;
@@ -45,6 +63,10 @@ export interface DriverDetailsDto extends DriverListItemDto {
   city?: string;
   postcode?: string;
   addressLine1?: string;
+  addressLine2?: string;
+  bloodGroup?: string;
+  alternatePhone?: string;
+  drivingExperienceYears?: number;
   documents: Array<{
     id: string;
     driverId: string;
@@ -52,10 +74,17 @@ export interface DriverDetailsDto extends DriverListItemDto {
     docNumber?: string;
     fileUrl: string;
     fileId?: string;
+    /// Back of a two-sided card, when the driver supplied one.
+    backFileId?: string;
+    contentType?: string;
+    backContentType?: string;
+    isPdf?: boolean;
+    issuedDate?: string;
     expiryDate?: string;
     verifyStatus: string;
     comment?: string;
     verifiedAt?: string;
+    createdAt: string;
     category?: 'driver' | 'vehicle';
   }>;
   vehicle?: {
@@ -67,8 +96,10 @@ export interface DriverDetailsDto extends DriverListItemDto {
     model?: string;
     registrationPlate: string;
     color?: string;
-    seatsCapacity: number;
+    fuelType?: string;
+    seatsCapacity?: number;
     manufacturingYear?: number;
+    photoUrl?: string | undefined;
     rcNumber?: string;
     insuranceNo?: string;
     insuranceExpiry?: string;
@@ -79,6 +110,11 @@ export interface DriverDetailsDto extends DriverListItemDto {
     fitnessNo?: string;
     fitnessExpiry?: string;
   };
+  bankAccountName?: string | undefined;
+  bankAccountNumber?: string | null | undefined;
+  bankIfsc?: string | undefined;
+  bankName?: string | undefined;
+  upiId?: string | undefined;
   bankAccounts: Array<{
     id: string;
     bankAccountName?: string;
@@ -115,6 +151,18 @@ export interface DriverDetailsDto extends DriverListItemDto {
     timestamp: string;
     notes?: string;
   }>;
+  paymentModel?: string | undefined;
+  subscription?:
+    | {
+        planName: string;
+        status: string;
+        startDate?: string | undefined;
+        endDate?: string | undefined;
+        amount?: number | undefined;
+        autoRenew?: boolean | undefined;
+      }
+    | null
+    | undefined;
 }
 
 function displayName(
@@ -180,12 +228,18 @@ export class AdminDriverService {
     private readonly epochService: EpochService,
   ) {}
 
-  async list(query: ListDriversQuery): Promise<{
+  /// `narrow` filters the rows in the query itself, so paging and the total count are over
+  /// the narrowed set (the applications queue relies on it).
+  async list(
+    query: ListDriversQuery,
+    narrow?: Prisma.DriverWhereInput,
+  ): Promise<{
     data: DriverListItemDto[];
     meta: { currentPage: number; totalPages: number; pageSize: number; totalCount: number };
   }> {
     const skip = (query.page - 1) * query.limit;
-    const where = this.driverWhere(query);
+    const base = this.driverWhere(query);
+    const where = narrow ? { AND: [base, narrow] } : base;
     const [rows, totalCount] = await Promise.all([
       this.databaseService.client.driver.findMany({
         where: where as never,
@@ -194,6 +248,9 @@ export class AdminDriverService {
           wallet: true,
           onlineStatus: true,
           user: { include: { profile: true } },
+          documents: {
+            select: { id: true, documentType: true, expiresAt: true, verificationStatus: true },
+          },
           assignments: {
             where: { status: 'ACTIVE', releasedAt: null },
             take: 1,
@@ -240,7 +297,22 @@ export class AdminDriverService {
 
     const base = this.toListDto(row);
     const assignment = row.assignments[0];
-    const vehicle = assignment?.vehicle;
+    let vehicle = assignment?.vehicle;
+    if (!vehicle && row.currentVehicleId) {
+      vehicle = (await this.databaseService.client.vehicle.findUnique({
+        where: { id: row.currentVehicleId },
+        include: {
+          vehicleType: true,
+          documents: {
+            include: {
+              file: { select: { contentType: true, fileName: true } },
+              backFile: { select: { contentType: true, fileName: true } },
+            },
+          },
+          images: { orderBy: { uploadedAt: 'desc' }, take: 1 },
+        },
+      })) as unknown as typeof vehicle;
+    }
 
     const timeline = [
       {
@@ -266,8 +338,25 @@ export class AdminDriverService {
       }),
     ].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
+    const primaryContact = row.user.emergencyContacts?.[0];
+
     return {
       ...base,
+      ...(primaryContact
+        ? {
+            emergencyContactName: primaryContact.contactName,
+            emergencyContactNumber: primaryContact.phoneNumber,
+            ...(primaryContact.relationship
+              ? { emergencyContactRelationship: primaryContact.relationship }
+              : {}),
+            emergencyContacts: row.user.emergencyContacts.map((c) => ({
+              id: c.id,
+              contactName: c.contactName,
+              phoneNumber: c.phoneNumber,
+              relationship: c.relationship,
+            })),
+          }
+        : {}),
       ...(row.profile?.gender ? { gender: row.profile.gender } : {}),
       ...(row.profile?.dateOfBirth
         ? { dateOfBirth: row.profile.dateOfBirth.toISOString().slice(0, 10) }
@@ -279,10 +368,26 @@ export class AdminDriverService {
       ...(row.profile?.state ? { state: row.profile.state } : {}),
       ...(row.profile?.city ? { city: row.profile.city } : {}),
       ...(row.profile?.postalCode ? { postcode: row.profile.postalCode } : {}),
-      ...(row.profile?.addressLine ? { addressLine1: row.profile.addressLine } : {}),
+      ...(row.profile?.addressLine
+        ? (() => {
+            const parts = row.profile.addressLine.split(' | ');
+            return {
+              addressLine1: parts[0] || row.profile.addressLine,
+              ...(parts[1] ? { addressLine2: parts[1] } : {}),
+            };
+          })()
+        : {}),
+      ...(row.profile?.bloodGroup ? { bloodGroup: row.profile.bloodGroup } : {}),
+      ...(row.profile?.alternatePhone ? { alternatePhone: row.profile.alternatePhone } : {}),
+      ...(typeof row.profile?.drivingExperienceYears === 'number'
+        ? { drivingExperienceYears: row.profile.drivingExperienceYears }
+        : {}),
       documents: [
         ...row.documents.map((doc) => {
           const comment = doc.rejectionReason ?? doc.verificationNotes ?? undefined;
+          const isPdf =
+            doc.file?.contentType === 'application/pdf' ||
+            Boolean(doc.fileUrl && /\.pdf(\?|$)/i.test(doc.fileUrl));
           return {
             id: doc.id,
             driverId: doc.driverId,
@@ -290,15 +395,24 @@ export class AdminDriverService {
             ...(doc.documentNumber ? { docNumber: doc.documentNumber } : {}),
             fileUrl: doc.fileUrl ?? '',
             ...(doc.fileId ? { fileId: doc.fileId } : {}),
+            ...(doc.backFileId ? { backFileId: doc.backFileId } : {}),
+            ...(doc.file?.contentType ? { contentType: doc.file.contentType } : {}),
+            ...(doc.backFile?.contentType ? { backContentType: doc.backFile.contentType } : {}),
+            isPdf,
+            ...(doc.issuedAt ? { issuedDate: doc.issuedAt.toISOString().slice(0, 10) } : {}),
             ...(doc.expiresAt ? { expiryDate: doc.expiresAt.toISOString().slice(0, 10) } : {}),
             verifyStatus: mapDocStatus(doc.verificationStatus),
             ...(comment ? { comment } : {}),
             ...(doc.verifiedAt ? { verifiedAt: doc.verifiedAt.toISOString() } : {}),
+            createdAt: doc.createdAt.toISOString(),
             category: 'driver' as const,
           };
         }),
         ...(vehicle?.documents ?? []).map((doc) => {
           const comment = doc.rejectionReason ?? undefined;
+          const isPdf =
+            doc.file?.contentType === 'application/pdf' ||
+            Boolean(doc.fileUrl && /\.pdf(\?|$)/i.test(doc.fileUrl));
           return {
             id: doc.id,
             driverId: row.id,
@@ -306,15 +420,20 @@ export class AdminDriverService {
             ...(doc.documentNumber ? { docNumber: doc.documentNumber } : {}),
             fileUrl: doc.fileUrl ?? '',
             ...(doc.fileId ? { fileId: doc.fileId } : {}),
+            ...(doc.backFileId ? { backFileId: doc.backFileId } : {}),
+            ...(doc.file?.contentType ? { contentType: doc.file.contentType } : {}),
+            ...(doc.backFile?.contentType ? { backContentType: doc.backFile.contentType } : {}),
+            isPdf,
+            ...(doc.issuedAt ? { issuedDate: doc.issuedAt.toISOString().slice(0, 10) } : {}),
             ...(doc.expiresAt ? { expiryDate: doc.expiresAt.toISOString().slice(0, 10) } : {}),
             verifyStatus: mapDocStatus(doc.verificationStatus),
             ...(comment ? { comment } : {}),
             ...(doc.verifiedAt ? { verifiedAt: doc.verifiedAt.toISOString() } : {}),
+            createdAt: doc.createdAt.toISOString(),
             category: 'vehicle' as const,
           };
         }),
       ],
-
       ...(vehicle
         ? {
             vehicle: {
@@ -329,12 +448,27 @@ export class AdminDriverService {
               ...(vehicle.model ? { model: vehicle.model } : {}),
               registrationPlate: vehicle.registrationNumber,
               ...(vehicle.color ? { color: vehicle.color } : {}),
-              seatsCapacity: vehicle.seatingCapacity ?? 4,
+              ...(vehicle.fuelType ? { fuelType: vehicle.fuelType } : {}),
+              ...(vehicle.seatingCapacity != null
+                ? { seatsCapacity: vehicle.seatingCapacity }
+                : {}),
               ...(vehicle.manufacturingYear
                 ? { manufacturingYear: vehicle.manufacturingYear }
                 : {}),
+              ...(vehicle.images?.[0]?.imageUrl ? { photoUrl: vehicle.images[0].imageUrl } : {}),
               ...vehicleDocFields(vehicle.documents ?? []),
             },
+          }
+        : {}),
+      ...(row.bankAccounts[0]
+        ? {
+            ...(row.bankAccounts[0].accountHolderName
+              ? { bankAccountName: row.bankAccounts[0].accountHolderName }
+              : {}),
+            ...(row.bankAccounts[0].bankName ? { bankName: row.bankAccounts[0].bankName } : {}),
+            ...(row.bankAccounts[0].ifscCode ? { bankIfsc: row.bankAccounts[0].ifscCode } : {}),
+            bankAccountNumber: maskAccountNumber(row.bankAccounts[0].accountNumberLast4),
+            ...(row.bankAccounts[0].upiId ? { upiId: row.bankAccounts[0].upiId } : {}),
           }
         : {}),
       bankAccounts: row.bankAccounts.map((account) => ({
@@ -371,6 +505,24 @@ export class AdminDriverService {
           ...(notes ? { notes } : {}),
         };
       }),
+      // The driver's own choice, made in the driver app after approval; absent until then.
+      ...(row.paymentModel ? { paymentModel: row.paymentModel } : {}),
+      subscription: row.subscriptions?.[0]
+        ? {
+            planName: row.subscriptions[0].plan?.name || 'Subscription Plan',
+            status: row.subscriptions[0].status,
+            ...(row.subscriptions[0].startDate
+              ? { startDate: row.subscriptions[0].startDate.toISOString().slice(0, 10) }
+              : {}),
+            ...(row.subscriptions[0].expiryDate
+              ? { endDate: row.subscriptions[0].expiryDate.toISOString().slice(0, 10) }
+              : {}),
+            ...(row.subscriptions[0].plan?.price != null
+              ? { amount: Number(row.subscriptions[0].plan.price) }
+              : {}),
+            autoRenew: row.subscriptions[0].autoRenew,
+          }
+        : null,
     };
   }
 
@@ -560,13 +712,42 @@ export class AdminDriverService {
         profile: true,
         wallet: true,
         onlineStatus: true,
-        documents: { orderBy: { createdAt: 'asc' } },
+        documents: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            file: { select: { contentType: true, fileName: true } },
+            backFile: { select: { contentType: true, fileName: true } },
+          },
+        },
         bankAccounts: { orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }] },
-        user: { include: { profile: true } },
+        user: {
+          include: {
+            profile: true,
+            emergencyContacts: { orderBy: { priority: 'asc' }, take: 1 },
+          },
+        },
         assignments: {
           where: { status: 'ACTIVE', releasedAt: null },
           take: 1,
-          include: { vehicle: { include: { vehicleType: true, documents: true } } },
+          include: {
+            vehicle: {
+              include: {
+                vehicleType: true,
+                documents: {
+                  include: {
+                    file: { select: { contentType: true, fileName: true } },
+                    backFile: { select: { contentType: true, fileName: true } },
+                  },
+                },
+                images: { orderBy: { uploadedAt: 'desc' }, take: 1 },
+              },
+            },
+          },
+        },
+        subscriptions: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: { plan: true },
         },
       },
     });
@@ -586,6 +767,16 @@ export class AdminDriverService {
     );
     const name = displayName(row.profile, row.user.profile, row.user.phoneNumber);
     const isBlocked = row.user.status === 'DEACTIVATED';
+    const driverDocs = row.documents ?? [];
+    const vehicleDocs = vehicle?.documents ?? [];
+    const documentsCount = driverDocs.length + vehicleDocs.length;
+    const licenseDoc = driverDocs.find(
+      (d) =>
+        d.documentType === 'DRIVING_LICENSE' ||
+        (d as unknown as { documentType: string }).documentType === 'LICENSE',
+    );
+    const insuranceDoc = vehicleDocs.find((d) => d.documentType?.toUpperCase() === 'INSURANCE');
+    const permitDoc = vehicleDocs.find((d) => d.documentType?.toUpperCase() === 'PERMIT');
 
     return {
       id: row.id,
@@ -598,10 +789,21 @@ export class AdminDriverService {
       ...(vehicle?.registrationNumber ? { registrationPlate: vehicle.registrationNumber } : {}),
       driverStatus,
       verificationStatus: row.verificationStatus,
+      ...(row.rejectionReason != null ? { rejectionReason: row.rejectionReason } : {}),
       ratingAvg: Number(row.rating),
       totalTrips: row.totalRides,
       walletBalance: row.wallet ? Number(row.wallet.balance) : 0,
       ...(row.profile?.profilePhoto ? { profilePhotoUrl: row.profile.profilePhoto } : {}),
+      documentsCount,
+      ...(licenseDoc?.expiresAt
+        ? { licenseExpiry: licenseDoc.expiresAt.toISOString().slice(0, 10) }
+        : {}),
+      ...(insuranceDoc?.expiresAt
+        ? { insuranceExpiry: insuranceDoc.expiresAt.toISOString().slice(0, 10) }
+        : {}),
+      ...(permitDoc?.expiresAt
+        ? { permitExpiry: permitDoc.expiresAt.toISOString().slice(0, 10) }
+        : {}),
       joinedAt: row.createdAt.toISOString(),
       ...(row.lastRideAt ? { lastActiveAt: row.lastRideAt.toISOString() } : {}),
       isOnline: !isBlocked && (online === 'ONLINE' || online === 'ON_TRIP' || online === 'BUSY'),
@@ -609,6 +811,61 @@ export class AdminDriverService {
       isBlocked,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  async getExpiryAlerts(): Promise<{
+    expired: number;
+    d30: number;
+    d60: number;
+    d90: number;
+    total: number;
+  }> {
+    const now = new Date();
+
+    const [driverDocs, vehicleDocs] = await Promise.all([
+      this.databaseService.client.driverDocument.findMany({
+        where: { expiresAt: { not: null } },
+        select: { expiresAt: true },
+      }),
+      this.databaseService.client.vehicleDocument.findMany({
+        where: { expiresAt: { not: null } },
+        select: { expiresAt: true },
+      }),
+    ]);
+
+    let expired = 0;
+    let d30 = 0;
+    let d60 = 0;
+    let d90 = 0;
+
+    const allExpiries = [
+      ...driverDocs.map((d) => d.expiresAt!),
+      ...vehicleDocs.map((d) => d.expiresAt!),
+    ];
+
+    for (const exp of allExpiries) {
+      const expDate = new Date(exp);
+      const diffMs = expDate.getTime() - now.getTime();
+      const diffDays = Math.ceil(diffMs / 86400000);
+
+      if (diffDays < 0) {
+        expired++;
+      } else if (diffDays <= 30) {
+        d30++;
+      } else if (diffDays <= 60) {
+        d60++;
+      } else if (diffDays <= 90) {
+        d90++;
+      }
+    }
+
+    return {
+      expired,
+      d30,
+      d60,
+      d90,
+      total: allExpiries.length,
     };
   }
 }

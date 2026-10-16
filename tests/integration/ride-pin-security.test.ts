@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { makeDispatchOffer, setRidePin, RIDE_PIN } from './helpers/fixtures.js';
-import { rideWorld, type RideWorld } from './helpers/ride-flow.js';
+import { placeDriverAt, rideWorld, type RideWorld } from './helpers/ride-flow.js';
 
 /// The guarantees the Ride PIN exists to provide, asserted over real HTTP.
 ///
@@ -59,6 +59,7 @@ describe('Ride PIN — credential containment and start authorization', () => {
     assert.equal(accepted.statusCode, 200, accepted.payload);
     const rideId = accepted.json().data.ride.id as string;
 
+    await placeDriverAt(world.driverId, 12.9716, 77.5946);
     const arrived = await app.inject({
       method: 'POST',
       url: `/api/v1/rides/${rideId}/arrive`,

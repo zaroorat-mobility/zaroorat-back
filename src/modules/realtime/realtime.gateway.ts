@@ -41,6 +41,10 @@ const chatTypingSchema = z.object({
   isTyping: z.boolean().default(true),
 });
 
+/// Every permission-gated dashboard room: left on (un)subscribe, re-checked on a
+/// role change. A room missing here would survive a revoked permission.
+const DASHBOARD_ROOMS = [room.opsDashboard(), room.financeDashboard(), room.driversDashboard()];
+
 /// Owns the Socket.IO server: its lifecycle, its authentication middleware, its
 /// room bookkeeping, and the one API the rest of the platform uses to reach a
 /// client (`emitToRoom`). Nothing outside this class touches `io`.
@@ -343,8 +347,7 @@ export class RealtimeGateway {
   }
 
   private async leaveDashboardRooms(socket: AuthedSocket): Promise<void> {
-    await socket.leave(room.opsDashboard());
-    await socket.leave(room.financeDashboard());
+    for (const name of DASHBOARD_ROOMS) await socket.leave(name);
   }
 
   private failFrom(socket: AuthedSocket, callback: unknown, err: unknown): void {
@@ -423,7 +426,7 @@ export class RealtimeGateway {
   /// left. A lookup that fails leaves both (fail closed; a re-subscribe restores).
   async reauthorizeDashboardRooms(): Promise<void> {
     if (!this.io) return;
-    const dashboardRooms = [room.opsDashboard(), room.financeDashboard()];
+    const dashboardRooms = DASHBOARD_ROOMS;
     const members = await this.io.in(dashboardRooms).fetchSockets();
     for (const member of members) {
       const principal = (member.data as AuthedSocket['data']).principal;

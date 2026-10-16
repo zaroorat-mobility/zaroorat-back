@@ -544,7 +544,8 @@ describe('admin audit remediation (integration)', () => {
       const res = await as(admin, resubmit(driverId, 'Upload a sharper licence photo'));
       assert.equal(res.statusCode, 200, res.payload);
       const row = await driver(driverId);
-      assert.equal(row.verificationStatus, 'REJECTED');
+      // Sent back = PENDING with the instructions; REJECTED is reserved for a final rejection.
+      assert.equal(row.verificationStatus, 'PENDING');
       assert.equal(row.rejectionReason, 'Upload a sharper licence photo');
 
       const rows = await auditRows('driver', driverId);
@@ -558,7 +559,7 @@ describe('admin audit remediation (integration)', () => {
         rejectionReason: null,
       });
       assert.deepEqual(meta(rows[0]!).after, {
-        verificationStatus: 'REJECTED',
+        verificationStatus: 'PENDING',
         rejectionReason: 'Upload a sharper licence photo',
         decision: 'RESUBMISSION_REQUESTED',
       });
@@ -1065,7 +1066,7 @@ describe('admin audit remediation (integration)', () => {
         where: { category: 'maps' },
       });
       await assert.rejects(
-        maps.updateMapSettings({ primaryProvider: 'ola' } as Parameters<
+        maps.updateMapSettings({ primaryProvider: 'google' } as Parameters<
           AdminMapSettingsService['updateMapSettings']
         >[0]),
         MissingAuditActorError,

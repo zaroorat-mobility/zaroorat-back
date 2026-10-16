@@ -18,6 +18,7 @@ export class DriverDocumentsController {
         driverId,
         documentType: body.documentType,
         fileId: body.fileId,
+        ...(body.backFileId !== undefined ? { backFileId: body.backFileId } : {}),
         ...(body.documentNumber !== undefined ? { documentNumber: body.documentNumber } : {}),
         ...(body.expiresAt !== undefined ? { expiresAt: new Date(body.expiresAt) } : {}),
       },

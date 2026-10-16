@@ -158,11 +158,11 @@ describe('planNotifications — F3 parity with the golden table', () => {
 });
 
 describe('planNotifications — contract edges', () => {
-  it('handles exactly the ten events the consumer subscribes to', () => {
+  it('handles exactly the twelve events the consumer subscribes to', () => {
     assert.deepEqual([...NOTIFICATION_EVENT_TYPES].sort(), [...CONSUMER_SUBSCRIPTIONS].sort());
   });
 
-  it('plans nothing, and reads nothing, for an event outside the ten', async () => {
+  it('plans nothing, and reads nothing, for an event outside the twelve', async () => {
     for (const type of [
       'ride.requested',
       'ride.dispatch.expired',

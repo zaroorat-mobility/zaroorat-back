@@ -3,12 +3,18 @@ export const DRIVER_PRODUCER = 'drivers';
 export const DRIVER_EVENT_CATALOG = {
   ONBOARDED: 'driver.onboarded',
   VERIFIED: 'driver.verified',
+  /// Final rejection of the application. Drives the decision SMS through the outbox.
+  VERIFICATION_REJECTED: 'driver.verification_rejected',
+  /// The application was sent back to the driver for corrections.
+  RESUBMISSION_REQUESTED: 'driver.resubmission_requested',
   STATUS_CHANGED: 'driver.status_changed',
   SHIFT_STARTED: 'driver.shift_started',
   SHIFT_ENDED: 'driver.shift_ended',
   LOCATION_UPDATED: 'driver.location_updated',
   DOCUMENT_EXPIRED: 'driver.document_expired',
   SUSPENDED: 'driver.suspended',
+  PROFILE_UPDATED: 'driver.profile_updated',
+  DOCUMENT_SUBMITTED: 'driver.document_submitted',
 } as const;
 export function driverEvent(
   name: (typeof DRIVER_EVENT_CATALOG)[keyof typeof DRIVER_EVENT_CATALOG],

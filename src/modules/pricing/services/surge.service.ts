@@ -6,7 +6,7 @@ import { logger } from '@shared/logger/index.js';
 /// Where peak hours are read when the caller does not know the pickup city's
 /// timezone. Every `City` carries one; this is the fallback for a quote taken
 /// before coverage is configured (BD-10), not a default anyone should rely on.
-const FALLBACK_TIME_ZONE = 'Asia/Kolkata';
+export const FALLBACK_TIME_ZONE = 'Asia/Kolkata';
 
 export const DEFAULT_SURGE_MULTIPLIER = 1.0;
 export const MIN_SURGE_MULTIPLIER = 1.0;

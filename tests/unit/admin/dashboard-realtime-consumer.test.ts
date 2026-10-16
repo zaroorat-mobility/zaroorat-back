@@ -129,6 +129,36 @@ describe('Dashboard realtime bridge', () => {
       'dashboard.driver.registration_changed',
       { driverId: 'd1', change: 'VERIFIED' },
     ],
+    [
+      'driver.verification_rejected',
+      { driverId: 'd1' },
+      'dashboard.driver.registration_changed',
+      { driverId: 'd1', change: 'REJECTED' },
+    ],
+    [
+      'driver.resubmission_requested',
+      { driverId: 'd1' },
+      'dashboard.driver.registration_changed',
+      { driverId: 'd1', change: 'RESUBMISSION_REQUESTED' },
+    ],
+    [
+      'driver.document_submitted',
+      { driverId: 'd1' },
+      'dashboard.driver.registration_changed',
+      { driverId: 'd1', change: 'DOCUMENT_SUBMITTED' },
+    ],
+    [
+      'driver.profile_updated',
+      { driverId: 'd1' },
+      'dashboard.driver.registration_changed',
+      { driverId: 'd1', change: 'UPDATED' },
+    ],
+    [
+      'driver.suspended',
+      { driverId: 'd1' },
+      'dashboard.driver.status_changed',
+      { driverId: 'd1', status: 'SUSPENDED' },
+    ],
   ];
 
   for (const [domainEvent, data, socketEvent, expected] of opsCases) {
@@ -175,10 +205,30 @@ describe('Dashboard realtime bridge', () => {
     for (const [domainEvent, data] of opsCases) await world.publish(domainEvent, data);
     for (const domainEvent of financeEvents) await world.publish(domainEvent, { rideId: 'r1' });
     for (const e of world.emissions) {
-      if (e.room === 'dashboard:ops')
-        assert.notEqual(e.envelope.type, 'dashboard.financials.changed');
-      else assert.equal(e.envelope.type, 'dashboard.financials.changed');
+      if (e.room === 'dashboard:finance')
+        assert.equal(e.envelope.type, 'dashboard.financials.changed');
+      else assert.notEqual(e.envelope.type, 'dashboard.financials.changed');
     }
+    world.unsubscribe();
+  });
+
+  it('copies every driver hint to the drivers room, and nothing else goes there', async () => {
+    const world = makeWorld();
+    for (const [domainEvent, data] of opsCases) await world.publish(domainEvent, data);
+    const isDriverHint = (type: string) => type.startsWith('dashboard.driver.');
+    const drivers = world.emissions.filter((e) => e.room === 'dashboard:drivers');
+    const opsDriverHints = world.emissions.filter(
+      (e) => e.room === 'dashboard:ops' && isDriverHint(e.envelope.type),
+    );
+    assert.ok(drivers.length > 0);
+    assert.ok(
+      drivers.every((e) => isDriverHint(e.envelope.type)),
+      'a ride hint leaked',
+    );
+    assert.deepEqual(
+      drivers.map((e) => e.envelope),
+      opsDriverHints.map((e) => e.envelope),
+    );
     world.unsubscribe();
   });
 

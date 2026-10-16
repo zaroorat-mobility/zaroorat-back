@@ -38,6 +38,16 @@ export interface NotificationConfig {
   customerOtpMessage?: string;
   driverOtpTemplateId?: string;
   driverOtpMessage?: string;
+  /// Separate DLT template sent when an admin rejects a driver document.
+  driverDocRejectedTemplateId?: string;
+  driverDocRejectedMessage?: string;
+  /// Separate DLT template sent when an admin activates / verifies a driver profile.
+  driverActivatedTemplateId?: string;
+  driverActivatedMessage?: string;
+  /// Separate DLT template for a final application rejection. The doc-rejected template
+  /// asks the driver to resubmit, which a final rejection must not say.
+  driverApplicationRejectedTemplateId?: string;
+  driverApplicationRejectedMessage?: string;
   airtel: {
     apiKey?: string;
     username?: string;
@@ -154,6 +164,17 @@ export function getNotificationConfig(): NotificationConfig {
     cleanEnv(process.env.AIRTEL_DRIVER_OTP_TEMPLATE_ID) ?? defaultOtpTemplateId;
   const driverOtpMessage = cleanEnv(process.env.AIRTEL_DRIVER_OTP_MESSAGE);
 
+  const driverDocRejectedTemplateId = cleanEnv(process.env.AIRTEL_DRIVER_DOC_REJECTED_TEMPLATE_ID);
+  const driverDocRejectedMessage = cleanEnv(process.env.AIRTEL_DRIVER_DOC_REJECTED_MESSAGE);
+  const driverActivatedTemplateId = cleanEnv(process.env.AIRTEL_DRIVER_ACTIVATED_TEMPLATE_ID);
+  const driverActivatedMessage = cleanEnv(process.env.AIRTEL_DRIVER_ACTIVATED_MESSAGE);
+  const driverApplicationRejectedTemplateId = cleanEnv(
+    process.env.AIRTEL_DRIVER_APPLICATION_REJECTED_TEMPLATE_ID,
+  );
+  const driverApplicationRejectedMessage = cleanEnv(
+    process.env.AIRTEL_DRIVER_APPLICATION_REJECTED_MESSAGE,
+  );
+
   return {
     smsProvider,
     airtel,
@@ -162,6 +183,12 @@ export function getNotificationConfig(): NotificationConfig {
     ...(customerOtpMessage ? { customerOtpMessage } : {}),
     ...(driverOtpTemplateId ? { driverOtpTemplateId } : {}),
     ...(driverOtpMessage ? { driverOtpMessage } : {}),
+    ...(driverDocRejectedTemplateId ? { driverDocRejectedTemplateId } : {}),
+    ...(driverDocRejectedMessage ? { driverDocRejectedMessage } : {}),
+    ...(driverActivatedTemplateId ? { driverActivatedTemplateId } : {}),
+    ...(driverActivatedMessage ? { driverActivatedMessage } : {}),
+    ...(driverApplicationRejectedTemplateId ? { driverApplicationRejectedTemplateId } : {}),
+    ...(driverApplicationRejectedMessage ? { driverApplicationRejectedMessage } : {}),
   };
 }
 export function createSmsProvider(notificationConfig: NotificationConfig): SmsProvider {

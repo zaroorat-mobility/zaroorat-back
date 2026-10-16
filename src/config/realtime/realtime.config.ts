@@ -47,5 +47,15 @@ export const realtimeConfig: RealtimeConfig = Object.freeze({
     min: 1_000,
     integer: true,
   }),
-  adapter: process.env.REALTIME_ADAPTER === 'redis' ? 'redis' : 'memory',
+  // `memory` only reaches sockets on this instance, and each outbox event is
+  // relayed by exactly one instance — so with two replicas about half of all
+  // realtime events vanish without an error. Deployed environments therefore
+  // default to the shared Redis adapter; `memory` stays an explicit opt-in.
+  adapter:
+    (process.env.REALTIME_ADAPTER ??
+      (process.env.APP_ENV === 'production' || process.env.APP_ENV === 'staging'
+        ? 'redis'
+        : 'memory')) === 'redis'
+      ? 'redis'
+      : 'memory',
 });

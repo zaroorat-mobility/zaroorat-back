@@ -7,6 +7,7 @@ import { DriverShiftRepository } from '../../repositories/driver-shift.repositor
 import { DriverEligibilityService } from '../eligibility/eligibility.service.js';
 import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
 import {
+  DriverError,
   DriverNotFoundError,
   DriverNotVerifiedError,
   DriverSuspendedError,
@@ -58,6 +59,16 @@ export class StatusService {
       // VEHICLE_DOCUMENTS_INCOMPLETE — rather than folding into the driver
       // document error above, so the app can tell the four apart.
       await this.vehicleEligibilityService.assertOperable(driverId, tx);
+      // Last: accepting refuses a driver with no payment model (rides'
+      // PAYMENT_MODEL_NOT_SELECTED, spec FR-000), so going online without one only
+      // collects offers that must fail.
+      if (!driver.paymentModel) {
+        throw new DriverError(
+          'Choose a payment plan (Commission or Subscription) before going online',
+          'PAYMENT_MODEL_NOT_SELECTED',
+          409,
+        );
+      }
       const shift = await this.shiftRepo.startShift(driverId, tx);
       await this.driverRepo.updateAvailability(driverId, true, tx);
       const onlineStatus = await this.statusRepo.updateStatus(
@@ -178,6 +189,15 @@ export class StatusService {
       this.driverMetrics.driverSuspended({ driverId });
       await this.eventPublisher.publish(
         driverEvent(DRIVER_EVENT_CATALOG.SUSPENDED, driverId, { driverId }),
+        tx,
+      );
+    } else {
+      await this.eventPublisher.publish(
+        driverEvent(DRIVER_EVENT_CATALOG.STATUS_CHANGED, driverId, {
+          driverId,
+          status: 'OFFLINE',
+          reason: 'ADMIN_ACTIVATION',
+        }),
         tx,
       );
     }

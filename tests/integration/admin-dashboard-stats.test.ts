@@ -434,7 +434,11 @@ describe('admin dashboard stats (integration)', () => {
   it('Scenario 8: Respects Asia/Kolkata timezone so 11:30 PM IST (18:00 UTC) belongs to the correct IST day', async () => {
     const { authorization } = await loginAdmin();
     // 18:00:00 UTC is 23:30:00 IST (same day in IST, but in UTC it is 18:00)
-    const eveningUtc = new Date(Date.UTC(2026, 8, 25, 18, 0, 0)); // 25 Sept 2026 18:00 UTC = 25 Sept 2026 23:30 IST
+    // Yesterday, so it stays inside the 7-day trend whenever the suite runs (a fixed
+    // date fell out of the window a week after it was written).
+    const eveningUtc = new Date();
+    eveningUtc.setUTCDate(eveningUtc.getUTCDate() - 1);
+    eveningUtc.setUTCHours(18, 0, 0, 0);
 
     await db().client.paymentLedgerEntry.create({
       data: {
@@ -455,7 +459,7 @@ describe('admin dashboard stats (integration)', () => {
 
     assert.equal(res.statusCode, 200);
     const trend = res.json().earningTrend;
-    // Find the bucket matching the IST date for 25 Sept 2026
+    // Find the bucket matching that evening's IST date
     const expectedWeekday = formatIstWeekday(eveningUtc);
     const matchingBucket = trend.find(
       (b: { date: string; platformRevenue: number }) =>

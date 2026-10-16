@@ -105,7 +105,9 @@ export const PURPOSE_KEY_PREFIX: Readonly<Record<FilePurposeName, string>> = Obj
 export const fileConfig = Object.freeze({
   purposes: filePurposePolicy,
   uploadsPerUserPerHour: Number(process.env.FILE_UPLOADS_PER_HOUR ?? 30),
-  uploadsPerPurposePerHour: Number(process.env.FILE_UPLOADS_PER_PURPOSE_PER_HOUR ?? 10),
+  // Driver onboarding alone needs 8 VEHICLE_DOCUMENT uploads (RC and vehicle photos are
+  // two-sided), so 10 left two retries before an hour's lock-out. The per-user 30 still caps it.
+  uploadsPerPurposePerHour: Number(process.env.FILE_UPLOADS_PER_PURPOSE_PER_HOUR ?? 20),
   readUrlsPerUserPerMinute: Number(process.env.FILE_READ_URLS_PER_MINUTE ?? 60),
   maxTotalBytesPerUser: Number(process.env.FILE_QUOTA_USER_BYTES ?? 500 * MB),
   maxTotalBytesPerPurpose: Number(process.env.FILE_QUOTA_PURPOSE_BYTES ?? 200 * MB),

@@ -8,6 +8,14 @@ export const claimVehicleSchema = z.object({
   model: z.string().max(50).optional(),
   color: z.string().max(30).optional(),
   seatingCapacity: z.number().int().positive().max(20).optional(),
+  fuelType: z.string().max(30).optional(),
+  manufacturingYear: z
+    .number()
+    .int()
+    .min(1900)
+    .max(new Date().getFullYear() + 1)
+    .optional(),
+  photoUrl: z.string().optional(),
 });
 export type ClaimVehicleBody = z.infer<typeof claimVehicleSchema>;
 
@@ -28,6 +36,7 @@ export const updateVehicleSchema = z
       .min(1900)
       .max(new Date().getFullYear() + 1)
       .optional(),
+    photoUrl: z.string().optional(),
   })
   .strict();
 export type UpdateVehicleBody = z.infer<typeof updateVehicleSchema>;
@@ -37,6 +46,8 @@ const documentTypeSchema = z.enum(VEHICLE_DOCUMENT_TYPES as unknown as [string, 
 export const submitVehicleDocumentSchema = z.object({
   documentType: documentTypeSchema,
   fileId: z.string().uuid(),
+  /// The back of a two-sided card (RC); `fileId` is then the front.
+  backFileId: z.string().uuid().optional(),
   documentNumber: z.string().max(60).optional(),
   issuedAt: z.string().datetime().optional(),
   expiresAt: z.string().datetime().optional(),

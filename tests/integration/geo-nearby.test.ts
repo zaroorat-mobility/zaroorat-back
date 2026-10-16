@@ -6,6 +6,7 @@ import { container } from '../../src/core/di.js';
 import { redis } from '../../src/core/cache/client.js';
 import { renderMetrics, resetMetrics } from '../../src/core/metrics/index.js';
 import { db, resetState } from './helpers/harness.js';
+import { makeAssignedVehicle, markDriverOnline } from './helpers/fixtures.js';
 import { NearbyDriverService } from '../../src/modules/location/core-services/nearby-driver.service.js';
 import type { GeoService } from '../../src/modules/location/core-services/geo.service.js';
 import type { CoordinateService } from '../../src/modules/location/core-services/coordinate.service.js';
@@ -77,7 +78,8 @@ function spyOnPostgis(): { calls: unknown[]; restore: () => void } {
   };
 }
 
-/** A driver row with a durable PostGIS location, without going through HTTP. */
+/** A dispatch-eligible driver (ONLINE, verified vehicle) with a durable PostGIS
+ *  location, without going through HTTP. The nearby query joins on both. */
 async function seedDriverAt(
   point: { latitude: number; longitude: number },
   recordedAt: Date = new Date(),
@@ -93,6 +95,8 @@ async function seedDriverAt(
     },
   });
 
+  await makeAssignedVehicle(driver.id);
+  await markDriverOnline(driver.id);
   await locationRepo().updateLocation({ driverId: driver.id, ...point });
   await db().client.$executeRawUnsafe(
     'UPDATE "driver_locations" SET "recorded_at" = $1 WHERE "driver_id" = $2::uuid',
@@ -446,27 +450,37 @@ describe('geo nearby-driver search (integration, real PostGIS + Redis)', () => {
       assert.equal('drivers' in result, false, 'the caller must not be handed a misleading []');
     });
 
-    it('does not query PostGIS at all when the live index is empty', async () => {
-      await seedDriverAt(north(300));
+    /// bbead58: an empty live index is checked against PostGIS once, because Redis
+    /// cell membership can lag a write or miss a driver just outside the H3 ring.
+    /// The check stays bounded (radius, freshness, limit) — never a table scan —
+    /// and the answer is labelled degraded so callers know the live store missed it.
+    it('checks PostGIS once, bounded, when the live index is empty — and says so', async () => {
+      const driverId = await seedDriverAt(north(300));
       const spy = spyOnPostgis();
 
       try {
         const result = await geo().findNearbyDrivers({ origin: CENTRE, radiusMeters: 2000 });
-        assert.equal(result.outcome, 'no-live-candidates');
-        assert.equal(spy.calls.length, 0, 'cache emptiness must not become a database scan');
+        assert.equal(result.outcome, 'degraded');
+        assert.deepEqual(driverIdsOf(result), [driverId]);
+        assert.equal(spy.calls.length, 1, 'one fallback query, not one per cell or per retry');
+        const query = spy.calls[0] as { radiusMeters: number; freshAfter: Date; limit: number };
+        assert.equal(query.radiusMeters, 2000, 'bounded by the requested radius');
+        assert.ok(query.freshAfter instanceof Date, 'bounded by freshness');
+        assert.ok(query.limit > 0, 'bounded by a limit');
       } finally {
         spy.restore();
       }
     });
 
-    it('reports no-live-candidates after a flush, never "no drivers exist"', async () => {
+    it('still finds the durable driver after a flush, labelled degraded — never "no drivers exist"', async () => {
       const driverId = await seedDriverAt(north(400));
       await geo().recordDriverPosition({ driverId, ...north(400) });
       await redis.flushdb();
 
       const result = await geo().findNearbyDrivers({ origin: CENTRE, radiusMeters: 1000 });
 
-      assert.equal(result.outcome, 'no-live-candidates');
+      assert.equal(result.outcome, 'degraded');
+      assert.deepEqual(driverIdsOf(result), [driverId]);
 
       const direct = await postgis().findNearbyDrivers({
         origin: CENTRE,

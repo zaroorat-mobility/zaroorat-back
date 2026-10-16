@@ -43,6 +43,10 @@ export async function adminDriverRoutes(fastify: FastifyInstance): Promise<void>
     controller.reviewApplicationDocument(req, reply),
   );
 
+  fastify.get('/expiry-alerts', canRead, (req, reply) => controller.getExpiryAlerts(req, reply));
+  fastify.get('/drivers/expiry-alerts', canRead, (req, reply) =>
+    controller.getExpiryAlerts(req, reply),
+  );
   fastify.get('/drivers', canRead, (req, reply) => controller.list(req, reply));
   fastify.get('/drivers/:id', canRead, (req, reply) => controller.getById(req, reply));
 

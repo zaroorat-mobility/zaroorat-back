@@ -94,6 +94,8 @@ model VehicleDocument {
 
   fileUrl            String?            @map("file_url")
   fileId             String?            @map("file_id") @db.Uuid
+  /// Back of a two-sided card (RC); `fileId` is the front.
+  backFileId         String?            @map("back_file_id") @db.Uuid
   issuedAt           DateTime?          @map("issued_at") @db.Date
   expiresAt          DateTime?          @map("expires_at") @db.Date
   verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
@@ -103,8 +105,9 @@ model VehicleDocument {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
-  file    File?   @relation(fields: [fileId], references: [id])
+  vehicle  Vehicle @relation(fields: [vehicleId], references: [id])
+  file     File?   @relation("VehicleDocumentFile", fields: [fileId], references: [id])
+  backFile File?   @relation("VehicleDocumentBackFile", fields: [backFileId], references: [id])
 
   @@unique([vehicleId, documentType], map: "vehicle_documents_vehicle_id_document_type_key")
   @@index([vehicleId])

@@ -153,7 +153,7 @@ describe('RideNotificationConsumer — F3 golden parity baseline', () => {
     await closeQueues();
   });
 
-  it('subscribes exactly the ten notification event types', () => {
+  it('subscribes exactly the twelve notification event types', () => {
     const handlers = makeConsumer(
       {},
       { rideLookups: [], driverLookups: [], rows: [], enqueues: [], statusWrites: [] },

@@ -29,6 +29,7 @@ export class VehicleDocumentController {
         ownerUserId: callerId(req),
         documentType: body.documentType,
         fileId: body.fileId,
+        ...(body.backFileId !== undefined ? { backFileId: body.backFileId } : {}),
         ...(body.documentNumber !== undefined ? { documentNumber: body.documentNumber } : {}),
         ...(body.issuedAt !== undefined ? { issuedAt: new Date(body.issuedAt) } : {}),
         ...(body.expiresAt !== undefined ? { expiresAt: new Date(body.expiresAt) } : {}),

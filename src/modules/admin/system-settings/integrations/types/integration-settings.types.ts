@@ -174,8 +174,8 @@ export interface MapClientConfigProviderView {
 export interface MapClientConfigView {
   primaryProvider: string;
   providers: {
-    ola: MapClientConfigProviderView;
     google: MapClientConfigProviderView;
     mappls: MapClientConfigProviderView;
+    ola?: MapClientConfigProviderView;
   };
 }

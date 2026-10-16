@@ -15,7 +15,7 @@ import {
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
 import { GeoService, haversineKm } from '@modules/location';
 import { haversineMeters } from '@modules/location/utils/coordinate.util.js';
-import { assessPlausibility } from './location-plausibility.js';
+import { assessPlausibility, type PlausibilityVerdict } from './location-plausibility.js';
 import { RedisService } from '@core/cache/RedisService.js';
 import { RedisKeys } from '@core/cache/keys.js';
 import { EventPublisher } from '@core/events';
@@ -43,31 +43,59 @@ export class LocationService {
     }
     const driver = await this.driverRepo.findById(input.driverId);
     if (!driver) throw new DriverNotFoundError(input.driverId);
-    const previous = await this.locationRepo.getLocation(input.driverId);
-    const verdict = assessPlausibility(
-      { latitude: input.latitude, longitude: input.longitude },
-      previous
-        ? {
-            latitude: Number(previous.latitude),
-            longitude: Number(previous.longitude),
-            recordedAt: previous.recordedAt,
-          }
-        : null,
+    // Read, check and write under a per-driver lock with one server clock
+    // reading, so two concurrent fixes can never both pass against the same old
+    // point, and an older fix can never overwrite a newer one.
+    const { previous, location, applied, baselineReset } = await this.locationRepo.withDriverLock(
+      input.driverId,
+      async (tx) => {
+        const previous = await this.locationRepo.getLocation(input.driverId, tx);
+        const now = new Date();
+        const verdict = assessPlausibility(
+          {
+            latitude: input.latitude,
+            longitude: input.longitude,
+            ...(input.accuracyMeters !== undefined ? { accuracyMeters: input.accuracyMeters } : {}),
+          },
+          previous
+            ? {
+                latitude: Number(previous.latitude),
+                longitude: Number(previous.longitude),
+                recordedAt: previous.recordedAt,
+              }
+            : null,
+          now,
+        );
+        if (!verdict.plausible) throw this.implausible(input, verdict);
+        const location = await this.locationRepo.updateLocation(input, tx, now);
+        // The upsert keeps a newer stored row (only reachable with clock skew
+        // between instances); this fix then was not stored and must not act as if it was.
+        const applied = location.recordedAt.getTime() === now.getTime();
+        return { previous, location, applied, baselineReset: verdict.baselineReset };
+      },
     );
-    if (!verdict.plausible) {
-      this.driverMetrics.implausibleLocationRejected({
-        driverId: input.driverId,
-        reason: verdict.reason,
-      });
+    if (!applied) {
       logger.warn(
-        { driverId: input.driverId, reason: verdict.reason, detail: verdict.detail },
-        '[drivers] implausible location rejected',
+        { driverId: input.driverId, storedRecordedAt: location.recordedAt },
+        '[drivers] location fix superseded by a newer stored fix',
       );
-      throw new ImplausibleLocationError(verdict.reason, verdict.detail);
+      return location;
     }
-    const location = await this.locationRepo.updateLocation(input);
+    if (baselineReset) {
+      this.driverMetrics.staleLocationBaselineReset({ driverId: input.driverId });
+      logger.info(
+        {
+          driverId: input.driverId,
+          ...baselineReset,
+          ...(input.accuracyMeters !== undefined ? { accuracyMeters: input.accuracyMeters } : {}),
+          staleAfterSeconds: driverConfig.locationStaleBaselineSeconds,
+        },
+        '[drivers] stale location baseline replaced',
+      );
+    }
     this.driverMetrics.locationUpdated({ driverId: input.driverId });
-    await this.accrueTripDistance(input, previous);
+    // A reset is a new baseline, not distance driven — it must never reach a fare.
+    await this.accrueTripDistance(input, baselineReset ? null : previous);
     if (
       driver.verificationStatus === 'VERIFIED' &&
       !driver.isSuspended &&
@@ -100,6 +128,29 @@ export class LocationService {
       }
     }
     return location;
+  }
+
+  /// Records and logs a refused fix and returns the error to throw. Logged with
+  /// the numbers that decided it — never anything from the request's auth.
+  private implausible(
+    input: UpdateDriverLocationInput,
+    verdict: Extract<PlausibilityVerdict, { plausible: false }>,
+  ): ImplausibleLocationError {
+    this.driverMetrics.implausibleLocationRejected({
+      driverId: input.driverId,
+      reason: verdict.reason,
+    });
+    logger.warn(
+      {
+        driverId: input.driverId,
+        reason: verdict.reason,
+        detail: verdict.detail,
+        ...verdict.facts,
+        ...(input.accuracyMeters !== undefined ? { accuracyMeters: input.accuracyMeters } : {}),
+      },
+      '[drivers] implausible location rejected',
+    );
+    return new ImplausibleLocationError(verdict.reason, verdict.detail);
   }
 
   /// One-shot "driver is nearby" when an en-route driver enters the nearby radius.

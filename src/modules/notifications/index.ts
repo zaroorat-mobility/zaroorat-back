@@ -10,6 +10,7 @@ import { NotificationRepository } from './repositories/notification.repository.j
 import { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
 import { NotificationReconciliationJob } from './jobs/notification-reconciliation.job.js';
 import { registerNotificationInbox } from './inbox.js';
+import { DriverDecisionSmsConsumer } from './consumers/driver-decision-sms.consumer.js';
 export type { SmsProvider, SmsMessage, SmsSendResult } from './providers/sms.provider';
 export type { PushProvider, PushMessage, PushSendResult } from './providers/push.provider';
 export type { EmailProvider, EmailMessage, EmailSendResult } from './providers/email.provider';
@@ -19,6 +20,7 @@ export { AirtelProvider, type AirtelConfig } from '../../integrations/airtel/air
 export { MockPushProvider } from './providers/mock-push.provider';
 export { FcmPushProvider } from '../../integrations/firebase/fcm-push.provider.js';
 export { NotificationRepository } from './repositories/notification.repository.js';
+export { DriverDecisionSmsConsumer } from './consumers/driver-decision-sms.consumer.js';
 export { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
 export {
   NotificationReconciliationJob,
@@ -61,6 +63,7 @@ export function registerNotificationModule(container: AwilixContainer): void {
     notificationDeliveryJob: asClass(NotificationDeliveryJob).singleton(),
     notificationReconciliationJob: asClass(NotificationReconciliationJob).singleton(),
     notificationService: asClass(NotificationService).singleton(),
+    driverDecisionSmsConsumer: asClass(DriverDecisionSmsConsumer).singleton(),
   });
   registerNotificationInbox(container);
 }

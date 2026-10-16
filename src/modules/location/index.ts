@@ -4,7 +4,6 @@ import {
   H3Provider,
   PostgisProvider,
   RedisGeoProvider,
-  OlaMapsProvider,
   GoogleMapsProvider,
   MapplsProvider,
 } from './providers/index.js';
@@ -44,12 +43,6 @@ export function registerLocationModule(container: AwilixContainer): void {
     redisGeoProvider: asClass(RedisGeoProvider).singleton(),
 
     // External Map Providers
-    olaMapsProvider: asFunction(() => {
-      const apiKey = process.env.OLA_MAPS_API_KEY ?? process.env.MAPS_API_KEY ?? '';
-      const baseUrl = process.env.OLA_MAPS_BASE_URL;
-      return new OlaMapsProvider({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
-    }).singleton(),
-
     googleMapsProvider: asFunction(() => {
       const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? '';
       const baseUrl = process.env.GOOGLE_MAPS_BASE_URL;
@@ -75,25 +68,23 @@ export function registerLocationModule(container: AwilixContainer): void {
     // for every dependency.
     mapProviderService: asFunction(
       function mapProviderServiceFactory(
-        olaMapsProvider,
         googleMapsProvider,
         mapplsProvider,
         systemSettingService,
         redisService,
       ) {
         const providerMap: Record<string, MapProvider> = {
-          ola: olaMapsProvider,
           google: googleMapsProvider,
           mappls: mapplsProvider,
         };
 
-        const envPrimary = (process.env.MAP_PROVIDER ?? 'ola').trim().toLowerCase();
+        const envPrimary = (process.env.MAP_PROVIDER ?? 'google').trim().toLowerCase();
         const primaryProvider: MapProvider =
           (providerMap[envPrimary]?.isConfigured() ? providerMap[envPrimary] : undefined) ??
           Object.values(providerMap).find((p) => p.isConfigured()) ??
           providerMap[envPrimary] ??
-          providerMap.ola ??
-          olaMapsProvider;
+          providerMap.google ??
+          googleMapsProvider;
 
         return new MapProviderService({
           primaryProvider,

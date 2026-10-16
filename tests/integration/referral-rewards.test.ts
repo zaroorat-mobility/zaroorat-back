@@ -379,11 +379,21 @@ describe('referral rewards and qualification (integration)', () => {
     const second = await makeProgram({ audience: 'RIDER', code: 'RIDER_TWO', ...nonMonetary });
     const driverProgram = await makeProgram({ audience: 'DRIVER', code: 'DRIVER_ONE' });
 
-    // Created directly here, so enforce it the way the admin service does.
+    // Created directly here, so enforce it the way the admin service does — as an admin
+    // acting through it, since every admin change must be attributable (fails closed).
+    const adminId = await makeUser('+919876660099');
     const programs = container.resolve<{
-      activate(id: string): Promise<unknown>;
+      activate(id: string, actor: { actorId: string }): Promise<unknown>;
     }>('adminReferralProgramService');
-    await programs.activate(second);
+    await programs.activate(second, { actorId: adminId });
+    const retirement = await db().client.adminActivityLog.findMany({
+      where: { entityType: 'referral_program', entityId: first },
+    });
+    assert.deepEqual(
+      retirement.map((row) => row.actorId),
+      [adminId],
+      'retiring the other program is audited to the admin who activated',
+    );
 
     const active = await db().client.referralProgram.findMany({
       where: { audience: 'RIDER', isActive: true },

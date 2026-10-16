@@ -87,9 +87,14 @@ function makeStatusService(options: {
   );
 }
 
-function verifiedDriverRepo(id: string) {
+function verifiedDriverRepo(id: string, paymentModel: string | null = 'COMMISSION') {
   return {
-    lockForUpdate: async () => ({ id, verificationStatus: 'VERIFIED', isSuspended: false }),
+    lockForUpdate: async () => ({
+      id,
+      verificationStatus: 'VERIFIED',
+      isSuspended: false,
+      paymentModel,
+    }),
     updateAvailability: async () => ({}),
   };
 }
@@ -143,6 +148,19 @@ describe('Driver Operational Verification Gate Tests', () => {
     });
 
     await assert.rejects(async () => service.setOnline('driver-3'), DriverNotVerifiedError);
+  });
+
+  it('prevents a verified, documented driver with no payment model from going ONLINE', async () => {
+    const service = makeStatusService({
+      driverRepo: verifiedDriverRepo('driver-5', null),
+      eligibilityService: new DriverEligibilityService(makeDocRepo(allDriverDocs()) as never),
+    });
+
+    await assert.rejects(
+      async () => service.setOnline('driver-5'),
+      (err: { code?: string; statusCode?: number }) =>
+        err.code === 'PAYMENT_MODEL_NOT_SELECTED' && err.statusCode === 409,
+    );
   });
 
   it('allows a verified driver with every required document VERIFIED and unexpired to go ONLINE', async () => {

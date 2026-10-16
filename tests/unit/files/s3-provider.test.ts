@@ -115,6 +115,22 @@ describe('S3 storage provider (unit)', () => {
       assert.equal(signed.headers['Content-Type'], 'image/jpeg');
     });
 
+    it('signs content-length, so S3 refuses a body larger than the size declared at init', async () => {
+      const provider = new S3StorageProvider(configFor(), undefined, () => FIXED_NOW);
+
+      const signed = await provider.signUpload({
+        key: 'dd/2026/08/abc.jpg',
+        contentType: 'image/jpeg',
+        contentLength: 1024,
+        ttlSeconds: 300,
+      });
+      const signedHeaders = new URL(signed.url).searchParams.get('X-Amz-SignedHeaders') ?? '';
+
+      // Unbound, a client could declare 1 KB (passing the size and quota checks) and PUT
+      // gigabytes into quarantine. Verified against real S3: a mismatched body gets 403.
+      assert.ok(signedHeaders.split(';').includes('content-length'), signedHeaders);
+    });
+
     it('returns the encryption headers the client must send back', async () => {
       const provider = new S3StorageProvider(
         configFor({ serverSideEncryption: 'aws:kms', kmsKeyId: 'key-123' }),

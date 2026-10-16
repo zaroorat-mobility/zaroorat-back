@@ -20,12 +20,16 @@ export class RoomAuthorizationService {
   /// permissions). A failed lookup throws, so the join fails closed.
   async dashboardRooms(principal: SocketPrincipal): Promise<string[]> {
     if (principal.roles.includes(SYSTEM_ADMIN_ROLE_SLUG)) {
-      return [room.opsDashboard(), room.financeDashboard()];
+      return [room.opsDashboard(), room.financeDashboard(), room.driversDashboard()];
     }
     const held = await this.permissionRepository.findAllowedCodesForUser(principal.userId);
     const rooms: string[] = [];
     if (held.includes('operations:read')) rooms.push(room.opsDashboard());
     if (held.includes('finance:read')) rooms.push(room.financeDashboard());
+    // Driver staff get driver hints only — the ops room also carries ride traffic.
+    if (held.includes('drivers:read') || held.includes('drivers:write')) {
+      rooms.push(room.driversDashboard());
+    }
     if (rooms.length === 0) throw new RoomAccessDeniedError('dashboard');
     return rooms;
   }

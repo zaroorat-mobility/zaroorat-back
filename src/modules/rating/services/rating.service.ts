@@ -77,13 +77,15 @@ export class RatingService {
       // count, and the driver's profile would keep reporting the 5.00 it was
       // created with. `Driver.rating` was written by nothing at all before this.
       //
-      // Only a customer's rating moves a driver's score. A driver rating a
-      // customer still goes nowhere — there is no column for it anywhere in the
-      // schema, so that half stays write-only until one exists.
       if (ratedBy === 'CUSTOMER') {
         const average = await this.ratingRepo.averageForDriver(ride.driverId, tx);
         if (average !== null) {
           await this.driverRepository.setRating(ride.driverId, Math.round(average * 100) / 100, tx);
+        }
+      } else if (ratedBy === 'DRIVER') {
+        const aggregate = await this.ratingRepo.aggregateForCustomer(ride.customerId, tx);
+        if (aggregate) {
+          await this.ratingRepo.updateCustomerRatingAggregate(ride.customerId, aggregate, tx);
         }
       }
       return created;

@@ -573,9 +573,11 @@ describe('admin audit hardening (integration)', () => {
       assert.equal((await auditRows('driver', driverId)).length, 0);
     });
 
-    it('application approval promotes documents, verifies the driver, and logs each — atomically', async () => {
+    it('application approval verifies the reviewed driver and logs it, never the documents', async () => {
       const admin = await loginStaff(ADMIN_PHONE, 'system_admin');
       const { driverId, docs } = await seedPendingDriver();
+      for (const doc of docs) await as(admin, review(driverId, doc.id));
+      const reviewRows = await auditCount();
       const res = await as(admin, {
         method: 'POST',
         url: `/api/v1/admin/applications/${driverId}/approve`,
@@ -583,19 +585,20 @@ describe('admin audit hardening (integration)', () => {
       });
       assert.equal(res.statusCode, 200, res.payload);
       assert.equal(await verificationStatus(driverId), 'VERIFIED');
-      const docRows = await db().client.adminActivityLog.findMany({
-        where: { entityType: 'driver_document', entityId: { in: docs.map((d) => d.id) } },
-      });
-      assert.equal(docRows.length, docs.length, 'one row per promoted document');
+      assert.equal(await auditCount(), reviewRows + 1, 'approval adds the driver row only');
       const driverRows = await auditRows('driver', driverId);
       assert.equal(driverRows.length, 1);
-      for (const row of [...docRows, ...driverRows]) assertActor(row, admin);
-      assertNoDocumentSecrets([...docRows, ...driverRows]);
+      for (const row of driverRows) assertActor(row, admin);
+      assertNoDocumentSecrets(driverRows);
     });
 
     it('a failed approval leaves documents and driver untouched and logs nothing', async () => {
       const admin = await loginStaff(ADMIN_PHONE, 'system_admin');
       const { driverId } = await seedPendingDriver();
+      await db().client.driverDocument.updateMany({
+        where: { driverId },
+        data: { verificationStatus: 'VERIFIED' },
+      });
       await refuseAuditWrites('driver');
       const res = await as(admin, {
         method: 'POST',
@@ -604,13 +607,6 @@ describe('admin audit hardening (integration)', () => {
       });
       assert.ok(res.statusCode >= 500, `${res.statusCode} ${res.payload}`);
       assert.equal(await verificationStatus(driverId), 'PENDING');
-      assert.equal(
-        await db().client.driverDocument.count({
-          where: { driverId, verificationStatus: 'VERIFIED' },
-        }),
-        0,
-        'the document promotion rolled back with the decision',
-      );
       assert.equal(await auditCount(), 0);
     });
 

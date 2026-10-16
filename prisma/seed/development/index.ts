@@ -853,16 +853,12 @@ async function seedPricingFixtures(prisma: Prisma) {
   if (zoneId) {
     const cab = byCode['CAB_ECONOMY'];
     const auto = byCode['AUTO'];
-    const tomorrow = new Date();
-    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-    tomorrow.setUTCHours(8, 0, 0, 0);
-    const tomorrowEnd = new Date(tomorrow);
-    tomorrowEnd.setUTCHours(11, 0, 0, 0);
-    const evening = new Date();
-    evening.setUTCDate(evening.getUTCDate() + 1);
-    evening.setUTCHours(17, 0, 0, 0);
-    const eveningEnd = new Date(evening);
-    eveningEnd.setUTCHours(20, 0, 0, 0);
+    // The daily hours live in peakHourStart/End, read in the city's timezone
+    // (pricing/utils/peak-window.ts). startsAt/endsAt only bound validity: pinning
+    // them to "tomorrow 08:00 UTC" (13:30 IST) never overlapped the 08:00 IST peak
+    // and expired a day after seeding.
+    const validFrom = new Date();
+    const validUntil = new Date(validFrom.getTime() + 90 * 86400000);
 
     const windowCount = await prisma.surgeWindow.count({ where: { zoneId } });
     if (windowCount === 0) {
@@ -872,8 +868,8 @@ async function seedPricingFixtures(prisma: Prisma) {
             zoneId,
             vehicleTypeId: cab.id,
             multiplier: 1.5,
-            startsAt: tomorrow,
-            endsAt: tomorrowEnd,
+            startsAt: validFrom,
+            endsAt: validUntil,
             reason: 'Morning Peak Cab Surge',
             source: 'MANUAL',
             isActive: true,
@@ -891,8 +887,8 @@ async function seedPricingFixtures(prisma: Prisma) {
             zoneId,
             vehicleTypeId: auto.id,
             multiplier: 1.2,
-            startsAt: evening,
-            endsAt: eveningEnd,
+            startsAt: validFrom,
+            endsAt: validUntil,
             reason: 'Evening Peak Auto Surge',
             source: 'MANUAL',
             isActive: true,

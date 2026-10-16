@@ -40,6 +40,9 @@ x-app-env: &app-env
   # one-shot below. See docs/15_Security/database-roles.md.
   DATABASE_URL: postgresql://${APP_DB_USER:-zaroorat_app}:${APP_DB_PASSWORD:?APP_DB_PASSWORD is required (runtime DB login, see docs/15_Security/database-roles.md)}@pgbouncer:6432/${POSTGRES_DB:-zaroorat}
   REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
+  # Socket.IO rooms shared across API replicas. Pinned here so a REALTIME_ADAPTER=memory
+  # copied from .env.example cannot silently drop events once a second replica exists.
+  REALTIME_ADAPTER: redis
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required (min 32 chars)}
   JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required (min 32 chars)}
   # postgres and the app share a private network, so TLS between them is not
@@ -82,6 +85,10 @@ x-app-env: &app-env
   AIRTEL_CUSTOMER_OTP_MESSAGE: ${AIRTEL_CUSTOMER_OTP_MESSAGE:-}
   AIRTEL_DRIVER_OTP_TEMPLATE_ID: ${AIRTEL_DRIVER_OTP_TEMPLATE_ID:-}
   AIRTEL_DRIVER_OTP_MESSAGE: ${AIRTEL_DRIVER_OTP_MESSAGE:-}
+  AIRTEL_DRIVER_DOC_REJECTED_TEMPLATE_ID: ${AIRTEL_DRIVER_DOC_REJECTED_TEMPLATE_ID:-}
+  AIRTEL_DRIVER_DOC_REJECTED_MESSAGE: ${AIRTEL_DRIVER_DOC_REJECTED_MESSAGE:-}
+  AIRTEL_DRIVER_ACTIVATED_TEMPLATE_ID: ${AIRTEL_DRIVER_ACTIVATED_TEMPLATE_ID:-}
+  AIRTEL_DRIVER_ACTIVATED_MESSAGE: ${AIRTEL_DRIVER_ACTIVATED_MESSAGE:-}
   # ── Push (FCM) ────────────────────────────────────────────────────────
   # Production refuses any other push provider (resolvePushProviderName), and a
   # single host has no Application Default Credentials, so the service-account
@@ -292,7 +299,18 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     # $$ escapes compose interpolation so the shell expands it, keeping the
     # password out of the process argument list in `docker inspect`/`ps`.
-    command: ['sh', '-c', 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes']
+    # Redis holds state, not just cache: token revocation epochs, BullMQ, the
+    # Socket.IO adapter, the driver GEO index, locks. So it must never evict —
+    # an evicted epoch key revives a revoked access token, and BullMQ requires
+    # noeviction. At the cap writes fail loudly (503) instead of losing keys.
+    # Size REDIS_MAXMEMORY to about half the RAM Redis may use: an AOF rewrite
+    # forks, and copy-on-write needs the headroom.
+    command:
+      [
+        'sh',
+        '-c',
+        'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory ${REDIS_MAXMEMORY:-1gb} --maxmemory-policy noeviction',
+      ]
     # No `ports`.
     volumes:
       - redis_data:/data

@@ -137,11 +137,20 @@ describe('Room authorization', () => {
       );
     });
 
-    it('gives system_admin both rooms without a lookup, as the HTTP guard does', async () => {
+    it('gives drivers:read or drivers:write the drivers room only, never the ops room', async () => {
+      for (const code of ['drivers:read', 'drivers:write']) {
+        assert.deepEqual(await service(RIDE, [code]).dashboardRooms(staff(['custom'])), [
+          'dashboard:drivers',
+        ]);
+      }
+    });
+
+    it('gives system_admin every room without a lookup, as the HTTP guard does', async () => {
       const lookupWouldFail = service(RIDE, new Error('must not be called'));
       assert.deepEqual(await lookupWouldFail.dashboardRooms(staff(['system_admin'])), [
         'dashboard:ops',
         'dashboard:finance',
+        'dashboard:drivers',
       ]);
     });
 

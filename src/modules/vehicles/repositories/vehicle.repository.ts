@@ -8,6 +8,8 @@ export interface CreateVehicleInput {
   model?: string;
   color?: string;
   seatingCapacity?: number;
+  fuelType?: string;
+  manufacturingYear?: number;
 }
 export interface UpdateVehicleInput {
   make?: string;
@@ -17,6 +19,7 @@ export interface UpdateVehicleInput {
   registrationState?: string;
   fuelType?: string;
   manufacturingYear?: number;
+  photoUrl?: string;
 }
 
 export class VehicleRepository {
@@ -50,7 +53,7 @@ export class VehicleRepository {
     const client = tx ?? this.db.client;
     return client.vehicle.findFirst({
       where: { currentDriverId: driverId },
-      include: { vehicleType: true, documents: true },
+      include: { vehicleType: true, documents: true, images: { orderBy: { uploadedAt: 'desc' } } },
     });
   }
   async findByRegistration(
@@ -70,6 +73,10 @@ export class VehicleRepository {
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.color !== undefined ? { color: input.color } : {}),
         ...(input.seatingCapacity !== undefined ? { seatingCapacity: input.seatingCapacity } : {}),
+        ...(input.fuelType !== undefined ? { fuelType: input.fuelType } : {}),
+        ...(input.manufacturingYear !== undefined
+          ? { manufacturingYear: input.manufacturingYear }
+          : {}),
         isActive: true,
       },
     });

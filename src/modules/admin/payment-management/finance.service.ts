@@ -316,12 +316,7 @@ export class AdminFinanceService {
     return this.toTransactionDto(row as TxnRow);
   }
 
-  async reconcileTransaction(
-    id: string,
-    body: ReconcileTransactionBody,
-    actorId: string,
-    actorName?: string,
-  ) {
+  async reconcileTransaction(id: string, body: ReconcileTransactionBody, actorId: string) {
     const existing = await this.client.paymentTransaction.findUnique({ where: { id } });
     if (!existing) throw new FinanceNotFoundError('Transaction was not found');
 
@@ -330,7 +325,7 @@ export class AdminFinanceService {
         where: { id },
         data: {
           varianceStatus: body.varianceStatus,
-          reconciledBy: actorLabel(actorName, actorId),
+          reconciledBy: actorLabel(await this.adminName(actorId), actorId),
           lastReconciledAt: new Date(),
         },
         include: this.txnInclude,
@@ -432,7 +427,7 @@ export class AdminFinanceService {
     return this.toRefundDto(row as RefundRow);
   }
 
-  async createRefund(body: CreateFinanceRefundBody, actorId: string, actorName?: string) {
+  async createRefund(body: CreateFinanceRefundBody, actorId: string) {
     let txn = body.transactionId
       ? await this.client.paymentTransaction.findUnique({
           where: { id: body.transactionId },
@@ -464,7 +459,7 @@ export class AdminFinanceService {
     const userId = txn.userId;
     const amount = new Decimal(body.requestedAmount);
     const now = new Date();
-    const actor = actorLabel(actorName);
+    const actor = actorLabel(await this.adminName(actorId));
     const year = now.getFullYear();
     const seq = Math.floor(Math.random() * 9000) + 1000;
     const displayCode = `REF-${year}-${seq}`;
@@ -513,6 +508,20 @@ export class AdminFinanceService {
     return this.toRefundDto(created as RefundRow);
   }
 
+  /// Name shown on refund timelines and reviewedBy/processedBy. Resolved from the
+  /// authenticated admin so a request body cannot put someone else's name there.
+  private async adminName(actorId: string): Promise<string | undefined> {
+    const user = await this.client.user.findUnique({
+      where: { id: actorId },
+      select: { phoneNumber: true, profile: { select: { firstName: true, lastName: true } } },
+    });
+    if (!user) return undefined;
+    return (
+      [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(' ') ||
+      user.phoneNumber
+    );
+  }
+
   private async updateRefundWorkflow(
     id: string,
     actorId: string,
@@ -525,7 +534,6 @@ export class AdminFinanceService {
       summary: string;
       event: TimelineEvent;
     },
-    actorName?: string,
   ) {
     const existing = await this.client.refund.findUnique({
       where: { id },
@@ -534,7 +542,7 @@ export class AdminFinanceService {
     if (!existing) throw new FinanceNotFoundError('Refund was not found');
 
     const now = new Date();
-    const actor = actorLabel(actorName);
+    const actor = actorLabel(await this.adminName(actorId));
     const { data, summary, event } = mutator(existing as RefundRow, now, actor);
 
     const updated = await this.client.$transaction(async (tx) => {
@@ -561,127 +569,99 @@ export class AdminFinanceService {
     return this.toRefundDto(updated as RefundRow);
   }
 
-  async startRefundReview(id: string, actorId: string, reviewerName?: string) {
-    return this.updateRefundWorkflow(
-      id,
-      actorId,
-      (row, now, actor) => {
-        if (!['requested', 'under_review'].includes(row.workflowStatus)) {
-          throw new FinanceConflictError(`Cannot start review from status ${row.workflowStatus}`);
-        }
-        return {
-          data: { workflowStatus: 'under_review' },
-          summary: `Started review for refund ${row.displayCode ?? row.id}`,
-          event: {
-            action: 'Review Started',
-            actor: reviewerName?.trim() || actor,
-            timestamp: now.toISOString(),
-            notes: `Assigned review agent: ${reviewerName?.trim() || actor}`,
-          },
-        };
-      },
-      reviewerName,
-    );
+  async startRefundReview(id: string, actorId: string) {
+    return this.updateRefundWorkflow(id, actorId, (row, now, actor) => {
+      if (!['requested', 'under_review'].includes(row.workflowStatus)) {
+        throw new FinanceConflictError(`Cannot start review from status ${row.workflowStatus}`);
+      }
+      return {
+        data: { workflowStatus: 'under_review' },
+        summary: `Started review for refund ${row.displayCode ?? row.id}`,
+        event: {
+          action: 'Review Started',
+          actor,
+          timestamp: now.toISOString(),
+          notes: `Review started by ${actor}`,
+        },
+      };
+    });
   }
 
-  async approveRefund(
-    id: string,
-    actorId: string,
-    approvedAmount: number,
-    notes?: string,
-    reviewerName?: string,
-  ) {
-    return this.updateRefundWorkflow(
-      id,
-      actorId,
-      (row, now, actor) => {
-        if (!['requested', 'under_review', 'approved'].includes(row.workflowStatus)) {
-          throw new FinanceConflictError(`Cannot approve from status ${row.workflowStatus}`);
-        }
-        const name = reviewerName?.trim() || actor;
-        return {
-          data: {
-            workflowStatus: 'approved',
-            amount: new Decimal(approvedAmount),
-            reviewedBy: name,
-            reviewedAt: now,
-            adminNotes: notes ?? row.adminNotes,
-          },
-          summary: `Approved refund ${row.displayCode ?? row.id} for ₹${approvedAmount}`,
-          event: {
-            action: 'Refund Approved',
-            actor: name,
-            timestamp: now.toISOString(),
-            notes: `Approved amount: ₹${approvedAmount}. Notes: ${notes ?? ''}`,
-          },
-        };
-      },
-      reviewerName,
-    );
+  async approveRefund(id: string, actorId: string, approvedAmount: number, notes?: string) {
+    return this.updateRefundWorkflow(id, actorId, (row, now, actor) => {
+      if (!['requested', 'under_review', 'approved'].includes(row.workflowStatus)) {
+        throw new FinanceConflictError(`Cannot approve from status ${row.workflowStatus}`);
+      }
+      const name = actor;
+      return {
+        data: {
+          workflowStatus: 'approved',
+          amount: new Decimal(approvedAmount),
+          reviewedBy: name,
+          reviewedAt: now,
+          adminNotes: notes ?? row.adminNotes,
+        },
+        summary: `Approved refund ${row.displayCode ?? row.id} for ₹${approvedAmount}`,
+        event: {
+          action: 'Refund Approved',
+          actor: name,
+          timestamp: now.toISOString(),
+          notes: `Approved amount: ₹${approvedAmount}. Notes: ${notes ?? ''}`,
+        },
+      };
+    });
   }
 
-  async rejectRefund(id: string, actorId: string, reason: string, reviewerName?: string) {
-    return this.updateRefundWorkflow(
-      id,
-      actorId,
-      (row, now, actor) => {
-        if (['completed', 'rejected'].includes(row.workflowStatus)) {
-          throw new FinanceConflictError(`Cannot reject from status ${row.workflowStatus}`);
-        }
-        // A PROCESSING refund has its amount reserved and may already be with
-        // the provider; flipping it to FAILED here would strand that reservation.
-        if (row.status === 'PROCESSING' || row.status === 'SUCCEEDED') {
-          throw new FinanceConflictError(
-            `A refund that is ${row.status} with the provider cannot be rejected`,
-          );
-        }
-        const name = reviewerName?.trim() || actor;
-        return {
-          data: {
-            workflowStatus: 'rejected',
-            reviewedBy: name,
-            reviewedAt: now,
-            adminNotes: reason,
-            status: 'FAILED',
-          },
-          summary: `Rejected refund ${row.displayCode ?? row.id}`,
-          event: {
-            action: 'Refund Rejected',
-            actor: name,
-            timestamp: now.toISOString(),
-            notes: reason,
-          },
-        };
-      },
-      reviewerName,
-    );
+  async rejectRefund(id: string, actorId: string, reason: string) {
+    return this.updateRefundWorkflow(id, actorId, (row, now, actor) => {
+      if (['completed', 'rejected'].includes(row.workflowStatus)) {
+        throw new FinanceConflictError(`Cannot reject from status ${row.workflowStatus}`);
+      }
+      // A PROCESSING refund has its amount reserved and may already be with
+      // the provider; flipping it to FAILED here would strand that reservation.
+      if (row.status === 'PROCESSING' || row.status === 'SUCCEEDED') {
+        throw new FinanceConflictError(
+          `A refund that is ${row.status} with the provider cannot be rejected`,
+        );
+      }
+      const name = actor;
+      return {
+        data: {
+          workflowStatus: 'rejected',
+          reviewedBy: name,
+          reviewedAt: now,
+          adminNotes: reason,
+          status: 'FAILED',
+        },
+        summary: `Rejected refund ${row.displayCode ?? row.id}`,
+        event: {
+          action: 'Refund Rejected',
+          actor: name,
+          timestamp: now.toISOString(),
+          notes: reason,
+        },
+      };
+    });
   }
 
-  async markRefundProcessing(id: string, actorId: string, actorName?: string) {
-    await this.updateRefundWorkflow(
-      id,
-      actorId,
-      (row, now, actor) => {
-        if (!['approved', 'processing'].includes(row.workflowStatus)) {
-          throw new FinanceConflictError(
-            `Cannot mark processing from status ${row.workflowStatus}`,
-          );
-        }
-        return {
-          data: {
-            workflowStatus: 'processing',
-            processedBy: actorName?.trim() || actor,
-          },
-          summary: `Refund ${row.displayCode ?? row.id} marked processing`,
-          event: {
-            action: 'Refund Processing',
-            actor: actorName?.trim() || actor,
-            timestamp: now.toISOString(),
-          },
-        };
-      },
-      actorName,
-    );
+  async markRefundProcessing(id: string, actorId: string) {
+    await this.updateRefundWorkflow(id, actorId, (row, now, actor) => {
+      if (!['approved', 'processing'].includes(row.workflowStatus)) {
+        throw new FinanceConflictError(`Cannot mark processing from status ${row.workflowStatus}`);
+      }
+      return {
+        data: {
+          workflowStatus: 'processing',
+          processedBy: actor,
+        },
+        summary: `Refund ${row.displayCode ?? row.id} marked processing`,
+        event: {
+          action: 'Refund Processing',
+          actor,
+          timestamp: now.toISOString(),
+        },
+      };
+    });
 
     const row = await this.client.refund.findUnique({ where: { id } });
     if (row && row.status !== 'SUCCEEDED') {
@@ -690,7 +670,7 @@ export class AdminFinanceService {
     return this.getRefund(id);
   }
 
-  async markRefundCompleted(id: string, actorId: string, actorName?: string, notes?: string) {
+  async markRefundCompleted(id: string, actorId: string, notes?: string) {
     const row = await this.client.refund.findUnique({ where: { id } });
     if (!row) throw new FinanceNotFoundError('Refund was not found');
 
@@ -709,29 +689,24 @@ export class AdminFinanceService {
       }
     }
 
-    return this.updateRefundWorkflow(
-      id,
-      actorId,
-      (current, now, actor) => {
-        const name = actorName?.trim() || actor;
-        return {
-          data: {
-            workflowStatus: 'completed',
-            processedBy: name,
-            completedAt: current.completedAt ?? now,
-            adminNotes: notes ?? current.adminNotes,
-          },
-          summary: `Completed refund ${current.displayCode ?? current.id}`,
-          event: {
-            action: 'Refund Completed',
-            actor: name,
-            timestamp: now.toISOString(),
-            ...(notes ? { notes } : {}),
-          },
-        };
-      },
-      actorName,
-    );
+    return this.updateRefundWorkflow(id, actorId, (current, now, actor) => {
+      const name = actor;
+      return {
+        data: {
+          workflowStatus: 'completed',
+          processedBy: name,
+          completedAt: current.completedAt ?? now,
+          adminNotes: notes ?? current.adminNotes,
+        },
+        summary: `Completed refund ${current.displayCode ?? current.id}`,
+        event: {
+          action: 'Refund Completed',
+          actor: name,
+          timestamp: now.toISOString(),
+          ...(notes ? { notes } : {}),
+        },
+      };
+    });
   }
 
   // ─── Settlements ──────────────────────────────────────────────────────────
@@ -864,7 +839,7 @@ export class AdminFinanceService {
   /// The batch is created under an advisory lock and re-checked inside it, so concurrent
   /// requests for one period produce one batch and one audit row — and batch numbers,
   /// derived from a count, cannot collide.
-  async generateSettlement(body: GenerateSettlementBody, actor: AuditActor, actorName?: string) {
+  async generateSettlement(body: GenerateSettlementBody, actor: AuditActor) {
     if (body.periodEnd < body.periodStart) {
       throw new FinanceConflictError('periodEnd must be on or after periodStart');
     }
@@ -886,7 +861,7 @@ export class AdminFinanceService {
       );
     }
 
-    const label = actorLabel(actorName);
+    const label = actorLabel(await this.adminName(actor.actorId));
     const batch = await this.db.transactionManager.execute(async (tx) => {
       await lockForAuditKey(tx, 'settlement_batches');
       const already = await tx.settlementBatch.findFirst({
@@ -974,19 +949,14 @@ export class AdminFinanceService {
     return this.toBatchDto(batch as BatchRow);
   }
 
-  async updateSettlementStatus(
-    id: string,
-    body: SettlementStatusBody,
-    actorId: string,
-    actorName?: string,
-  ) {
+  async updateSettlementStatus(id: string, body: SettlementStatusBody, actorId: string) {
     const existing = await this.client.settlementBatch.findUnique({
       where: { id },
       include: this.batchInclude,
     });
     if (!existing) throw new FinanceNotFoundError('Settlement batch was not found');
 
-    const actor = actorLabel(actorName);
+    const actor = actorLabel(await this.adminName(actorId));
     const now = new Date();
     const actionMap: Record<string, string> = {
       pending: 'Settlement Approved for Processing',
@@ -1243,7 +1213,7 @@ export class AdminFinanceService {
     return this.toDisputeDto(row);
   }
 
-  async createDispute(body: CreateDisputeBody, actorId: string, actorName?: string) {
+  async createDispute(body: CreateDisputeBody, actorId: string) {
     const ride = await this.client.ride.findUnique({
       where: { id: body.rideId },
       include: {
@@ -1259,7 +1229,7 @@ export class AdminFinanceService {
     if (!ride) throw new FinanceNotFoundError('Ride was not found');
 
     const now = new Date();
-    const actor = actorLabel(actorName);
+    const actor = actorLabel(await this.adminName(actorId));
     const riderName = body.riderName ?? displayName(ride.customer.profile, 'Rider');
     const driverName =
       body.driverName ??
@@ -1306,7 +1276,7 @@ export class AdminFinanceService {
     return this.toDisputeDto(created);
   }
 
-  async assignDispute(id: string, agentName: string, actorId: string, actorName?: string) {
+  async assignDispute(id: string, agentName: string, actorId: string) {
     const existing = await this.client.paymentDispute.findUnique({ where: { id } });
     if (!existing) throw new FinanceNotFoundError('Dispute was not found');
 
@@ -1320,7 +1290,7 @@ export class AdminFinanceService {
           assignedAt: now,
           timeline: appendTimeline(existing.timeline, {
             action: 'Dispute Assigned',
-            actor: actorLabel(actorName),
+            actor: actorLabel(await this.adminName(actorId)),
             timestamp: now.toISOString(),
             notes: `Assigned to ${agentName}`,
           }),
@@ -1338,13 +1308,7 @@ export class AdminFinanceService {
     return this.toDisputeDto(updated);
   }
 
-  async updateDisputeStatus(
-    id: string,
-    status: string,
-    actorId: string,
-    notes?: string,
-    actorName?: string,
-  ) {
+  async updateDisputeStatus(id: string, status: string, actorId: string, notes?: string) {
     const existing = await this.client.paymentDispute.findUnique({ where: { id } });
     if (!existing) throw new FinanceNotFoundError('Dispute was not found');
 
@@ -1356,7 +1320,7 @@ export class AdminFinanceService {
           status,
           timeline: appendTimeline(existing.timeline, {
             action: `Status → ${status}`,
-            actor: actorLabel(actorName),
+            actor: actorLabel(await this.adminName(actorId)),
             timestamp: now.toISOString(),
             ...(notes ? { notes } : {}),
           }),
@@ -1382,16 +1346,14 @@ export class AdminFinanceService {
       resolutionType: string;
       resolutionNotes?: string;
       adjustmentAmount?: number;
-      resolvedBy?: string;
     },
     actorId: string,
-    actorName?: string,
   ) {
     const existing = await this.client.paymentDispute.findUnique({ where: { id } });
     if (!existing) throw new FinanceNotFoundError('Dispute was not found');
 
     const now = new Date();
-    const resolver = input.resolvedBy?.trim() || actorLabel(actorName);
+    const resolver = actorLabel(await this.adminName(actorId));
     const updated = await this.client.$transaction(async (tx) => {
       const row = await tx.paymentDispute.update({
         where: { id },
@@ -1423,8 +1385,8 @@ export class AdminFinanceService {
     return this.toDisputeDto(updated);
   }
 
-  async closeDispute(id: string, actorId: string, notes?: string, actorName?: string) {
-    return this.updateDisputeStatus(id, 'closed', actorId, notes, actorName);
+  async closeDispute(id: string, actorId: string, notes?: string) {
+    return this.updateDisputeStatus(id, 'closed', actorId, notes);
   }
 
   // ─── Audit ────────────────────────────────────────────────────────────────

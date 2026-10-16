@@ -58,7 +58,15 @@ export class OnboardingService {
     if (!driver) throw new DriverNotFoundError(driverId);
 
     return this.txManager.execute(async (tx) => {
-      return this.driverRepo.updateProfile(userId, driverId, data, tx);
+      const updated = await this.driverRepo.updateProfile(userId, driverId, data, tx);
+      await this.eventPublisher.publish(
+        driverEvent(DRIVER_EVENT_CATALOG.PROFILE_UPDATED, driverId, {
+          driverId,
+          userId,
+        }),
+        tx,
+      );
+      return updated;
     });
   }
 
@@ -73,16 +81,18 @@ export class OnboardingService {
     );
   }
 
-  /// "Send back for corrections". The driver goes to REJECTED carrying the operator's
-  /// reason — the instructions the driver app shows — and the change is recorded as its own
-  /// decision (`decision: 'RESUBMISSION_REQUESTED'`, summary "Driver Resubmission
-  /// Requested"), never as a REJECT, which is a different operator act.
+  /// "Send back for corrections". The driver returns to PENDING — waiting on their
+  /// documents — carrying the operator's reason, the instructions the driver app shows; the
+  /// admin queue reads PENDING-with-instructions as "resubmission required". Their next
+  /// upload moves them to DOCUMENT_REVIEW. A final rejection is REJECTED instead, which an
+  /// upload never leaves. The change is recorded as its own decision
+  /// (`decision: 'RESUBMISSION_REQUESTED'`, summary "Driver Resubmission Requested"), never
+  /// as a REJECT, which is a different operator act.
   ///
-  /// From an already-REJECTED driver the request is a real change only when it carries new
-  /// instructions: the reason is replaced and audited. The same request again changes
-  /// nothing and is refused (`RESUBMISSION_ALREADY_REQUESTED`), so it cannot log a success
-  /// that did not happen. A SUSPENDED driver cannot be sent back. The driver row is locked
-  /// first, so concurrent requests serialise and the second sees the first's result.
+  /// The same instructions again, while the driver has not yet re-uploaded, change nothing
+  /// and are refused (`RESUBMISSION_ALREADY_REQUESTED`), so it cannot log a success that did
+  /// not happen. A SUSPENDED driver cannot be sent back. The driver row is locked first, so
+  /// concurrent requests serialise and the second sees the first's result.
   async requestResubmission(driverId: string, actor: AuditActor, reason: string): Promise<Driver> {
     return this.txManager.execute(async (tx) => {
       const locked = await this.driverRepo.lockForUpdate(driverId, tx);
@@ -102,7 +112,7 @@ export class OnboardingService {
           409,
         );
       }
-      if (locked.verificationStatus === 'REJECTED' && locked.rejectionReason === reason) {
+      if (locked.verificationStatus === 'PENDING' && locked.rejectionReason === reason) {
         throw new DriverError(
           'Resubmission has already been requested with these instructions',
           'RESUBMISSION_ALREADY_REQUESTED',
@@ -112,7 +122,7 @@ export class OnboardingService {
 
       const updated = await this.driverRepo.updateVerificationStatus(
         driverId,
-        'REJECTED',
+        'PENDING',
         actor.actorId,
         reason,
         tx,
@@ -135,6 +145,16 @@ export class OnboardingService {
         },
         result: 'SUCCESS',
       });
+      // The driver's SMS rides on this event: it commits with the decision and its audit
+      // row, and is sent only once the outbox relay delivers it after commit.
+      await this.eventPublisher.publish(
+        driverEvent(DRIVER_EVENT_CATALOG.RESUBMISSION_REQUESTED, driverId, {
+          driverId,
+          userId: locked.userId,
+          reason,
+        }),
+        tx,
+      );
       return updated;
     });
   }
@@ -193,6 +213,8 @@ export class OnboardingService {
       tx,
     );
 
+    // Each decision's event commits with it and its audit row; the driver's SMS is sent
+    // from the event only after commit, so a rolled-back decision never texts anyone.
     if (newVerificationStatus === 'VERIFIED') {
       this.driverMetrics.driverVerified({ driverId });
       await this.eventPublisher.publish(
@@ -200,6 +222,16 @@ export class OnboardingService {
           driverId,
           approvedBy,
           userId: locked.userId,
+        }),
+        tx,
+      );
+    } else {
+      await this.eventPublisher.publish(
+        driverEvent(DRIVER_EVENT_CATALOG.VERIFICATION_REJECTED, driverId, {
+          driverId,
+          rejectedBy: approvedBy,
+          userId: locked.userId,
+          ...(rejectionReason ? { reason: rejectionReason } : {}),
         }),
         tx,
       );

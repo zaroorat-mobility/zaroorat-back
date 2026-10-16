@@ -41,7 +41,26 @@ function makeWorld(rideOverrides: Record<string, unknown> = {}) {
       if (stars.length === 0) return null;
       return stars.reduce((sum, star) => sum + star, 0) / stars.length;
     },
+    /// Same idea for the customer side: DRIVER ratings only.
+    async aggregateForCustomer() {
+      const stars = ratings.filter((r) => r.ratedBy === 'DRIVER').map((r) => r.rating as number);
+      if (stars.length === 0) return null;
+      const count = (n: number) => stars.filter((s) => s === n).length;
+      return {
+        avgRating: Number((stars.reduce((sum, s) => sum + s, 0) / stars.length).toFixed(2)),
+        totalRatings: stars.length,
+        star1: count(1),
+        star2: count(2),
+        star3: count(3),
+        star4: count(4),
+        star5: count(5),
+      };
+    },
+    async updateCustomerRatingAggregate(userId: string, aggregate: Record<string, number>) {
+      customerAggregates.push({ userId, ...aggregate });
+    },
   };
+  const customerAggregates: Record<string, unknown>[] = [];
   const driverRatings: { driverId: string; rating: number }[] = [];
   const driverRepository = {
     async setRating(driverId: string, rating: number) {
@@ -60,7 +79,7 @@ function makeWorld(rideOverrides: Record<string, unknown> = {}) {
     driverRepository as never,
     txManager as never,
   );
-  return { service, ratings, driverRatings };
+  return { service, ratings, driverRatings, customerAggregates };
 }
 
 describe('RatingService.submitRating', () => {
@@ -146,8 +165,19 @@ describe('RatingService.submitRating', () => {
     const world = makeWorld();
     await world.service.submitRating('ride_1', 'DRIVER', 'driver_user_1', 1);
 
-    // There is no customer rating column anywhere in the schema, so this half is
-    // still write-only — but it must never be misfiled onto the driver.
+    // It lands on the customer's aggregate — never misfiled onto the driver.
     assert.deepEqual(world.driverRatings, []);
+    assert.deepEqual(world.customerAggregates, [
+      {
+        userId: 'cust_1',
+        avgRating: 1,
+        totalRatings: 1,
+        star1: 1,
+        star2: 0,
+        star3: 0,
+        star4: 0,
+        star5: 0,
+      },
+    ]);
   });
 });

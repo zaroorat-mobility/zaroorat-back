@@ -385,25 +385,25 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       try {
         mapProviderService.resolveProviderChain = async () => [
           {
-            providerName: 'ola',
+            providerName: 'google',
             isConfigured: () => true,
             supportedCapabilities: () => ['route'],
-            attribution: () => ({ text: '© Ola Maps' }),
+            attribution: () => ({ text: '© Google' }),
             getDirections: async () => {
-              throw new Error('Ola 500 Internal Error');
+              throw new Error('Google 500 Internal Error');
             },
             autocomplete: async () => ({
               status: 'unavailable',
               predictions: [],
-              providerName: 'ola',
+              providerName: 'google',
             }),
             reverseGeocode: async () => {
-              throw new Error('Ola reverse geocode error');
+              throw new Error('Google reverse geocode error');
             },
             getDistanceMatrix: async () => ({
               status: 'unavailable',
               cells: [],
-              providerName: 'ola',
+              providerName: 'google',
             }),
           },
         ];

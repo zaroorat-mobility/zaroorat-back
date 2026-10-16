@@ -20,6 +20,7 @@ import {
   makeVehicleType,
   setRidePin,
 } from './helpers/fixtures.js';
+import { driverConfig } from '../../src/config/driver/driver.config.js';
 import { realtimeConfig } from '../../src/config/realtime/realtime.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
 import { container } from '../../src/core/di.js';
@@ -592,6 +593,39 @@ describe('realtime socket gateway (integration)', () => {
       });
       assert.equal(response.ok, false);
       assert.equal((response.error as { code: string }).code, 'IMPLAUSIBLE_LOCATION');
+    });
+
+    it('serialises a REST fix racing a socket frame — only one may replace a stale fix', async () => {
+      const vehicleTypeId = await makeVehicleType({ code: `LOC9_${randomUUID().slice(0, 6)}` });
+      const driver = await onlineDriver('+919876770041', vehicleTypeId);
+      const socket = await connect(driver.accessToken);
+      // Just past the stale window, so both far jumps are impossible by speed and
+      // either may only win as a baseline reset. Both share the per-driver lock,
+      // so the second is speed-checked against the first.
+      const staleMs = (driverConfig.locationStaleBaselineSeconds + 60) * 1000;
+      await db().client.driverLocation.update({
+        where: { driverId: driver.driverId },
+        data: { recordedAt: new Date(Date.now() - staleMs) },
+      });
+      const pune = { latitude: 18.5308, longitude: 73.8475, accuracyMeters: 5 };
+      const srinagar = { latitude: 34.0837, longitude: 74.7973, accuracyMeters: 5 };
+
+      const [rest, frame] = await Promise.all([
+        server.app.inject({
+          method: 'POST',
+          url: '/api/v1/drivers/location',
+          headers: driver.authHeader,
+          payload: pune,
+        }),
+        emit(socket, 'driver.location.update', srinagar),
+      ]);
+
+      const restWon = rest.statusCode === 200;
+      assert.notEqual(restWon, frame.ok === true, `${rest.payload} | ${JSON.stringify(frame)}`);
+      const stored = await db().client.driverLocation.findUniqueOrThrow({
+        where: { driverId: driver.driverId },
+      });
+      assert.equal(Number(stored.latitude), (restWon ? pune : srinagar).latitude);
     });
 
     it('goes nowhere when the driver is in no ride room', async () => {

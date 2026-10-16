@@ -12,7 +12,12 @@ import {
   SelfReviewForbiddenError,
 } from '../../errors/driver.errors.js';
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
+import { logger } from '@shared/logger/index.js';
 import type { DriverDocument, DriverDocumentType, VerificationStatus } from '../../types';
+import type { NotificationService } from '@modules/notifications/notification.service.js';
+import type { DatabaseService } from '@core/database';
+import { EventPublisher } from '@core/events';
+import { driverEvent, DRIVER_EVENT_CATALOG } from '../../events/catalog.js';
 
 export class DocumentsService {
   constructor(
@@ -23,6 +28,9 @@ export class DocumentsService {
     private readonly fileService: FileService,
     private readonly statusRepo: DriverStatusRepository,
     private readonly statusService: StatusService,
+    private readonly notificationService: NotificationService,
+    private readonly databaseService: DatabaseService,
+    private readonly eventPublisher?: EventPublisher,
   ) {}
 
   async submitDocument(
@@ -30,6 +38,7 @@ export class DocumentsService {
       driverId: string;
       documentType: DriverDocumentType;
       fileId: string;
+      backFileId?: string;
       documentNumber?: string;
       expiresAt?: Date;
     },
@@ -37,24 +46,101 @@ export class DocumentsService {
   ): Promise<DriverDocument> {
     const driver = await this.driverRepo.findById(data.driverId);
     if (!driver) throw new DriverNotFoundError(data.driverId);
+    if (data.backFileId === data.fileId) {
+      throw new DriverError(
+        'The back of a document must be a different file from its front',
+        'DOCUMENT_BACK_IS_FRONT',
+        422,
+      );
+    }
+    // The same `<= now` that makes eligibility call a document expired: one already past it
+    // could never be approved, so it is refused here rather than queued for review.
+    if (data.expiresAt && data.expiresAt.getTime() <= Date.now()) {
+      throw new DriverError('This document has already expired', 'DOCUMENT_EXPIRED', 422);
+    }
 
     const isRequired = (driverConfig.requiredDocumentTypes as string[]).includes(data.documentType);
-    const wasVerifiedRequiredResubmit = driver.verificationStatus === 'VERIFIED' && isRequired;
+    const isProfilePhoto = data.documentType === 'PROFILE_PHOTO';
 
-    const doc = await this.txManager.execute(async (tx) => {
+    // DRIVER_DOCUMENT admits PDFs; the photo shown on the profile must be an image.
+    if (isProfilePhoto) {
+      const file = await this.fileService.getMetadata(data.fileId, {
+        userId: driver.userId,
+        roles: [],
+      });
+      if (!file.contentType.startsWith('image/')) {
+        throw new DriverError('Profile photo must be an image', 'PROFILE_PHOTO_NOT_IMAGE', 422);
+      }
+    }
+
+    const { doc, wasVerifiedRequiredResubmit } = await this.txManager.execute(async (tx) => {
+      // The driver row first, the lock admin decisions take: an upload racing a decision
+      // waits for it and then acts on the status it committed, never on a stale read.
+      const locked = await this.driverRepo.lockForUpdate(data.driverId, tx);
+      if (!locked) throw new DriverNotFoundError(data.driverId);
+      const account = await tx.user.findUnique({
+        where: { id: locked.userId },
+        select: { status: true },
+      });
+      const moderated =
+        locked.isSuspended || account?.status === 'SUSPENDED' || account?.status === 'DEACTIVATED';
+      const verifiedRequiredResubmit = locked.verificationStatus === 'VERIFIED' && isRequired;
+
       const existing = (await this.docRepo.findByDriverId(data.driverId, tx)).find(
         (d) => d.documentType === data.documentType,
       );
 
+      // Both sides locked together, in a fixed order, before either is checked.
+      await this.fileService.lockForAttach(
+        [data.fileId, ...(data.backFileId ? [data.backFileId] : [])],
+        tx,
+      );
       await this.fileService.assertReferenceable(data.fileId, driver.userId, 'DRIVER_DOCUMENT', tx);
+      if (data.backFileId) {
+        await this.fileService.assertReferenceable(
+          data.backFileId,
+          driver.userId,
+          'DRIVER_DOCUMENT',
+          tx,
+        );
+      }
 
       const created = await this.docRepo.upsertDocument(data, tx);
 
       if (existing?.fileId && existing.fileId !== data.fileId) {
         await this.fileService.supersede(existing.fileId, data.fileId, tx, requestId);
       }
+      // The old back follows the new one, or is retired when the replacement has none, so a
+      // stale back never sits beside a new front.
+      if (existing?.backFileId && existing.backFileId !== data.backFileId) {
+        if (data.backFileId) {
+          await this.fileService.supersede(existing.backFileId, data.backFileId, tx, requestId);
+        } else {
+          await this.fileService.releaseInTransaction(
+            existing.backFileId,
+            driver.userId,
+            tx,
+            requestId,
+          );
+        }
+      }
 
-      if (driver.verificationStatus === 'PENDING') {
+      // The profile holds the file id (never a URL); readers sign it via GET /files/:id/url.
+      if (isProfilePhoto) {
+        await this.driverRepo.updateProfile(
+          driver.userId,
+          data.driverId,
+          { profilePhoto: data.fileId },
+          tx,
+        );
+      }
+
+      // PENDING — a new application, or one sent back for corrections — enters the review
+      // queue with the upload; the operator's instructions stay on the row. A final
+      // rejection (REJECTED) stays final, and a suspended or blocked driver never re-enters
+      // review by uploading. Re-uploading a required document after approval always goes
+      // back to review: that only ever narrows what the driver may do.
+      if (locked.verificationStatus === 'PENDING' && !moderated) {
         await this.driverRepo.updateVerificationStatus(
           data.driverId,
           'DOCUMENT_REVIEW',
@@ -62,7 +148,7 @@ export class DocumentsService {
           undefined,
           tx,
         );
-      } else if (wasVerifiedRequiredResubmit) {
+      } else if (verifiedRequiredResubmit) {
         await this.driverRepo.updateVerificationStatus(
           data.driverId,
           'DOCUMENT_REVIEW',
@@ -72,7 +158,17 @@ export class DocumentsService {
         );
       }
 
-      return created;
+      if (this.eventPublisher) {
+        await this.eventPublisher.publish(
+          driverEvent(DRIVER_EVENT_CATALOG.DOCUMENT_SUBMITTED, data.driverId, {
+            driverId: data.driverId,
+            documentType: data.documentType,
+          }),
+          tx,
+        );
+      }
+
+      return { doc: created, wasVerifiedRequiredResubmit: verifiedRequiredResubmit };
     });
 
     if (wasVerifiedRequiredResubmit) {
@@ -146,6 +242,16 @@ export class DocumentsService {
         },
         result: 'SUCCESS',
       });
+      if (this.eventPublisher) {
+        await this.eventPublisher.publish(
+          driverEvent(DRIVER_EVENT_CATALOG.DOCUMENT_SUBMITTED, driverId, {
+            driverId,
+            documentId,
+            status,
+          }),
+          tx,
+        );
+      }
       return { reviewed, changed: true };
     });
 
@@ -154,8 +260,49 @@ export class DocumentsService {
         this.driverMetrics.documentVerified({ documentId, driverId });
       } else if (status === 'REJECTED') {
         this.driverMetrics.documentRejected({ documentId, driverId });
+        // Fire-and-forget: SMS failure must never surface to the HTTP caller.
+        void this.sendDocRejectedSms(driver, outcome.reviewed.documentType, rejectionReason);
       }
     }
     return outcome.reviewed;
+  }
+
+  /// Sends a rejection SMS to the driver's phone (fire-and-forget).
+  /// Fetches the phone number from the linked User record.
+  /// Any failure is logged and swallowed — never thrown.
+  private async sendDocRejectedSms(
+    driver: { id: string; userId: string },
+    documentType: string,
+    reason: string | undefined,
+  ): Promise<void> {
+    try {
+      const user = await this.databaseService.client.user.findUnique({
+        where: { id: driver.userId },
+        select: { phoneNumber: true },
+      });
+      if (!user?.phoneNumber) {
+        logger.warn(
+          { driverId: driver.id },
+          '[DocumentsService] doc-rejected SMS skipped — no phone on record',
+        );
+        return;
+      }
+      const result = await this.notificationService.sendDriverDocRejectedSms(
+        user.phoneNumber,
+        documentType,
+        reason ?? 'No reason provided',
+      );
+      if (!result.accepted) {
+        logger.warn(
+          { driverId: driver.id, error: result.error },
+          '[DocumentsService] doc-rejected SMS not accepted by provider',
+        );
+      }
+    } catch (err) {
+      logger.error(
+        { driverId: driver.id, err },
+        '[DocumentsService] doc-rejected SMS failed — skipping',
+      );
+    }
   }
 }

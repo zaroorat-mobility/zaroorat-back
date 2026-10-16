@@ -55,6 +55,14 @@ export const rateLimits = Object.freeze({
     windowSeconds: Number(process.env.RL_DRIVER_LOCATION_WINDOW ?? 60),
     keyBy: 'user',
   }),
+  /// Map refetches on pan/zoom settle and every 60s; this leaves headroom for
+  /// real use while capping a client that loops.
+  driverMapZones: Object.freeze<RateLimitOptions>({
+    scope: 'rl:driver-map-zones',
+    limit: Number(process.env.RL_DRIVER_MAP_ZONES_LIMIT ?? 60),
+    windowSeconds: Number(process.env.RL_DRIVER_MAP_ZONES_WINDOW ?? 60),
+    keyBy: 'user',
+  }),
   adminLogin: Object.freeze<RateLimitOptions>({
     scope: 'rl:admin-login',
     limit: Number(process.env.RL_ADMIN_LOGIN_LIMIT ?? 10),
@@ -72,6 +80,15 @@ export const rateLimits = Object.freeze({
     limit: Number(process.env.RL_MAPS_ROUTE_LIMIT ?? 60),
     windowSeconds: Number(process.env.RL_MAPS_ROUTE_WINDOW ?? 3600),
     keyBy: 'user',
+  }),
+  /// Public trip-tracking link. The tracker page polls it for the live position,
+  /// so this leaves room for a few family members behind one home IP while
+  /// capping anyone hammering or sweeping the endpoint.
+  rideShareView: Object.freeze<RateLimitOptions>({
+    scope: 'rl:ride-share-view',
+    limit: Number(process.env.RL_RIDE_SHARE_VIEW_LIMIT ?? 120),
+    windowSeconds: Number(process.env.RL_RIDE_SHARE_VIEW_WINDOW ?? 60),
+    keyBy: 'ip',
   }),
   appConfig: Object.freeze<RateLimitOptions>({
     scope: 'rl:app-config',

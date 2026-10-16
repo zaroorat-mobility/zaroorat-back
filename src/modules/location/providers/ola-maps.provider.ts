@@ -14,10 +14,7 @@ import type {
   RoutingResult,
   SuggestedPlace,
 } from '../types/map-provider.types.js';
-import {
-  DEFAULT_PROVIDER_CAPABILITIES,
-  type MapCapability,
-} from '../types/map-capabilities.types.js';
+import { type MapCapability } from '../types/map-capabilities.types.js';
 import { logger } from '@shared/logger/index.js';
 import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 
@@ -110,8 +107,8 @@ function isOlaSuccessStatus(status: string | undefined): boolean {
   return OLA_SUCCESS_STATUSES.has(status.toUpperCase());
 }
 
-export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
-  readonly providerName = 'ola';
+export class OlaMapsProvider extends OlaMapsClient implements Partial<MapProvider> {
+  readonly providerName = 'ola' as unknown as MapProvider['providerName'];
 
   constructor(config: OlaMapsConfig) {
     super(config);
@@ -122,7 +119,7 @@ export class OlaMapsProvider extends OlaMapsClient implements MapProvider {
   }
 
   supportedCapabilities(): readonly MapCapability[] {
-    return DEFAULT_PROVIDER_CAPABILITIES.ola;
+    return [];
   }
 
   attribution(): MapProviderAttribution {

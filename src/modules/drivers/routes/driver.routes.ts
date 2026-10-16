@@ -17,8 +17,20 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/me/earnings/daily', (req, reply) => controller.earnings.daily(req, reply));
   fastify.get('/me/rides', (req, reply) => controller.earnings.rides(req, reply));
   fastify.get('/me/scheduled-rides', (req, reply) => controller.scheduled.list(req, reply));
+  fastify.get(
+    '/me/map-zones',
+    {
+      preHandler: [
+        fastify.authorize({ requireOperableDriver: true }),
+        fastify.rateLimit(rateLimits.driverMapZones),
+      ],
+    },
+    (req, reply) => controller.mapZones.list(req, reply),
+  );
   fastify.get('/me/withdrawals', (req, reply) => controller.withdrawals.list(req, reply));
   fastify.post('/me/withdrawals', (req, reply) => controller.withdrawals.create(req, reply));
+  fastify.get('/me/bank-account', (req, reply) => controller.bank.getBankAccount(req, reply));
+  fastify.post('/me/bank-account', (req, reply) => controller.bank.saveBankAccount(req, reply));
 
   fastify.patch('/:driverId/profile', (req, reply) =>
     controller.onboarding.updateProfile(req, reply),

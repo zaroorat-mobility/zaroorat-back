@@ -7,6 +7,12 @@ export interface RateLimitResult {
   remaining: number;
   retryAfterSeconds: number;
 }
+/// Enforcement is skipped only when a developer opts in on a dev box. A missing or
+/// unexpected APP_ENV / NODE_ENV never disables it: this guards OTP and login
+/// brute-force budgets, so it must fail closed.
+export function rateLimitsBypassed(): boolean {
+  return process.env.APP_ENV === 'development' && process.env.RATE_LIMIT_BYPASS === 'true';
+}
 export class RateLimitStore {
   private readonly client: Redis;
   private static readonly HIT_LUA = `
@@ -22,11 +28,7 @@ export class RateLimitStore {
     limit: number,
     windowSeconds: number,
   ): Promise<RateLimitResult> {
-    const isDev =
-      process.env.APP_ENV === 'development' ||
-      process.env.NODE_ENV === 'development' ||
-      !process.env.APP_ENV;
-    if (isDev) {
+    if (rateLimitsBypassed()) {
       return {
         allowed: true,
         current: 1,
@@ -61,11 +63,7 @@ export class RateLimitStore {
   /// reason: the caller still records the failure afterwards, so a race between
   /// two peeks costs at most one extra attempt before the counter catches up.
   async peek(scope: string, id: string, limit: number): Promise<RateLimitResult> {
-    const isDev =
-      process.env.APP_ENV === 'development' ||
-      process.env.NODE_ENV === 'development' ||
-      !process.env.APP_ENV;
-    if (isDev) {
+    if (rateLimitsBypassed()) {
       return {
         allowed: true,
         current: 0,
@@ -98,11 +96,7 @@ export class RateLimitStore {
     allowed: boolean;
     retryAfterSeconds: number;
   }> {
-    const isDev =
-      process.env.APP_ENV === 'development' ||
-      process.env.NODE_ENV === 'development' ||
-      !process.env.APP_ENV;
-    if (isDev) {
+    if (rateLimitsBypassed()) {
       return { allowed: true, retryAfterSeconds: 0 };
     }
     const key = RedisKeys.rateLimit(`${scope}:gap`, id);

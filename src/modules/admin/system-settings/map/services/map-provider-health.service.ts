@@ -1,5 +1,4 @@
 import { logger } from '@shared/logger/index.js';
-import { OlaMapsProvider } from '@modules/location/providers/ola-maps.provider.js';
 import { GoogleMapsProvider } from '@modules/location/providers/google-maps.provider.js';
 import {
   MapplsProvider,
@@ -64,42 +63,7 @@ export class MapProviderHealthService {
       Boolean(process.env.JEST_WORKER_ID);
 
     try {
-      if (input.providerName === 'ola') {
-        const apiKey =
-          input.apiKey && !input.apiKey.startsWith('***')
-            ? input.apiKey
-            : ((await this.systemSettingService.getSettingValue(MAP_SETTING_KEYS.OLA_API_KEY)) ??
-              process.env.OLA_MAPS_API_KEY ??
-              '');
-
-        if (!apiKey || apiKey.startsWith('invalid_') || apiKey.startsWith('fail_')) {
-          return {
-            ok: false,
-            providerName: input.providerName,
-            message: 'Provider health check failed (invalid key)',
-            responseTimeMs: 1,
-          };
-        }
-        // Only the environment may short-circuit a health check. Keying it on the
-        // shape of the credential meant a production key beginning `test_` was
-        // reported healthy without any request ever leaving the process.
-        if (isTestEnv) {
-          return {
-            ok: true,
-            providerName: input.providerName,
-            message: 'Provider health check succeeded (test mode)',
-            responseTimeMs: 1,
-          };
-        }
-
-        const baseUrl = input.baseUrl ?? process.env.OLA_MAPS_BASE_URL;
-        const tempClient = new OlaMapsProvider({
-          apiKey,
-          ...(baseUrl ? { baseUrl } : {}),
-        });
-
-        await tempClient.verifyConnectivity(testCoord1, testCoord2);
-      } else if (input.providerName === 'google') {
+      if (input.providerName === 'google') {
         const apiKey =
           input.apiKey && !input.apiKey.startsWith('***')
             ? input.apiKey

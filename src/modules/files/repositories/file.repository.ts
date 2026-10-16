@@ -43,6 +43,14 @@ export class FileRepository extends BaseRepository {
       },
     });
   }
+  /// Row-locks the files for the rest of `tx`, in id order so two transactions locking the
+  /// same set cannot deadlock. Attaching and deleting take this lock, so a check that a file
+  /// is unreferenced holds until the transaction that relies on it commits.
+  async lockForUpdate(ids: string[], tx: TransactionClient): Promise<void> {
+    if (ids.length === 0) return;
+    await tx.$queryRaw`
+      SELECT id FROM files WHERE id = ANY(${ids}::uuid[]) ORDER BY id FOR UPDATE`;
+  }
   async findOwned(id: string, ownerUserId: string, tx?: TransactionClient): Promise<File | null> {
     return (tx ?? this.client).file.findFirst({ where: { id, ownerUserId } });
   }

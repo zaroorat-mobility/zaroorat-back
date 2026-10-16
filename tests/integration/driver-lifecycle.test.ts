@@ -4,6 +4,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
+import { driverConfig } from '../../src/config/driver/driver.config.js';
 import { grantRole } from './helpers/fixtures.js';
 import { vehicleConfig } from '../../src/config/vehicle/vehicle.config.js';
 import { container } from '../../src/core/di.js';
@@ -19,7 +20,7 @@ function png(): Buffer {
 }
 
 const CENTRE = { latitude: 12.9716, longitude: 77.5946 };
-const REQUIRED_TYPES = ['DRIVING_LICENSE', 'RC', 'INSURANCE'];
+const REQUIRED_TYPES: readonly string[] = driverConfig.requiredDocumentTypes;
 const VEHICLE_REQUIRED_TYPES = vehicleConfig.requiredDocumentTypes;
 
 function driverIdsOf(result: NearbyDriversResult): string[] {
@@ -292,7 +293,22 @@ describe('driver verification lifecycle — full production path (integration)',
     assert.equal(vehicleApproved.statusCode, 200, vehicleApproved.payload);
     assert.equal(vehicleApproved.json().data.verificationStatus, 'VERIFIED');
 
-    // 13. Go online.
+    // 13. Choose a payment plan — the last gate before online — then go online.
+    const noPlan = await app.inject({
+      method: 'POST',
+      url: '/api/v1/drivers/status/online',
+      headers: freshAuthHeader,
+      payload: {},
+    });
+    assert.equal(noPlan.statusCode, 409, noPlan.payload);
+    assert.equal(noPlan.json().error.code, 'PAYMENT_MODEL_NOT_SELECTED');
+    const plan = await app.inject({
+      method: 'POST',
+      url: '/api/v1/drivers/payment-model',
+      headers: freshAuthHeader,
+      payload: { model: 'COMMISSION' },
+    });
+    assert.ok([200, 201].includes(plan.statusCode), plan.payload);
     const online = await app.inject({
       method: 'POST',
       url: '/api/v1/drivers/status/online',
