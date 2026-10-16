@@ -773,6 +773,7 @@ export class RideRequestService {
           customerId,
           boostAmount,
           totalOffered,
+          expiresAt: expiresAt.toISOString(),
         }),
         tx,
       );

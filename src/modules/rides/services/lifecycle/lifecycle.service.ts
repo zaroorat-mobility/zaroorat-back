@@ -79,8 +79,8 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
     'CANCELLED_BY_DRIVER',
     'CANCELLED_BY_SYSTEM',
   ],
-  IN_PROGRESS: ['DRIVER_AT_DROPOFF', 'COMPLETED', 'CANCELLED_BY_SYSTEM'],
-  DRIVER_AT_DROPOFF: ['COMPLETED', 'CANCELLED_BY_SYSTEM'],
+  IN_PROGRESS: ['DRIVER_AT_DROPOFF', 'COMPLETED', 'CANCELLED_BY_CUSTOMER', 'CANCELLED_BY_SYSTEM'],
+  DRIVER_AT_DROPOFF: ['COMPLETED', 'CANCELLED_BY_CUSTOMER', 'CANCELLED_BY_SYSTEM'],
   COMPLETED: [],
   CANCELLED_BY_CUSTOMER: [],
   CANCELLED_BY_DRIVER: [],
@@ -498,6 +498,28 @@ export class LifecycleService {
           })),
           tx,
         );
+      }
+      if (request.dropLat != null && request.dropLng != null) {
+        try {
+          const points = [
+            { lat: Number(request.pickupLat), lng: Number(request.pickupLng) },
+            ...requestStops.map((s) => ({ lat: Number(s.lat), lng: Number(s.lng) })),
+            { lat: Number(request.dropLat), lng: Number(request.dropLng) },
+          ];
+          const route = await this.pricingService.estimateRoute(points);
+          if (route.encodedPolyline || route.distanceKm) {
+            await tx.rideRoutePlan.create({
+              data: {
+                rideId: ride.id,
+                encodedPolyline: route.encodedPolyline ?? null,
+                plannedDistanceKm: new Decimal(route.distanceKm),
+                plannedDurationMin: route.durationMin,
+              },
+            });
+          }
+        } catch (_err) {
+          // If route plan creation fails, continue without blocking acceptance
+        }
       }
       await this.dispatchRepo.resolveOffers(request.id, data.driverId, tx);
       await this.driverStatusRepository.updateStatus(data.driverId, 'ON_TRIP', {}, tx);
@@ -1147,6 +1169,13 @@ export class LifecycleService {
     reasonText?: string,
     adminActor?: AuditActor,
   ): Promise<Ride> {
+    const trimmedReason = reasonCode?.trim();
+    if (!trimmedReason) {
+      throw new InvalidRideStateTransitionError(
+        'REASON_REQUIRED',
+        'A reason code is required to cancel a ride',
+      );
+    }
     const toStatus: RideStatus =
       cancelledBy === 'CUSTOMER'
         ? 'CANCELLED_BY_CUSTOMER'

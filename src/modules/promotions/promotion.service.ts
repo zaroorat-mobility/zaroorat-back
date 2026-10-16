@@ -7,7 +7,10 @@ import {
   PromoLimitReachedError,
   PromoNotEligibleError,
 } from './errors.js';
+import { toClientPromotionView } from './presenters/promotion-client.presenter.js';
 import type {
+  ClientPromotionView,
+  HomeBannerView,
   DiscountType,
   PromoEligibilityContext,
   PromoQuoteResult,
@@ -91,6 +94,7 @@ type PromotionRow = {
   id: string;
   code: string;
   title: string | null;
+  description?: string | null;
   discountType: string;
   discountValue: { toString(): string };
   maxDiscount: { toString(): string } | null;
@@ -435,5 +439,191 @@ export class PromotionService {
         },
       });
     }
+  }
+
+  async checkEligibility(
+    promotion: PromotionRow,
+    ctx: PromoEligibilityContext,
+    client: DbClient = this.db,
+  ): Promise<{ eligible: boolean; reason?: string }> {
+    try {
+      await this.assertPromotionEligible(promotion, ctx, client);
+      return { eligible: true };
+    } catch (err) {
+      if (
+        err instanceof PromoCodeNotFoundError ||
+        err instanceof PromoCodeInvalidError ||
+        err instanceof PromoNotEligibleError
+      ) {
+        return { eligible: false, reason: err.message };
+      }
+      throw err;
+    }
+  }
+
+  async listHomeBanners(): Promise<HomeBannerView[]> {
+    const now = new Date();
+    const banners = await this.db.promoBanner.findMany({
+      where: {
+        isActive: true,
+        placement: 'HOME',
+        OR: [{ startsAt: null }, { startsAt: { lte: now } }],
+        AND: [
+          {
+            OR: [{ endsAt: null }, { endsAt: { gte: now } }],
+          },
+        ],
+      },
+      include: {
+        imageFile: true,
+        campaign: {
+          include: {
+            targets: {
+              include: {
+                promotion: true,
+              },
+            },
+            batches: {
+              include: {
+                promotion: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    return banners.map((b) => {
+      let linkedPromo: ClientPromotionView | null = null;
+      if (b.campaign) {
+        const targetPromo = b.campaign.targets.find(
+          (t) =>
+            t.promotion &&
+            t.promotion.isActive &&
+            t.promotion.validFrom <= now &&
+            t.promotion.validTo >= now,
+        )?.promotion;
+        const batchPromo = b.campaign.batches.find(
+          (batch) =>
+            batch.isActive &&
+            batch.promotion &&
+            batch.promotion.isActive &&
+            batch.promotion.validFrom <= now &&
+            batch.promotion.validTo >= now,
+        )?.promotion;
+        const found = targetPromo ?? batchPromo;
+        if (found) {
+          linkedPromo = toClientPromotionView(found);
+        }
+      }
+
+      return {
+        id: b.id,
+        campaignId: b.campaignId,
+        title: b.title,
+        imageFileId: b.imageFileId,
+        imageUrl: b.actionUrl ?? (b.imageFileId ? `/api/v1/files/${b.imageFileId}/url` : null),
+        placement: b.placement,
+        actionUrl: b.actionUrl,
+        priority: b.priority,
+        startsAt: b.startsAt?.toISOString() ?? null,
+        endsAt: b.endsAt?.toISOString() ?? null,
+        promotion: linkedPromo,
+      };
+    });
+  }
+
+  async listAvailablePromotions(
+    userId: string,
+    ctx?: {
+      cityCode?: string | undefined;
+      vehicleTypeId?: string | undefined;
+      subtotal?: number | undefined;
+    },
+  ): Promise<ClientPromotionView[]> {
+    const now = new Date();
+    const results: ClientPromotionView[] = [];
+    const seenCodes = new Set<string>();
+
+    const promos = await this.db.promotion.findMany({
+      where: {
+        isActive: true,
+        validFrom: { lte: now },
+        validTo: { gte: now },
+        ...(ctx?.cityCode
+          ? { OR: [{ applicableCity: null }, { applicableCity: ctx.cityCode }] }
+          : {}),
+        ...(ctx?.vehicleTypeId
+          ? { OR: [{ applicableVehicleType: null }, { applicableVehicleType: ctx.vehicleTypeId }] }
+          : {}),
+      },
+      orderBy: [{ discountValue: 'desc' }, { validTo: 'asc' }],
+    });
+
+    for (const promo of promos) {
+      if (promo.usageLimitTotal != null && promo.usedCount >= promo.usageLimitTotal) {
+        continue;
+      }
+      const checkSubtotal = ctx?.subtotal != null ? ctx.subtotal : toNum(promo.minFare);
+      const eligibility = await this.checkEligibility(promo, {
+        userId,
+        cityCode: ctx?.cityCode ?? null,
+        vehicleTypeId: ctx?.vehicleTypeId ?? null,
+        subtotal: checkSubtotal,
+      });
+      if (eligibility.eligible) {
+        seenCodes.add(promo.code.toUpperCase());
+        results.push(toClientPromotionView(promo));
+      }
+    }
+
+    const coupons = await this.db.coupon.findMany({
+      where: {
+        status: { in: ['ACTIVE', 'ASSIGNED'] },
+        OR: [{ userId }, { userId: null }],
+        AND: [
+          {
+            OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+          },
+          {
+            batch: {
+              isActive: true,
+              OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+            },
+          },
+        ],
+      },
+      include: {
+        batch: {
+          include: {
+            promotion: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    for (const coupon of coupons) {
+      const promo = coupon.batch.promotion;
+      if (!promo || !promo.isActive) continue;
+      if (promo.validFrom > now || promo.validTo < now) continue;
+      if (promo.usageLimitTotal != null && promo.usedCount >= promo.usageLimitTotal) continue;
+      if (seenCodes.has(coupon.code.toUpperCase())) continue;
+
+      const checkSubtotal = ctx?.subtotal != null ? ctx.subtotal : toNum(promo.minFare);
+      const eligibility = await this.checkEligibility(promo, {
+        userId,
+        cityCode: ctx?.cityCode ?? null,
+        vehicleTypeId: ctx?.vehicleTypeId ?? null,
+        subtotal: checkSubtotal,
+      });
+      if (eligibility.eligible) {
+        seenCodes.add(coupon.code.toUpperCase());
+        results.push(toClientPromotionView(promo, coupon));
+      }
+    }
+
+    return results;
   }
 }

@@ -18,6 +18,7 @@ import { mapsRoutes } from '@modules/location/routes/maps.routes.js';
 import { appConfigRoutes } from '@modules/app-config';
 import { supportRoutes } from '@modules/support';
 import { notificationInboxRoutes } from '@modules/notifications';
+import { promotionRoutes } from '@modules/promotions/routes/promotion.routes.js';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(healthRoute, { prefix: '/api/v1' });
@@ -41,6 +42,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(appConfigRoutes, { prefix: '/api/v1/app-config' });
   await app.register(supportRoutes, { prefix: '/api/v1/support' });
   await app.register(notificationInboxRoutes, { prefix: '/api/v1/notifications' });
+  await app.register(promotionRoutes, { prefix: '/api/v1/promotions' });
   // Admin routes declare domain-scoped bare paths (`/drivers/:id/verify`,
   // `/payments/payouts`, `/surge-zones`). Mounted at `/api/v1` those would
   // collide with the real drivers/vehicles/payments modules above and expose

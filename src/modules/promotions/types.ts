@@ -35,3 +35,36 @@ export interface PromoQuoteResult {
   errorCode?: string;
   errorMessage?: string;
 }
+
+export interface ClientPromotionView {
+  id: string;
+  code: string;
+  title: string | null;
+  description: string | null;
+  discountType: DiscountType;
+  discountValue: number;
+  maxDiscount: number | null;
+  minFare: number;
+  applicableCity: string | null;
+  applicableVehicleType: string | null;
+  firstRideOnly: boolean;
+  validFrom: string;
+  validTo: string;
+  isCoupon: boolean;
+  couponId: string | null;
+  discountDisplay: string;
+}
+
+export interface HomeBannerView {
+  id: string;
+  campaignId: string | null;
+  title: string | null;
+  imageFileId: string;
+  imageUrl: string | null;
+  placement: string;
+  actionUrl: string | null;
+  priority: number;
+  startsAt: string | null;
+  endsAt: string | null;
+  promotion: ClientPromotionView | null;
+}

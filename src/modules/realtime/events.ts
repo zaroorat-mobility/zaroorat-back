@@ -15,6 +15,10 @@ export const SOCKET_EVENT = {
   OFFER_EXPIRED: 'ride.offer.expired',
 
   RIDE_REQUESTED: 'ride.requested',
+  /// Server → the rider's own user room. Customer boosted the offer.
+  REQUEST_BOOSTED: 'ride.request.boosted',
+  /// Server → the rider's own user room. Drivers notified and rejected stats update.
+  REQUEST_STATS: 'ride.request.stats',
   /// Server → the rider's own user room. There is no ride and never will be:
   /// the search ran out of time without a driver.
   REQUEST_EXPIRED: 'ride.request.expired',

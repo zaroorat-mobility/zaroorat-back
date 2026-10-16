@@ -142,27 +142,22 @@ export class RideDispatchRepository {
     driversRejected: number;
   }> {
     const client = tx ?? this.db.client;
-    const groups = await client.rideDispatch.groupBy({
-      by: ['response'],
+    const dispatches = await client.rideDispatch.findMany({
       where: { requestId },
-      _count: { _all: true },
+      select: { driverId: true, response: true },
     });
-    let sent = 0;
-    let rejected = 0;
-    for (const g of groups) {
-      const n = g._count._all;
-      // CANCELLED means another captain already won — not a customer-facing reject.
-      if (g.response === 'CANCELLED') continue;
-      sent += n;
-      if (g.response === 'REJECTED' || g.response === 'TIMEOUT') {
-        rejected += n;
-      }
-    }
+    const nonCancelled = dispatches.filter((d) => d.response !== 'CANCELLED');
+    const notifiedDrivers = new Set(nonCancelled.map((d) => d.driverId));
+    const rejectedDrivers = new Set(
+      nonCancelled
+        .filter((d) => d.response === 'REJECTED' || d.response === 'TIMEOUT')
+        .map((d) => d.driverId),
+    );
     return {
-      offersSent: sent,
-      offersRejected: rejected,
-      driversNotified: sent,
-      driversRejected: rejected,
+      offersSent: notifiedDrivers.size,
+      offersRejected: rejectedDrivers.size,
+      driversNotified: notifiedDrivers.size,
+      driversRejected: rejectedDrivers.size,
     };
   }
   /// Locks one offer row for the duration of the caller's transaction. Reject

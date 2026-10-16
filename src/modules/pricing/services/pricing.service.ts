@@ -397,6 +397,8 @@ export class PricingService {
     let distanceKm = 0;
     let durationMin = 0;
     let source = '';
+    const fullPath: Array<{ latitude: number; longitude: number }> = [];
+    let encodedPolyline: string | undefined;
     for (let i = 1; i < points.length; i++) {
       const from = points[i - 1]!;
       const to = points[i]!;
@@ -409,8 +411,20 @@ export class PricingService {
       distanceKm += leg.distanceKm;
       durationMin += leg.durationMin;
       source ||= leg.source;
+      if (leg.path) {
+        fullPath.push(...leg.path);
+      }
+      if (leg.encodedPolyline && points.length === 2) {
+        encodedPolyline = leg.encodedPolyline;
+      }
     }
-    return { distanceKm: money(distanceKm), durationMin, source };
+    return {
+      distanceKm: money(distanceKm),
+      durationMin,
+      source,
+      ...(fullPath.length > 0 ? { path: fullPath } : {}),
+      ...(encodedPolyline ? { encodedPolyline } : {}),
+    };
   }
 
   async calculateFareQuote(params: FareCalculationParams): Promise<ItemizedFareResult> {

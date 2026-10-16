@@ -45,6 +45,16 @@ export const quoteFareSchema = z.object({
   stops: stopsSchema.optional(),
 });
 export type QuoteFareBody = z.infer<typeof quoteFareSchema>;
+export const FARE_BOOST_AMOUNTS = RIDE_BOOST_AMOUNTS;
+export const rideBoostAmountSchema = z.coerce
+  .number()
+  .transform((n) => Math.round(n))
+  .refine(
+    (n): n is (typeof RIDE_BOOST_AMOUNTS)[number] =>
+      (RIDE_BOOST_AMOUNTS as readonly number[]).includes(n),
+    { message: `boostAmount must be one of: ${RIDE_BOOST_AMOUNTS.join(', ')}` },
+  );
+
 export const createRideRequestSchema = z
   .object({
     vehicleTypeId: z.string().uuid(),
@@ -68,7 +78,7 @@ export const createRideRequestSchema = z
     /// ISO-8601. The lead-time rule lives in the service so it is enforced
     /// against the server clock, not the one that parsed the body.
     scheduledFor: z.coerce.date().optional(),
-    boostAmount: z.literal(RIDE_BOOST_AMOUNTS).optional(),
+    boostAmount: rideBoostAmountSchema.optional(),
   })
   .superRefine((body, ctx) => {
     if ((body.passengerName === undefined) !== (body.passengerPhone === undefined)) {
@@ -81,7 +91,7 @@ export const createRideRequestSchema = z
   });
 export type CreateRideRequestBody = z.infer<typeof createRideRequestSchema>;
 export const boostRequestSchema = z.object({
-  boostAmount: z.literal(RIDE_BOOST_AMOUNTS),
+  boostAmount: rideBoostAmountSchema,
 });
 export type BoostRequestBody = z.infer<typeof boostRequestSchema>;
 export const changeDestinationQuoteSchema = z.object({
@@ -92,13 +102,7 @@ export const changeDestinationQuoteSchema = z.object({
   paymentMethod: z.enum(NEW_RIDE_PAYMENT_METHODS).optional(),
   promoCode: z.string().max(50).optional(),
   /// Optional ₹ offset from the quoted fare (−10 … +60) applied at create time.
-  boostAmount: z.coerce
-    .number()
-    .transform((n) => Math.round(n))
-    .refine((n): n is (typeof FARE_BOOST_AMOUNTS)[number] =>
-      (FARE_BOOST_AMOUNTS as readonly number[]).includes(n),
-    )
-    .optional(),
+  boostAmount: rideBoostAmountSchema.optional(),
 });
 export type ChangeDestinationQuoteBody = z.infer<typeof changeDestinationQuoteSchema>;
 /// `expectedFare` is the figure the rider was shown by the quote call. When
@@ -164,7 +168,7 @@ export const completeRideSchema = z
   });
 export type CompleteRideBody = z.infer<typeof completeRideSchema>;
 export const cancelRideSchema = z.object({
-  reasonCode: z.string().max(50),
+  reasonCode: z.string().trim().min(1, 'Reason code is required').max(50),
   reasonText: z.string().max(255).optional(),
 });
 export type CancelRideBody = z.infer<typeof cancelRideSchema>;
@@ -178,12 +182,7 @@ export type RejectOfferBody = z.infer<typeof rejectOfferSchema>;
 
 /// Discrete ₹ offsets from the quoted fare while a request is still searching.
 /// Negative = offer below quote; 0 = keep quote; positive = bump.
-export const FARE_BOOST_AMOUNTS = [-10, 0, 20, 30, 40, 50, 60] as const;
 export const boostRideRequestSchema = z.object({
-  boostAmount: z.coerce
-    .number()
-    .refine((n): n is (typeof FARE_BOOST_AMOUNTS)[number] =>
-      (FARE_BOOST_AMOUNTS as readonly number[]).includes(n),
-    ),
+  boostAmount: rideBoostAmountSchema,
 });
 export type BoostRideRequestBody = z.infer<typeof boostRideRequestSchema>;

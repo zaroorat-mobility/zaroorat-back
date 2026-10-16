@@ -6,6 +6,7 @@ import { geoConfig } from '@config';
 
 export interface RideEtaSnapshot {
   rideId: string;
+  destinationType: 'PICKUP' | 'DROP';
   remainingDistanceMeters: number;
   remainingDurationSeconds: number;
   providerName: string;
@@ -41,17 +42,24 @@ export class RideEtaService {
     }
   }
 
+  getEta(rideId: string): RideEtaSnapshot | null {
+    const entry = this.cache.get(rideId);
+    return entry ? entry.snapshot : null;
+  }
+
   async refreshEta(input: {
     rideId: string;
     driverPosition: Coordinate;
     destination: Coordinate;
+    destinationType?: 'PICKUP' | 'DROP';
     pinnedProvider?: MapProviderName;
   }): Promise<RideEtaSnapshot | null> {
+    const destinationType = input.destinationType ?? 'DROP';
+    const previous = this.cache.get(input.rideId);
     const now = Date.now();
     this.sweep(now);
-    const previous = this.cache.get(input.rideId);
 
-    if (previous) {
+    if (previous && previous.snapshot.destinationType === destinationType) {
       const movedEnough =
         haversineMeters(previous.lastOrigin, input.driverPosition) >=
         geoConfig.etaRefreshMinMovementMeters;
@@ -69,6 +77,7 @@ export class RideEtaService {
       );
       const snapshot: RideEtaSnapshot = {
         rideId: input.rideId,
+        destinationType,
         remainingDistanceMeters: route.distanceMeters,
         remainingDurationSeconds: route.durationSeconds,
         providerName: route.providerName,
@@ -83,7 +92,9 @@ export class RideEtaService {
       return snapshot;
     } catch (err) {
       logger.warn({ err, rideId: input.rideId }, '[RideEtaService] ETA refresh failed');
-      if (previous) return { ...previous.snapshot, stale: true };
+      if (previous && previous.snapshot.destinationType === destinationType) {
+        return { ...previous.snapshot, stale: true };
+      }
       return null;
     }
   }

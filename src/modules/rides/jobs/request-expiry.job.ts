@@ -33,7 +33,7 @@ export class RequestExpiryJob {
         },
       });
       for (const request of expiredRequests) {
-        if (await this.expire(request.id, request.customerId)) expiredCount++;
+        if (await this.expire(request.id, request.customerId, now)) expiredCount++;
       }
     } catch (err) {
       logger.error({ err }, 'Error running request expiry job');
@@ -60,11 +60,19 @@ export class RequestExpiryJob {
   /// The event goes through the outbox inside the same transaction, so it
   /// cannot announce an expiry that rolled back, and it survives this process
   /// dying between the write and the send.
-  private async expire(requestId: string, customerId: string): Promise<boolean> {
+  private async expire(
+    requestId: string,
+    customerId: string,
+    expiryThreshold: Date = new Date(),
+  ): Promise<boolean> {
     try {
       return await this.txManager.execute(async (tx) => {
         const { count } = await tx.rideRequest.updateMany({
-          where: { id: requestId, status: { in: ['CREATED', 'SEARCHING'] } },
+          where: {
+            id: requestId,
+            status: { in: ['CREATED', 'SEARCHING'] },
+            expiresAt: { lte: expiryThreshold },
+          },
           data: { status: 'EXPIRED' },
         });
         if (count !== 1) return false;

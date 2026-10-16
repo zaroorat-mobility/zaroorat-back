@@ -39,6 +39,11 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
     { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
     (req, reply) => controller.request.boostRequest(req, reply),
   );
+  fastify.post(
+    '/requests/:id/boost',
+    { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },
+    (req, reply) => controller.request.boostRequest(req, reply),
+  );
 
   const driverOnly = { preHandler: fastify.authorize({ requireOperableDriver: true }) };
   const driverOnlyById = { ...byId, ...driverOnly };
