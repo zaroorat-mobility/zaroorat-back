@@ -1,7 +1,11 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
 import { IdempotencyInFlightError } from '@core/cache';
-import { PaymentError } from '../errors/index.js';
+import {
+  PaymentError,
+  PaymentGatewayUnavailableError,
+  PaymentsUnavailableError,
+} from '../errors/index.js';
 export function handlePaymentError(
   err: unknown,
   request: FastifyRequest,
@@ -13,6 +17,13 @@ export function handlePaymentError(
   // It carries a `code` but no `statusCode`, so it used to fall through to 500.
   if (err instanceof IdempotencyInFlightError) {
     reply.status(409).send(errorEnvelope(err.code, err.message, request.id));
+    return;
+  }
+  // The deliberate 5xx answers, each with a fixed message that is safe to pass
+  // on, unlike other 5xx errors: a kill switch is off (TD-12), or the provider
+  // is unreachable and a retry with the same key is safe (005 T043).
+  if (err instanceof PaymentsUnavailableError || err instanceof PaymentGatewayUnavailableError) {
+    reply.status(503).send(errorEnvelope(err.code, err.message, request.id));
     return;
   }
   if (isCodedError(err) && err.statusCode < 500) {

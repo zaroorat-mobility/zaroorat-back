@@ -1,9 +1,13 @@
+import { container } from '@core/di';
 import { geoConfig } from '@config/geo/geo.config.js';
 import { otpConfig } from '@config/otp/otp.config.js';
 import { rideConfig } from '@config/ride/ride.config.js';
 import { driverConfig } from '@config/driver/driver.config.js';
 import { vehicleConfig } from '@config/vehicle/vehicle.config.js';
 import { SystemSettingService } from '../../services/system-setting.service.js';
+import { getStorageConfig } from '@modules/files/config/storage.config.js';
+import type { StorageProvider } from '@modules/files/utils/storage/storage.provider.js';
+import { brandingLogoKey } from './branding-logo-key.js';
 import {
   GENERAL_SETTING_KEYS,
   RIDE_SETTING_KEYS,
@@ -29,14 +33,61 @@ function parseFloat(value: string | null | undefined, fallback: number): number 
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/// Re-signs an uploaded logo so its URL never expires in app config. Only keys
+/// `brandingLogoKey` accepts are signed; any other URL is returned as typed.
+async function refreshIfS3Url(rawUrl: string): Promise<string> {
+  if (!rawUrl) return '';
+  try {
+    const key = brandingLogoKey(rawUrl, getStorageConfig().bucket);
+    if (!key) return rawUrl;
+    if (container.hasRegistration('storageProvider')) {
+      const storageProvider = container.resolve<StorageProvider>('storageProvider');
+      const signed = await storageProvider.signDownload({
+        key,
+        ttlSeconds: 604800, // 7 days (maximum AWS S3 SigV4 presigned duration)
+        contentType: key.endsWith('.png')
+          ? 'image/png'
+          : key.endsWith('.webp')
+            ? 'image/webp'
+            : 'image/jpeg',
+        disposition: 'inline',
+        fileName: 'brand-logo.png',
+      });
+      return signed.url;
+    }
+  } catch (err) {
+    console.error('[refreshIfS3Url] Error refreshing S3 download URL:', err);
+  }
+  return rawUrl;
+}
+
 export class PlatformConfigResolver {
   constructor(private readonly systemSettingService: SystemSettingService) {}
 
-  async getGeneralConfig() {
+  async getGeneralConfig(app?: string) {
     const s = await this.systemSettingService.getCategorySettings('general');
+    const masterLogoRaw = s.get(GENERAL_SETTING_KEYS.LOGO_URL)?.value ?? '';
+    const customerLogoRaw = s.get(GENERAL_SETTING_KEYS.CUSTOMER_LOGO_URL)?.value ?? '';
+    const driverLogoRaw = s.get(GENERAL_SETTING_KEYS.DRIVER_LOGO_URL)?.value ?? '';
+
+    const [masterLogo, customerLogo, driverLogo] = await Promise.all([
+      refreshIfS3Url(masterLogoRaw),
+      refreshIfS3Url(customerLogoRaw),
+      refreshIfS3Url(driverLogoRaw),
+    ]);
+
+    let resolvedLogo = masterLogo;
+    if (app === 'driver') {
+      resolvedLogo = driverLogo || masterLogo;
+    } else if (app === 'rider') {
+      resolvedLogo = customerLogo || masterLogo;
+    }
+
     return {
       platformName: s.get(GENERAL_SETTING_KEYS.PLATFORM_NAME)?.value ?? 'Zaroorat',
-      logoUrl: s.get(GENERAL_SETTING_KEYS.LOGO_URL)?.value ?? '',
+      logoUrl: resolvedLogo,
+      customerLogoUrl: customerLogo || masterLogo,
+      driverLogoUrl: driverLogo || masterLogo,
       supportPhone: s.get(GENERAL_SETTING_KEYS.SUPPORT_PHONE)?.value ?? '',
       supportEmail: s.get(GENERAL_SETTING_KEYS.SUPPORT_EMAIL)?.value ?? '',
       defaultLanguage: s.get(GENERAL_SETTING_KEYS.DEFAULT_LANGUAGE)?.value ?? 'en',

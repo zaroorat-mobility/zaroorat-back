@@ -14,6 +14,7 @@ import { seedRoles } from '../../../prisma/seed/shared/roles.js';
 import { seedVehicleTypes } from '../../../prisma/seed/shared/vehicle-types.js';
 import { seedNotificationTemplates } from '../../../prisma/seed/shared/notification-templates.js';
 import { encryptSecret } from '../../../src/shared/crypto/encryption.util.js';
+import { PAYMENT_FEATURE_FLAG_KEYS } from '../../../src/modules/admin/system-settings/platform/constants/payment-feature-flags.constants.js';
 import { registerEventConsumers } from '../../../src/bootstrap/events.bootstrap.js';
 import type { Unsubscribe } from '../../../src/core/events/index.js';
 import type { OutboxRelay } from '../../../src/core/events/OutboxRelay.js';
@@ -73,6 +74,8 @@ export async function resetState(): Promise<void> {
   await db().client.$transaction(
     async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL zaroorat.allow_audit_truncate = 'on'");
+      // Same escape for the append-only financial tables (005 T020/T021).
+      await tx.$executeRawUnsafe("SET LOCAL zaroorat.allow_financial_truncate = 'on'");
       await tx.$executeRawUnsafe(
         'TRUNCATE "users", "user_profiles", "emergency_contacts", "saved_places", ' +
           '"account_deletion_requests", ' +
@@ -123,7 +126,26 @@ export async function resetState(): Promise<void> {
   await seedNotificationTemplates(db().client);
   await seedMapProvider();
   await clearPaymentSettings();
+  await enablePaymentCheckout();
   await redis.flushdb();
+}
+
+/// 005-razorpay-driver-payments TD-12: the two payment kill switches are seeded
+/// OFF, so a fresh database refuses every new driver payment. Suites that
+/// exercise payments need them on; `feature_flags` is not in the TRUNCATE list,
+/// so a suite that switched one off would otherwise leak that into the next.
+/// `payment-kill-switch.test.ts` switches them off itself.
+async function enablePaymentCheckout(): Promise<void> {
+  for (const key of [
+    PAYMENT_FEATURE_FLAG_KEYS.DRIVER_CHECKOUT,
+    PAYMENT_FEATURE_FLAG_KEYS.SUBSCRIPTION_CHECKOUT,
+  ]) {
+    await db().client.featureFlag.upsert({
+      where: { key },
+      update: { status: 'ON', isActive: true },
+      create: { key, name: key, status: 'ON', rolloutPercentage: 100, isActive: true },
+    });
+  }
 }
 
 /// The same leak `seedMapProvider`'s own comment documents, for the payment

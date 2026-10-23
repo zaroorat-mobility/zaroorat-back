@@ -86,6 +86,9 @@ export interface MapProviderOptions {
   language?: string;
   trafficMode?: 'default' | 'traffic_aware' | 'traffic_unaware';
   timeoutMs?: number;
+  /// Client-generated autocomplete session token. The same token on the
+  /// autocomplete keystrokes and the place-details call bills them as one session.
+  sessionToken?: string;
 }
 
 /**

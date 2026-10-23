@@ -158,3 +158,46 @@ describe('IdempotencyStore.runOnce', () => {
     assert.equal(runs, 2, 'a claim on one key must not block another');
   });
 });
+
+describe('IdempotencyStore.runOnce — in-flight TTL (005 T014/T017)', () => {
+  function recordingStore() {
+    const keys = new Map<string, string>();
+    const sets: { state: string; ttl: number; nx: boolean }[] = [];
+    const client = {
+      async set(key: string, value: string, _ex: string, ttl: number, nx?: string) {
+        if (nx === 'NX' && keys.has(key)) return null;
+        keys.set(key, value);
+        sets.push({ state: (JSON.parse(value) as { state: string }).state, ttl, nx: nx === 'NX' });
+        return 'OK';
+      },
+      async get(key: string) {
+        return keys.get(key) ?? null;
+      },
+      async del(key: string) {
+        keys.delete(key);
+        return 1;
+      },
+    };
+    return { store: new IdempotencyStore({ client } as never), sets };
+  }
+
+  it('claims with the short in-flight TTL and keeps the result for the full TTL', async () => {
+    const { store, sets } = recordingStore();
+    await store.runOnce(OP, 'k7', 86400, async () => 'v', 120);
+
+    assert.deepEqual(sets, [
+      { state: 'in_flight', ttl: 120, nx: true },
+      { state: 'done', ttl: 86400, nx: false },
+    ]);
+  });
+
+  it('uses one TTL for both when no in-flight TTL is given, as before', async () => {
+    const { store, sets } = recordingStore();
+    await store.runOnce(OP, 'k8', 60, async () => 'v');
+
+    assert.deepEqual(
+      sets.map((s) => s.ttl),
+      [60, 60],
+    );
+  });
+});

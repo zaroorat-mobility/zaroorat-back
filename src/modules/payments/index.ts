@@ -14,6 +14,7 @@ import {
   RidePaymentRepository,
   CommissionWalletRepository,
   WalletRechargeOptionRepository,
+  PaymentReviewCaseRepository,
 } from './repositories/index.js';
 import { PaymentGatewayResolverService } from './services/gateway/payment-gateway-resolver.service.js';
 import {
@@ -79,6 +80,7 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     ridePaymentRepository: asClass(RidePaymentRepository).singleton(),
     commissionWalletRepository: asClass(CommissionWalletRepository).singleton(),
     rechargeOptionRepository: asClass(WalletRechargeOptionRepository).singleton(),
+    paymentReviewCaseRepository: asClass(PaymentReviewCaseRepository).singleton(),
     // Resolves the one admin-active gateway (Razorpay/Stripe/Mock) or an
     // existing PaymentIntent/PaymentTransaction's own stored `gateway` — the
     // one seam every business service consults instead of instantiating a
@@ -143,6 +145,7 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     paymentMethodRepo: aliasTo('paymentMethodRepository'),
     idempotencyRepo: aliasTo('idempotencyRepository'),
     ridePaymentRepo: aliasTo('ridePaymentRepository'),
+    paymentReviewCaseRepo: aliasTo('paymentReviewCaseRepository'),
     txManager: aliasTo('transactionManager'),
   });
 }

@@ -19,7 +19,8 @@ function harness(existing: { purpose: string } | null = null) {
   const created: { purpose: string }[] = [];
   const intentRepo = {
     async findByIdempotencyKey() {
-      return existing;
+      // A stored intent always has an owner; here it is the harness's own caller.
+      return existing && { userId: 'user_1', ...existing };
     },
     async create(input: { purpose: string }) {
       created.push(input);
@@ -48,6 +49,13 @@ function harness(existing: { purpose: string } | null = null) {
     {} as never,
     {} as never,
     {} as never,
+    {
+      async findByUserId() {
+        return null;
+      },
+    } as never,
+    // Both payment kill switches on: this suite is about purposes, not TD-12.
+    { isEnabled: async () => true } as never,
     {} as never,
   );
   const create = (purpose: string) =>

@@ -49,6 +49,8 @@ export async function adminDriverRoutes(fastify: FastifyInstance): Promise<void>
   );
   fastify.get('/drivers', canRead, (req, reply) => controller.list(req, reply));
   fastify.get('/drivers/:id', canRead, (req, reply) => controller.getById(req, reply));
+  fastify.patch('/drivers/:id', canWrite, (req, reply) => controller.update(req, reply));
+  fastify.put('/drivers/:id', canWrite, (req, reply) => controller.update(req, reply));
 
   fastify.post('/drivers/:driverId/documents/:documentId/review', canVerify, (req, reply) =>
     controller.reviewDocument(req, reply),

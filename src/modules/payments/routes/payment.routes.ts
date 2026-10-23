@@ -4,6 +4,30 @@ import { rateLimits } from '@config';
 import { registerRawJsonParser } from '../../../plugins/raw-body/raw-body.plugin.js';
 import { PaymentController } from '../controllers/payment.controller.js';
 import { handlePaymentError } from '../schemas/error-response.js';
+
+export const intentIdParams = {
+  type: 'object',
+  required: ['intentId'],
+  properties: {
+    intentId: {
+      type: 'string',
+      pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    },
+  },
+} as const;
+
+/// Razorpay Standard Checkout success-callback fields, nothing else.
+export const verifyCheckoutBody = {
+  type: 'object',
+  required: ['razorpayPaymentId', 'razorpayOrderId', 'razorpaySignature'],
+  additionalProperties: false,
+  properties: {
+    razorpayPaymentId: { type: 'string', pattern: '^pay_[A-Za-z0-9]{6,40}$' },
+    razorpayOrderId: { type: 'string', pattern: '^order_[A-Za-z0-9]{6,40}$' },
+    razorpaySignature: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+  },
+} as const;
+
 export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<PaymentController>('paymentController');
   fastify.setErrorHandler(handlePaymentError);
@@ -16,8 +40,25 @@ export async function paymentRoutes(fastify: FastifyInstance): Promise<void> {
   // the subscriptions module. A customer's ride fare is paid to the driver.
   fastify.post(
     '/intents/:intentId/confirm',
-    { preHandler: fastify.rateLimit(rateLimits.payment) },
+    { schema: { params: intentIdParams }, preHandler: fastify.rateLimit(rateLimits.payment) },
     (req, reply) => controller.intent.confirmIntent(req, reply),
+  );
+  // 005 T043: what the Driver App uses after checkout (contracts/http-api.md).
+  fastify.get(
+    '/intents/:intentId',
+    {
+      schema: { params: intentIdParams },
+      preHandler: fastify.rateLimit(rateLimits.paymentStatus),
+    },
+    (req, reply) => controller.intent.getIntent(req, reply),
+  );
+  fastify.post(
+    '/intents/:intentId/verify',
+    {
+      schema: { params: intentIdParams, body: verifyCheckoutBody },
+      preHandler: fastify.rateLimit(rateLimits.payment),
+    },
+    (req, reply) => controller.intent.verifyIntent(req, reply),
   );
   fastify.post('/refunds', { preHandler: fastify.rateLimit(rateLimits.payment) }, (req, reply) =>
     controller.refund.processRefund(req, reply),

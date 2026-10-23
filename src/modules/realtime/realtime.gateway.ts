@@ -401,6 +401,12 @@ export class RealtimeGateway {
     this.io.to(roomName).emit(envelope.type, envelope);
   }
 
+  /// Broadcast an envelope to every connected socket across all rooms.
+  emitBroadcast(envelope: SocketEnvelope): void {
+    if (!this.io) return;
+    this.io.emit(envelope.type, envelope);
+  }
+
   /// Terminal ride events close the room. Without this a driver stays in the
   /// room of a ride they are no longer on and would keep streaming a position
   /// into it — membership was authorised once, at join time, and this is what

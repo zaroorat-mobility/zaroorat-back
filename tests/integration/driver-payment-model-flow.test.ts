@@ -562,7 +562,13 @@ describe('duplicate wallet recharge webhook cannot credit twice (real PostgreSQL
       created_at: Math.floor(Date.now() / 1000),
       payload: {
         payment: {
-          entity: { id: paymentId, order_id: gatewayIntentId, status: 'captured' },
+          entity: {
+            id: paymentId,
+            order_id: gatewayIntentId,
+            amount: 50000,
+            currency: 'INR',
+            status: 'captured',
+          },
         },
       },
     });

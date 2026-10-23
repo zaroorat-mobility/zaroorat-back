@@ -80,6 +80,7 @@ model PaymentIntent {
   user          User                 @relation(fields: [userId], references: [id])
   paymentMethod PaymentInstrument?   @relation(fields: [paymentMethodId], references: [id])
   transactions  PaymentTransaction[]
+  reviewCases   PaymentReviewCase[]
 
   @@index([rideId])
   @@index([userId])
@@ -105,11 +106,12 @@ model PaymentTransaction {
   lastReconciledAt DateTime? @map("last_reconciled_at")
   createdAt        DateTime  @default(now()) @map("created_at")
 
-  intent      PaymentIntent @relation(fields: [intentId], references: [id])
-  ride        Ride?         @relation(fields: [rideId], references: [id])
-  user        User          @relation(fields: [userId], references: [id])
+  intent      PaymentIntent       @relation(fields: [intentId], references: [id])
+  ride        Ride?               @relation(fields: [rideId], references: [id])
+  user        User                @relation(fields: [userId], references: [id])
   refunds     Refund[]
   chargebacks Chargeback[]
+  reviewCases PaymentReviewCase[]
 
   @@index([intentId])
   @@index([rideId])
@@ -178,14 +180,71 @@ model Refund {
   timeline       Json?
   riderName      String?   @map("rider_name")
 
-  transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
-  ride        Ride?              @relation(fields: [rideId], references: [id])
-  user        User               @relation(fields: [userId], references: [id])
+  transaction PaymentTransaction  @relation(fields: [transactionId], references: [id])
+  ride        Ride?               @relation(fields: [rideId], references: [id])
+  user        User                @relation(fields: [userId], references: [id])
+  reviewCases PaymentReviewCase[]
 
   @@index([transactionId])
   @@index([workflowStatus, createdAt])
   @@index([status, lastDispatchAt])
   @@map("refunds")
+}
+
+/// 005-razorpay-driver-payments (data-model §5, TD-9). A captured payment that
+/// could not be applied automatically, held for Finance. Opening the same case
+/// twice is a no-op (unique kind + payment); resolution is a conditional claim
+/// on OPEN. Kind, status and the resolution fields are CHECK-constrained in
+/// migration 20261021120000_razorpay_payment_safeguards.
+model PaymentReviewCase {
+  id                   String    @id @default(uuid(7)) @db.Uuid
+  kind                 String
+  status               String    @default("OPEN")
+  /// Null only for UNKNOWN_ORDER.
+  intentId             String?   @map("intent_id") @db.Uuid
+  /// The CAPTURED_REVIEW hold row; for PAYMENT_ID_REUSED, the existing
+  /// SUCCEEDED row of the other intent.
+  paymentTransactionId String?   @map("payment_transaction_id") @db.Uuid
+  gateway              String
+  providerPaymentId    String    @map("provider_payment_id")
+  providerOrderId      String?   @map("provider_order_id")
+  expectedAmount       Decimal?  @map("expected_amount") @db.Decimal(12, 2)
+  observedAmount       Decimal   @map("observed_amount") @db.Decimal(12, 2)
+  expectedCurrency     String?   @map("expected_currency") @db.Char(3)
+  observedCurrency     String    @map("observed_currency") @db.Char(3)
+  /// Sanitised provider fields only: no contact, email, VPA or card data.
+  evidence             Json
+  refundId             String?   @map("refund_id") @db.Uuid
+  resolvedBy           String?   @map("resolved_by")
+  resolvedAt           DateTime? @map("resolved_at")
+  resolutionNote       String?   @map("resolution_note")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  intent             PaymentIntent?      @relation(fields: [intentId], references: [id], onDelete: Restrict)
+  paymentTransaction PaymentTransaction? @relation(fields: [paymentTransactionId], references: [id], onDelete: Restrict)
+  refund             Refund?             @relation(fields: [refundId], references: [id], onDelete: Restrict)
+
+  @@unique([kind, providerPaymentId])
+  @@index([status, createdAt])
+  @@map("payment_review_cases")
+}
+
+/// 005-razorpay-driver-payments (data-model §6). One row per reconciliation
+/// job run: the heartbeat (FR-033) and the provider sweep's window.
+model PaymentReconciliationRun {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  job         String
+  windowStart DateTime? @map("window_start")
+  windowEnd   DateTime? @map("window_end")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+  status      String    @default("RUNNING")
+  counts      Json?
+  error       String?
+
+  @@index([job, finishedAt(sort: Desc)])
+  @@map("payment_reconciliation_runs")
 }
 
 model PaymentLedgerEntry {

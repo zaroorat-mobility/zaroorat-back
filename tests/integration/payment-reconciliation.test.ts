@@ -92,9 +92,18 @@ describe('payment reconciliation (integration)', () => {
     // An entry from before the BD-7 boundary. It is uncorrectable, not
     // invisible: it must be counted, and counted apart from what the running
     // platform is accountable for.
-    await db().client.paymentLedgerEntry.updateMany({
-      where: { account: 'CUSTOMER_WALLET', accountRefId: w.customer.userId },
-      data: { createdAt: new Date(paymentConfig.ledgerCutoverAt.getTime() - 86_400_000) },
+    // The ledger is append-only once migration 20261021120000 is applied. This
+    // fixture rewrites history on purpose, so the guard is lifted inside this
+    // one transaction (DDL is transactional: a failure re-arms it too).
+    const guard = (op: string) =>
+      `DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'payment_ledger_entries_append_only') THEN ALTER TABLE "payment_ledger_entries" ${op} TRIGGER payment_ledger_entries_append_only; END IF; END $$`;
+    await db().client.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(guard('DISABLE'));
+      await tx.paymentLedgerEntry.updateMany({
+        where: { account: 'CUSTOMER_WALLET', accountRefId: w.customer.userId },
+        data: { createdAt: new Date(paymentConfig.ledgerCutoverAt.getTime() - 86_400_000) },
+      });
+      await tx.$executeRawUnsafe(guard('ENABLE ALWAYS'));
     });
 
     const report = await reconcile().run();

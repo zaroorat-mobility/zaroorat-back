@@ -9,8 +9,10 @@ import type {
   ForwardGeocodeResult,
   MapProvider,
   MapProviderAttribution,
+  MapProviderOptions,
   MatrixCell,
   MatrixResult,
+  PlaceDetailsResult,
   ReverseGeocodeResult,
   RoutingResult,
   SuggestedPlace,
@@ -34,15 +36,28 @@ interface GoogleDirectionsResponse {
   error_message?: string;
 }
 
-interface GooglePlacesAutocompleteResponse {
-  predictions?: Array<{
-    place_id?: string;
-    description?: string;
-    structured_formatting?: { main_text?: string; secondary_text?: string };
+/// Places API (New) `places:autocomplete`.
+interface PlacesAutocompleteResponse {
+  suggestions?: Array<{
+    placePrediction?: {
+      placeId?: string;
+      text?: { text?: string };
+      structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
+    };
   }>;
-  status?: string;
-  error_message?: string;
 }
+
+/// Places API (New) `places/{id}`, limited to the fields requested below.
+interface PlacesDetailsResponse {
+  id?: string;
+  formattedAddress?: string;
+  location?: { latitude?: number; longitude?: number };
+}
+
+/// Zaroorat operates in India only.
+const PLACES_REGION_CODES = ['in'];
+/// The largest circular bias Places API (New) accepts.
+const PLACES_BIAS_RADIUS_METERS = 50_000;
 
 interface GoogleGeocodeResponse {
   results?: Array<{
@@ -113,39 +128,103 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
     };
   }
 
-  async autocomplete(input: string, location?: Coordinate): Promise<AutocompleteResult> {
+  /// Places API (New) autocomplete. Legacy Places can no longer be enabled on a
+  /// new Google Cloud project, so this does not depend on it.
+  ///
+  /// The rider's position is a bias, not a fence: a place outside the service
+  /// area still appears, and the quote rejects it with a reason the app shows
+  /// (`DROP_OUTSIDE_SERVICE_AREA`) instead of the search silently missing it.
+  async autocomplete(
+    input: string,
+    location?: Coordinate,
+    options?: MapProviderOptions,
+  ): Promise<AutocompleteResult> {
     try {
-      const params: Record<string, string> = { input, types: 'geocode' };
-      if (location) {
-        params['location'] = `${location.latitude},${location.longitude}`;
-        params['radius'] = '50000';
-      }
+      const response = await this.places<PlacesAutocompleteResponse>('places:autocomplete', {
+        method: 'POST',
+        label: 'places:autocomplete',
+        fieldMask:
+          'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat',
+        body: {
+          input,
+          includedRegionCodes: PLACES_REGION_CODES,
+          languageCode: options?.language ?? 'en',
+          ...(location
+            ? {
+                locationBias: {
+                  circle: {
+                    center: { latitude: location.latitude, longitude: location.longitude },
+                    radius: PLACES_BIAS_RADIUS_METERS,
+                  },
+                },
+              }
+            : {}),
+          ...(options?.sessionToken ? { sessionToken: options.sessionToken } : {}),
+        },
+      });
 
-      const response = await this.get<GooglePlacesAutocompleteResponse>(
-        'place/autocomplete/json',
-        params,
-      );
+      const predictions: SuggestedPlace[] = (response.suggestions ?? []).flatMap((s) => {
+        const p = s.placePrediction;
+        if (!p?.placeId) return [];
+        const full = p.text?.text ?? '';
+        return [
+          {
+            placeId: p.placeId,
+            placeName: p.structuredFormat?.mainText?.text ?? full.split(',')[0]?.trim() ?? '',
+            placeAddress: p.structuredFormat?.secondaryText?.text ?? full,
+            provider: this.providerName,
+          },
+        ];
+      });
 
-      if (response.status && response.status !== 'OK' && response.status !== 'ZERO_RESULTS') {
-        const msg = response.error_message ? `: ${response.error_message}` : '';
-        logger.warn({ status: response.status, msg }, '[GoogleMaps] autocomplete status not OK');
-      }
-
-      if (!response.predictions || response.predictions.length === 0) {
+      if (predictions.length === 0) {
         return { status: 'no_results', predictions: [], providerName: this.providerName };
       }
-
-      const predictions: SuggestedPlace[] = response.predictions.map((p) => ({
-        placeId: p.place_id ?? '',
-        placeName: p.structured_formatting?.main_text ?? p.description?.split(',')[0] ?? '',
-        placeAddress: p.structured_formatting?.secondary_text ?? p.description ?? '',
-      }));
-
       return { status: 'ok', predictions, providerName: this.providerName };
     } catch (error) {
-      logger.error({ error, input }, '[GoogleMaps] autocomplete failed');
+      // The search text is not logged: it is what the rider typed.
+      logger.error({ error }, '[GoogleMaps] autocomplete failed');
       return { status: 'unavailable', predictions: [], providerName: this.providerName };
     }
+  }
+
+  /// Coordinates for an autocomplete pick. Sending the autocomplete session
+  /// token closes the session, so its keystrokes are billed with this call.
+  ///
+  /// Only Essentials fields are requested. `displayName` bills at a higher tier,
+  /// and the app already has the name from the prediction, so `placeName` here
+  /// is just the first line of the address.
+  async getPlaceDetails(
+    placeId: string,
+    options?: MapProviderOptions,
+  ): Promise<PlaceDetailsResult> {
+    const response = await this.places<PlacesDetailsResponse>(
+      `places/${encodeURIComponent(placeId)}`,
+      {
+        method: 'GET',
+        label: 'places/{placeId}',
+        fieldMask: 'id,formattedAddress,location',
+        params: {
+          languageCode: options?.language ?? 'en',
+          ...(options?.sessionToken ? { sessionToken: options.sessionToken } : {}),
+        },
+      },
+    );
+
+    const latitude = response.location?.latitude;
+    const longitude = response.location?.longitude;
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+      throw new Error('[GoogleMaps] place details: missing coordinates');
+    }
+    const address = response.formattedAddress ?? '';
+    return {
+      placeId: response.id ?? placeId,
+      placeName: address.split(',')[0]?.trim() ?? '',
+      placeAddress: address,
+      latitude,
+      longitude,
+      providerName: this.providerName,
+    };
   }
 
   async reverseGeocode(coordinate: Coordinate): Promise<ReverseGeocodeResult> {
@@ -159,9 +238,8 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
     }
 
     if (!response.results || response.results.length === 0) {
-      throw new Error(
-        `[GoogleMaps] reverseGeocode: no result for ${coordinate.latitude},${coordinate.longitude}`,
-      );
+      // No coordinates in the message: it is logged, and it is a rider's position.
+      throw new Error('[GoogleMaps] reverseGeocode: no result');
     }
 
     const result = response.results[0]!;

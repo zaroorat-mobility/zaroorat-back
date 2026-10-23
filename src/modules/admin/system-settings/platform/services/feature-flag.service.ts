@@ -2,6 +2,14 @@ import type { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { FeatureFlagStatus } from '../../../../../generated/prisma/index.js';
 import { FEATURE_FLAG_SEED } from '../constants/platform-settings.constants.js';
+import { PAYMENT_FEATURE_FLAG_SEED } from '../constants/payment-feature-flags.constants.js';
+
+const SEED: ReadonlyArray<{
+  key: string;
+  name: string;
+  description: string;
+  defaultStatus?: FeatureFlagStatus;
+}> = [...FEATURE_FLAG_SEED, ...PAYMENT_FEATURE_FLAG_SEED];
 
 export class FeatureFlagService {
   constructor(private readonly db: DatabaseService) {}
@@ -10,8 +18,10 @@ export class FeatureFlagService {
     return this.db.client;
   }
 
+  /// `defaultStatus` applies only when a flag is first created: re-seeding never
+  /// changes a status staff have set.
   async ensureSeeded(): Promise<void> {
-    for (const flag of FEATURE_FLAG_SEED) {
+    for (const flag of SEED) {
       await this.client.featureFlag.upsert({
         where: { key: flag.key },
         update: { name: flag.name, description: flag.description },
@@ -19,7 +29,7 @@ export class FeatureFlagService {
           key: flag.key,
           name: flag.name,
           description: flag.description,
-          status: 'ON',
+          status: flag.defaultStatus ?? 'ON',
           rolloutPercentage: 100,
           isActive: true,
         },

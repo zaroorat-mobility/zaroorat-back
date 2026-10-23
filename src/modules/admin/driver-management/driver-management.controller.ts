@@ -18,6 +18,7 @@ import {
   driverIdParamSchema,
   listDriversQuerySchema,
   suspendDriverBodySchema,
+  updateDriverBodySchema,
 } from './drivers/driver.schemas.js';
 import {
   applicationDocumentParamSchema,
@@ -52,6 +53,14 @@ export class AdminDriverManagementController {
     const { id } = driverIdParamSchema.parse(req.params);
     const driver = await this.adminDriverService.getById(id);
     reply.send({ data: driver });
+  }
+
+  async update(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = driverIdParamSchema.parse(req.params);
+    const body = updateDriverBodySchema.parse(req.body);
+    const actor = auditActor(req);
+    const updated = await this.adminDriverService.update(id, body, actor);
+    reply.send({ data: updated });
   }
 
   async getApplicationStats(_req: FastifyRequest, reply: FastifyReply): Promise<void> {

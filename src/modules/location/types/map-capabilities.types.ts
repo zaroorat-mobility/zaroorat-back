@@ -18,6 +18,7 @@ export const ALL_MAP_CAPABILITIES: readonly MapCapability[] = Object.values(MAP_
 export const DEFAULT_PROVIDER_CAPABILITIES: Record<MapProviderName, readonly MapCapability[]> = {
   google: [
     MAP_CAPABILITY.AUTOCOMPLETE,
+    MAP_CAPABILITY.PLACE_DETAILS,
     MAP_CAPABILITY.GEOCODE,
     MAP_CAPABILITY.REVERSE_GEOCODE,
     MAP_CAPABILITY.ROUTE,

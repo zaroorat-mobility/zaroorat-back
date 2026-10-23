@@ -35,6 +35,7 @@ export class PaymentService {
       payload,
       ttl,
       operation,
+      paymentConfig.idempotencyInFlightTtlSeconds,
     );
     return result;
   }

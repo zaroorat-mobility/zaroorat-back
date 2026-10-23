@@ -59,12 +59,20 @@ export class RideEtaService {
     const now = Date.now();
     this.sweep(now);
 
+    // One Directions call per ride at most every `etaRefreshMinIntervalMs`, and
+    // only once the driver has moved; a driver who has not moved is re-checked
+    // after `etaRefreshMaxIntervalMs`. Movement alone used to trigger a call, so
+    // a moving driver cost one request per 100 m. A change of target (pickup →
+    // drop) always recomputes.
     if (previous && previous.snapshot.destinationType === destinationType) {
+      const elapsed = now - previous.lastComputedAtMs;
       const movedEnough =
         haversineMeters(previous.lastOrigin, input.driverPosition) >=
         geoConfig.etaRefreshMinMovementMeters;
-      const recent = now - previous.lastComputedAtMs < geoConfig.etaRefreshMinIntervalMs;
-      if (!movedEnough && recent) {
+      const due =
+        elapsed >= geoConfig.etaRefreshMaxIntervalMs ||
+        (elapsed >= geoConfig.etaRefreshMinIntervalMs && movedEnough);
+      if (!due) {
         return { ...previous.snapshot, stale: true };
       }
     }

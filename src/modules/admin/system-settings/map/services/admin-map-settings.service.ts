@@ -25,6 +25,15 @@ import type {
   UpdateMapSettingsBody,
 } from '../types/map-settings.types.js';
 import type { MapClientConfigView } from '../../integrations/types/integration-settings.types.js';
+import { logger } from '@shared/logger/index.js';
+
+/// The backend's Google credential, resolved exactly as MapProviderService does.
+function googleServerKey(settingsMap: Map<string, { value: string | null }>): string {
+  return resolveMapCredential(
+    settingsMap.get(MAP_SETTING_KEYS.GOOGLE_API_KEY)?.value,
+    process.env.GOOGLE_MAPS_API_KEY,
+  );
+}
 
 export class AdminMapSettingsService {
   constructor(
@@ -104,9 +113,10 @@ export class AdminMapSettingsService {
     const primary = settings.primaryProvider as MapProviderName;
 
     /// The browser-facing tile key: the platform-restricted client SDK key, and
-    /// nothing else.
-    const resolveTileKey = (name: MapProviderName): string =>
-      resolveMapCredential(
+    /// nothing else. A "client" key equal to the server key would hand the
+    /// unrestricted backend credential to the browser, so it is refused.
+    const resolveTileKey = (name: MapProviderName): string => {
+      const key = resolveMapCredential(
         settingsMap.get(
           name === 'google'
             ? MAP_SETTING_KEYS.GOOGLE_CLIENT_SDK_KEY
@@ -116,6 +126,15 @@ export class AdminMapSettingsService {
           ? process.env.GOOGLE_MAPS_CLIENT_SDK_KEY
           : process.env.MAPPLS_CLIENT_SDK_KEY,
       );
+      if (name === 'google' && key && key === googleServerKey(settingsMap)) {
+        logger.warn(
+          '[AdminMapSettings] Google client SDK key equals the server key; not serving it. ' +
+            'Configure a separate HTTP-referrer-restricted browser key.',
+        );
+        return '';
+      }
+      return key;
+    };
 
     const buildProvider = (name: MapProviderName) => {
       const isPrimary = name === primary;
@@ -170,31 +189,23 @@ export class AdminMapSettingsService {
     const settingsMap = await this.systemSettingService.getCategorySettings(MAP_SETTINGS_CATEGORY);
     const primary = settings.primaryProvider as MapProviderName;
 
-    const clientSdk = {
-      google: resolveMapCredential(
-        settingsMap.get(MAP_SETTING_KEYS.GOOGLE_CLIENT_SDK_KEY)?.value,
-        process.env.GOOGLE_MAPS_CLIENT_SDK_KEY,
-      ),
-      mappls: resolveMapCredential(
-        settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SDK_KEY)?.value,
-        process.env.MAPPLS_CLIENT_SDK_KEY,
-      ),
-    };
+    // No Google key goes to mobile clients: their Android Maps SDK key is built
+    // into the binary, and nothing on the device reads one from here. Only the
+    // Mappls native SDK takes its key at runtime.
+    const mapplsSdkKey = resolveMapCredential(
+      settingsMap.get(MAP_SETTING_KEYS.MAPPLS_CLIENT_SDK_KEY)?.value,
+      process.env.MAPPLS_CLIENT_SDK_KEY,
+    );
 
     const buildProvider = (name: MapProviderName) => {
       const enabled = settings.providers[name]?.enabled ?? false;
-      const sdkKey = clientSdk[name];
       const baseUrl = settings.providers[name]?.baseUrl;
       const out: PublicMapConfigView['providers'][MapProviderName] = { enabled };
       if (baseUrl) out.baseUrl = baseUrl.replace(/\/+$/, '');
-      if (enabled && sdkKey) {
-        out.clientSdkKey = sdkKey;
-        if (name === 'google') {
-          out.tileUrl = buildGoogleTileUrl(sdkKey);
-        } else if (name === 'mappls') {
-          out.tileUrl = buildMapplsTileUrl(sdkKey);
-          out.baseUrl = DEFAULT_BASE_URLS.MAPPLS_TILES;
-        }
+      if (name === 'mappls' && enabled && mapplsSdkKey) {
+        out.clientSdkKey = mapplsSdkKey;
+        out.tileUrl = buildMapplsTileUrl(mapplsSdkKey);
+        out.baseUrl = DEFAULT_BASE_URLS.MAPPLS_TILES;
       }
       return out;
     };

@@ -30,6 +30,14 @@ export const rateLimits = Object.freeze({
     windowSeconds: Number(process.env.RL_PAYMENT_WINDOW ?? 3600),
     keyBy: 'user',
   }),
+  /// 005 T043: the app polls `GET /payments/intents/:id` after checkout, so it
+  /// gets its own bucket instead of sharing the 20/h `rl:payment` one (TD-5).
+  paymentStatus: Object.freeze<RateLimitOptions>({
+    scope: 'rl:payment-status',
+    limit: Number(process.env.RL_PAYMENT_STATUS_LIMIT ?? 60),
+    windowSeconds: Number(process.env.RL_PAYMENT_STATUS_WINDOW ?? 60),
+    keyBy: 'user',
+  }),
   webhook: Object.freeze<RateLimitOptions>({
     scope: 'rl:webhook',
     limit: Number(process.env.RL_WEBHOOK_LIMIT ?? 600),

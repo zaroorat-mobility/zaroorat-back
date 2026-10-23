@@ -11,3 +11,4 @@ export * from './idempotency.repository.js';
 export * from './ride-payment.repository.js';
 export * from './commission-wallet.repository.js';
 export * from './wallet-recharge-option.repository.js';
+export * from './payment-review-case.repository.js';

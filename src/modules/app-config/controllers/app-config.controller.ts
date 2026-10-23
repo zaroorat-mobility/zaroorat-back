@@ -7,6 +7,10 @@ function etagForVersion(version: number): string {
   return `W/"app-config-v${version}"`;
 }
 
+interface PlatformConfigResolverLike {
+  getGeneralConfig(app?: string): Promise<{ logoUrl?: string | null }>;
+}
+
 export class AppConfigController {
   constructor(private readonly appConfigService: AppConfigService) {}
 
@@ -31,5 +35,34 @@ export class AppConfigController {
     const query = getAppConfigQuerySchema.pick({ app: true }).parse(req.query);
     const data = await this.appConfigService.getLocaleStrings(query.app as AppClientSlug, code);
     reply.send({ data });
+  }
+
+  async getBrandLogo(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = req.query as { app?: string };
+    const appClient: AppClientSlug = query.app === 'driver' ? 'driver' : 'rider';
+    try {
+      const { container } = await import('@core/di.js');
+      if (container.hasRegistration('platformConfigResolver')) {
+        const resolver = container.resolve<PlatformConfigResolverLike>('platformConfigResolver');
+        const config = await resolver.getGeneralConfig(appClient);
+        if (config.logoUrl) {
+          reply
+            .header('Cache-Control', 'public, max-age=1800')
+            .status(302)
+            .redirect(config.logoUrl);
+          return;
+        }
+      }
+    } catch (err) {
+      req.log.warn({ err }, '[getBrandLogo] Failed to resolve via platformConfigResolver');
+    }
+
+    const bundle = await this.appConfigService.getPublicBundle(appClient, 'en');
+    const logoUrl = bundle.settings?.general?.logoUrl;
+    if (!logoUrl) {
+      reply.status(404).send({ error: 'No brand logo configured' });
+      return;
+    }
+    reply.header('Cache-Control', 'public, max-age=1800').status(302).redirect(logoUrl);
   }
 }

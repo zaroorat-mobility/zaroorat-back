@@ -96,6 +96,11 @@ export class SubscriptionService {
         return { action: 'STAGE' as const, subscription: active, intentId: null };
       }
 
+      // Every path below leads to a payment. With subscription payments
+      // switched off (TD-12) refuse here, before the subscription row below is
+      // written. Staging above needs no payment, so it is not gated.
+      await this.intentService.assertCheckoutOpen('DRIVER_SUBSCRIPTION_PAYMENT');
+
       // 3. Check PENDING_PAYMENT subscription
       const pending = await this.driverSubscriptionRepository.findPending(driverId, tx);
       if (pending) {

@@ -24,6 +24,8 @@ import {
 export interface AppGeneralSettings {
   platformName: string;
   logoUrl: string;
+  customerLogoUrl?: string;
+  driverLogoUrl?: string;
   supportPhone: string;
   supportEmail: string;
   defaultLanguage: string;
@@ -207,7 +209,7 @@ export class AppConfigService {
       this.appConfigRepository.findLocales(),
       this.appConfigRepository.findTranslations(locale, appKey),
       this.loadFeatureFlags(),
-      this.loadPlatformSettings(),
+      this.loadPlatformSettings(app),
     ]);
 
     const strings: Record<string, string> = {};
@@ -304,13 +306,13 @@ export class AppConfigService {
     }
   }
 
-  private async loadPlatformSettings(): Promise<AppPlatformSettings> {
+  private async loadPlatformSettings(app?: AppClientSlug): Promise<AppPlatformSettings> {
     if (!this.platformConfigResolver) {
       return structuredClone(DEFAULT_PLATFORM_SETTINGS);
     }
     try {
       const [general, ride, otp, onboarding, maintenance] = await Promise.all([
-        this.platformConfigResolver.getGeneralConfig(),
+        this.platformConfigResolver.getGeneralConfig(app),
         this.platformConfigResolver.getRideConfig(),
         this.platformConfigResolver.getOtpConfig(),
         this.platformConfigResolver.getOnboardingConfig(),

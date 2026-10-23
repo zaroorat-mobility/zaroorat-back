@@ -53,10 +53,18 @@ export class SubscriptionController {
           body.planId,
           idempotencyKey as string,
         );
+        // 005 T042: `checkout` is present whenever `intentId` is
+        // (contracts/http-api.md); null when the provider has no checkout.
+        const intent = result.intentId
+          ? await this.paymentService.intent.findById(result.intentId)
+          : null;
         return {
           subscriptionId: result.subscription?.id ?? null,
           status: result.subscription?.status ?? null,
           intentId: result.intentId,
+          checkout: intent
+            ? await this.paymentService.intent.checkoutFor(intent, 'Subscription plan')
+            : null,
         };
       },
     );

@@ -11,6 +11,32 @@ import type { IntentService } from '../../src/modules/payments/services/intent/i
 import type { PaymentIntentReconciliationJob } from '../../src/modules/payments/jobs/payment-intent-reconciliation.job.js';
 import type { WebhookService } from '../../src/modules/payments/services/webhook/webhook.service.js';
 import { MockGatewayProvider } from '../../src/modules/payments/services/gateway/mock.gateway.js';
+import type {
+  OrderPayments,
+  ProviderPaymentStatus,
+} from '../../src/modules/payments/services/gateway/gateway.provider.js';
+
+/// What the mock gateway reports for an order (005 T024: IntentService reads
+/// provider truth through `fetchOrderPayments`, not a status string).
+function reports(
+  kind: OrderPayments['kind'],
+  status: ProviderPaymentStatus,
+  amountPaise: number,
+): (orderId: string) => Promise<OrderPayments> {
+  return async (orderId) => ({
+    kind,
+    payment: {
+      id: `pay_h1_${orderId}`,
+      orderId,
+      amountPaise,
+      currency: 'INR',
+      status,
+      method: 'mock',
+      createdAt: null,
+    },
+    additionalCaptures: [],
+  });
+}
 
 /// H1 — PAYMENT STATE MACHINE / LATE CAPTURE FIX
 ///
@@ -70,10 +96,8 @@ describe('H1 — Payment State Machine & Late Capture Fix (integration)', () => 
         assert.equal(intent.status, 'PENDING');
 
         // Patch gateway to report PENDING / PROCESSING
-        const originalConfirm = MockGatewayProvider.prototype.confirmIntent;
-        MockGatewayProvider.prototype.confirmIntent = async function (id: string) {
-          return { gatewayIntentId: id, status: 'PENDING' };
-        };
+        const originalConfirm = MockGatewayProvider.prototype.fetchOrderPayments;
+        MockGatewayProvider.prototype.fetchOrderPayments = reports('pending', 'authorized', 50000);
 
         try {
           // Confirm before pay / reconciliation check
@@ -97,7 +121,7 @@ describe('H1 — Payment State Machine & Late Capture Fix (integration)', () => 
           });
           assert.equal(ledgerCount, 0, 'No ledger entry written for non-terminal intent');
         } finally {
-          MockGatewayProvider.prototype.confirmIntent = originalConfirm;
+          MockGatewayProvider.prototype.fetchOrderPayments = originalConfirm;
         }
       });
 
@@ -117,10 +141,8 @@ describe('H1 — Payment State Machine & Late Capture Fix (integration)', () => 
         });
 
         // Patch gateway to report terminal failure
-        const originalConfirm = MockGatewayProvider.prototype.confirmIntent;
-        MockGatewayProvider.prototype.confirmIntent = async function (id: string) {
-          return { gatewayIntentId: id, status: 'FAILED' };
-        };
+        const originalConfirm = MockGatewayProvider.prototype.fetchOrderPayments;
+        MockGatewayProvider.prototype.fetchOrderPayments = reports('failed', 'failed', 100000);
 
         try {
           const updated = await intentService.confirmIntent(intent.id);
@@ -142,7 +164,7 @@ describe('H1 — Payment State Machine & Late Capture Fix (integration)', () => 
           });
           assert.equal(ledgerCount, 0, 'No ledger entry for FAILED intent');
         } finally {
-          MockGatewayProvider.prototype.confirmIntent = originalConfirm;
+          MockGatewayProvider.prototype.fetchOrderPayments = originalConfirm;
         }
       });
 
@@ -170,10 +192,8 @@ describe('H1 — Payment State Machine & Late Capture Fix (integration)', () => 
         assert.equal(failedIntent?.status, 'FAILED');
 
         // Step 2: Late capture arrives with verified SUCCEEDED status from gateway
-        const originalConfirm = MockGatewayProvider.prototype.confirmIntent;
-        MockGatewayProvider.prototype.confirmIntent = async function (id: string) {
-          return { gatewayIntentId: id, status: 'SUCCEEDED' };
-        };
+        const originalConfirm = MockGatewayProvider.prototype.fetchOrderPayments;
+        MockGatewayProvider.prototype.fetchOrderPayments = reports('captured', 'captured', 75000);
 
         try {
           const recovered = await intentService.confirmIntent(intent.id);
@@ -217,7 +237,7 @@ describe('H1 — Payment State Machine & Late Capture Fix (integration)', () => 
             );
           }
         } finally {
-          MockGatewayProvider.prototype.confirmIntent = originalConfirm;
+          MockGatewayProvider.prototype.fetchOrderPayments = originalConfirm;
         }
       });
 

@@ -41,13 +41,21 @@ export class IdempotencyStore {
   async forget(operation: IdempotencyOperation, key: string): Promise<void> {
     await this.client.del(RedisKeys.idempotency(operation, key));
   }
+  /// `inFlightTtlSeconds` bounds how long a request that crashed mid-flight
+  /// blocks its key; the stored result still lives `ttlSeconds`.
   async runOnce<T>(
     operation: IdempotencyOperation,
     key: string,
     ttlSeconds: number,
     action: () => Promise<T>,
+    inFlightTtlSeconds: number = ttlSeconds,
   ): Promise<T> {
-    const claimed = await this.putIfAbsent(operation, key, { state: 'in_flight' }, ttlSeconds);
+    const claimed = await this.putIfAbsent(
+      operation,
+      key,
+      { state: 'in_flight' },
+      inFlightTtlSeconds,
+    );
     if (!claimed) {
       const record = await this.get<IdempotencyRecord<T>>(operation, key);
       if (record?.state === 'done') return record.result;

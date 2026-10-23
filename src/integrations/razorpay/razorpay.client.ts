@@ -1,10 +1,14 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import type {
-  PaymentGatewayProvider,
-  CreateGatewayIntentInput,
-  GatewayIntentResult,
-  GatewayRefundResult,
-  CreateGatewayRefundInput,
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import {
+  selectOrderPayments,
+  type PaymentGatewayProvider,
+  type CreateGatewayIntentInput,
+  type GatewayIntentResult,
+  type GatewayRefundResult,
+  type CreateGatewayRefundInput,
+  type OrderPayments,
+  type ProviderPayment,
+  type ProviderPaymentStatus,
 } from '../../modules/payments/services/gateway/gateway.provider.js';
 
 const SANDBOX_BASE_URL = 'https://api.razorpay.com/v1';
@@ -27,10 +31,27 @@ interface RazorpayOrderResponse {
   status: string;
 }
 
-interface RazorpayPaymentResponse {
+interface RazorpayPaymentEntity {
   id: string;
-  order_id: string;
+  order_id: string | null;
+  amount: number;
+  currency: string;
   status: string;
+  captured?: boolean;
+  method?: string | null;
+  created_at?: number;
+}
+
+/// Sweep page size; Razorpay's documented maximum for `count`.
+export const RAZORPAY_LIST_PAGE_SIZE = 100;
+
+/// decisions.md TD-3: `zr1_` + the first 32 hex chars of SHA-256(scoped key).
+/// 36 ASCII chars, inside the documented 40-char limit, where the raw scoped
+/// key (`recharge:{driverId}:{key}`) is not. Deterministic, for traceability
+/// only: sandbox S2c showed Razorpay accepts a reused receipt, so it is not an
+/// idempotency guarantee.
+export function razorpayReceipt(scopedIdempotencyKey: string): string {
+  return `zr1_${createHash('sha256').update(scopedIdempotencyKey).digest('hex').slice(0, 32)}`;
 }
 
 interface RazorpayErrorBody {
@@ -109,11 +130,15 @@ export class RazorpayGatewayProvider implements PaymentGatewayProvider {
     // Amounts are paise-integer at the API boundary; Decimal is rupees
     // everywhere else in this codebase (RideFareSplit, PaymentIntent.amount).
     const amountPaise = input.amount.mul(100).toDecimalPlaces(0).toNumber();
+    // A 400 here is a plain gateway error: the receipt-lookup recovery was
+    // withdrawn after sandbox S2c/S2d (contracts/razorpay-provider.md §1).
     const order = await this.request<RazorpayOrderResponse>('POST', '/orders', {
       amount: amountPaise,
       currency: input.currency,
-      receipt: input.idempotencyKey,
+      receipt: razorpayReceipt(input.idempotencyKey),
       notes: input.metadata ?? {},
+      // One payment per order; Razorpay allows more only when this is true.
+      partial_payment: false,
     });
     return {
       gatewayIntentId: order.id,
@@ -122,22 +147,54 @@ export class RazorpayGatewayProvider implements PaymentGatewayProvider {
   }
 
   async confirmIntent(gatewayIntentId: string): Promise<GatewayIntentResult> {
-    // An Order has no single terminal status of its own once paid — the
-    // payment attached to it does. `payments?order_id=` returns every attempt;
-    // the most recent captured/authorized one (if any) is authoritative.
-    const list = await this.request<{ items: RazorpayPaymentResponse[] }>(
+    const { kind, payment } = await this.fetchOrderPayments(gatewayIntentId);
+    return {
+      gatewayIntentId,
+      status: kind === 'captured' ? 'SUCCEEDED' : kind === 'failed' ? 'FAILED' : 'PENDING',
+      ...(payment ? { providerPaymentId: payment.id } : {}),
+    };
+  }
+
+  /// Documented `GET /orders/{id}/payments` (TD-2). It replaces an undocumented
+  /// order-id filter on `GET /payments` that stored the order id as the
+  /// payment id (research.md CD-1).
+  async fetchOrderPayments(orderId: string): Promise<OrderPayments> {
+    const list = await this.request<{ items: RazorpayPaymentEntity[] }>(
       'GET',
-      `/payments?order_id=${encodeURIComponent(gatewayIntentId)}`,
+      `/orders/${encodeURIComponent(orderId)}/payments`,
     );
-    const authoritative =
-      list.items.find((p) => p.status === 'captured') ??
-      list.items.find((p) => p.status === 'authorized') ??
-      list.items.find((p) => p.status === 'failed') ??
-      list.items[0];
-    if (!authoritative) {
-      return { gatewayIntentId, status: 'PENDING' };
-    }
-    return { gatewayIntentId, status: mapPaymentStatus(authoritative.status) };
+    return selectOrderPayments(orderId, list.items.map(normalisePayment));
+  }
+
+  async fetchPayment(paymentId: string): Promise<ProviderPayment> {
+    return normalisePayment(
+      await this.request<RazorpayPaymentEntity>(
+        'GET',
+        `/payments/${encodeURIComponent(paymentId)}`,
+      ),
+    );
+  }
+
+  async listPayments(from: Date, to: Date, skip: number): Promise<ProviderPayment[]> {
+    const query = new URLSearchParams({
+      from: String(Math.floor(from.getTime() / 1000)),
+      to: String(Math.floor(to.getTime() / 1000)),
+      count: String(RAZORPAY_LIST_PAGE_SIZE),
+      skip: String(skip),
+    });
+    const list = await this.request<{ items: RazorpayPaymentEntity[] }>(
+      'GET',
+      `/payments?${query.toString()}`,
+    );
+    return list.items.map(normalisePayment);
+  }
+
+  checkoutKeyId(): string {
+    return this.keyId;
+  }
+
+  verifyCheckoutSignature(orderId: string, paymentId: string, signature: string): boolean {
+    return verifyRazorpayPaymentSignature(orderId, paymentId, signature, this.keySecret);
   }
 
   /// `providerPaymentId` is the Razorpay payment id (`pay_...`). This used to be
@@ -196,19 +253,37 @@ function mapOrderStatus(status: string): string {
   return 'PENDING';
 }
 
-function mapPaymentStatus(status: string): string {
-  if (status === 'captured') return 'SUCCEEDED';
-  if (status === 'failed') return 'FAILED';
-  return 'PENDING';
+function normalisePayment(p: RazorpayPaymentEntity): ProviderPayment {
+  return {
+    id: p.id,
+    orderId: p.order_id ?? '',
+    amountPaise: p.amount,
+    currency: String(p.currency ?? '').toUpperCase(),
+    status: normaliseStatus(p),
+    method: p.method ?? null,
+    createdAt: typeof p.created_at === 'number' ? new Date(p.created_at * 1000) : null,
+  };
+}
+
+/// An authorisation Razorpay auto-refunded at the capture timeout is
+/// `refunded` with `captured: false`: no money was ever taken, so for us it is
+/// a failed attempt, not an external refund (data-model §9).
+function normaliseStatus(p: RazorpayPaymentEntity): ProviderPaymentStatus {
+  if (p.status === 'refunded' && p.captured === false) return 'failed';
+  if (['created', 'authorized', 'captured', 'failed', 'refunded'].includes(p.status)) {
+    return p.status as ProviderPaymentStatus;
+  }
+  // Undocumented status: never treat it as money received.
+  return 'created';
 }
 
 /// Server-side verification of a Razorpay Checkout success callback —
 /// spec section 7's "verify Checkout payment signature server-side".
 /// signature = HMAC-SHA256(order_id + "|" + payment_id, key_secret), hex.
-/// No route currently calls this (checkout confirmation in this codebase is
-/// webhook-driven end-to-end, not a client-posted callback) — exported so a
-/// client-callback endpoint can use it the moment one is added, without
-/// re-deriving Razorpay's signature formula.
+/// Used through `RazorpayGatewayProvider.verifyCheckoutSignature` by
+/// `POST /payments/intents/:intentId/verify` (005 T043). A valid signature
+/// proves the callback came from checkout for that order, never that money
+/// was captured: verify still fetches the payment and runs the gate.
 export function verifyRazorpayPaymentSignature(
   orderId: string,
   paymentId: string,

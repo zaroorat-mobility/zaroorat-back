@@ -7,6 +7,11 @@ import {
   DuplicateIdempotencyKeyError,
   IdempotencyKeyRequiredError,
 } from '../../../src/modules/payments/errors/payment.errors.js';
+import { IntentService } from '../../../src/modules/payments/services/intent/intent.service.js';
+import { CommissionWalletController } from '../../../src/modules/payments/controllers/commission-wallet.controller.js';
+import { SubscriptionService } from '../../../src/modules/subscriptions/services/subscription.service.js';
+import { Decimal } from '../../../src/modules/payments/types/index.js';
+import { paymentConfig } from '../../../src/config/index.js';
 
 function fakeRedis() {
   const store = new Map<string, unknown>();
@@ -203,5 +208,243 @@ describe('Payment idempotency', () => {
       refundId: 'rf_ok',
     }));
     assert.deepEqual(retry, { refundId: 'rf_ok' });
+  });
+});
+
+/// 005-razorpay-driver-payments T014 (TM-04): idempotency keys are scoped per
+/// driver and purpose (T017). The fakes below share one in-memory intent table,
+/// keyed like `payment_intents.idempotency_key` (unique across all users).
+describe('Driver-scoped payment idempotency (T014/T017)', () => {
+  const OPTION_ID = '0190c3f4-6a3e-7c1d-8a4b-2f6e9d1c0aaa';
+  const drivers: Record<string, { id: string; paymentModel: string }> = {
+    user_a: { id: 'driver_a', paymentModel: 'COMMISSION' },
+    user_b: { id: 'driver_b', paymentModel: 'COMMISSION' },
+  };
+
+  function world() {
+    const intents = new Map<string, { id: string; userId: string; purpose: string }>();
+    const gatewayCalls: string[] = [];
+    let seq = 0;
+    const intentRepo = {
+      async findByIdempotencyKey(key: string) {
+        return intents.get(key) ?? null;
+      },
+      async create(input: { idempotencyKey: string; userId: string; purpose: string }) {
+        if (intents.has(input.idempotencyKey)) throw new Error('unique violation');
+        const row = {
+          ...input,
+          id: `intent_${++seq}`,
+          status: 'PENDING',
+          amount: new Decimal(500),
+        };
+        intents.set(input.idempotencyKey, row);
+        return row;
+      },
+    };
+    const gateway = {
+      gatewayName: 'mock',
+      async createIntent(input: { idempotencyKey: string }) {
+        gatewayCalls.push(input.idempotencyKey);
+        return { gatewayIntentId: `order_${gatewayCalls.length}`, status: 'PENDING' };
+      },
+      // The recharge response's checkout payload (005 T042); the mock has none.
+      checkoutKeyId: () => null,
+    };
+    const gatewayResolver = {
+      async getActiveGateway() {
+        return gateway;
+      },
+      async forProviderName() {
+        return gateway;
+      },
+    };
+    const intentService = new IntentService(
+      intentRepo as never,
+      gatewayResolver as never,
+      {} as never,
+      { execute: (fn: (tx: unknown) => unknown) => fn({}) } as never,
+      { async publish() {} } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {
+        async findByUserId() {
+          return null;
+        },
+      } as never,
+      { isEnabled: async () => true } as never,
+      {} as never,
+    );
+    const paymentService = new PaymentService(
+      {} as never,
+      intentService,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      new IdempotencyRepository(fakeRedis() as never),
+    );
+    const controller = new CommissionWalletController(
+      paymentService,
+      {
+        async findById() {
+          return { status: 'ACTIVE', amount: new Decimal(500) };
+        },
+      } as never,
+      {
+        async findByUserId(userId: string) {
+          return drivers[userId] ?? null;
+        },
+      } as never,
+    );
+    const recharge = async (userId: string, key: string) => {
+      let sent: { data: { intentId: string; gatewayIntentId: string } } | undefined;
+      await controller.recharge(
+        {
+          auth: { userId, roles: ['driver'], sid: 's' },
+          headers: { 'idempotency-key': key },
+          body: { rechargeOptionId: OPTION_ID },
+        } as never,
+        {
+          send(body: { data: { intentId: string; gatewayIntentId: string } }) {
+            sent = body;
+          },
+        } as never,
+      );
+      return sent!.data;
+    };
+    return { intents, gatewayCalls, intentService, recharge };
+  }
+
+  it('gives two drivers who send the same key two separate intents and orders', async () => {
+    const w = world();
+
+    const a = await w.recharge('user_a', 'shared-key');
+    const b = await w.recharge('user_b', 'shared-key');
+
+    assert.notEqual(a.intentId, b.intentId);
+    assert.notEqual(a.gatewayIntentId, b.gatewayIntentId);
+    assert.ok(![a.intentId, a.gatewayIntentId].some((v) => JSON.stringify(b).includes(v)));
+    assert.deepEqual([...w.intents.keys()].sort(), [
+      'recharge:driver_a:shared-key',
+      'recharge:driver_b:shared-key',
+    ]);
+  });
+
+  it('replays one driver’s retry with the same key as the same intent, with one gateway call', async () => {
+    const w = world();
+
+    const first = await w.recharge('user_a', 'k1');
+    const retry = await w.recharge('user_a', 'k1');
+
+    assert.equal(retry.intentId, first.intentId);
+    assert.equal(w.gatewayCalls.length, 1);
+  });
+
+  it('keeps one driver’s recharge and subscription with the same raw key apart', async () => {
+    const w = world();
+    const subscriptions = new SubscriptionService(
+      {
+        async findById() {
+          return {
+            id: 'plan_1',
+            status: 'ACTIVE',
+            price: new Decimal(99),
+            billingPeriod: 'WEEKLY',
+          };
+        },
+      } as never,
+      {
+        async findActive() {
+          return null;
+        },
+        async findPending() {
+          return null;
+        },
+        async create() {
+          return { id: 'sub_1' };
+        },
+      } as never,
+      w.intentService,
+      {
+        execute: (fn: (tx: unknown) => unknown) =>
+          fn({ driverSubscription: { async update() {} } }),
+      } as never,
+      { async lockForUpdate() {} } as never,
+    );
+
+    const recharge = await w.recharge('user_a', 'same-raw-key');
+    const sub = await subscriptions.purchase('driver_a', 'user_a', 'plan_1', 'same-raw-key');
+
+    assert.notEqual(sub.intentId, recharge.intentId);
+    assert.deepEqual([...w.intents.keys()].sort(), [
+      'recharge:driver_a:same-raw-key',
+      'subscription:driver_a:same-raw-key',
+    ]);
+  });
+
+  it('never hands back an intent that belongs to another user, and says nothing about it', async () => {
+    const w = world();
+    w.intents.set('recharge:driver_a:k9', {
+      id: 'intent_of_a',
+      userId: 'user_a',
+      purpose: 'DRIVER_COMMISSION_RECHARGE',
+    });
+
+    await assert.rejects(
+      w.intentService.createIntent({
+        userId: 'user_b',
+        amount: new Decimal(500),
+        methodType: 'CARD',
+        idempotencyKey: 'recharge:driver_a:k9',
+        purpose: 'DRIVER_COMMISSION_RECHARGE',
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof DuplicateIdempotencyKeyError);
+        assert.ok(!err.message.includes('intent_of_a'));
+        return true;
+      },
+    );
+    assert.equal(w.gatewayCalls.length, 0);
+  });
+
+  it('claims payment keys with the short in-flight TTL and keeps results for the full TTL', async () => {
+    const seen: { ttl: number; inFlight: number | undefined }[] = [];
+    const redis = {
+      idempotency: {
+        async get() {
+          return null;
+        },
+        async runOnce<T>(
+          _op: string,
+          _key: string,
+          ttl: number,
+          action: () => Promise<T>,
+          inFlight?: number,
+        ) {
+          seen.push({ ttl, inFlight });
+          return action();
+        },
+      },
+    };
+    const svc = new PaymentService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      new IdempotencyRepository(redis as never),
+    );
+
+    await svc.withIdempotency('user-1', '/payments/driver-wallet/recharge', 'k', {}, async () => 1);
+
+    assert.deepEqual(seen, [
+      {
+        ttl: paymentConfig.idempotencyTtlSeconds,
+        inFlight: paymentConfig.idempotencyInFlightTtlSeconds,
+      },
+    ]);
+    assert.ok(paymentConfig.idempotencyInFlightTtlSeconds < paymentConfig.idempotencyTtlSeconds);
   });
 });

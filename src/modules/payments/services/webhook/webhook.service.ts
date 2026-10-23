@@ -102,18 +102,27 @@ export class WebhookService {
         const intent = reference
           ? await this.intentService.findByGatewayReference(reference, tx)
           : null;
-        if (intent) {
-          await this.intentService.applyConfirmation(
-            intent.id,
-            parsed.outcome,
-            parsed.gatewayTxnId,
-            tx,
-          );
-        } else if (reference) {
+        if (!parsed.payment) {
+          // Signed, but without the fields the validation gate needs: apply
+          // nothing. Reconciliation reads provider truth for this payment.
+          this.paymentMetrics.webhookFailure({ gateway, reason: 'unusable_payment' });
           logger.warn(
             { gateway, eventId: event.id, reference },
-            '[payments] webhook references an unknown payment intent',
+            '[payments] webhook payment fields missing or malformed; nothing applied',
           );
+        } else {
+          const provider = {
+            kind: 'payment' as const,
+            payment: parsed.payment,
+            ...(parsed.orderAmountPaidPaise !== undefined
+              ? { orderAmountPaidPaise: parsed.orderAmountPaidPaise }
+              : {}),
+          };
+          if (intent) {
+            await this.intentService.applyConfirmation(intent.id, provider, 'WEBHOOK', tx);
+          } else {
+            await this.intentService.reviewUnknownOrder(gateway, provider, 'WEBHOOK', tx);
+          }
         }
       }
 

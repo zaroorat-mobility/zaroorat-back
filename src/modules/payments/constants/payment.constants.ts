@@ -15,6 +15,17 @@ export const REFUND_STATUS = {
   FAILED: 'FAILED',
 } as const;
 export type RefundStatus = (typeof REFUND_STATUS)[keyof typeof REFUND_STATUS];
+/// 005-razorpay-driver-payments data-model §5. Mirrored by the
+/// `payment_review_cases_kind_check` constraint.
+export type ReviewCaseKind =
+  | 'AMOUNT_MISMATCH'
+  | 'CURRENCY_MISMATCH'
+  | 'ORDER_MISMATCH'
+  | 'PAYMENT_ID_REUSED'
+  | 'MULTIPLE_CAPTURES'
+  | 'UNMATCHED_CAPTURE'
+  | 'UNKNOWN_ORDER'
+  | 'EXTERNAL_REFUND';
 /// The only things a NEW PaymentIntent may fund — and so the only money that
 /// ever reaches Razorpay/Stripe. A customer's ride fare is paid to the driver
 /// directly (cash, UPI, a phone transfer) and is never a gateway payment.

@@ -57,6 +57,7 @@ describe('payment webhook signature (integration, real HTTP — Razorpay route)'
       createdAt?: number;
       paymentId?: string;
       orderId?: string;
+      amountPaise?: number;
     } = {},
   ): string {
     return JSON.stringify({
@@ -67,6 +68,8 @@ describe('payment webhook signature (integration, real HTTP — Razorpay route)'
           entity: {
             id: overrides.paymentId ?? `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
             order_id: overrides.orderId ?? `order_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
+            amount: overrides.amountPaise ?? 50000,
+            currency: 'INR',
             status: 'captured',
           },
         },
@@ -173,7 +176,7 @@ describe('payment webhook signature (integration, real HTTP — Razorpay route)'
       where: { id: intentId },
     });
 
-    const body = payload({ orderId: intentRow.gatewayIntentId! });
+    const body = payload({ orderId: intentRow.gatewayIntentId!, amountPaise: 75000 });
     const signature = sign(body);
     const eventId = randomUUID();
 

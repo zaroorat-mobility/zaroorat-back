@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const updateGeneralSettingsSchema = z.object({
   platformName: z.string().min(1).max(120).optional(),
   logoUrl: z.string().url().or(z.literal('')).optional(),
+  customerLogoUrl: z.string().url().or(z.literal('')).optional(),
+  driverLogoUrl: z.string().url().or(z.literal('')).optional(),
   supportPhone: z.string().max(20).optional(),
   supportEmail: z.string().email().or(z.literal('')).optional(),
   defaultLanguage: z.string().min(2).max(10).optional(),

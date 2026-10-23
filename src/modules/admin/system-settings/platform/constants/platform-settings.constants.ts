@@ -9,6 +9,8 @@ export const MAINTENANCE_SETTINGS_CATEGORY = 'maintenance';
 export const GENERAL_SETTING_KEYS = Object.freeze({
   PLATFORM_NAME: 'general.platform_name',
   LOGO_URL: 'general.logo_url',
+  CUSTOMER_LOGO_URL: 'general.customer_logo_url',
+  DRIVER_LOGO_URL: 'general.driver_logo_url',
   SUPPORT_PHONE: 'general.support_phone',
   SUPPORT_EMAIL: 'general.support_email',
   DEFAULT_LANGUAGE: 'general.default_language',

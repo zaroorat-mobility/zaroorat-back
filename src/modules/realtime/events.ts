@@ -57,6 +57,9 @@ export const SOCKET_EVENT = {
   DASHBOARD_DRIVER_REGISTRATION_CHANGED: 'dashboard.driver.registration_changed',
   /// Finance room only, and carries no data at all: "the ledger moved".
   DASHBOARD_FINANCIALS_CHANGED: 'dashboard.financials.changed',
+
+  /// Server → all connected client apps. System branding / logo updated by admin.
+  APP_BRANDING_UPDATED: 'app.branding.updated',
 } as const;
 
 /// Client → server.

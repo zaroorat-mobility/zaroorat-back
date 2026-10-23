@@ -21,7 +21,7 @@ import {
   refuseAuditWrites,
   SPOOFED_ACTOR_ID,
 } from './helpers/audit.js';
-import { fundWallet } from './helpers/ride-flow.js';
+import { capturedPaymentFields, fundWallet } from './helpers/ride-flow.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 import { mockGatewayControl } from '../../src/modules/payments/services/gateway/mock.gateway.js';
 import type { RefundService } from '../../src/modules/payments/services/refund/refund.service.js';
@@ -71,6 +71,7 @@ describe('refund lifecycle (integration, real HTTP)', () => {
 
   /// A real, signed Razorpay `payment.captured` delivery for an intent.
   async function capture(gatewayIntentId: string): Promise<void> {
+    const fields = await capturedPaymentFields(gatewayIntentId);
     const body = JSON.stringify({
       event: 'payment.captured',
       created_at: Math.floor(Date.now() / 1000),
@@ -78,7 +79,7 @@ describe('refund lifecycle (integration, real HTTP)', () => {
         payment: {
           entity: {
             id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
-            order_id: gatewayIntentId,
+            ...fields,
             status: 'captured',
           },
         },
