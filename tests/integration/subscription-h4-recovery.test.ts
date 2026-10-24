@@ -12,6 +12,7 @@ import {
   resetState,
 } from './helpers/harness.js';
 import { grantRole, makeDriver, makeSubscriptionPlan } from './helpers/fixtures.js';
+import { capturedPaymentFields } from './helpers/ride-flow.js';
 import { container } from '../../src/core/di.js';
 import { paymentConfig } from '../../src/config/payment/payment.config.js';
 import type { Unsubscribe } from '../../src/core/events/index.js';
@@ -53,7 +54,8 @@ describe('H4 — Subscription activation failure recovery & outbox reliability',
     return { driver, driverId, userId: driverUser.userId };
   }
 
-  function deliverWebhook(orderReference: string, eventId = `evt_${randomUUID()}`) {
+  async function deliverWebhook(orderReference: string, eventId = `evt_${randomUUID()}`) {
+    const fields = await capturedPaymentFields(orderReference);
     const body = JSON.stringify({
       event: 'payment.captured',
       created_at: Math.floor(Date.now() / 1000),
@@ -61,7 +63,7 @@ describe('H4 — Subscription activation failure recovery & outbox reliability',
         payment: {
           entity: {
             id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
-            order_id: orderReference,
+            ...fields,
             status: 'captured',
           },
         },

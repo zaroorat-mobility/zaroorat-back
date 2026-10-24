@@ -14,7 +14,24 @@ describe('Payment State Machine Tests (H1)', () => {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
+    {} as never,
   );
+
+  it('allows the data-model §2 moves into and out of MANUAL_REVIEW and EXPIRED (005 T024)', () => {
+    for (const from of ['PENDING', 'PROCESSING', 'FAILED', 'EXPIRED', 'CANCELLED']) {
+      assert.doesNotThrow(() => service.validateTransition(from, 'MANUAL_REVIEW'));
+    }
+    assert.doesNotThrow(() => service.validateTransition('EXPIRED', 'SUCCEEDED'));
+    assert.doesNotThrow(() => service.validateTransition('PENDING', 'EXPIRED'));
+    assert.doesNotThrow(() => service.validateTransition('MANUAL_REVIEW', 'CANCELLED'));
+  });
+
+  it('never moves SUCCEEDED into review or EXPIRED', () => {
+    for (const to of ['MANUAL_REVIEW', 'EXPIRED', 'FAILED']) {
+      assert.throws(() => service.validateTransition('SUCCEEDED', to), InvalidStateTransitionError);
+    }
+  });
 
   it('allows valid state transitions including late capture recovery FAILED -> SUCCEEDED', () => {
     assert.doesNotThrow(() => service.validateTransition('CREATED', 'PENDING'));

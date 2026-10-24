@@ -22,6 +22,7 @@ import { MockGatewayProvider } from '../../../src/modules/payments/services/gate
 import type {
   CreateGatewayIntentInput,
   GatewayIntentResult,
+  OrderPayments,
 } from '../../../src/modules/payments/services/gateway/gateway.provider.js';
 
 /// Makes the gateway decline every confirmation until the returned restore
@@ -33,13 +34,51 @@ import type {
 /// shares regardless of when it was constructed.
 export function declineGateway(): () => void {
   const original = MockGatewayProvider.prototype.confirmIntent;
+  const originalLookup = MockGatewayProvider.prototype.fetchOrderPayments;
   MockGatewayProvider.prototype.confirmIntent = async function (
     gatewayIntentId: string,
   ): Promise<GatewayIntentResult> {
     return { gatewayIntentId, status: 'FAILED' };
   };
+  // IntentService reads provider truth here since 005 T024.
+  MockGatewayProvider.prototype.fetchOrderPayments = async function (
+    orderId: string,
+  ): Promise<OrderPayments> {
+    const payment = {
+      id: `mock_pay_declined_${orderId}`,
+      orderId,
+      amountPaise: 0,
+      currency: 'INR',
+      status: 'failed' as const,
+      method: 'mock',
+      createdAt: null,
+    };
+    return { kind: 'failed', payment, additionalCaptures: [] };
+  };
   return () => {
     MockGatewayProvider.prototype.confirmIntent = original;
+    MockGatewayProvider.prototype.fetchOrderPayments = originalLookup;
+  };
+}
+
+/// What Razorpay reports for a capture of one of our intents in full: its real
+/// order id and the amount in paise. `reference` may be the order id or the
+/// intent's own id. The validation gate (005 T024) checks both fields, so a
+/// payload without them, or carrying the intent id as the order, applies
+/// nothing.
+export async function capturedPaymentFields(
+  reference: string,
+): Promise<{ order_id: string; amount: number; currency: string }> {
+  const intent = await db().client.paymentIntent.findFirst({
+    where: /^[0-9a-f-]{36}$/i.test(reference)
+      ? { OR: [{ gatewayIntentId: reference }, { id: reference }] }
+      : { gatewayIntentId: reference },
+  });
+  if (!intent) return { order_id: reference, amount: 0, currency: 'INR' };
+  return {
+    order_id: intent.gatewayIntentId ?? reference,
+    amount: intent.amount.mul(100).toNumber(),
+    currency: intent.currency,
   };
 }
 
@@ -350,6 +389,8 @@ export async function fundWallet(
         entity: {
           id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
           order_id: intent.gatewayIntentId,
+          amount: amount * 100,
+          currency: 'INR',
           status: 'captured',
         },
       },

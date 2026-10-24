@@ -60,7 +60,18 @@ export class SubscriptionController {
         };
       },
     );
-    reply.send({ data });
+    // 005 T042: `checkout` is present whenever `intentId` is
+    // (contracts/http-api.md); null when the provider has no checkout. Built on
+    // every answer, a replay included, so it never repeats stale values.
+    const intent = data.intentId ? await this.paymentService.intent.findById(data.intentId) : null;
+    reply.send({
+      data: {
+        ...data,
+        checkout: intent
+          ? await this.paymentService.intent.checkoutFor(intent, 'Subscription plan')
+          : null,
+      },
+    });
   }
 
   async getStatus(req: FastifyRequest, reply: FastifyReply): Promise<void> {

@@ -192,9 +192,40 @@ export class PaymentPurposeNotAllowedError extends PaymentError {
     this.name = 'PaymentPurposeNotAllowedError';
   }
 }
+/// The purpose's kill switch is off (decisions.md TD-12). Nothing was written.
+export class PaymentsUnavailableError extends PaymentError {
+  constructor(message = 'Payments are temporarily unavailable') {
+    super(message, 'PAYMENTS_UNAVAILABLE', 503);
+    this.name = 'PaymentsUnavailableError';
+  }
+}
 /// Commission credit is prepaid platform commission, so only a driver on (or
 /// staged to switch to) the COMMISSION model may buy it. Refused before any
 /// idempotency record or gateway payment exists.
+/// 005 T043 (contracts/http-api.md "Error code additions"). The checkout
+/// callback names an order that is not this intent's, or the provider says the
+/// named payment belongs to another order (decision R1: rejected before the
+/// gate, no state change).
+export class PaymentOrderMismatchError extends PaymentError {
+  constructor(message = 'Payment does not belong to this order') {
+    super(message, 'PAYMENT_ORDER_MISMATCH', 400);
+  }
+}
+
+export class PaymentSignatureInvalidError extends PaymentError {
+  constructor(message = 'Checkout signature is invalid') {
+    super(message, 'PAYMENT_SIGNATURE_INVALID', 400);
+  }
+}
+
+/// The provider could not be reached or answered 5xx/429: the outcome is
+/// unknown, nothing changed, and a retry with the same key is safe.
+export class PaymentGatewayUnavailableError extends PaymentError {
+  constructor(message = 'Payment provider unavailable; retry later') {
+    super(message, 'PAYMENT_GATEWAY_UNAVAILABLE', 503);
+  }
+}
+
 export class CommissionRechargeNotAllowedError extends PaymentError {
   constructor(message = 'Only a commission-model driver can recharge commission credit') {
     super(message, 'COMMISSION_RECHARGE_NOT_ALLOWED', 403);

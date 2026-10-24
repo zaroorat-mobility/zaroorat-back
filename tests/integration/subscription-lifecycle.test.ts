@@ -14,6 +14,7 @@ import {
 import {
   acceptRide,
   bookRideRequest,
+  capturedPaymentFields,
   finishRide,
   rideWorld,
   type RideWorld,
@@ -85,10 +86,11 @@ describe('subscription purchase → payment → activation (integration, real HT
 
   /// Real Razorpay webhook envelope, matching the shape every other webhook
   /// test in this suite uses (`event` at the top, the payment nested under
-  /// `payload.payment.entity`, `order_id` as the order reference — accepted
-  /// by `IntentService.findByGatewayReference` either as the gateway's own
-  /// reference or, as here, the intent's own internal id).
-  function deliverWebhook(orderReference: string, eventId = `evt_${randomUUID()}`) {
+  /// `payload.payment.entity`, `order_id` as the order reference).
+  /// `capturedPaymentFields` turns the intent id callers pass into the real
+  /// order id and full amount, which the validation gate checks.
+  async function deliverWebhook(orderReference: string, eventId = `evt_${randomUUID()}`) {
+    const fields = await capturedPaymentFields(orderReference);
     const body = JSON.stringify({
       event: 'payment.captured',
       created_at: Math.floor(Date.now() / 1000),
@@ -96,7 +98,7 @@ describe('subscription purchase → payment → activation (integration, real HT
         payment: {
           entity: {
             id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
-            order_id: orderReference,
+            ...fields,
             status: 'captured',
           },
         },
@@ -398,6 +400,7 @@ describe('subscription expiry (integration, real HTTP)', () => {
       payload: { planId },
     });
     const { intentId } = purchaseRes.json().data;
+    const fields = await capturedPaymentFields(intentId);
     const body = JSON.stringify({
       event: 'payment.captured',
       created_at: Math.floor(Date.now() / 1000),
@@ -405,7 +408,7 @@ describe('subscription expiry (integration, real HTTP)', () => {
         payment: {
           entity: {
             id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
-            order_id: intentId,
+            ...fields,
             status: 'captured',
           },
         },

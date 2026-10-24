@@ -100,7 +100,7 @@ function payload(overrides: Record<string, unknown> = {}): Record<string, unknow
     id: 'evt_1',
     type: 'payment_intent.succeeded',
     created: nowSeconds(),
-    data: { object: { id: 'pi_1' } },
+    data: { object: { id: 'pi_1', amount_received: 50000, currency: 'inr' } },
     ...overrides,
   };
 }

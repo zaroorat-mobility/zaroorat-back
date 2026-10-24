@@ -5,6 +5,7 @@ import {
   autocompleteQuerySchema,
   geocodeBodySchema,
   placeDetailsParamsSchema,
+  placeDetailsQuerySchema,
   reverseGeocodeBodySchema,
   routeBodySchema,
   routeMatrixBodySchema,
@@ -29,7 +30,12 @@ export class MapsController {
       query.latitude != null && query.longitude != null
         ? { latitude: query.latitude, longitude: query.longitude }
         : undefined;
-    const data = await this.mapProviderService.autocomplete(query.input, location);
+    const data = await this.mapProviderService.autocomplete(
+      query.input,
+      location,
+      undefined,
+      query.sessionToken ? { sessionToken: query.sessionToken } : undefined,
+    );
     reply.send({ data });
   }
 
@@ -72,7 +78,12 @@ export class MapsController {
   async placeDetails(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     try {
       const params = placeDetailsParamsSchema.parse(req.params);
-      const data = await this.mapProviderService.getPlaceDetails(params.placeId, params.provider);
+      const { sessionToken } = placeDetailsQuerySchema.parse(req.query);
+      const data = await this.mapProviderService.getPlaceDetails(
+        params.placeId,
+        params.provider,
+        sessionToken ? { sessionToken } : undefined,
+      );
       reply.send({ data });
     } catch (err) {
       this.handleMapError(req, reply, err);

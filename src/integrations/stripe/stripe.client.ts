@@ -1,10 +1,14 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type {
-  PaymentGatewayProvider,
-  CreateGatewayIntentInput,
-  GatewayIntentResult,
-  GatewayRefundResult,
-  CreateGatewayRefundInput,
+import {
+  selectOrderPayments,
+  type PaymentGatewayProvider,
+  type CreateGatewayIntentInput,
+  type GatewayIntentResult,
+  type GatewayRefundResult,
+  type CreateGatewayRefundInput,
+  type OrderPayments,
+  type ProviderPayment,
+  type ProviderPaymentStatus,
 } from '../../modules/payments/services/gateway/gateway.provider.js';
 
 const BASE_URL = 'https://api.stripe.com/v1';
@@ -26,6 +30,24 @@ interface StripePaymentIntentResponse {
   id: string;
   status: string;
   client_secret?: string;
+  amount?: number;
+  amount_received?: number;
+  currency?: string;
+  latest_charge?: string | null;
+  created?: number;
+  payment_method_types?: string[];
+}
+
+interface StripeCharge {
+  id: string;
+  payment_intent: string | null;
+  amount: number;
+  currency: string;
+  status: string;
+  captured: boolean;
+  refunded: boolean;
+  created?: number;
+  payment_method_details?: { type?: string } | null;
 }
 
 interface StripeErrorBody {
@@ -142,6 +164,78 @@ export class StripeGatewayProvider implements PaymentGatewayProvider {
     return { gatewayIntentId: intent.id, status: mapIntentStatus(intent.status) };
   }
 
+  /// Stripe is dormant and has no app checkout here (TD-1 is Razorpay only).
+  checkoutKeyId(): null {
+    return null;
+  }
+
+  verifyCheckoutSignature(): boolean {
+    return false;
+  }
+
+  /// Stripe has no orders: the PaymentIntent is both the "order" and the
+  /// payment, so its one payment is the intent itself, reported under its
+  /// latest charge id (what the webhook stores as `gatewayTxnId`).
+  async fetchOrderPayments(orderId: string): Promise<OrderPayments> {
+    const intent = await this.request<StripePaymentIntentResponse>(
+      'GET',
+      `/payment_intents/${encodeURIComponent(orderId)}`,
+    );
+    return selectOrderPayments(orderId, [normaliseIntent(intent)]);
+  }
+
+  async fetchPayment(paymentId: string): Promise<ProviderPayment> {
+    if (!paymentId.startsWith('ch_')) {
+      return normaliseIntent(
+        await this.request<StripePaymentIntentResponse>(
+          'GET',
+          `/payment_intents/${encodeURIComponent(paymentId)}`,
+        ),
+      );
+    }
+    const charge = await this.request<StripeCharge>(
+      'GET',
+      `/charges/${encodeURIComponent(paymentId)}`,
+    );
+    return {
+      id: charge.id,
+      orderId: charge.payment_intent ?? '',
+      amountPaise: charge.amount,
+      currency: charge.currency.toUpperCase(),
+      status: charge.refunded
+        ? 'refunded'
+        : charge.status === 'succeeded' && charge.captured
+          ? 'captured'
+          : charge.status === 'failed'
+            ? 'failed'
+            : 'created',
+      method: charge.payment_method_details?.type ?? null,
+      createdAt: charge.created ? new Date(charge.created * 1000) : null,
+    };
+  }
+
+  /// Stripe pages by cursor, not offset, so this walks to `skip`.
+  async listPayments(from: Date, to: Date, skip: number): Promise<ProviderPayment[]> {
+    const items: StripePaymentIntentResponse[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const query = new URLSearchParams({
+        'created[gte]': String(Math.floor(from.getTime() / 1000)),
+        'created[lte]': String(Math.floor(to.getTime() / 1000)),
+        limit: '100',
+      });
+      if (after) query.set('starting_after', after);
+      const page = await this.request<{ data: StripePaymentIntentResponse[]; has_more: boolean }>(
+        'GET',
+        `/payment_intents?${query.toString()}`,
+      );
+      items.push(...page.data);
+      if (!page.has_more || page.data.length === 0 || items.length >= skip + 100) break;
+      after = page.data[page.data.length - 1]!.id;
+    }
+    return items.slice(skip, skip + 100).map(normaliseIntent);
+  }
+
   /// `providerPaymentId` is Stripe's own id — the charge (`ch_…`, what the
   /// webhook stores as `gatewayTxnId`) or the PaymentIntent (`pi_…`). This used
   /// to send our internal PaymentTransaction UUID as `payment_intent`, which
@@ -229,6 +323,26 @@ function mapStripeRefundStatus(status: string): 'SUCCEEDED' | 'PENDING' | 'FAILE
   if (status === 'succeeded') return 'SUCCEEDED';
   if (status === 'failed' || status === 'canceled') return 'FAILED';
   return 'PENDING';
+}
+
+function normaliseIntent(intent: StripePaymentIntentResponse): ProviderPayment {
+  return {
+    id: intent.latest_charge ?? intent.id,
+    orderId: intent.id,
+    amountPaise:
+      intent.status === 'succeeded' ? (intent.amount_received ?? 0) : (intent.amount ?? 0),
+    currency: String(intent.currency ?? '').toUpperCase(),
+    status: intentPaymentStatus(intent.status),
+    method: intent.payment_method_types?.[0] ?? null,
+    createdAt: intent.created ? new Date(intent.created * 1000) : null,
+  };
+}
+
+function intentPaymentStatus(status: string): ProviderPaymentStatus {
+  if (status === 'succeeded') return 'captured';
+  if (status === 'requires_capture') return 'authorized';
+  if (status === 'canceled') return 'failed';
+  return 'created';
 }
 
 function mapIntentStatus(status: string): string {

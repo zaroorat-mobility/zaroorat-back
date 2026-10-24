@@ -70,4 +70,24 @@ export async function appConfigRoutes(fastify: FastifyInstance): Promise<void> {
     },
     (req, reply) => controller.getLocaleStrings(req, reply),
   );
+
+  fastify.get(
+    '/brand-logo',
+    {
+      config: { public: true },
+      preHandler: fastify.rateLimit(rateLimits.appConfig),
+      schema: {
+        tags: ['AppConfig'],
+        summary: 'Get dynamic brand logo with fresh presigned redirect',
+        querystring: {
+          type: 'object',
+          properties: {
+            app: { type: 'string', enum: ['driver', 'rider', 'admin'] },
+            v: { type: 'string' },
+          },
+        },
+      },
+    },
+    (req, reply) => controller.getBrandLogo(req, reply),
+  );
 }

@@ -99,6 +99,8 @@ export class IntentRepository {
       gatewayTxnId?: string | null;
       errorCode?: string | null;
       errorMessage?: string | null;
+      /// The provider-reported currency of a CAPTURED_REVIEW hold row.
+      currency?: string;
     },
     tx?: TransactionClient,
   ): Promise<PaymentTransaction> {
@@ -110,7 +112,7 @@ export class IntentRepository {
         rideId: data.rideId ?? null,
         txnType: data.txnType,
         amount: data.amount,
-        currency: 'INR',
+        currency: data.currency ?? 'INR',
         status: data.status,
         gateway: data.gateway ?? null,
         gatewayTxnId: data.gatewayTxnId ?? null,
@@ -118,5 +120,64 @@ export class IntentRepository {
         errorMessage: data.errorMessage ?? null,
       },
     });
+  }
+  /// Every applied (SUCCEEDED) or held (CAPTURED_REVIEW) record of one provider
+  /// payment, on any intent: the rows INV-2's unique index allows at most one of.
+  async findPaymentRecords(
+    gateway: string | null,
+    providerPaymentId: string,
+    tx: TransactionClient,
+  ): Promise<{ id: string; intentId: string; status: string }[]> {
+    return tx.paymentTransaction.findMany({
+      where: {
+        txnType: 'PAYMENT',
+        gateway,
+        gatewayTxnId: providerPaymentId,
+        status: { in: ['SUCCEEDED', 'CAPTURED_REVIEW'] },
+      },
+      select: { id: true, intentId: true, status: true },
+    });
+  }
+  async findSucceededPayment(
+    intentId: string,
+    tx: TransactionClient,
+  ): Promise<{ id: string; gatewayTxnId: string | null } | null> {
+    return tx.paymentTransaction.findFirst({
+      where: { intentId, txnType: 'PAYMENT', status: 'SUCCEEDED' },
+      select: { id: true, gatewayTxnId: true },
+    });
+  }
+  /// A Zaroorat refund in progress or done for this provider payment.
+  async hasRefundFor(providerPaymentId: string, tx: TransactionClient): Promise<boolean> {
+    const count = await tx.refund.count({
+      where: { providerPaymentId, status: { in: ['PROCESSING', 'SUCCEEDED'] } },
+    });
+    return count > 0;
+  }
+  /// Read-only lookups for the payment-status view (005 T043): they never
+  /// create a wallet or touch a row.
+  async findCommissionWalletBalance(userId: string): Promise<Decimal | null> {
+    const driver = await this.db.client.driver.findFirst({
+      where: { userId },
+      select: { id: true },
+    });
+    if (!driver) return null;
+    const wallet = await this.db.client.driverCommissionWallet.findUnique({
+      where: { driverId: driver.id },
+      select: { balance: true },
+    });
+    return wallet?.balance ?? null;
+  }
+  async findSubscriptionFundedBy(intentId: string) {
+    return this.db.client.driverSubscription.findFirst({
+      where: { paymentIntentId: intentId },
+      select: { id: true, status: true, startDate: true, expiryDate: true },
+    });
+  }
+  async hasRefundResolvedReviewCase(intentId: string): Promise<boolean> {
+    const count = await this.db.client.paymentReviewCase.count({
+      where: { intentId, status: 'RESOLVED_REFUND' },
+    });
+    return count > 0;
   }
 }

@@ -34,6 +34,9 @@ export interface PaymentConfig {
   defaultCurrency: string;
   defaultGateway: PaymentGatewayName;
   idempotencyTtlSeconds: number;
+  /// How long a request that crashed mid-flight blocks its Idempotency-Key
+  /// (TD-6). The finished result is still kept `idempotencyTtlSeconds`.
+  idempotencyInFlightTtlSeconds: number;
   razorpayKeyId?: string | undefined;
   razorpayKeySecret?: string | undefined;
   razorpayWebhookSecret?: string | undefined;
@@ -143,6 +146,11 @@ export function getPaymentConfig(): PaymentConfig {
     defaultGateway,
     idempotencyTtlSeconds: numericEnv('PAYMENT_IDEMPOTENCY_TTL', 86400, {
       min: 60,
+      integer: true,
+    }),
+    idempotencyInFlightTtlSeconds: numericEnv('PAYMENT_IDEMPOTENCY_INFLIGHT_TTL_SEC', 120, {
+      min: 30,
+      max: 600,
       integer: true,
     }),
     razorpayKeyId: process.env.RAZORPAY_KEY_ID,

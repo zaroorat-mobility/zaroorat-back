@@ -5,6 +5,7 @@ import { SystemSettingService } from '../system-settings/services/system-setting
 import { recordAdminAction, type AuditActor } from '../audit/index.js';
 import { FinanceNotFoundError } from './finance.errors.js';
 import {
+  daysUntil,
   expiryStatus,
   isoDate,
   mapDocType,
@@ -109,34 +110,58 @@ export class DocumentComplianceService {
   private toDocDto(
     doc: {
       id: string;
-      driverId: string;
       documentType: string;
+      documentNumber?: string | null;
       fileUrl: string | null;
       fileId: string | null;
       issuedAt: Date | null;
       expiresAt: Date | null;
       verificationStatus: string;
       createdAt: Date;
+      rejectionReason?: string | null;
+      verifiedAt?: Date | null;
+      verifiedBy?: string | null;
       file?: { fileName?: string | null } | null;
     },
     driverName: string,
     thresholdDays: number,
+    driverId: string,
+    target: 'driver' | 'vehicle',
+    vehicleInfo?: {
+      plate?: string | null;
+      makeModel?: string | null;
+      typeCode?: string | null;
+      categoryLabel?: string | null;
+    } | null,
   ) {
     return {
       id: doc.id,
-      driverId: doc.driverId,
+      driverId,
       driverName,
+      target,
       docType: mapDocType(doc.documentType),
+      documentType: doc.documentType,
+      documentNumber: doc.documentNumber ?? null,
       fileName:
         doc.file?.fileName ??
         doc.fileUrl?.split('/').pop() ??
         `${doc.documentType.toLowerCase()}.pdf`,
+      fileUrl: doc.fileUrl,
+      fileId: doc.fileId,
       uploadDate: isoDate(doc.createdAt),
       issueDate: doc.issuedAt ? isoDate(doc.issuedAt) : '',
       expiryDate: doc.expiresAt ? isoDate(doc.expiresAt) : '',
+      daysUntilExpiry: daysUntil(doc.expiresAt),
       status: expiryStatus(doc.expiresAt, thresholdDays),
       expiryThresholdDays: thresholdDays,
       verificationStatus: mapVerificationStatus(doc.verificationStatus),
+      rejectionReason: doc.rejectionReason ?? null,
+      verifiedAt: doc.verifiedAt ? isoDate(doc.verifiedAt) : null,
+      verifiedBy: doc.verifiedBy ?? null,
+      vehiclePlate: vehicleInfo?.plate ?? null,
+      vehicleMakeModel: vehicleInfo?.makeModel ?? null,
+      vehicleType: vehicleInfo?.typeCode ?? null,
+      vehicleCategoryLabel: vehicleInfo?.categoryLabel ?? null,
     };
   }
 
@@ -146,7 +171,14 @@ export class DocumentComplianceService {
       driverCode: string;
       createdAt: Date;
       approvedAt: Date | null;
-      profile?: { fullLegalName?: string | null } | null;
+      rating?: unknown;
+      totalRides?: number;
+      profile?: {
+        fullLegalName?: string | null;
+        drivingExperienceYears?: number | null;
+        city?: string | null;
+      } | null;
+      wallet?: { balance: unknown } | null;
       user: {
         phoneNumber: string;
         profile?: { firstName?: string | null; lastName?: string | null } | null;
@@ -155,19 +187,71 @@ export class DocumentComplianceService {
         id: string;
         driverId: string;
         documentType: string;
+        documentNumber?: string | null;
         fileUrl: string | null;
         fileId: string | null;
         issuedAt: Date | null;
         expiresAt: Date | null;
         verificationStatus: string;
         createdAt: Date;
+        rejectionReason?: string | null;
+        verifiedAt?: Date | null;
+        verifiedBy?: string | null;
         file?: { fileName?: string | null } | null;
+      }>;
+      assignments?: Array<{
+        vehicle?: {
+          id: string;
+          registrationNumber: string;
+          make: string | null;
+          model: string | null;
+          fuelType: string | null;
+          seatingCapacity: number | null;
+          vehicleType: { code: string; name: string };
+          documents: Array<{
+            id: string;
+            vehicleId: string;
+            documentType: string;
+            documentNumber?: string | null;
+            fileUrl: string | null;
+            fileId: string | null;
+            issuedAt: Date | null;
+            expiresAt: Date | null;
+            verificationStatus: string;
+            createdAt: Date;
+            rejectionReason?: string | null;
+            verifiedAt?: Date | null;
+            verifiedBy?: string | null;
+            file?: { fileName?: string | null } | null;
+          }>;
+        };
       }>;
     },
     thresholdDays: number,
   ) {
     const name = this.driverName(driver);
-    const documents = driver.documents.map((d) => this.toDocDto(d, name, thresholdDays));
+    const activeAssignment = driver.assignments?.[0];
+    const activeVehicle = activeAssignment?.vehicle;
+    const vehicleInfo = activeVehicle
+      ? {
+          plate: activeVehicle.registrationNumber,
+          makeModel:
+            [activeVehicle.make, activeVehicle.model].filter(Boolean).join(' ') ||
+            'Commercial Vehicle',
+          typeCode: activeVehicle.vehicleType?.code ?? 'cab_economy',
+          categoryLabel: activeVehicle.vehicleType?.name ?? 'Cab Economy',
+          fuelType: activeVehicle.fuelType,
+          seatsCapacity: activeVehicle.seatingCapacity,
+        }
+      : null;
+
+    const driverDocs = driver.documents.map((d) =>
+      this.toDocDto(d, name, thresholdDays, driver.id, 'driver', vehicleInfo),
+    );
+    const vehicleDocs = (activeVehicle?.documents ?? []).map((vd) =>
+      this.toDocDto(vd, name, thresholdDays, driver.id, 'vehicle', vehicleInfo),
+    );
+    const documents = [...driverDocs, ...vehicleDocs];
     const uploadedDocs = documents.length;
 
     let complianceState: ComplianceState = 'compliant';
@@ -192,6 +276,17 @@ export class DocumentComplianceService {
       driverName: name,
       mobile: driver.user.phoneNumber,
       onboardedOn: isoDate(driver.approvedAt ?? driver.createdAt),
+      city: driver.profile?.city ?? 'Srinagar',
+      totalTrips: driver.totalRides ?? 0,
+      ratingAvg: driver.rating ? Number(driver.rating) : 5.0,
+      drivingExpYears: driver.profile?.drivingExperienceYears ?? 0,
+      walletBalance: driver.wallet?.balance ? Number(driver.wallet.balance) : 0,
+      vehiclePlate: vehicleInfo?.plate ?? null,
+      vehicleMakeModel: vehicleInfo?.makeModel ?? null,
+      vehicleType: vehicleInfo?.typeCode ?? null,
+      vehicleCategoryLabel: vehicleInfo?.categoryLabel ?? null,
+      seatsCapacity: vehicleInfo?.seatsCapacity ?? null,
+      fuelType: vehicleInfo?.fuelType ?? null,
       totalDocs: EXPECTED_DOCS,
       uploadedDocs,
       complianceState,
@@ -228,6 +323,20 @@ export class DocumentComplianceService {
         profile: true,
         user: { include: { profile: true } },
         documents: { include: { file: true } },
+        wallet: { select: { balance: true } },
+        assignments: {
+          where: { releasedAt: null, status: 'ACTIVE' },
+          include: {
+            vehicle: {
+              include: {
+                vehicleType: true,
+                documents: { include: { file: true } },
+              },
+            },
+          },
+          orderBy: { assignedAt: 'desc' },
+          take: 1,
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -237,11 +346,44 @@ export class DocumentComplianceService {
       summaries = summaries.filter((s) => s.complianceState === query.complianceState);
     }
 
+    let expiredCount = 0;
+    let expiring7dCount = 0;
+    let expiring30dCount = 0;
+    let validCount = 0;
+    let totalDocsCount = 0;
+
+    for (const s of summaries) {
+      for (const d of s.documents) {
+        totalDocsCount++;
+        if (d.status === 'expired') {
+          expiredCount++;
+        } else if (d.daysUntilExpiry !== null && d.daysUntilExpiry <= 7) {
+          expiring7dCount++;
+        } else if (d.status === 'expiring_soon') {
+          expiring30dCount++;
+        } else {
+          validCount++;
+        }
+      }
+    }
+
     const totalCount = summaries.length;
     const start = (query.page - 1) * query.limit;
     const data = summaries.slice(start, start + query.limit);
 
-    return { data, meta: pageMeta(query.page, query.limit, totalCount) };
+    return {
+      data,
+      meta: {
+        ...pageMeta(query.page, query.limit, totalCount),
+        counts: {
+          expired: expiredCount,
+          expiring7d: expiring7dCount,
+          expiring30d: expiring30dCount,
+          valid: validCount,
+          total: totalDocsCount,
+        },
+      },
+    };
   }
 
   async getCompliance(driverId: string, alertThresholdDays?: number) {
@@ -254,6 +396,20 @@ export class DocumentComplianceService {
         profile: true,
         user: { include: { profile: true } },
         documents: { include: { file: true } },
+        wallet: { select: { balance: true } },
+        assignments: {
+          where: { releasedAt: null, status: 'ACTIVE' },
+          include: {
+            vehicle: {
+              include: {
+                vehicleType: true,
+                documents: { include: { file: true } },
+              },
+            },
+          },
+          orderBy: { assignedAt: 'desc' },
+          take: 1,
+        },
       },
     });
     if (!driver || driver.deletedAt) {
@@ -269,22 +425,43 @@ export class DocumentComplianceService {
     actor: AuditActor,
     rejectionReason?: string,
   ) {
-    const doc = await this.client.driverDocument.findUnique({ where: { id: documentId } });
-    if (!doc) throw new FinanceNotFoundError('Document was not found');
+    const driverDoc = await this.client.driverDocument.findUnique({ where: { id: documentId } });
+    if (driverDoc) {
+      const reviewed = await this.driverService.documents.reviewDocument(
+        documentId,
+        driverDoc.driverId,
+        status,
+        actor,
+        rejectionReason,
+      );
 
-    const reviewed = await this.driverService.documents.reviewDocument(
-      documentId,
-      doc.driverId,
-      status,
-      actor,
-      rejectionReason,
-    );
+      return {
+        id: reviewed.id,
+        driverId: reviewed.driverId,
+        verificationStatus: mapVerificationStatus(reviewed.verificationStatus),
+        rejectionReason: reviewed.rejectionReason ?? undefined,
+      };
+    }
 
-    return {
-      id: reviewed.id,
-      driverId: reviewed.driverId,
-      verificationStatus: mapVerificationStatus(reviewed.verificationStatus),
-      rejectionReason: reviewed.rejectionReason ?? undefined,
-    };
+    const vehicleDoc = await this.client.vehicleDocument.findUnique({ where: { id: documentId } });
+    if (vehicleDoc) {
+      const reviewed = await this.client.vehicleDocument.update({
+        where: { id: documentId },
+        data: {
+          verificationStatus: status,
+          rejectionReason: rejectionReason ?? null,
+          ...(status === 'VERIFIED' ? { verifiedAt: new Date(), verifiedBy: actor.actorId } : {}),
+        },
+      });
+
+      return {
+        id: reviewed.id,
+        vehicleId: reviewed.vehicleId,
+        verificationStatus: mapVerificationStatus(reviewed.verificationStatus),
+        rejectionReason: reviewed.rejectionReason ?? undefined,
+      };
+    }
+
+    throw new FinanceNotFoundError('Document was not found');
   }
 }

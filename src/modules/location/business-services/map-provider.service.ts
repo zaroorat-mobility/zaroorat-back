@@ -4,6 +4,7 @@ import type {
   AutocompleteResult,
   ForwardGeocodeResult,
   MapProvider,
+  MapProviderOptions,
   MatrixResult,
   PlaceDetailsResult,
   ReverseGeocodeResult,
@@ -271,10 +272,11 @@ export class MapProviderService {
     input: string,
     location?: Coordinate,
     pinnedProvider?: MapProviderName,
+    options?: MapProviderOptions,
   ): Promise<AutocompleteResult> {
     try {
       return await this.withProvider('autocomplete', pinnedProvider, (provider) =>
-        provider.autocomplete(input, location),
+        provider.autocomplete(input, location, options),
       );
     } catch {
       return { status: 'unavailable', predictions: [], providerName: 'none' };
@@ -302,16 +304,18 @@ export class MapProviderService {
     });
   }
 
+  /// Pinned to the provider that produced the place id: an id from one provider
+  /// means nothing to another.
   async getPlaceDetails(
     placeId: string,
     providerName: MapProviderName,
+    options?: MapProviderOptions,
   ): Promise<PlaceDetailsResult> {
-    const policy = await this.resolvePolicy();
-    const provider = this.buildProvider(providerName, policy);
-    if (!provider?.getPlaceDetails) {
-      throw new RoutingProviderUnavailableError('Place details not supported');
-    }
-    const result = await provider.getPlaceDetails(placeId);
-    return attachMeta(result, this.buildMeta(provider, policy, 'place_details'));
+    return this.withProvider('place_details', providerName, async (provider) => {
+      if (!provider.getPlaceDetails) {
+        throw new RoutingProviderUnavailableError('Place details not supported');
+      }
+      return provider.getPlaceDetails(placeId, options);
+    });
   }
 }

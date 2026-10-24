@@ -144,8 +144,9 @@ export function mapTxnType(txnType: string): {
 export function mapDocType(
   documentType: string,
 ): 'licence' | 'rc' | 'insurance' | 'permit' | 'kyc' | 'puc' | 'police_verification' | 'id_proof' {
-  switch (documentType) {
+  switch (documentType.toUpperCase()) {
     case 'DRIVING_LICENSE':
+    case 'LICENCE':
       return 'licence';
     case 'RC':
       return 'rc';
@@ -153,6 +154,9 @@ export function mapDocType(
       return 'insurance';
     case 'PUC':
       return 'puc';
+    case 'PERMIT':
+    case 'FITNESS':
+      return 'permit';
     case 'POLICE_VERIFICATION':
       return 'police_verification';
     case 'AADHAAR':
@@ -163,6 +167,12 @@ export function mapDocType(
     default:
       return 'id_proof';
   }
+}
+
+export function daysUntil(date: Date | null | undefined, now = new Date()): number | null {
+  if (!date) return null;
+  const ms = date.getTime() - now.getTime();
+  return Math.ceil(ms / (1000 * 60 * 60 * 24));
 }
 
 export function mapVerificationStatus(status: string): 'verified' | 'pending' | 'rejected' {

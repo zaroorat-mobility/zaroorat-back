@@ -433,10 +433,31 @@ describe('authorization / BOLA (integration, real HTTP)', () => {
       const intentId = await makePendingIntent(victim.userId, 250);
 
       const response = await post(`/api/v1/payments/intents/${intentId}/confirm`, attacker);
-      assert.equal(response.statusCode, 403, response.payload);
+      const missingId = randomUUID();
+      const missing = await post(`/api/v1/payments/intents/${missingId}/confirm`, attacker);
+
+      // 404, not 403 (005 T027, TM-16): a foreign intent must be
+      // indistinguishable from one that does not exist, so the caller cannot
+      // even learn that the id is real.
+      assert.equal(response.statusCode, 404, response.payload);
+      assert.equal(missing.statusCode, 404, missing.payload);
+      const comparable = (body: { error: Record<string, unknown> }, id: string) => {
+        const { requestId: _requestId, ...rest } = body.error;
+        return { ...rest, message: String(rest.message).replaceAll(id, '<id>') };
+      };
+      assert.deepEqual(
+        comparable(response.json(), intentId),
+        comparable(missing.json(), missingId),
+        'same body as a missing intent',
+      );
 
       const row = await db().client.paymentIntent.findUniqueOrThrow({ where: { id: intentId } });
       assert.equal(row.status, 'PENDING', 'the intent was not settled');
+      assert.equal(
+        await db().client.paymentTransaction.count({ where: { intentId } }),
+        0,
+        'no payment record was written',
+      );
     });
 
     it('scopes the wallet to the caller', async () => {

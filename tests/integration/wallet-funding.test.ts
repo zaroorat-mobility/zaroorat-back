@@ -11,7 +11,7 @@ import type { WalletService } from '../../src/modules/payments/services/wallet/w
 import type { IntentService } from '../../src/modules/payments/services/intent/intent.service.js';
 import type { GatewayPaymentPurpose } from '../../src/modules/payments/constants/payment.constants.js';
 import { PaymentPurposeNotAllowedError } from '../../src/modules/payments/errors/payment.errors.js';
-import { captureGatewayIntentInputs } from './helpers/ride-flow.js';
+import { captureGatewayIntentInputs, capturedPaymentFields } from './helpers/ride-flow.js';
 import type { TransactionManager } from '../../src/core/database/TransactionManager.js';
 
 const RIDER = '+919876603001';
@@ -75,11 +75,11 @@ describe('wallet funding integrity (integration)', () => {
   /// Real Razorpay webhook envelope — `event` at the top, the payment nested
   /// under `payload.payment.entity`, `order_id` as the order reference.
   /// `orderReference` may be either the intent's real `gatewayIntentId` or
-  /// (as most callers here pass) its own internal `PaymentIntent.id` —
-  /// `IntentService.findByGatewayReference` accepts either, falling back to
-  /// a UUID-pattern match against the intent's own id when it is not a
-  /// recognised gateway reference.
-  function deliverWebhook(orderReference: string, eventId = `evt_${randomUUID()}`) {
+  /// (as most callers here pass) its own internal `PaymentIntent.id`;
+  /// `capturedPaymentFields` turns either into the real order id and full
+  /// amount, which the validation gate checks (005 T024).
+  async function deliverWebhook(orderReference: string, eventId = `evt_${randomUUID()}`) {
+    const fields = await capturedPaymentFields(orderReference);
     const body = JSON.stringify({
       event: 'payment.captured',
       created_at: Math.floor(Date.now() / 1000),
@@ -87,7 +87,7 @@ describe('wallet funding integrity (integration)', () => {
         payment: {
           entity: {
             id: `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`,
-            order_id: orderReference,
+            ...fields,
             status: 'captured',
           },
         },

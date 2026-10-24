@@ -81,6 +81,15 @@ export class PaymentMetrics {
   subscriptionActivated(fields?: PaymentMetricFields): void {
     this.emit('subscription_activated_total', fields);
   }
+  /// 005 T043: a checkout `verify` was refused (order mismatch, bad
+  /// signature, unknown payment). Label `reason`; a security signal.
+  verifyRejected(fields?: PaymentMetricFields): void {
+    this.emit('verify_rejected_total', fields);
+  }
+  /// 005 T024: a captured payment opened a review case. Label `kind`.
+  amountMismatch(fields?: PaymentMetricFields): void {
+    this.emit('amount_mismatch_total', fields);
+  }
   private emit(event: string, fields?: PaymentMetricFields): void {
     incrementCounter(`payment_${event}`, fields);
     logger.info({ metric: `payment.${event}`, ...fields }, `[metric] payment.${event}`);

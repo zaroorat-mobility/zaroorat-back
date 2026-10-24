@@ -1,6 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
 import { IdempotencyInFlightError } from '@core/cache';
+import {
+  PaymentGatewayUnavailableError,
+  PaymentsUnavailableError,
+} from '@modules/payments/errors/payment.errors.js';
 export function handleSubscriptionError(
   err: unknown,
   request: FastifyRequest,
@@ -10,6 +14,12 @@ export function handleSubscriptionError(
   // a `code` but no `statusCode`, so without this it would surface as a 500.
   if (err instanceof IdempotencyInFlightError) {
     reply.status(409).send(errorEnvelope(err.code, err.message, request.id));
+    return;
+  }
+  // Subscription payments switched off (TD-12), or the provider unreachable
+  // while creating the order (005 T043): fixed messages, safe to pass on.
+  if (err instanceof PaymentsUnavailableError || err instanceof PaymentGatewayUnavailableError) {
+    reply.status(503).send(errorEnvelope(err.code, err.message, request.id));
     return;
   }
   if (isCodedError(err) && err.statusCode < 500) {

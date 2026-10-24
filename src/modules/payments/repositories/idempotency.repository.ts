@@ -35,6 +35,7 @@ export class IdempotencyRepository {
     payload: unknown,
     ttlSeconds: number,
     operation: () => Promise<T>,
+    inFlightTtlSeconds: number = ttlSeconds,
   ): Promise<{
     result: T;
     replayed: boolean;
@@ -57,6 +58,7 @@ export class IdempotencyRepository {
       scopedKey,
       ttlSeconds,
       async () => ({ payloadHash: currentHash, response: await operation() }),
+      inFlightTtlSeconds,
     );
     if (claimed.payloadHash !== currentHash) {
       throw new DuplicateIdempotencyKeyError();

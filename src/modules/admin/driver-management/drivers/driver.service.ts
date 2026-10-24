@@ -8,7 +8,7 @@ import type { EpochService } from '@modules/auth/services/token/epoch.service.js
 import { DriverService } from '@modules/drivers/services/driver.service.js';
 import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { AdminDriverConflictError, AdminDriverNotFoundError } from '../driver.errors.js';
-import type { ListDriversQuery } from './driver.schemas.js';
+import type { ListDriversQuery, UpdateDriverBody } from './driver.schemas.js';
 
 export type DriverStatusDto =
   'active' | 'offline' | 'online' | 'on_trip' | 'suspended' | 'blocked' | 'pending' | 'rejected';
@@ -36,6 +36,20 @@ export interface DriverListItemDto {
   licenseExpiry?: string;
   insuranceExpiry?: string;
   permitExpiry?: string;
+  vehicleMake?: string;
+  vehicleModel?: string;
+  subscription?:
+    | {
+        planName?: string | undefined;
+        status: string;
+        expiryDate?: string | undefined;
+        startDate?: string | undefined;
+        endDate?: string | undefined;
+        amount?: number | undefined;
+        autoRenew?: boolean | undefined;
+      }
+    | null
+    | undefined;
   joinedAt: string;
   lastActiveAt?: string;
   isOnline: boolean;
@@ -154,8 +168,9 @@ export interface DriverDetailsDto extends DriverListItemDto {
   paymentModel?: string | undefined;
   subscription?:
     | {
-        planName: string;
+        planName?: string | undefined;
         status: string;
+        expiryDate?: string | undefined;
         startDate?: string | undefined;
         endDate?: string | undefined;
         amount?: number | undefined;
@@ -251,6 +266,11 @@ export class AdminDriverService {
           documents: {
             select: { id: true, documentType: true, expiresAt: true, verificationStatus: true },
           },
+          subscriptions: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            include: { plan: true },
+          },
           assignments: {
             where: { status: 'ACTIVE', releasedAt: null },
             take: 1,
@@ -301,6 +321,21 @@ export class AdminDriverService {
     if (!vehicle && row.currentVehicleId) {
       vehicle = (await this.databaseService.client.vehicle.findUnique({
         where: { id: row.currentVehicleId },
+        include: {
+          vehicleType: true,
+          documents: {
+            include: {
+              file: { select: { contentType: true, fileName: true } },
+              backFile: { select: { contentType: true, fileName: true } },
+            },
+          },
+          images: { orderBy: { uploadedAt: 'desc' }, take: 1 },
+        },
+      })) as unknown as typeof vehicle;
+    }
+    if (!vehicle) {
+      vehicle = (await this.databaseService.client.vehicle.findFirst({
+        where: { currentDriverId: row.id },
         include: {
           vehicleType: true,
           documents: {
@@ -536,6 +571,314 @@ export class AdminDriverService {
 
   async activate(id: string, actor: AuditActor, notes?: string): Promise<DriverDetailsDto> {
     return this.setModerationState(id, 'active', actor, 'Driver Account Activated', notes);
+  }
+
+  async update(id: string, data: UpdateDriverBody, actor: AuditActor): Promise<DriverDetailsDto> {
+    await this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'drivers', id);
+      const row = await tx.driver.findFirst({
+        where: { id, deletedAt: null },
+        include: {
+          profile: true,
+          user: { include: { profile: true, emergencyContacts: true } },
+          bankAccounts: { where: { isActive: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+          assignments: {
+            where: { status: 'ACTIVE', releasedAt: null },
+            take: 1,
+            include: { vehicle: true },
+          },
+        },
+      });
+      if (!row) throw new AdminDriverNotFoundError();
+
+      // 1. Update User (email, mobileNumber)
+      const userUpdates: Prisma.UserUpdateInput = {};
+      if (data.email !== undefined && data.email !== '') {
+        userUpdates.email = data.email.toLowerCase().trim();
+      }
+      if (data.mobileNumber && data.mobileNumber.trim()) {
+        userUpdates.phoneNumber = data.mobileNumber.trim();
+      }
+      if (Object.keys(userUpdates).length > 0) {
+        await tx.user.update({
+          where: { id: row.userId },
+          data: userUpdates,
+        });
+      }
+
+      // 1b. Update UserProfile
+      const name = (data.driverName || data.fullName)?.trim();
+      if (name) {
+        const parts = name.split(/\s+/);
+        const firstName = parts[0];
+        const lastName = parts.slice(1).join(' ');
+        await tx.userProfile.upsert({
+          where: { userId: row.userId },
+          create: {
+            userId: row.userId,
+            ...(firstName ? { firstName } : {}),
+            ...(lastName ? { lastName } : {}),
+          },
+          update: {
+            ...(firstName ? { firstName } : {}),
+            ...(lastName ? { lastName } : {}),
+          },
+        });
+      }
+
+      // 2. Update or create Emergency Contact
+      const eName = (data.emergencyContactName || data.emergencyContacts?.[0]?.name)?.trim();
+      const ePhone = (
+        data.emergencyContactNumber || data.emergencyContacts?.[0]?.phoneNumber
+      )?.trim();
+      const eRel = (
+        data.emergencyContactRelationship || data.emergencyContacts?.[0]?.relationship
+      )?.trim();
+      if (eName || ePhone) {
+        const existingEc = row.user.emergencyContacts?.[0];
+        if (existingEc) {
+          await tx.emergencyContact.update({
+            where: { id: existingEc.id },
+            data: {
+              ...(eName ? { contactName: eName } : {}),
+              ...(ePhone ? { phoneNumber: ePhone } : {}),
+              ...(eRel ? { relationship: eRel } : {}),
+            },
+          });
+        } else if (ePhone) {
+          await tx.emergencyContact.create({
+            data: {
+              userId: row.userId,
+              contactName: eName || 'Emergency Contact',
+              phoneNumber: ePhone,
+              relationship: eRel || 'Family',
+              priority: 1,
+            },
+          });
+        }
+      }
+
+      // 3. Update DriverProfile
+      const profileUpdates: Prisma.DriverProfileUncheckedUpdateInput = {};
+      if (name) profileUpdates.fullLegalName = name;
+      if (data.dateOfBirth) {
+        const d = new Date(data.dateOfBirth);
+        if (!isNaN(d.getTime())) profileUpdates.dateOfBirth = d;
+      }
+      if (data.gender) profileUpdates.gender = data.gender;
+      if (data.bloodGroup) profileUpdates.bloodGroup = data.bloodGroup;
+      if (data.preferredLanguage || data.language) {
+        profileUpdates.preferredLanguage = (data.preferredLanguage || data.language)!.trim();
+      }
+      if (data.city) profileUpdates.city = data.city.trim();
+      if (data.state) profileUpdates.state = data.state.trim();
+      const addr = (data.addressLine1 || data.address)?.trim();
+      if (addr) profileUpdates.addressLine = addr;
+      if (data.alternatePhone) profileUpdates.alternatePhone = data.alternatePhone.trim();
+      const exp =
+        data.drivingExperienceYears ??
+        (data.drivingExperience != null ? parseInt(String(data.drivingExperience), 10) : undefined);
+      if (exp != null && !isNaN(exp)) profileUpdates.drivingExperienceYears = exp;
+
+      if (Object.keys(profileUpdates).length > 0) {
+        if (row.profile) {
+          await tx.driverProfile.update({
+            where: { driverId: id },
+            data: profileUpdates,
+          });
+        } else {
+          await tx.driverProfile.create({
+            data: {
+              driverId: id,
+              ...(name ? { fullLegalName: name } : {}),
+              ...(data.dateOfBirth ? { dateOfBirth: new Date(data.dateOfBirth) } : {}),
+              ...(data.gender ? { gender: data.gender } : {}),
+              ...(data.bloodGroup ? { bloodGroup: data.bloodGroup } : {}),
+              ...(data.preferredLanguage || data.language
+                ? { preferredLanguage: (data.preferredLanguage || data.language)!.trim() }
+                : {}),
+              ...(data.city ? { city: data.city.trim() } : {}),
+              ...(data.state ? { state: data.state.trim() } : {}),
+              ...(addr ? { addressLine: addr } : {}),
+              ...(data.alternatePhone ? { alternatePhone: data.alternatePhone.trim() } : {}),
+              ...(exp != null && !isNaN(exp) ? { drivingExperienceYears: exp } : {}),
+            },
+          });
+        }
+      }
+
+      // 4. Update Driver paymentModel
+      if (data.paymentModel) {
+        const pm = data.paymentModel.toUpperCase();
+        if (pm === 'COMMISSION' || pm === 'SUBSCRIPTION') {
+          await tx.driver.update({
+            where: { id },
+            data: { paymentModel: pm },
+          });
+        }
+      }
+
+      // 5. Update Vehicle
+      const vMake = (data.vehicle?.brand || data.vehicleMake)?.trim();
+      const vModel = (data.vehicle?.model || data.vehicleModel)?.trim();
+      const vPlate = (data.vehicle?.registrationNo || data.registrationPlate)?.trim();
+      const vColor = (data.vehicle?.color || data.vehicleColor)?.trim();
+      const vYearRaw = data.vehicle?.yearOfManufacture ?? data.manufacturingYear;
+      const vYear = vYearRaw != null ? parseInt(String(vYearRaw), 10) : undefined;
+      const vFuel = (data.vehicle?.fuelType || data.fuelType)?.trim();
+      const vType = (data.vehicle?.category || data.vehicleType)?.trim();
+
+      let vehicleId = row.currentVehicleId || row.assignments?.[0]?.vehicleId;
+      if (!vehicleId) {
+        const linkedVehicle = await tx.vehicle.findFirst({
+          where: { currentDriverId: id },
+          select: { id: true },
+        });
+        vehicleId = linkedVehicle?.id;
+      }
+
+      if (!vehicleId && (vPlate || vMake || vModel)) {
+        const plate = vPlate || `JK_${id.replace(/-/g, '').slice(0, 8).toUpperCase()}`;
+        const existingByPlate = await tx.vehicle.findUnique({
+          where: { registrationNumber: plate },
+        });
+        if (existingByPlate) {
+          vehicleId = existingByPlate.id;
+          await tx.vehicle.update({
+            where: { id: vehicleId },
+            data: { currentDriverId: id },
+          });
+        } else {
+          const defaultType = await tx.vehicleType.findFirst();
+          if (defaultType) {
+            const newVehicle = await tx.vehicle.create({
+              data: {
+                registrationNumber: plate,
+                make: vMake || 'Vehicle',
+                model: vModel || 'Model',
+                color: vColor || 'White',
+                vehicleTypeId: defaultType.id,
+                currentDriverId: id,
+                ...(vFuel ? { fuelType: vFuel } : {}),
+                ...(vYear && !isNaN(vYear) ? { manufacturingYear: vYear } : {}),
+              },
+            });
+            vehicleId = newVehicle.id;
+          }
+        }
+      }
+
+      if (vehicleId) {
+        if (!row.currentVehicleId) {
+          await tx.driver.update({
+            where: { id },
+            data: { currentVehicleId: vehicleId },
+          });
+        }
+
+        const vehicleUpdates: Prisma.VehicleUpdateInput = {};
+        if (vMake) vehicleUpdates.make = vMake;
+        if (vModel) vehicleUpdates.model = vModel;
+        if (vPlate) vehicleUpdates.registrationNumber = vPlate.toUpperCase();
+        if (vColor) vehicleUpdates.color = vColor;
+        if (vYear && !isNaN(vYear)) vehicleUpdates.manufacturingYear = vYear;
+        if (vFuel) vehicleUpdates.fuelType = vFuel;
+
+        if (vType) {
+          const matchedType = await tx.vehicleType.findFirst({
+            where: {
+              OR: [
+                { code: { equals: vType, mode: 'insensitive' } },
+                { name: { contains: vType, mode: 'insensitive' } },
+              ],
+            },
+          });
+          if (matchedType) {
+            vehicleUpdates.vehicleType = { connect: { id: matchedType.id } };
+          }
+        }
+
+        if (Object.keys(vehicleUpdates).length > 0) {
+          await tx.vehicle.update({
+            where: { id: vehicleId },
+            data: vehicleUpdates,
+          });
+        }
+      }
+
+      // 6. Update Bank Account
+      const bName = (data.bankAccount?.bankName || data.bankName)?.trim();
+      const bHolder = (data.bankAccount?.accountHolderName || data.accountHolderName)?.trim();
+      const bNum = (data.bankAccount?.accountNumber || data.accountNumber)?.trim();
+      const bIfsc = (data.bankAccount?.ifscCode || data.ifscCode)?.trim()?.toUpperCase();
+      const bUpi = (data.bankAccount?.upiId || data.upiId)?.trim();
+
+      if (bName || bHolder || bIfsc || bUpi || (bNum && !bNum.includes('•'))) {
+        const existingAcc = row.bankAccounts?.[0];
+        if (existingAcc) {
+          const bankUpdates: Prisma.DriverBankAccountUpdateInput = {};
+          if (bName) bankUpdates.bankName = bName;
+          if (bHolder) bankUpdates.accountHolderName = bHolder;
+          if (bIfsc) bankUpdates.ifscCode = bIfsc;
+          if (bUpi) bankUpdates.upiId = bUpi;
+          if (bNum && !bNum.includes('•')) {
+            const clean = bNum.replace(/\D/g, '');
+            bankUpdates.accountNumberLast4 =
+              clean.length >= 4 ? clean.slice(-4) : clean.padStart(4, '0');
+          }
+          await tx.driverBankAccount.update({
+            where: { id: existingAcc.id },
+            data: bankUpdates,
+          });
+        } else {
+          const clean = bNum ? bNum.replace(/\D/g, '') : '';
+          const last4 =
+            clean.length >= 4 ? clean.slice(-4) : clean ? clean.padStart(4, '0') : '0000';
+          await tx.driverBankAccount.create({
+            data: {
+              driverId: id,
+              bankName: bName || 'Bank',
+              accountHolderName: bHolder || name || 'Account Holder',
+              ifscCode: bIfsc || 'IFSC0000000',
+              accountNumberLast4: last4,
+              ...(bUpi ? { upiId: bUpi } : {}),
+              isDefault: true,
+              enteredBy: actor.actorId,
+            },
+          });
+        }
+      }
+
+      // 7. Audit Log
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'driver',
+        entityId: id,
+        summary: 'Driver profile updated by admin',
+        notes: `Updated profile details for driver ${name || row.driverCode}`,
+        result: 'SUCCESS',
+      });
+    });
+
+    // 8. Moderation status change
+    if (data.driverStatus) {
+      const s = data.driverStatus.toLowerCase();
+      if (s === 'suspended' || s === 'blocked' || s === 'active') {
+        const current = await this.getById(id);
+        if (current.driverStatus !== s) {
+          await this.setModerationState(
+            id,
+            s as 'suspended' | 'blocked' | 'active',
+            actor,
+            `Driver status updated to ${s}`,
+            'Updated via admin edit modal',
+          ).catch(() => {});
+        }
+      }
+    }
+
+    return this.getById(id);
   }
 
   /// The driver flag, the account status, the session revocation and the audit row
@@ -787,6 +1130,31 @@ export class AdminDriverService {
       ...(row.user.email ? { email: row.user.email } : {}),
       vehicleType: mapVehicleTypeLabel(vehicle?.vehicleType?.code, vehicle?.vehicleType?.name),
       ...(vehicle?.registrationNumber ? { registrationPlate: vehicle.registrationNumber } : {}),
+      ...(vehicle?.make ? { vehicleMake: vehicle.make } : {}),
+      ...(vehicle?.model ? { vehicleModel: vehicle.model } : {}),
+      ...(() => {
+        const rawRow = row as {
+          subscriptions?: Array<{
+            status?: string;
+            plan?: { name?: string };
+            expiryDate?: Date;
+          }>;
+        };
+        const activeSub = rawRow.subscriptions?.[0];
+        if (!activeSub) return {};
+        return {
+          subscription: {
+            status:
+              activeSub.status === 'ACTIVE'
+                ? 'active'
+                : activeSub.status === 'EXPIRED'
+                  ? 'expired'
+                  : 'none',
+            planName: activeSub.plan?.name ?? 'Active Plan',
+            expiryDate: activeSub.expiryDate ? activeSub.expiryDate.toISOString() : undefined,
+          },
+        };
+      })(),
       driverStatus,
       verificationStatus: row.verificationStatus,
       ...(row.rejectionReason != null ? { rejectionReason: row.rejectionReason } : {}),

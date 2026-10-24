@@ -37,6 +37,9 @@ import type {
   UpdateMaintenanceSettingsBody,
 } from '../schemas/platform-settings.schema.js';
 import { logger } from '@shared/logger/index.js';
+import { SOCKET_EVENT, socketEnvelope } from '@modules/realtime/events.js';
+import type { RealtimeGateway } from '@modules/realtime/realtime.gateway.js';
+import { uuidV7 } from '@shared/crypto';
 
 type SettingField<T> = { value: T; source: 'database' | 'default' };
 
@@ -88,6 +91,12 @@ export class AdminPlatformSettingsService {
         (v) => v,
       ),
       logoUrl: withSource(s.get(GENERAL_SETTING_KEYS.LOGO_URL)?.value, '', (v) => v),
+      customerLogoUrl: withSource(
+        s.get(GENERAL_SETTING_KEYS.CUSTOMER_LOGO_URL)?.value,
+        '',
+        (v) => v,
+      ),
+      driverLogoUrl: withSource(s.get(GENERAL_SETTING_KEYS.DRIVER_LOGO_URL)?.value, '', (v) => v),
       supportPhone: withSource(s.get(GENERAL_SETTING_KEYS.SUPPORT_PHONE)?.value, '', (v) => v),
       supportEmail: withSource(s.get(GENERAL_SETTING_KEYS.SUPPORT_EMAIL)?.value, '', (v) => v),
       defaultLanguage: withSource(
@@ -106,6 +115,8 @@ export class AdminPlatformSettingsService {
       [
         { key: GENERAL_SETTING_KEYS.PLATFORM_NAME, value: body.platformName },
         { key: GENERAL_SETTING_KEYS.LOGO_URL, value: body.logoUrl },
+        { key: GENERAL_SETTING_KEYS.CUSTOMER_LOGO_URL, value: body.customerLogoUrl },
+        { key: GENERAL_SETTING_KEYS.DRIVER_LOGO_URL, value: body.driverLogoUrl },
         { key: GENERAL_SETTING_KEYS.SUPPORT_PHONE, value: body.supportPhone },
         { key: GENERAL_SETTING_KEYS.SUPPORT_EMAIL, value: body.supportEmail },
         { key: GENERAL_SETTING_KEYS.DEFAULT_LANGUAGE, value: body.defaultLanguage },
@@ -596,8 +607,27 @@ export class AdminPlatformSettingsService {
       const appConfigCache = container.resolve('appConfigCache') as {
         purgeAll: () => Promise<void>;
       };
-      await appConfigService.bumpVersion(actorId ?? null);
+      const newVersion = await appConfigService.bumpVersion(actorId ?? null);
       await appConfigCache.purgeAll();
+
+      if (container.hasRegistration('realtimeGateway')) {
+        const gateway = container.resolve<RealtimeGateway>('realtimeGateway');
+        const [general, riderConfig, driverConfig] = await Promise.all([
+          this.platformConfigResolver.getGeneralConfig(),
+          this.platformConfigResolver.getGeneralConfig('rider'),
+          this.platformConfigResolver.getGeneralConfig('driver'),
+        ]);
+        gateway.emitBroadcast(
+          socketEnvelope(uuidV7(), SOCKET_EVENT.APP_BRANDING_UPDATED, {
+            logoUrl: general.logoUrl,
+            customerLogoUrl: riderConfig.logoUrl,
+            driverLogoUrl: driverConfig.logoUrl,
+            platformName: general.platformName,
+            version: newVersion,
+            timestamp: Date.now(),
+          }),
+        );
+      }
     } catch (err) {
       logger.warn({ err }, '[AdminPlatformSettings] Failed to invalidate public app-config');
     }

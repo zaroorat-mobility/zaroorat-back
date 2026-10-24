@@ -4,6 +4,7 @@ import { afterEach, describe, it } from 'node:test';
 import {
   RazorpayGatewayProvider,
   RazorpayApiError,
+  razorpayReceipt,
 } from '../../../src/integrations/razorpay/razorpay.client.js';
 import {
   StripeGatewayProvider,
@@ -62,7 +63,7 @@ describe('Gateway adapters — real order/intent creation against the actual API
       const body = JSON.parse(String(calls[0]!.init?.body));
       // Rupees -> paise.
       assert.equal(body.amount, 25000);
-      assert.equal(body.receipt, 'idem-rzp');
+      assert.equal(body.receipt, razorpayReceipt('idem-rzp'));
     });
 
     it('resolves the authoritative payment from a list of attempts on confirmIntent', async () => {
@@ -79,7 +80,35 @@ describe('Gateway adapters — real order/intent creation against the actual API
       const provider = new RazorpayGatewayProvider('id', 'secret', 'sandbox');
       const result = await provider.confirmIntent('order_1');
       assert.equal(result.status, 'SUCCEEDED');
-      assert.match(calls[0]!.url, /\/payments\?order_id=order_1$/);
+      assert.equal(result.providerPaymentId, 'pay_2');
+    });
+
+    // 005-razorpay-driver-payments T011 (TM-01).
+    it('asks the documented GET /orders/{id}/payments on confirmIntent', async () => {
+      const calls = stubFetch(() =>
+        jsonResponse(200, { items: [{ id: 'pay_2', order_id: 'order_1', status: 'captured' }] }),
+      );
+      restore = () => (calls as unknown as { restore: () => void }).restore();
+
+      await new RazorpayGatewayProvider('id', 'secret', 'sandbox').confirmIntent('order_1');
+      assert.match(calls[0]!.url, /\/orders\/order_1\/payments$/);
+    });
+
+    it("never selects another order's captured payment on confirmIntent", async () => {
+      const calls = stubFetch(() =>
+        jsonResponse(200, {
+          items: [
+            { id: 'pay_other', order_id: 'order_OTHER', status: 'captured' },
+            { id: 'pay_1', order_id: 'order_1', status: 'failed' },
+          ],
+        }),
+      );
+      restore = () => (calls as unknown as { restore: () => void }).restore();
+
+      const result = await new RazorpayGatewayProvider('id', 'secret', 'sandbox').confirmIntent(
+        'order_1',
+      );
+      assert.notEqual(result.status, 'SUCCEEDED');
     });
 
     it('surfaces a Razorpay API error with the gateway error code', async () => {

@@ -1,4 +1,14 @@
+import type {
+  ProviderPayment,
+  ProviderPaymentStatus,
+} from '../services/gateway/gateway.provider.js';
+
 export type GatewayWebhookPayload = Record<string, unknown> | null | undefined;
+/// What the validation gate reads from a signed payload.
+export type WebhookPayment = Pick<
+  ProviderPayment,
+  'id' | 'orderId' | 'amountPaise' | 'currency' | 'status'
+>;
 
 export interface ParsedWebhookEvent {
   eventId: string | null;
@@ -12,6 +22,12 @@ export interface ParsedWebhookEvent {
   /// (e.g. a Stripe `charge.dispute.created`) — persisted for idempotency,
   /// but never fed into `IntentService.applyConfirmation`.
   outcome: 'SUCCEEDED' | 'FAILED' | null;
+  /// The payment as a provider record for the validation gate (005 T024).
+  /// null when a field the gate needs is missing or malformed: nothing is
+  /// then applied, and reconciliation settles the payment from provider truth.
+  payment: WebhookPayment | null;
+  /// Razorpay `order.paid` only: `payload.order.entity.amount_paid`.
+  orderAmountPaidPaise?: number;
 }
 
 function pick(source: GatewayWebhookPayload, ...path: string[]): unknown {
@@ -30,6 +46,33 @@ function asNonEmptyString(value: unknown): string | null {
 function asNumber(value: unknown): number | null {
   const n = typeof value === 'string' ? Number(value) : value;
   return typeof n === 'number' && Number.isFinite(n) ? n : null;
+}
+
+/// Integer paise (Razorpay) or minor units (Stripe). A string, a fraction or
+/// a negative number is malformed, not something to coerce.
+function asMinorUnits(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function asCurrency(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : null;
+}
+
+const PAYMENT_STATUSES = new Set(['created', 'authorized', 'captured', 'failed', 'refunded']);
+
+function gatePayment(fields: {
+  id: string | null;
+  orderId: string | null;
+  amount: unknown;
+  currency: unknown;
+  status: ProviderPaymentStatus | null;
+}): WebhookPayment | null {
+  const amountPaise = asMinorUnits(fields.amount);
+  const currency = asCurrency(fields.currency);
+  if (!fields.id || !fields.orderId || amountPaise === null || !currency || !fields.status) {
+    return null;
+  }
+  return { id: fields.id, orderId: fields.orderId, amountPaise, currency, status: fields.status };
 }
 
 /// Both epoch-seconds and epoch-milliseconds arrive from different providers
@@ -59,17 +102,29 @@ export function parseStripeWebhook(payload: GatewayWebhookPayload): ParsedWebhoo
     : STRIPE_FAILURE_TYPES.has(eventType)
       ? 'FAILED'
       : null;
+  const intentReference =
+    asNonEmptyString(pick(payload, 'data', 'object', 'payment_intent')) ??
+    asNonEmptyString(pick(payload, 'data', 'object', 'id'));
+  const gatewayTxnId =
+    asNonEmptyString(pick(payload, 'data', 'object', 'latest_charge')) ??
+    asNonEmptyString(pick(payload, 'data', 'object', 'id'));
   return {
     eventId: asNonEmptyString(pick(payload, 'id')),
     eventType,
-    intentReference:
-      asNonEmptyString(pick(payload, 'data', 'object', 'payment_intent')) ??
-      asNonEmptyString(pick(payload, 'data', 'object', 'id')),
-    gatewayTxnId:
-      asNonEmptyString(pick(payload, 'data', 'object', 'latest_charge')) ??
-      asNonEmptyString(pick(payload, 'data', 'object', 'id')),
+    intentReference,
+    gatewayTxnId,
     timestampSeconds: normaliseTimestamp(pick(payload, 'created')),
     outcome,
+    // A PaymentIntent reports `amount_received`; a charge only `amount`.
+    payment: gatePayment({
+      id: gatewayTxnId,
+      orderId: intentReference,
+      amount:
+        pick(payload, 'data', 'object', 'amount_received') ??
+        pick(payload, 'data', 'object', 'amount'),
+      currency: pick(payload, 'data', 'object', 'currency'),
+      status: outcome === 'SUCCEEDED' ? 'captured' : outcome === 'FAILED' ? 'failed' : null,
+    }),
   };
 }
 
@@ -92,8 +147,31 @@ export function parseRazorpayWebhook(
     : RAZORPAY_FAILURE_EVENTS.has(eventType)
       ? 'FAILED'
       : null;
-  const paymentId = asNonEmptyString(pick(payload, 'payload', 'payment', 'entity', 'id'));
-  const orderId = asNonEmptyString(pick(payload, 'payload', 'payment', 'entity', 'order_id'));
+  const entity = (key: string) => pick(payload, 'payload', 'payment', 'entity', key);
+  const paymentId = asNonEmptyString(entity('id'));
+  const orderId = asNonEmptyString(entity('order_id'));
+  const rawStatus = entity('status');
+  // An authorisation auto-refunded at the capture timeout never took money
+  // (same rule as the adapter, data-model §9).
+  const status =
+    typeof rawStatus !== 'string' || !PAYMENT_STATUSES.has(rawStatus)
+      ? null
+      : rawStatus === 'refunded' && entity('captured') === false
+        ? 'failed'
+        : (rawStatus as ProviderPaymentStatus);
+  const payment = gatePayment({
+    id: paymentId,
+    orderId,
+    amount: entity('amount'),
+    currency: entity('currency'),
+    status,
+  });
+  // `order.paid` must also carry a well-formed `amount_paid`, which the gate
+  // compares with the expected amount.
+  const amountPaid =
+    eventType === 'order.paid'
+      ? asMinorUnits(pick(payload, 'payload', 'order', 'entity', 'amount_paid'))
+      : undefined;
   return {
     // Falls back to `orderId:paymentId` only when the header is missing
     // (e.g. a hand-built test payload) — a real Razorpay delivery always
@@ -105,5 +183,7 @@ export function parseRazorpayWebhook(
     gatewayTxnId: paymentId,
     timestampSeconds: normaliseTimestamp(pick(payload, 'created_at')),
     outcome,
+    payment: amountPaid === null ? null : payment,
+    ...(amountPaid != null ? { orderAmountPaidPaise: amountPaid } : {}),
   };
 }

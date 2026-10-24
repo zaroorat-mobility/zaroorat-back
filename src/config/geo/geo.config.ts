@@ -9,6 +9,8 @@ export interface GeoConfig {
   rideLocationSampleIntervalMs: number;
   etaRefreshMinIntervalMs: number;
   etaRefreshMinMovementMeters: number;
+  /// A stationary driver (traffic, waiting at pickup) still gets a fresh ETA this often.
+  etaRefreshMaxIntervalMs: number;
 }
 export const geoConfig: GeoConfig = Object.freeze({
   h3Resolution: Number(process.env.GEO_H3_RESOLUTION ?? 8),
@@ -21,4 +23,5 @@ export const geoConfig: GeoConfig = Object.freeze({
   rideLocationSampleIntervalMs: Number(process.env.GEO_RIDE_LOCATION_SAMPLE_INTERVAL_MS ?? 15_000),
   etaRefreshMinIntervalMs: Number(process.env.GEO_ETA_REFRESH_MIN_INTERVAL_MS ?? 30_000),
   etaRefreshMinMovementMeters: Number(process.env.GEO_ETA_REFRESH_MIN_MOVEMENT_M ?? 100),
+  etaRefreshMaxIntervalMs: Number(process.env.GEO_ETA_REFRESH_MAX_INTERVAL_MS ?? 120_000),
 });
