@@ -89,11 +89,11 @@ describe('driver checkout: payload, status and verify (integration)', () => {
     return { driver, driverId, initialBalance: await balance(driverId) };
   }
 
-  async function recharge(driver: LoggedInUser) {
+  async function recharge(driver: LoggedInUser, key: string = randomUUID()) {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/payments/driver-wallet/recharge',
-      headers: { ...driver.authHeader, 'idempotency-key': randomUUID() },
+      headers: { ...driver.authHeader, 'idempotency-key': key },
       payload: { amount: 500 },
     });
     assert.equal(res.statusCode, 200, res.payload);
@@ -144,7 +144,7 @@ describe('driver checkout: payload, status and verify (integration)', () => {
       where: { txnType: 'MANUAL_RECHARGE', referenceId: intentId },
     });
 
-  it('returns the checkout payload (T042): public key, our order, paise, no secret, no prefill', async () => {
+  it("returns the checkout payload (T042): public key, our order, paise, no secret, the driver's own phone", async () => {
     const { driver } = await commissionDriver('+919876607101');
     const data = await recharge(driver);
 
@@ -156,10 +156,28 @@ describe('driver checkout: payload, status and verify (integration)', () => {
       currency: 'INR',
       name: 'Zaroorat',
       description: 'Commission wallet recharge',
+      // UD-9 (a): the caller's own login number, and nothing else about them.
+      prefill: { contact: '+919876607101' },
     });
     const raw = JSON.stringify(data);
     assert.ok(!raw.includes(FAKE_RAZORPAY_KEY_SECRET!), 'the key secret never leaves the backend');
-    assert.ok(!('prefill' in (data.checkout ?? {})), 'prefill stays off until UD-9 (C7)');
+  });
+
+  it('rebuilds the checkout on a replay: same intent and order, current values', async () => {
+    const { driver } = await commissionDriver('+919876607111');
+    const key = randomUUID();
+    const first = await recharge(driver, key);
+    // Stands in for any value that changed after the first answer was stored,
+    // like the phone prefill added after an attempt began.
+    await db().client.user.update({
+      where: { id: driver.userId },
+      data: { phoneNumber: '+919876607198' },
+    });
+    const replay = await recharge(driver, key);
+
+    assert.equal(replay.intentId, first.intentId);
+    assert.equal(replay.gatewayIntentId, first.gatewayIntentId);
+    assert.deepEqual(replay.checkout?.prefill, { contact: '+919876607198' });
   });
 
   it('shows the owner a database-only status; anyone else gets the missing-intent answer', async () => {

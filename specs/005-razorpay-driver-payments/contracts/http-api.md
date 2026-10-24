@@ -46,7 +46,7 @@ Legend: **NEW** · **CHANGED** · **UNCHANGED** (context only). All bodies use t
 }
 ```
 
-- `checkout.prefill` is **omitted** until UD-9 approves sharing the phone number. If approved, it is `{ "contact": "+91…" }`.
+- `checkout.prefill` is `{ "contact": "+91…" }`: the paying driver's own login number (UD-9 (a), 2026-10-23). It is omitted when the intent's owner has no driver record.
 
 - **Errors**:
 

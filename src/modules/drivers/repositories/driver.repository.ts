@@ -50,6 +50,14 @@ export class DriverRepository {
       },
     });
   }
+  /// The driver's own login number (E.164), or null for a user who is not a driver.
+  async findPhoneByUserId(userId: string): Promise<string | null> {
+    const driver = await this.db.client.driver.findUnique({
+      where: { userId },
+      select: { user: { select: { phoneNumber: true } } },
+    });
+    return driver?.user.phoneNumber ?? null;
+  }
   async updateProfile(
     userId: string,
     driverId: string,

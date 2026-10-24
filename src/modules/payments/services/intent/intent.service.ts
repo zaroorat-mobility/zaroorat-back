@@ -53,6 +53,8 @@ export interface CheckoutPayload {
   currency: string;
   name: string;
   description: string;
+  /// UD-9 (a): the paying driver's own number, so checkout does not ask for it.
+  prefill?: { contact: string };
 }
 /// contracts/http-api.md `GET /payments/intents/:intentId`.
 export interface IntentStatusView {
@@ -513,6 +515,8 @@ export class IntentService {
     const gateway = await this.gatewayResolver.forProviderName(intent.gateway);
     const keyId = gateway.checkoutKeyId();
     if (!keyId) return null;
+    // From our database for the intent's owner, never from the request (UD-9 a).
+    const contact = await this.driverRepository.findPhoneByUserId(intent.userId);
     return {
       provider: gateway.gatewayName,
       keyId,
@@ -521,6 +525,7 @@ export class IntentService {
       currency: intent.currency,
       name: CHECKOUT_MERCHANT_NAME,
       description,
+      ...(contact ? { prefill: { contact } } : {}),
     };
   }
   /// `GET /payments/intents/:intentId`: our database only, never the provider.

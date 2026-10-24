@@ -77,16 +77,22 @@ export class CommissionWalletController {
           gateway: intent.gateway,
           gatewayIntentId: intent.gatewayIntentId,
           amount: intent.amount.toNumber(),
-          // 005 T042: what the app's native checkout opens with; null when
-          // the provider has none (the mock in development).
-          checkout: await this.paymentService.intent.checkoutFor(
-            intent,
-            'Commission wallet recharge',
-          ),
         };
       },
     );
-    reply.send({ data: result });
+    // 005 T042: what the app's native checkout opens with; null when the
+    // provider has none (the mock in development). Built on every answer, a
+    // replay included: inside the replayed record it froze the values of the
+    // first answer, such as a phone number added later (UD-9) or a rotated key.
+    const intent = await this.paymentService.intent.findById(result.intentId);
+    reply.send({
+      data: {
+        ...result,
+        checkout: intent
+          ? await this.paymentService.intent.checkoutFor(intent, 'Commission wallet recharge')
+          : null,
+      },
+    });
   }
 
   /// Commission credit only pays platform commission, so only a COMMISSION

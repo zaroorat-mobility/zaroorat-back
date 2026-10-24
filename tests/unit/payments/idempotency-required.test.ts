@@ -229,6 +229,10 @@ describe('Driver-scoped payment idempotency (T014/T017)', () => {
       async findByIdempotencyKey(key: string) {
         return intents.get(key) ?? null;
       },
+      // The controllers rebuild `checkout` from the intent on every answer.
+      async findById(id: string) {
+        return [...intents.values()].find((row) => row.id === id) ?? null;
+      },
       async create(input: { idempotencyKey: string; userId: string; purpose: string }) {
         if (intents.has(input.idempotencyKey)) throw new Error('unique violation');
         const row = {
