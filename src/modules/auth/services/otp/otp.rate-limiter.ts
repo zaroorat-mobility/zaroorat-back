@@ -1,4 +1,4 @@
-import { RedisService } from '@core/cache';
+import { RedisService, rateLimitsBypassed } from '@core/cache';
 import type { OtpPurpose } from '@core/database/types';
 import type { OtpConfig } from '@config/otp/otp.config';
 export interface OtpSendContext {
@@ -31,12 +31,14 @@ export class OtpRateLimiter {
     return { allowed: true, retryAfterSeconds: 0 };
   }
   async isLocked(purpose: OtpPurpose, phoneNumber: string): Promise<boolean> {
+    if (rateLimitsBypassed()) return false;
     return this.redisService.otp.isLocked(purpose, phoneNumber);
   }
   async registerFailedAttempt(
     purpose: OtpPurpose,
     phoneNumber: string,
   ): Promise<FailedAttemptResult> {
+    if (rateLimitsBypassed()) return { locked: false };
     const count = await this.redisService.otp.incrementAttempts(
       purpose,
       phoneNumber,

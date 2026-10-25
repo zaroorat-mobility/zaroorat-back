@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis';
 import { RedisProvider } from '../RedisProvider';
 import { RedisKeys } from '../keys';
+import { rateLimitsBypassed } from './RateLimitStore';
 export interface OtpChallengeMeta {
   challengeId: string;
   otpExpiresAt: number;
@@ -75,6 +76,7 @@ export class OtpStore {
     },
   ): Promise<ClaimChallengeResult> {
     const payload = JSON.stringify(meta);
+    const limit = rateLimitsBypassed() ? 999999 : options.limit;
     const [status, value, ttl] = (await this.client.eval(
       OtpStore.CLAIM_CHALLENGE_LUA,
       2,
@@ -82,7 +84,7 @@ export class OtpStore {
       RedisKeys.rateLimit(options.rateLimitScope, phone),
       payload,
       String(options.cooldownSeconds),
-      String(options.limit),
+      String(limit),
       String(options.windowSeconds),
     )) as [number, string, number];
     if (status === 0) {

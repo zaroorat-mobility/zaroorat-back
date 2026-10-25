@@ -20,6 +20,7 @@ x-app-env: &app-env
   REDIS_URL: redis://redis:6379
   JWT_ACCESS_SECRET: local_dev_access_secret_do_not_use_in_prod
   JWT_REFRESH_SECRET: local_dev_refresh_secret_do_not_use_in_prod
+  RATE_LIMIT_BYPASS: 'true'
 
 x-app-build: &app-build
   context: .
