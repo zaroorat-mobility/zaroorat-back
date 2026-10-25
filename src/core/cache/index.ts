@@ -6,7 +6,7 @@ export { registerRedisModule } from './RedisModule';
 export { OtpStore } from './stores/OtpStore';
 export { EpochStore } from './stores/EpochStore';
 export { SidBlacklistStore } from './stores/SidBlacklistStore';
-export { RateLimitStore, type RateLimitResult } from './stores/RateLimitStore';
+export { RateLimitStore, rateLimitsBypassed, type RateLimitResult } from './stores/RateLimitStore';
 export {
   IdempotencyStore,
   IdempotencyInFlightError,
