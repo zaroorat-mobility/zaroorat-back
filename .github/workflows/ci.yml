@@ -178,6 +178,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Boots the image under production config validation with no real database.
+      # The whole static module graph and every import-time config guard load
+      # before bootstrapDatabase() runs, so stopping at a refused database
+      # connection proves the image resolves its modules and accepts its
+      # configuration. It does NOT prove the API serves traffic: that needs real
+      # PostgreSQL/Redis services, and storage/SMS/push are only checked after them.
+      #
+      # Every key below is a CI-only dummy for this throwaway container — not a
+      # secret, never used anywhere else. DB_BOOT_RETRIES=1 makes the expected
+      # database failure arrive in seconds instead of after the ~30s retry budget.
       - name: Smoke-test the image
         run: |
           docker run -d --name api -p 3000:3000 \
@@ -187,20 +197,39 @@ jobs:
             -e REDIS_URL=redis://localhost:6379 \
             -e JWT_ACCESS_SECRET=ci_access_secret_padded_to_min_32_chars \
             -e JWT_REFRESH_SECRET=ci_refresh_secret_padded_to_min_32_chars \
+            -e ENCRYPTION_KEY=ci_encryption_key_padded_to_min_32_chars \
+            -e BANK_DATA_ENCRYPTION_KEY=ci_bank_data_key_padded_to_min_32_chars \
+            -e BANK_ACCOUNT_HASH_KEY=ci_bank_hash_key_padded_to_min_32_chars \
+            -e RIDE_PIN_PEPPER=ci_ride_pin_pepper_padded_to_min_32_chars \
+            -e PAYMENT_WEBHOOK_SECRET=ci_payment_webhook_secret_not_real \
+            -e DB_BOOT_RETRIES=1 \
             zaroorat-backend:ci
-          # The container has no real database, so it may exit during bootstrap.
-          # What we assert here is that it got far enough to validate config —
-          # a missing module or bad CMD fails much earlier and louder.
-          sleep 10
-          docker logs api
-          if docker logs api 2>&1 | grep -q "Cannot find module"; then
-            echo "Image cannot resolve its own modules."
+          if ! status=$(timeout 60 docker wait api); then
+            docker logs api
+            echo "::error::Container still running after 60s; expected it to stop at the placeholder database."
             exit 1
           fi
-          if docker logs api 2>&1 | grep -q "Environment validation failed"; then
-            echo "Image rejected its configuration."
+          log="$RUNNER_TEMP/api.log"
+          docker logs api > "$log" 2>&1
+          cat "$log"
+          echo "Container exit status: $status"
+          if grep -q "Cannot find module" "$log"; then
+            echo "::error::Image cannot resolve its own modules."
             exit 1
           fi
+          if grep -q "Environment validation failed" "$log"; then
+            echo "::error::Image rejected its configuration."
+            exit 1
+          fi
+          # Any other crash before the database (an import-time config guard, a bad
+          # CMD) prints neither string above, so success is asserted positively —
+          # on our own startup catch and bootstrapDatabase() stack frame, because
+          # the driver's error text differs by network (ECONNREFUSED vs P2010).
+          if ! grep -q "Failed to start application orchestration" "$log" || ! grep -q "at async bootstrapDatabase" "$log"; then
+            echo "::error::Image exited (status $status) before reaching the database bootstrap."
+            exit 1
+          fi
+          echo "Image loaded its modules and configuration and stopped at the placeholder database. API readiness is NOT verified by this step."
 
       # The image compiles its own dist/ from source (.dockerignore excludes any host
       # build), so this checks the code that ships: real auth-otp jobs in every state,
