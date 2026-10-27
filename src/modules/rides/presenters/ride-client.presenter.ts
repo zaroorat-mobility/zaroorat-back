@@ -85,19 +85,33 @@ type FareInput = {
   distanceFare?: unknown;
   timeFare?: unknown;
   waitingFare?: unknown;
+  waitingCharge?: unknown;
   surgeAmount?: unknown;
   discountAmount?: unknown;
   platformFee?: unknown;
+  platformCommission?: unknown;
   cgst?: unknown;
   sgst?: unknown;
   igst?: unknown;
+  taxAmount?: unknown;
   tipAmount?: unknown;
   tollAmount?: unknown;
   totalFare?: unknown;
+  driverEarning?: unknown;
   driverEarnings?: unknown;
   currency?: string | null;
   createdAt?: Date | string | null;
   updatedAt?: Date | string | null;
+};
+
+type CancellationInput = {
+  id?: string;
+  cancelledBy?: string | null;
+  reasonCode?: string | null;
+  reasonText?: string | null;
+  cancellationFee?: unknown;
+  feeCharged?: boolean | null;
+  createdAt?: Date | string | null;
 };
 
 type RideInput = {
@@ -116,14 +130,18 @@ type RideInput = {
   passengerName?: string | null;
   passengerPhone?: string | null;
   pickupNotes?: string | null;
+  createdAt?: Date | string | null;
   acceptedAt?: Date | string | null;
   arrivedAt?: Date | string | null;
   dropoffArrivedAt?: Date | string | null;
   startedAt?: Date | string | null;
   completedAt?: Date | string | null;
   cancelledAt?: Date | string | null;
+  actualDistanceKm?: unknown;
+  actualDurationMin?: number | null;
+  driverPaymentModel?: string | null;
   fare?: unknown;
-  cancellation?: unknown;
+  cancellation?: CancellationInput | null;
   driver?: DriverInput | null;
   customer?: CustomerInput | null;
   vehicle?: VehicleInput | null;
@@ -453,35 +471,61 @@ export function toClientRideView(
           createdAt: e.createdAt,
         }))
       : undefined,
+    createdAt: ride.createdAt ?? null,
     acceptedAt: ride.acceptedAt,
     arrivedAt: ride.arrivedAt,
     dropoffArrivedAt: ride.dropoffArrivedAt ?? null,
     startedAt: ride.startedAt,
     completedAt: ride.completedAt,
     cancelledAt: ride.cancelledAt,
+    actualDistanceKm: dec(ride.actualDistanceKm),
+    actualDurationMin: ride.actualDurationMin ?? null,
+    distanceKm: dec(ride.actualDistanceKm) ?? dec(req?.estimatedDistanceKm) ?? null,
+    durationMin: ride.actualDurationMin ?? req?.estimatedDurationMin ?? null,
+    driverPaymentModel: ride.driverPaymentModel ?? null,
     fare: ride.fare
       ? (() => {
           const f = ride.fare as FareInput;
+          const driverEarning = dec(f.driverEarning ?? f.driverEarnings);
+          const platformCommission = dec(f.platformCommission ?? f.platformFee);
+          const waitingCharge = dec(f.waitingCharge ?? f.waitingFare);
+          const taxAmount = dec(
+            f.taxAmount ?? ((dec(f.cgst) ?? 0) + (dec(f.sgst) ?? 0) + (dec(f.igst) ?? 0) || null),
+          );
           return {
             ...(f as Record<string, unknown>),
             baseFare: dec(f.baseFare),
             distanceFare: dec(f.distanceFare),
             timeFare: dec(f.timeFare),
-            waitingFare: dec(f.waitingFare),
+            waitingFare: waitingCharge,
+            waitingCharge,
             surgeAmount: dec(f.surgeAmount),
             discountAmount: dec(f.discountAmount),
-            platformFee: dec(f.platformFee),
+            platformFee: platformCommission,
+            platformCommission,
+            taxAmount,
             cgst: dec(f.cgst),
             sgst: dec(f.sgst),
             igst: dec(f.igst),
             tipAmount: dec(f.tipAmount),
             tollAmount: dec(f.tollAmount),
             totalFare: dec(f.totalFare),
-            driverEarnings: dec(f.driverEarnings),
+            driverEarning,
+            driverEarnings: driverEarning,
           };
         })()
       : null,
-    cancellation: ride.cancellation ?? null,
+    cancellation: ride.cancellation
+      ? {
+          id: ride.cancellation.id,
+          cancelledBy: ride.cancellation.cancelledBy,
+          reasonCode: ride.cancellation.reasonCode,
+          reasonText: ride.cancellation.reasonText ?? null,
+          cancellationFee: dec(ride.cancellation.cancellationFee),
+          feeCharged: Boolean(ride.cancellation.feeCharged),
+          createdAt: ride.cancellation.createdAt,
+        }
+      : null,
     driver,
     customer,
     vehicle: ride.vehicle

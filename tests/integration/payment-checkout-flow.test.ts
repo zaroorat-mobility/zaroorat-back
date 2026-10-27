@@ -163,6 +163,28 @@ describe('driver checkout: payload, status and verify (integration)', () => {
     assert.ok(!raw.includes(FAKE_RAZORPAY_KEY_SECRET!), 'the key secret never leaves the backend');
   });
 
+  it('adds the public checkout key id to the recharge options on request, never the secret', async () => {
+    const { driver } = await commissionDriver('+919876607121');
+    const url = '/api/v1/payments/driver-wallet/recharge-options';
+
+    const plain = await app.inject({ method: 'GET', url, headers: driver.authHeader });
+    assert.equal(plain.statusCode, 200, plain.payload);
+    assert.ok(Array.isArray(plain.json().data), 'older apps still receive the option list');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `${url}?include=checkout`,
+      headers: driver.authHeader,
+    });
+    assert.equal(res.statusCode, 200, res.payload);
+    const data = res.json().data;
+    assert.ok(Array.isArray(data.options));
+    assert.deepEqual(data.checkout, { provider: 'razorpay', keyId: FAKE_RAZORPAY_KEY_ID });
+    assert.equal(data.checkoutError, null);
+    assert.ok(!res.payload.includes(FAKE_RAZORPAY_KEY_SECRET!), 'the key secret never leaves');
+    assert.ok(!/secret/i.test(res.payload));
+  });
+
   it('rebuilds the checkout on a replay: same intent and order, current values', async () => {
     const { driver } = await commissionDriver('+919876607111');
     const key = randomUUID();

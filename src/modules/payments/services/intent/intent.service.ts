@@ -12,7 +12,11 @@ import {
   type GatePath,
   type GateProvider,
 } from './payment-application-rules.js';
-import { PaymentGatewayResolverService } from '../gateway/payment-gateway-resolver.service.js';
+import {
+  PaymentGatewayDisabledError,
+  PaymentGatewayNotConfiguredError,
+  PaymentGatewayResolverService,
+} from '../gateway/payment-gateway-resolver.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import { CommissionWalletService } from '../commission-wallet/commission-wallet.service.js';
@@ -56,6 +60,17 @@ export interface CheckoutPayload {
   /// UD-9 (a): the paying driver's own number, so checkout does not ask for it.
   prefill?: { contact: string };
 }
+/// `GET /payments/driver-wallet/recharge-options?include=checkout`: the active
+/// gateway's PUBLIC key id, for the Driver App's payment-method discovery
+/// before any order exists. Never a secret. `checkout` is null when the
+/// provider has no client checkout (the mock in development) or is not usable,
+/// and then `checkoutError` says why when it is a configuration problem.
+export interface CheckoutConfigView {
+  checkout: { provider: string; keyId: string } | null;
+  checkoutError: { code: 'PAYMENT_GATEWAY_NOT_CONFIGURED' | 'PAYMENT_GATEWAY_DISABLED' } | null;
+}
+/// A Razorpay public key id; anything else is treated as not configured.
+const RAZORPAY_KEY_ID = /^rzp_(test|live)_[A-Za-z0-9]{6,}$/;
 /// contracts/http-api.md `GET /payments/intents/:intentId`.
 export interface IntentStatusView {
   intentId: string;
@@ -527,6 +542,28 @@ export class IntentService {
       description,
       ...(contact ? { prefill: { contact } } : {}),
     };
+  }
+  /// The same key id every new order's `checkout` carries: the active gateway as
+  /// admin settings (then env) configure it. The secret stays in the adapter.
+  async checkoutConfig(): Promise<CheckoutConfigView> {
+    let gateway: PaymentGatewayProvider;
+    try {
+      gateway = await this.gatewayResolver.getActiveGateway();
+    } catch (err) {
+      if (err instanceof PaymentGatewayNotConfiguredError) {
+        return { checkout: null, checkoutError: { code: 'PAYMENT_GATEWAY_NOT_CONFIGURED' } };
+      }
+      if (err instanceof PaymentGatewayDisabledError) {
+        return { checkout: null, checkoutError: { code: 'PAYMENT_GATEWAY_DISABLED' } };
+      }
+      throw err;
+    }
+    const keyId = gateway.checkoutKeyId();
+    if (keyId === null) return { checkout: null, checkoutError: null };
+    if (gateway.gatewayName === 'razorpay' && !RAZORPAY_KEY_ID.test(keyId)) {
+      return { checkout: null, checkoutError: { code: 'PAYMENT_GATEWAY_NOT_CONFIGURED' } };
+    }
+    return { checkout: { provider: gateway.gatewayName, keyId }, checkoutError: null };
   }
   /// `GET /payments/intents/:intentId`: our database only, never the provider.
   async statusView(intent: PaymentIntent): Promise<IntentStatusView> {
