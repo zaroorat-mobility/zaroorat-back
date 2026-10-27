@@ -17,6 +17,13 @@ export const earningsRidesQuerySchema = z.object({
   to: z.coerce.date().optional(),
   cursor: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
+  status: z
+    .string()
+    .optional()
+    .transform((val) =>
+      val ? (val.toUpperCase() as 'ALL' | 'COMPLETED' | 'CANCELLED') : undefined,
+    )
+    .pipe(z.enum(['ALL', 'COMPLETED', 'CANCELLED']).optional()),
 });
 
 export const withdrawalCreateSchema = z.object({

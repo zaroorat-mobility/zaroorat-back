@@ -110,15 +110,20 @@ export class CommissionWalletController {
     return driver.id;
   }
 
-  async listRechargeOptions(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const options = await this.rechargeOptionRepository.listActive();
-    reply.send({
-      data: options.map((o) => ({
-        id: o.id,
-        amount: o.amount.toNumber(),
-        label: o.label,
-        sortOrder: o.sortOrder,
-      })),
-    });
+  async listRechargeOptions(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const options = (await this.rechargeOptionRepository.listActive()).map((o) => ({
+      id: o.id,
+      amount: o.amount.toNumber(),
+      label: o.label,
+      sortOrder: o.sortOrder,
+    }));
+    // Older apps read `data` as the option list, so the shape changes only on
+    // request: `include=checkout` adds the public checkout key id the app
+    // needs to list banks and wallets before any order exists.
+    if ((req.query as { include?: unknown } | undefined)?.include !== 'checkout') {
+      reply.send({ data: options });
+      return;
+    }
+    reply.send({ data: { options, ...(await this.paymentService.intent.checkoutConfig()) } });
   }
 }

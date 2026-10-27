@@ -1,5 +1,6 @@
 import { DatabaseService } from '@core/database';
 import { Decimal } from '../../types';
+import type { RideStatus } from '@core/database/types.js';
 
 export type EarningsPeriod = 'today' | 'week' | 'month';
 
@@ -156,72 +157,287 @@ export class DriverEarningsService {
 
   async listCompletedRides(
     driverId: string,
-    opts: { from?: Date; to?: Date; cursor?: string; limit: number },
+    opts: {
+      from?: Date;
+      to?: Date;
+      cursor?: string;
+      limit: number;
+      status?: 'ALL' | 'COMPLETED' | 'CANCELLED';
+    },
   ): Promise<{
     data: Array<{
       id: string;
       rideCode: string;
+      status: string;
+      createdAt: string;
+      acceptedAt?: string | null;
+      arrivedAt?: string | null;
+      startedAt?: string | null;
       completedAt: string | null;
+      cancelledAt: string | null;
       distanceKm: number | null;
       durationMin: number | null;
+      actualDistanceKm?: number | null;
+      actualDurationMin?: number | null;
       pickupAddress: string | null;
       dropAddress: string | null;
       driverEarning: number;
+      commissionAmount: number;
       totalFare: number;
       paymentMethod: string;
+      vehicleTypeName: string;
+      riderName: string;
+      rider?: {
+        fullName?: string;
+        firstName?: string | null;
+        lastName?: string | null;
+        phone?: string | null;
+      };
+      vehicle?: {
+        registrationNumber: string | null;
+        make: string | null;
+        model: string | null;
+        color: string | null;
+      } | null;
+      cancellation?: {
+        reasonCode: string;
+        reasonText: string | null;
+        cancelledBy: string;
+        cancellationFee: number;
+        feeCharged: boolean;
+      } | null;
+      request?: {
+        passengerCount?: number;
+        rideType?: string;
+        estimatedDistanceKm?: number | null;
+        estimatedDurationMin?: number | null;
+        pickupAddress?: string | null;
+        dropAddress?: string | null;
+      };
+      rating?: { rating: number; tags?: string[]; comment?: string | null } | null;
+      fare?: {
+        driverEarning: number;
+        totalFare: number;
+        baseFare: number;
+        distanceFare: number;
+        timeFare: number;
+        waitingCharge?: number;
+        surgeAmount?: number;
+        discountAmount?: number;
+        taxes: number;
+        tollAmount?: number;
+        commission: number;
+        platformCommission?: number;
+      } | null;
     }>;
     nextCursor: string | null;
   }> {
     const limit = opts.limit;
-    let cursorCompletedAt: Date | undefined;
+    let cursorCreatedAt: Date | undefined;
     if (opts.cursor) {
       const cursorRide = await this.db.client.ride.findUnique({
         where: { id: opts.cursor },
-        select: { completedAt: true },
+        select: { createdAt: true },
       });
-      cursorCompletedAt = cursorRide?.completedAt ?? undefined;
+      cursorCreatedAt = cursorRide?.createdAt ?? undefined;
     }
+
+    const cancelledStatuses: RideStatus[] = [
+      'CANCELLED_BY_CUSTOMER',
+      'CANCELLED_BY_DRIVER',
+      'CANCELLED_BY_SYSTEM',
+    ];
+    const allStatuses: RideStatus[] = [
+      'COMPLETED',
+      'CANCELLED_BY_CUSTOMER',
+      'CANCELLED_BY_DRIVER',
+      'CANCELLED_BY_SYSTEM',
+    ];
+
+    const statusCondition =
+      opts.status === 'CANCELLED'
+        ? { in: cancelledStatuses }
+        : opts.status === 'ALL'
+          ? { in: allStatuses }
+          : 'COMPLETED';
 
     const rides = await this.db.client.ride.findMany({
       where: {
         driverId,
-        status: 'COMPLETED',
+        status: statusCondition,
         ...(opts.from || opts.to
           ? {
-              completedAt: {
+              createdAt: {
                 ...(opts.from ? { gte: opts.from } : {}),
                 ...(opts.to ? { lt: opts.to } : {}),
               },
             }
           : {}),
-        ...(opts.cursor && cursorCompletedAt
+        ...(opts.cursor && cursorCreatedAt
           ? {
               OR: [
-                { completedAt: { lt: cursorCompletedAt } },
-                { completedAt: cursorCompletedAt, id: { lt: opts.cursor } },
+                { createdAt: { lt: cursorCreatedAt } },
+                { createdAt: cursorCreatedAt, id: { lt: opts.cursor } },
               ],
             }
           : {}),
       },
-      include: { fare: true },
-      orderBy: [{ completedAt: 'desc' }, { id: 'desc' }],
+      include: {
+        fare: true,
+        vehicleType: { select: { id: true, name: true } },
+        vehicle: {
+          select: {
+            registrationNumber: true,
+            make: true,
+            model: true,
+            color: true,
+          },
+        },
+        request: {
+          select: {
+            estimatedDistanceKm: true,
+            estimatedDurationMin: true,
+            pickupAddress: true,
+            dropAddress: true,
+          },
+        },
+        cancellation: {
+          select: {
+            reasonCode: true,
+            reasonText: true,
+            cancelledBy: true,
+            cancellationFee: true,
+            feeCharged: true,
+          },
+        },
+        customer: {
+          select: {
+            phoneNumber: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+        ratings: {
+          where: { ratedBy: 'DRIVER' },
+          select: { rating: true, tags: true, comment: true },
+          take: 1,
+        },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
     const page = rides.slice(0, limit);
     const next = rides.length > limit ? (page[page.length - 1]?.id ?? null) : null;
     return {
-      data: page.map((ride) => ({
-        id: ride.id,
-        rideCode: ride.rideCode,
-        completedAt: ride.completedAt?.toISOString() ?? null,
-        distanceKm: ride.actualDistanceKm != null ? Number(ride.actualDistanceKm) : null,
-        durationMin: ride.actualDurationMin,
-        pickupAddress: ride.pickupAddress,
-        dropAddress: ride.dropAddress,
-        driverEarning: Number(ride.fare?.driverEarning ?? 0),
-        totalFare: Number(ride.fare?.totalFare ?? 0),
-        paymentMethod: ride.paymentMethod,
-      })),
+      data: page.map((ride) => {
+        const profile = ride.customer?.profile;
+        const riderName =
+          ride.passengerName ||
+          (profile?.firstName ? `${profile.firstName} ${profile.lastName ?? ''}`.trim() : null) ||
+          'Rider';
+
+        const driverRating =
+          ride.ratings && ride.ratings[0]
+            ? {
+                rating: ride.ratings[0].rating,
+                tags: ride.ratings[0].tags,
+                comment: ride.ratings[0].comment,
+              }
+            : null;
+
+        const dist =
+          ride.actualDistanceKm != null
+            ? Number(ride.actualDistanceKm)
+            : ride.request?.estimatedDistanceKm != null
+              ? Number(ride.request.estimatedDistanceKm)
+              : null;
+
+        const dur =
+          ride.actualDurationMin != null
+            ? ride.actualDurationMin
+            : ride.request?.estimatedDurationMin != null
+              ? ride.request.estimatedDurationMin
+              : null;
+
+        return {
+          id: ride.id,
+          rideCode: ride.rideCode,
+          status: ride.status,
+          createdAt:
+            ride.createdAt instanceof Date ? ride.createdAt.toISOString() : String(ride.createdAt),
+          acceptedAt: ride.acceptedAt ? new Date(ride.acceptedAt).toISOString() : null,
+          arrivedAt: ride.arrivedAt ? new Date(ride.arrivedAt).toISOString() : null,
+          startedAt: ride.startedAt ? new Date(ride.startedAt).toISOString() : null,
+          completedAt: ride.completedAt ? new Date(ride.completedAt).toISOString() : null,
+          cancelledAt: ride.cancelledAt ? new Date(ride.cancelledAt).toISOString() : null,
+          distanceKm: dist,
+          durationMin: dur,
+          actualDistanceKm: ride.actualDistanceKm != null ? Number(ride.actualDistanceKm) : null,
+          actualDurationMin: ride.actualDurationMin,
+          pickupAddress: ride.pickupAddress ?? ride.request?.pickupAddress ?? null,
+          dropAddress: ride.dropAddress ?? ride.request?.dropAddress ?? null,
+          driverEarning: Number(ride.fare?.driverEarning ?? 0),
+          commissionAmount: Number(
+            ride.fare?.platformCommission ?? ride.fare?.platformFee ?? ride.commissionAmount ?? 0,
+          ),
+          totalFare: Number(ride.fare?.totalFare ?? 0),
+          paymentMethod: ride.paymentMethod,
+          vehicleTypeName: ride.vehicleType?.name ?? 'Standard',
+          riderName,
+          rider: {
+            fullName: riderName,
+            firstName: profile?.firstName ?? null,
+            lastName: profile?.lastName ?? null,
+            phone: ride.passengerPhone ?? ride.customer?.phoneNumber ?? null,
+          },
+          vehicle: ride.vehicle
+            ? {
+                registrationNumber: ride.vehicle.registrationNumber ?? null,
+                make: ride.vehicle.make ?? null,
+                model: ride.vehicle.model ?? null,
+                color: ride.vehicle.color ?? null,
+              }
+            : null,
+          cancellation: ride.cancellation
+            ? {
+                reasonCode: ride.cancellation.reasonCode,
+                reasonText: ride.cancellation.reasonText,
+                cancelledBy: ride.cancellation.cancelledBy,
+                cancellationFee: Number(ride.cancellation.cancellationFee ?? 0),
+                feeCharged: Boolean(ride.cancellation.feeCharged),
+              }
+            : null,
+          request: {
+            passengerCount: 1,
+            rideType: ride.vehicleType?.name ?? 'Standard',
+            estimatedDistanceKm:
+              ride.request?.estimatedDistanceKm != null
+                ? Number(ride.request.estimatedDistanceKm)
+                : null,
+            estimatedDurationMin: ride.request?.estimatedDurationMin ?? null,
+            pickupAddress: ride.request?.pickupAddress ?? null,
+            dropAddress: ride.request?.dropAddress ?? null,
+          },
+          rating: driverRating,
+          fare: ride.fare
+            ? {
+                driverEarning: Number(ride.fare.driverEarning ?? 0),
+                totalFare: Number(ride.fare.totalFare ?? 0),
+                baseFare: Number(ride.fare.baseFare ?? 0),
+                distanceFare: Number(ride.fare.distanceFare ?? 0),
+                timeFare: Number(ride.fare.timeFare ?? 0),
+                waitingCharge: Number(ride.fare.waitingCharge ?? 0),
+                surgeAmount: Number(ride.fare.surgeAmount ?? 0),
+                discountAmount: Number(ride.fare.discountAmount ?? 0),
+                taxes: Number(ride.fare.taxAmount ?? 0),
+                tollAmount: Number(ride.fare.tollAmount ?? 0),
+                commission: Number(ride.fare.platformCommission ?? ride.fare.platformFee ?? 0),
+                platformCommission: Number(
+                  ride.fare.platformCommission ?? ride.fare.platformFee ?? 0,
+                ),
+              }
+            : null,
+        };
+      }),
       nextCursor: next,
     };
   }
