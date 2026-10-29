@@ -12,7 +12,8 @@ import { isIP } from 'node:net';
 ///   neither             trust nothing — `request.ip` is the socket peer.
 ///
 /// The authenticated actor never comes from here: it is the JWT subject.
-export type TrustProxySetting = boolean | number | string[];
+export type TrustProxyFunction = (address: string, hop: number) => boolean;
+export type TrustProxySetting = boolean | string[] | TrustProxyFunction;
 
 const NAMED_RANGES = new Set(['loopback', 'linklocal', 'uniquelocal']);
 
@@ -46,7 +47,7 @@ export function resolveTrustProxy(env: NodeJS.ProcessEnv): TrustProxySetting {
     if (!Number.isInteger(count) || count < 0) {
       throw new Error(`TRUSTED_PROXY_HOPS must be a non-negative integer, got "${hops}"`);
     }
-    return count === 0 ? false : count;
+    return count === 0 ? false : (_addr: string, hop: number) => hop < count;
   }
   return false;
 }
