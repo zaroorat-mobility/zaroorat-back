@@ -33,7 +33,11 @@ export class CommissionWalletService {
   async listTransactions(
     driverId: string,
     limit = 50,
-  ): Promise<DriverCommissionWalletTransaction[]> {
+  ): Promise<
+    (DriverCommissionWalletTransaction & {
+      ride?: { id: string; pickupAddress: string | null; dropAddress: string | null } | null;
+    })[]
+  > {
     return this.commissionWalletRepository.listTransactions(driverId, limit);
   }
 

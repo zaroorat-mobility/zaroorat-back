@@ -94,12 +94,25 @@ export class CommissionWalletRepository {
     driverId: string,
     limit = 50,
     tx?: TransactionClient,
-  ): Promise<DriverCommissionWalletTransaction[]> {
+  ): Promise<
+    (DriverCommissionWalletTransaction & {
+      ride?: { id: string; pickupAddress: string | null; dropAddress: string | null } | null;
+    })[]
+  > {
     const client = tx ?? this.db.client;
     return client.driverCommissionWalletTransaction.findMany({
       where: { driverId },
       orderBy: { createdAt: 'desc' },
       take: limit,
+      include: {
+        ride: {
+          select: {
+            id: true,
+            pickupAddress: true,
+            dropAddress: true,
+          },
+        },
+      },
     });
   }
 }
