@@ -73,6 +73,17 @@ describe('driver checkout: payload, status and verify (integration)', () => {
   });
 
   const payId = () => `pay_${randomUUID().replace(/-/g, '').slice(0, 14)}`;
+
+  /// Admin's company checkout email (resetState clears payment settings).
+  const COMPANY_EMAIL = 'payments@zaroorat.example';
+  const setCompanyEmail = () =>
+    db().client.systemSetting.create({
+      data: {
+        key: 'payment.razorpay.checkout_email',
+        value: COMPANY_EMAIL,
+        category: 'integrations.payment',
+      },
+    });
   const sign = (orderId: string, paymentId: string) =>
     createHmac('sha256', FAKE_RAZORPAY_KEY_SECRET!).update(`${orderId}|${paymentId}`).digest('hex');
 
@@ -144,7 +155,8 @@ describe('driver checkout: payload, status and verify (integration)', () => {
       where: { txnType: 'MANUAL_RECHARGE', referenceId: intentId },
     });
 
-  it("returns the checkout payload (T042): public key, our order, paise, no secret, the driver's own phone", async () => {
+  it("returns the checkout payload (T042): public key, our order, paise, no secret, the driver's own phone and the company email", async () => {
+    await setCompanyEmail();
     const { driver } = await commissionDriver('+919876607101');
     const data = await recharge(driver);
 
@@ -156,14 +168,16 @@ describe('driver checkout: payload, status and verify (integration)', () => {
       currency: 'INR',
       name: 'Zaroorat',
       description: 'Commission wallet recharge',
-      // UD-9 (a): the caller's own login number, and nothing else about them.
-      prefill: { contact: '+919876607101' },
+      // UD-9 (a): the caller's own login number, and nothing else about them;
+      // the email is Admin's company address.
+      prefill: { contact: '+919876607101', email: COMPANY_EMAIL },
     });
     const raw = JSON.stringify(data);
     assert.ok(!raw.includes(FAKE_RAZORPAY_KEY_SECRET!), 'the key secret never leaves the backend');
   });
 
   it('adds the public checkout key id to the recharge options on request, never the secret', async () => {
+    await setCompanyEmail();
     const { driver } = await commissionDriver('+919876607121');
     const url = '/api/v1/payments/driver-wallet/recharge-options';
 
@@ -179,10 +193,51 @@ describe('driver checkout: payload, status and verify (integration)', () => {
     assert.equal(res.statusCode, 200, res.payload);
     const data = res.json().data;
     assert.ok(Array.isArray(data.options));
-    assert.deepEqual(data.checkout, { provider: 'razorpay', keyId: FAKE_RAZORPAY_KEY_ID });
+    assert.deepEqual(data.checkout, {
+      provider: 'razorpay',
+      keyId: FAKE_RAZORPAY_KEY_ID,
+      // Defaults: UPI always, net banking and wallets on, cards off until PCI DSS.
+      methods: { upi: true, netbanking: true, wallet: true, card: false },
+    });
     assert.equal(data.checkoutError, null);
     assert.ok(!res.payload.includes(FAKE_RAZORPAY_KEY_SECRET!), 'the key secret never leaves');
     assert.ok(!/secret/i.test(res.payload));
+  });
+
+  it('blocks driver checkout until Admin sets the company email, and passes method switches through', async () => {
+    const { driver } = await commissionDriver('+919876607122');
+    const config = async () =>
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/v1/payments/driver-wallet/recharge-options?include=checkout',
+          headers: driver.authHeader,
+        })
+      ).json().data;
+
+    const blocked = await config();
+    assert.equal(blocked.checkout, null);
+    assert.deepEqual(blocked.checkoutError, { code: 'PAYMENT_EMAIL_NOT_SET' });
+
+    await setCompanyEmail();
+    await db().client.systemSetting.createMany({
+      data: [
+        {
+          key: 'payment.methods.netbanking_enabled',
+          value: 'false',
+          category: 'integrations.payment',
+        },
+        { key: 'payment.methods.card_enabled', value: 'true', category: 'integrations.payment' },
+      ],
+    });
+    const open = await config();
+    assert.equal(open.checkoutError, null);
+    assert.deepEqual(open.checkout.methods, {
+      upi: true,
+      netbanking: false,
+      wallet: true,
+      card: true,
+    });
   });
 
   it('rebuilds the checkout on a replay: same intent and order, current values', async () => {

@@ -10,10 +10,16 @@ import {
 // active gateway's PUBLIC key id ever leaves the backend.
 const SECRET = 'very_secret_value_that_must_never_leave';
 
-function serviceWith(getActiveGateway: () => Promise<unknown>) {
+const DEFAULT_METHODS = { upi: true, netbanking: true, wallet: true, card: false };
+const COMPANY = { email: 'payments@zaroorat.example', methods: DEFAULT_METHODS };
+
+function serviceWith(
+  getActiveGateway: () => Promise<unknown>,
+  driverCheckout: { email: string | null; methods: typeof DEFAULT_METHODS } = COMPANY,
+) {
   return new IntentService(
     {} as never,
-    { getActiveGateway } as never,
+    { getActiveGateway, driverCheckoutSettings: async () => driverCheckout } as never,
     {} as never,
     {} as never,
     {} as never,
@@ -36,10 +42,27 @@ describe('checkout config for the Driver App (public key id only)', () => {
   it('returns the configured public key id and nothing secret', async () => {
     const view = await serviceWith(async () => razorpay('rzp_test_AbCdEf123456')).checkoutConfig();
     assert.deepEqual(view, {
-      checkout: { provider: 'razorpay', keyId: 'rzp_test_AbCdEf123456' },
+      checkout: { provider: 'razorpay', keyId: 'rzp_test_AbCdEf123456', methods: DEFAULT_METHODS },
       checkoutError: null,
     });
     assert.ok(!JSON.stringify(view).includes(SECRET));
+  });
+
+  it("passes Admin's method switches through, UPI always on", async () => {
+    const methods = { upi: true, netbanking: false, wallet: true, card: true };
+    const view = await serviceWith(async () => razorpay('rzp_test_AbCdEf123456'), {
+      ...COMPANY,
+      methods,
+    }).checkoutConfig();
+    assert.deepEqual(view.checkout?.methods, methods);
+  });
+
+  it('reports PAYMENT_EMAIL_NOT_SET for Razorpay without a company email, since Razorpay refuses those payments', async () => {
+    const view = await serviceWith(async () => razorpay('rzp_test_AbCdEf123456'), {
+      ...COMPANY,
+      email: null,
+    }).checkoutConfig();
+    assert.deepEqual(view, { checkout: null, checkoutError: { code: 'PAYMENT_EMAIL_NOT_SET' } });
   });
 
   it('has no checkout and no error for a provider without client checkout (the dev mock)', async () => {

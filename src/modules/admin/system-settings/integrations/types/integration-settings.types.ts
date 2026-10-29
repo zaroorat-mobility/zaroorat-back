@@ -31,6 +31,12 @@ export interface PaymentSettingsView {
     razorpay: PaymentProviderView & { keyId: string; keySecret: string; webhookSecret: string };
     stripe: PaymentProviderView & { secretKey: string; webhookSecret: string };
   };
+  /// The company email sent with every driver payment ('' = not set) and the
+  /// Driver App's method switches (UPI is always on, so it has none).
+  driverPayments: {
+    checkoutEmail: string;
+    methods: { netbanking: boolean; wallet: boolean; card: boolean };
+  };
 }
 
 export interface UpdatePaymentSettingsBody {
@@ -53,6 +59,11 @@ export interface UpdatePaymentSettingsBody {
       secretKey?: string;
       webhookSecret?: string;
     };
+  };
+  driverPayments?: {
+    /// '' clears it, which blocks driver payments until one is set again.
+    checkoutEmail?: string;
+    methods?: { netbanking?: boolean; wallet?: boolean; card?: boolean };
   };
   expectedVersion?: number;
 }

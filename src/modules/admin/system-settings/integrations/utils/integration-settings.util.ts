@@ -13,7 +13,6 @@ export type SettingEntry = {
   key: string;
   value: string | null | undefined;
   isSecret?: boolean | undefined;
-  expectedVersion?: number | undefined;
 };
 
 export function maxSettingVersion(settings: Map<string, { version: number }>): number {
@@ -36,8 +35,41 @@ export async function saveIntegrationSettings(
   entityType: string,
   summary: string,
   before?: unknown,
+  /// The page's version: `maxSettingVersion` of the category when the admin
+  /// loaded it. Compared with the category's current max, never with one key's
+  /// own version: keys saved on every Save advance while a secret that is only
+  /// saved when retyped stays behind, so a per-key check refused every later
+  /// secret change.
+  expectedVersion?: number,
 ): Promise<void> {
   await deps.txManager.execute(async (tx) => {
+    // One save per category at a time, so two admins cannot both pass the check.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`system_settings:${category}`}, 0))`;
+    const current = maxSettingVersion(
+      await deps.systemSettingService.getCategorySettings(category, tx),
+    );
+    if (expectedVersion !== undefined && current !== expectedVersion) {
+      throw new Error(
+        `These settings were changed by someone else (version ${current}, your page has ${expectedVersion}). Refresh and try again.`,
+      );
+    }
+    // Every save moves the page version past every key, even one that only
+    // adds a key or changes a key that is behind; the next stale page is then
+    // refused. The row holds no value.
+    const revisionKey = `${category}.revision`;
+    await tx.systemSetting.upsert({
+      where: { key: revisionKey },
+      create: {
+        key: revisionKey,
+        value: null,
+        category,
+        description: 'Internal: save counter for this settings page',
+        version: current + 1,
+        updatedBy: actorId ?? null,
+      },
+      update: { version: current + 1, updatedBy: actorId ?? null },
+    });
+
     const changes: Record<string, string | null> = {};
 
     for (const entry of entries) {
@@ -49,9 +81,6 @@ export async function saveIntegrationSettings(
           value: entry.value,
           category,
           isSecret: entry.isSecret ?? false,
-          ...(entry.expectedVersion !== undefined
-            ? { expectedVersion: entry.expectedVersion }
-            : {}),
           ...(actorId ? { updatedBy: actorId } : {}),
         },
         tx,

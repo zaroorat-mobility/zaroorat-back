@@ -31,7 +31,33 @@ const CATEGORY_ALIASES: Record<string, string> = {
   route_issue: 'RIDE_ISSUE',
   vehicle_issue: 'RIDE_ISSUE',
   other_issue: 'RIDE_ISSUE',
+  payment: 'PAYMENT',
+  account: 'ACCOUNT',
+  safety: 'SAFETY',
+  app: 'APP_ISSUE',
+  other: 'RIDE_ISSUE',
+  grievance: 'RIDE_ISSUE',
 };
+
+async function generateUniqueTicketNumber(client: {
+  supportTicket: {
+    findUnique: (args: {
+      where: { ticketNumber: string };
+      select?: { id: boolean };
+    }) => Promise<{ id: string } | null>;
+  };
+}): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const random = Math.floor(100000 + Math.random() * 900000);
+    const candidate = `TKT-${random}`;
+    const exists = await client.supportTicket.findUnique({
+      where: { ticketNumber: candidate },
+      select: { id: true },
+    });
+    if (!exists) return candidate;
+  }
+  return `TKT-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+}
 
 function publicMessage(row: {
   id: string;
@@ -84,7 +110,7 @@ export class CustomerSupportService {
       if (!ride) rideId = null;
     }
 
-    const ticketNumber = `TKT-${Math.floor(100000 + Math.random() * 900000)}`;
+    const ticketNumber = await generateUniqueTicketNumber(this.client);
     const ticket = await this.client.$transaction(async (tx) => {
       const created = await tx.supportTicket.create({
         data: {
@@ -174,7 +200,30 @@ export class CustomerSupportService {
       orderBy: { sortOrder: 'asc' },
       select: { id: true, code: true, name: true, sortOrder: true },
     });
+    if (rows.length === 0) {
+      return [
+        { id: 'cat-payment', code: 'PAYMENT', name: 'Payment or settlement', sortOrder: 1 },
+        { id: 'cat-account', code: 'ACCOUNT', name: 'Account & Documents', sortOrder: 2 },
+        { id: 'cat-safety', code: 'SAFETY', name: 'Safety & Security', sortOrder: 3 },
+        { id: 'cat-app', code: 'APP_ISSUE', name: 'App & Technical issues', sortOrder: 4 },
+        { id: 'cat-other', code: 'RIDE_ISSUE', name: 'Other grievances', sortOrder: 5 },
+      ];
+    }
     return rows;
+  }
+
+  async getGrievanceOfficer() {
+    return {
+      name: 'Nusrat Jan',
+      designation: 'Grievance Officer, Zaroorat Pvt Ltd',
+      email: 'grievance@zaroorat.in',
+      phone: '+91 9412 111 222',
+      address: 'Rajbagh, Srinagar, J&K 190008',
+      acknowledgementHours: 24,
+      resolutionDays: 15,
+      statutoryNotice:
+        'Published under Rule 3(2), Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021. We acknowledge every grievance within 24 hours and resolve it within 15 days.',
+    };
   }
 
   private async loadOwnedTicket(userId: string, ticketId: string) {
@@ -278,6 +327,11 @@ export class CustomerSupportController {
     reply.send({ data });
   }
 
+  async getGrievanceOfficer(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const data = await this.customerSupportService.getGrievanceOfficer();
+    reply.send({ data });
+  }
+
   async getTicket(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = req.params as { id: string };
     const data = await this.customerSupportService.getTicket(callerId(req), id);
@@ -328,6 +382,7 @@ export async function supportRoutes(fastify: FastifyInstance): Promise<void> {
     },
   } as const;
 
+  fastify.get('/grievance-officer', (req, reply) => controller.getGrievanceOfficer(req, reply));
   fastify.get('/categories', (req, reply) => controller.listCategories(req, reply));
   fastify.post('/tickets', writeLimit, (req, reply) => controller.create(req, reply));
   fastify.get('/tickets', (req, reply) => controller.list(req, reply));

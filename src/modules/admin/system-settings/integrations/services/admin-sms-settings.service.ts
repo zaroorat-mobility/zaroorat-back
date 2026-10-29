@@ -99,7 +99,6 @@ export class AdminSmsSettingsService {
         key: SMS_SETTING_KEYS.AIRTEL_API_KEY,
         value: input.airtelApiKey,
         isSecret: true,
-        expectedVersion: input.expectedVersion,
       });
     }
     if (input.airtelUsername !== undefined) {
@@ -110,7 +109,6 @@ export class AdminSmsSettingsService {
         key: SMS_SETTING_KEYS.AIRTEL_PASSWORD,
         value: input.airtelPassword,
         isSecret: true,
-        expectedVersion: input.expectedVersion,
       });
     }
     if (input.airtelCustomerId !== undefined) {
@@ -144,6 +142,7 @@ export class AdminSmsSettingsService {
       'integration_sms_settings',
       'Updated SMS integration settings',
       before,
+      input.expectedVersion,
     );
 
     return this.getSmsSettings();

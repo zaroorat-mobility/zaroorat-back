@@ -8,6 +8,7 @@ import { PaymentGatewayResolverService } from '../../../../payments/services/gat
 import {
   PAYMENT_SETTING_KEYS,
   PAYMENT_SETTINGS_CATEGORY,
+  readDriverCheckoutSettings,
 } from '../constants/integration-settings.constants.js';
 import {
   isMaskedSecret,
@@ -15,6 +16,11 @@ import {
   saveIntegrationSettings,
 } from '../utils/integration-settings.util.js';
 import type { IntegrationHealthService } from './integration-health.service.js';
+import { container } from '@core/di';
+import { SOCKET_EVENT, socketEnvelope } from '@modules/realtime/events.js';
+import type { RealtimeGateway } from '@modules/realtime/realtime.gateway.js';
+import { uuidV7 } from '@shared/crypto';
+import { logger } from '@shared/logger/index.js';
 import type {
   IntegrationHealthSnapshot,
   IntegrationTestResult,
@@ -84,6 +90,7 @@ export class AdminPaymentSettingsService {
       PAYMENT_SETTING_KEYS.STRIPE_WEBHOOK_SECRET,
       env.stripeWebhookSecret,
     );
+    const driverCheckout = readDriverCheckoutSettings(settings);
 
     return {
       defaultCurrency: readString(PAYMENT_SETTING_KEYS.DEFAULT_CURRENCY, env.defaultCurrency),
@@ -114,6 +121,14 @@ export class AdminPaymentSettingsService {
           webhookSecret: maskSecret(stripeWebhookSecret),
         },
       },
+      driverPayments: {
+        checkoutEmail: driverCheckout.email ?? '',
+        methods: {
+          netbanking: driverCheckout.methods.netbanking,
+          wallet: driverCheckout.methods.wallet,
+          card: driverCheckout.methods.card,
+        },
+      },
     };
   }
 
@@ -122,22 +137,10 @@ export class AdminPaymentSettingsService {
     actorId?: string,
   ): Promise<PaymentSettingsView> {
     const before = await this.getPaymentSettings();
-    const entries: {
-      key: string;
-      value: string | undefined;
-      isSecret?: boolean;
-      expectedVersion?: number;
-    }[] = [];
+    const entries: { key: string; value: string | undefined; isSecret?: boolean }[] = [];
     const secret = (key: string, value: string | undefined): void => {
       if (value !== undefined && !isMaskedSecret(value)) {
-        entries.push({
-          key,
-          value,
-          isSecret: true,
-          ...(input.expectedVersion !== undefined
-            ? { expectedVersion: input.expectedVersion }
-            : {}),
-        });
+        entries.push({ key, value, isSecret: true });
       }
     };
     const plain = (key: string, value: string | undefined): void => {
@@ -197,6 +200,16 @@ export class AdminPaymentSettingsService {
       secret(PAYMENT_SETTING_KEYS.STRIPE_WEBHOOK_SECRET, p.stripe.webhookSecret);
     }
 
+    const d = input.driverPayments;
+    if (d) {
+      plain(PAYMENT_SETTING_KEYS.CHECKOUT_EMAIL, d.checkoutEmail);
+      const flag = (key: string, value: boolean | undefined) =>
+        plain(key, value === undefined ? undefined : String(value));
+      flag(PAYMENT_SETTING_KEYS.METHOD_NETBANKING_ENABLED, d.methods?.netbanking);
+      flag(PAYMENT_SETTING_KEYS.METHOD_WALLET_ENABLED, d.methods?.wallet);
+      flag(PAYMENT_SETTING_KEYS.METHOD_CARD_ENABLED, d.methods?.card);
+    }
+
     await saveIntegrationSettings(
       {
         systemSettingService: this.systemSettingService,
@@ -209,9 +222,25 @@ export class AdminPaymentSettingsService {
       'integration_payment_settings',
       'Updated payment integration settings',
       before,
+      input.expectedVersion,
     );
+    this.announcePaymentSettingsChange();
 
     return this.getPaymentSettings();
+  }
+
+  /// Tells every connected Driver App to re-read its recharge config now, so a
+  /// method switched on or off shows up while a driver is on Add Money. Best
+  /// effort: an app that misses it re-reads on its next open, focus or Pay.
+  private announcePaymentSettingsChange(): void {
+    try {
+      if (!container.hasRegistration('realtimeGateway')) return;
+      container
+        .resolve<RealtimeGateway>('realtimeGateway')
+        .emitBroadcast(socketEnvelope(uuidV7(), SOCKET_EVENT.PAYMENT_SETTINGS_UPDATED, {}));
+    } catch (err) {
+      logger.warn({ err }, '[AdminPaymentSettings] Failed to announce payment settings change');
+    }
   }
 
   /// Connectivity check for one provider. For `mock`, always succeeds without

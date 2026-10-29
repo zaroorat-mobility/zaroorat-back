@@ -30,6 +30,9 @@ export const SOCKET_EVENT = {
   RIDE_STARTED: 'ride.started',
   RIDE_COMPLETED: 'ride.completed',
   RIDE_CANCELLED: 'ride.cancelled',
+  /// The rider moved the drop. Carries no coordinates: the Driver App re-reads
+  /// the ride and its in-app navigation re-routes to the new drop.
+  DESTINATION_CHANGED: 'ride.destination_changed',
 
   /// Server -> ride room. The outcome of collecting the fare, which happens
   /// after the ride is already over.
@@ -60,6 +63,10 @@ export const SOCKET_EVENT = {
 
   /// Server → all connected client apps. System branding / logo updated by admin.
   APP_BRANDING_UPDATED: 'app.branding.updated',
+  /// Server → all connected client apps. Admin saved payment settings (method
+  /// switches, checkout email, gateway). Carries no data: the Driver App
+  /// re-reads its recharge config over REST, so nothing is trusted from here.
+  PAYMENT_SETTINGS_UPDATED: 'payments.settings.updated',
 } as const;
 
 /// Client → server.

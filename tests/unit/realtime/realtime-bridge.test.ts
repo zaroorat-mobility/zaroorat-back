@@ -108,6 +108,7 @@ describe('Outbox to socket bridge', () => {
       ['ride.started', 'ride.started'],
       ['ride.completed', 'ride.completed'],
       ['ride.cancelled', 'ride.cancelled'],
+      ['ride.destination_changed', 'ride.destination_changed'],
     ];
 
     for (const [domainEvent, socketEvent] of cases) {
@@ -147,6 +148,23 @@ describe('Outbox to socket bridge', () => {
       const world = makeWorld();
       await world.publish('ride.driver_arriving', { rideId: 'ride_1' });
       assert.deepEqual(world.closedRooms, []);
+      world.unsubscribe();
+    });
+
+    it('a destination change keeps the room open and forwards no coordinates or fares', async () => {
+      const world = makeWorld();
+      await world.publish('ride.destination_changed', {
+        rideId: 'ride_1',
+        dropLat: 12.97,
+        dropLng: 77.64,
+        newFare: 310,
+        previousFare: 250,
+      });
+      assert.deepEqual(world.closedRooms, []);
+      const data = world.emissions[0]!.envelope.data;
+      for (const key of ['dropLat', 'dropLng', 'newFare', 'previousFare']) {
+        assert.equal(data[key], undefined, `${key} must be read from the ride, not the event`);
+      }
       world.unsubscribe();
     });
 
