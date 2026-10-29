@@ -38,7 +38,45 @@ export const PAYMENT_SETTING_KEYS = {
   STRIPE_ENVIRONMENT: 'payment.stripe.environment',
   STRIPE_SECRET_KEY: 'payment.stripe_secret_key',
   STRIPE_WEBHOOK_SECRET: 'payment.stripe.webhook_secret',
+
+  /// Razorpay refuses a payment without an email (verified 2026-10-27) and a
+  /// driver's own email is never shared (UD-9): this ONE company address goes
+  /// on every driver payment, next to the driver's own phone. Empty means
+  /// driver payments are not configured.
+  CHECKOUT_EMAIL: 'payment.razorpay.checkout_email',
+  /// Which payment methods the Driver App offers. UPI is always offered and
+  /// has no switch; these only hide a method, they never refuse a payment.
+  METHOD_NETBANKING_ENABLED: 'payment.methods.netbanking_enabled',
+  METHOD_WALLET_ENABLED: 'payment.methods.wallet_enabled',
+  METHOD_CARD_ENABLED: 'payment.methods.card_enabled',
 } as const;
+
+export interface DriverCheckoutSettings {
+  email: string | null;
+  methods: { upi: true; netbanking: boolean; wallet: boolean; card: boolean };
+}
+
+/// The one reading of the driver checkout settings, shared by Admin and the
+/// payment flow so both agree on defaults: net banking and wallets ON, cards
+/// OFF until the PCI DSS assessment (an unset row takes its default).
+export function readDriverCheckoutSettings(
+  settings: Map<string, { value: string | null }>,
+): DriverCheckoutSettings {
+  const flag = (key: string, fallback: boolean): boolean => {
+    const raw = settings.get(key)?.value;
+    return raw == null ? fallback : raw === 'true';
+  };
+  const email = settings.get(PAYMENT_SETTING_KEYS.CHECKOUT_EMAIL)?.value?.trim();
+  return {
+    email: email || null,
+    methods: {
+      upi: true,
+      netbanking: flag(PAYMENT_SETTING_KEYS.METHOD_NETBANKING_ENABLED, true),
+      wallet: flag(PAYMENT_SETTING_KEYS.METHOD_WALLET_ENABLED, true),
+      card: flag(PAYMENT_SETTING_KEYS.METHOD_CARD_ENABLED, false),
+    },
+  };
+}
 
 // Cashfree is deliberately absent: not exposed or selectable for now.
 export const PAYMENT_GATEWAY_NAMES = ['mock', 'razorpay', 'stripe'] as const;

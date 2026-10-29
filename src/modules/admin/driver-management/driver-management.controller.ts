@@ -18,6 +18,7 @@ import {
   driverIdParamSchema,
   listDriversQuerySchema,
   suspendDriverBodySchema,
+  topUpDriverWalletBodySchema,
   updateDriverBodySchema,
 } from './drivers/driver.schemas.js';
 import {
@@ -268,6 +269,24 @@ export class AdminDriverManagementController {
     req.log.warn(
       { driverId: id, isSuspended: false, actorUserId: actor.actorId },
       '[admin-drivers] driver reactivated by operator',
+    );
+    reply.send({ data: driver });
+  }
+
+  async topUpWallet(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = driverIdParamSchema.parse(req.params);
+    const body = topUpDriverWalletBodySchema.parse(req.body ?? {});
+    const actor = auditActor(req);
+    const driver = await this.adminDriverService.topUpCommissionWallet(
+      id,
+      body.amount,
+      actor,
+      body.notes,
+    );
+
+    req.log.info(
+      { driverId: id, amount: body.amount, actorUserId: actor.actorId },
+      '[admin-drivers] driver commission wallet topped up by admin',
     );
     reply.send({ data: driver });
   }

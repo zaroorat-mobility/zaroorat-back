@@ -9,6 +9,8 @@ import { container } from '../../src/core/di.js';
 import type { PaymentGatewayResolverService } from '../../src/modules/payments/services/gateway/payment-gateway-resolver.service.js';
 import type { IntentService } from '../../src/modules/payments/services/intent/intent.service.js';
 import { Decimal } from '../../src/modules/payments/types/index.js';
+import type { RealtimeGateway } from '../../src/modules/realtime/realtime.gateway.js';
+import type { SocketEnvelope } from '../../src/modules/realtime/events.js';
 
 const ADMIN_PHONE = '+919876546044';
 const ADMIN_EMAIL = 'payment-gateway-admin@zaroorat.test';
@@ -116,6 +118,127 @@ describe('admin payment gateway configuration (integration)', () => {
         }
       }
     }
+  });
+
+  it('saves the company checkout email and method switches, audited, with defaults until set', async () => {
+    const adminHeaders = await loginAdmin();
+    const initial = (await getSettings(adminHeaders)).json().data;
+    assert.deepEqual(initial.driverPayments, {
+      checkoutEmail: '',
+      methods: { netbanking: true, wallet: true, card: false },
+    });
+
+    const update = await updateSettings(adminHeaders, {
+      driverPayments: {
+        checkoutEmail: '  Payments@Zaroorat.Example ',
+        methods: { wallet: false, card: true },
+      },
+    });
+    assert.equal(update.statusCode, 200, update.payload);
+    assert.deepEqual(update.json().data.driverPayments, {
+      checkoutEmail: 'payments@zaroorat.example',
+      methods: { netbanking: true, wallet: false, card: true },
+    });
+    // The payment flow reads the very same values.
+    const driverCheckout = await resolver().driverCheckoutSettings();
+    assert.equal(driverCheckout.email, 'payments@zaroorat.example');
+    assert.deepEqual(driverCheckout.methods, {
+      upi: true,
+      netbanking: true,
+      wallet: false,
+      card: true,
+    });
+
+    const logs = await db().client.adminActivityLog.findMany({
+      where: { entityType: 'integration_payment_settings' },
+      include: { fieldChanges: true },
+    });
+    const audited = JSON.stringify(logs);
+    assert.ok(audited.includes('payment.razorpay.checkout_email'), 'the email change is audited');
+    assert.ok(audited.includes('payments@zaroorat.example'), 'with its new value');
+    assert.ok(audited.includes('payment.methods.card_enabled'), 'and the method switches');
+  });
+
+  it('tells every connected app to re-read its payment config after a save, with no data in the event', async () => {
+    const adminHeaders = await loginAdmin();
+    const gateway = container.resolve<RealtimeGateway>('realtimeGateway');
+    const sent: SocketEnvelope[] = [];
+    const original = gateway.emitBroadcast;
+    gateway.emitBroadcast = (envelope: SocketEnvelope) => {
+      sent.push(envelope);
+    };
+    try {
+      const res = await updateSettings(adminHeaders, {
+        driverPayments: { methods: { netbanking: false } },
+      });
+      assert.equal(res.statusCode, 200, res.payload);
+    } finally {
+      gateway.emitBroadcast = original;
+    }
+    const hints = sent.filter((e) => e.type === 'payments.settings.updated');
+    assert.equal(hints.length, 1);
+    assert.deepEqual(hints[0]!.data, {}, 'a hint only: the app re-reads over REST');
+  });
+
+  it('changes a secret after earlier saves that skipped it (regression: per-key version conflict)', async () => {
+    const adminHeaders = await loginAdmin();
+    const version = async () => (await getSettings(adminHeaders)).json().data.version as number;
+    const keys = { keyId: 'rzp_test_FirstKey0001', keySecret: 'first_secret_value_0001' };
+    let res = await updateSettings(adminHeaders, {
+      providers: { razorpay: keys },
+      expectedVersion: await version(),
+    });
+    assert.equal(res.statusCode, 200, res.payload);
+    // Saves that leave the secrets masked move every plain key ahead of them.
+    for (const defaultCurrency of ['INR', 'INR']) {
+      res = await updateSettings(adminHeaders, {
+        defaultCurrency,
+        expectedVersion: await version(),
+      });
+      assert.equal(res.statusCode, 200, res.payload);
+    }
+    res = await updateSettings(adminHeaders, {
+      providers: { razorpay: { keyId: 'rzp_test_SecondKey002' } },
+      expectedVersion: await version(),
+    });
+    assert.equal(
+      res.statusCode,
+      200,
+      `a fresh page must be able to change the key id: ${res.payload}`,
+    );
+    const resolved = await resolver().forProviderName('razorpay');
+    assert.equal(resolved.checkoutKeyId(), 'rzp_test_SecondKey002');
+  });
+
+  it('refuses a stale page after another save, and writes nothing from it', async () => {
+    const adminHeaders = await loginAdmin();
+    const stale = (await getSettings(adminHeaders)).json().data.version as number;
+    const first = await updateSettings(adminHeaders, {
+      driverPayments: { checkoutEmail: 'first@zaroorat.example' },
+      expectedVersion: stale,
+    });
+    assert.equal(first.statusCode, 200, first.payload);
+    const second = await updateSettings(adminHeaders, {
+      driverPayments: { checkoutEmail: 'second@zaroorat.example' },
+      expectedVersion: stale,
+    });
+    assert.equal(second.statusCode, 400, second.payload);
+    assert.match(second.json().error.message, /changed by someone else/);
+    assert.equal((await resolver().driverCheckoutSettings()).email, 'first@zaroorat.example');
+  });
+
+  it('refuses a malformed checkout email, and lets an empty one clear it', async () => {
+    const adminHeaders = await loginAdmin();
+    for (const checkoutEmail of ['not-an-email', 'a@b', `${'x'.repeat(250)}@zaroorat.example`]) {
+      const res = await updateSettings(adminHeaders, { driverPayments: { checkoutEmail } });
+      assert.equal(res.statusCode, 400, `${checkoutEmail}: ${res.payload}`);
+    }
+    await updateSettings(adminHeaders, {
+      driverPayments: { checkoutEmail: 'payments@zaroorat.example' },
+    });
+    const cleared = await updateSettings(adminHeaders, { driverPayments: { checkoutEmail: '' } });
+    assert.equal(cleared.statusCode, 200, cleared.payload);
+    assert.equal((await resolver().driverCheckoutSettings()).email, null);
   });
 
   it('configures a provider and stores credentials encrypted — never plaintext in the DB', async () => {

@@ -5,6 +5,8 @@ import { SystemSettingService } from '@modules/admin/system-settings/services/sy
 import {
   PAYMENT_SETTING_KEYS,
   PAYMENT_SETTINGS_CATEGORY,
+  readDriverCheckoutSettings,
+  type DriverCheckoutSettings,
 } from '@modules/admin/system-settings/integrations/constants/integration-settings.constants.js';
 import { RazorpayGatewayProvider } from '../../../../integrations/razorpay/razorpay.client.js';
 import { StripeGatewayProvider } from '../../../../integrations/stripe/stripe.client.js';
@@ -93,6 +95,15 @@ export class PaymentGatewayResolverService {
       );
     }
     return paymentConfig.webhookSecret;
+  }
+
+  /// The company checkout email and the Driver App's method switches, read
+  /// fresh like every other setting here so an Admin change applies to the
+  /// very next payment.
+  async driverCheckoutSettings(): Promise<DriverCheckoutSettings> {
+    return readDriverCheckoutSettings(
+      await this.systemSettingService.getCategorySettings(PAYMENT_SETTINGS_CATEGORY),
+    );
   }
 
   private async build(

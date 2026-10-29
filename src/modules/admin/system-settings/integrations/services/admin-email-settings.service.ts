@@ -87,7 +87,6 @@ export class AdminEmailSettingsService {
         key: EMAIL_SETTING_KEYS.SMTP_PASSWORD,
         value: input.smtpPassword,
         isSecret: true,
-        expectedVersion: input.expectedVersion,
       });
     }
     if (input.fromAddress !== undefined) {
@@ -106,6 +105,7 @@ export class AdminEmailSettingsService {
       'integration_email_settings',
       'Updated email integration settings',
       before,
+      input.expectedVersion,
     );
 
     return this.getEmailSettings();

@@ -1,7 +1,7 @@
 import { DatabaseService } from '@core/database';
 import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type { UserStatus } from '@core/database/types';
-import type { Prisma } from '../../../../generated/prisma/index.js';
+import { Prisma } from '../../../../generated/prisma/index.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
 import { SessionService } from '@modules/auth/services/session/session.service.js';
 import type { EpochService } from '@modules/auth/services/token/epoch.service.js';
@@ -30,6 +30,10 @@ export interface DriverListItemDto {
   ratingAvg: number;
   totalTrips: number;
   walletBalance: number;
+  commissionWalletBalance?: number | undefined;
+  earningsBalance?: number | undefined;
+  paymentModel?: string | undefined;
+  pendingPaymentModel?: string | undefined;
   profilePhotoUrl?: string;
   documentsCount?: number;
   totalDocuments?: number;
@@ -143,13 +147,50 @@ export interface DriverDetailsDto extends DriverListItemDto {
     isActive: boolean;
     isDefault: boolean;
   }>;
+  commissionWallet?: {
+    id?: string | undefined;
+    balance: number;
+    currency: string;
+    lastTransactionAt?: string | undefined;
+  };
+  commissionWalletBalance?: number | undefined;
+  earningsBalance?: number | undefined;
   ledger: Array<{
     id: string;
     date: string;
     type: string;
     amount: number;
     balanceAfter: number;
-    rideId?: string;
+    description?: string | undefined;
+    rideId?: string | undefined;
+    referenceType?: string | undefined;
+    referenceId?: string | undefined;
+  }>;
+  commissionLedger?: Array<{
+    id: string;
+    date: string;
+    type: string;
+    amount: number;
+    balanceAfter: number;
+    description?: string | undefined;
+    rideId?: string | undefined;
+    referenceType?: string | undefined;
+    referenceId?: string | undefined;
+  }>;
+  subscriptionPayments?: Array<{
+    id: string;
+    date: string;
+    plan: string;
+    amount: string;
+    status: string;
+    method: string;
+    txId: string;
+  }>;
+  subscriptionTimeline?: Array<{
+    iconType: string;
+    title: string;
+    subtitle?: string;
+    date: string;
   }>;
   timeline: Array<{
     id: string;
@@ -166,15 +207,20 @@ export interface DriverDetailsDto extends DriverListItemDto {
     notes?: string;
   }>;
   paymentModel?: string | undefined;
+  pendingPaymentModel?: string | undefined;
   subscription?:
     | {
+        id?: string | undefined;
+        planId?: string | undefined;
         planName?: string | undefined;
+        billingPeriod?: string | undefined;
         status: string;
         expiryDate?: string | undefined;
         startDate?: string | undefined;
         endDate?: string | undefined;
         amount?: number | undefined;
         autoRenew?: boolean | undefined;
+        remainingDays?: number | undefined;
       }
     | null
     | undefined;
@@ -261,6 +307,7 @@ export class AdminDriverService {
         include: {
           profile: true,
           wallet: true,
+          commissionWallet: true,
           onlineStatus: true,
           user: { include: { profile: true } },
           documents: {
@@ -301,7 +348,12 @@ export class AdminDriverService {
     const row = await this.findDriverRow(id);
     if (!row) throw new AdminDriverNotFoundError();
 
-    const [walletTxns, activityLogs] = await Promise.all([
+    const [commissionTxns, walletTxns, activityLogs] = await Promise.all([
+      this.databaseService.client.driverCommissionWalletTransaction.findMany({
+        where: { driverId: id },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
       this.databaseService.client.driverWalletTransaction.findMany({
         where: { driverId: id },
         orderBy: { createdAt: 'desc' },
@@ -314,6 +366,21 @@ export class AdminDriverService {
         take: 50,
       }),
     ]);
+
+    const subPaymentIntentIds = (row.subscriptions ?? [])
+      .map((s) => s.paymentIntentId)
+      .filter((pid): pid is string => Boolean(pid));
+    const txnPaymentIntentIds = commissionTxns
+      .filter((t) => t.referenceType === 'PAYMENT_INTENT' && t.referenceId)
+      .map((t) => t.referenceId as string);
+    const allIntentIds = Array.from(new Set([...subPaymentIntentIds, ...txnPaymentIntentIds]));
+    const paymentIntents =
+      allIntentIds.length > 0
+        ? await this.databaseService.client.paymentIntent.findMany({
+            where: { id: { in: allIntentIds } },
+          })
+        : [];
+    const intentMap = new Map(paymentIntents.map((i) => [i.id, i]));
 
     const base = this.toListDto(row);
     const assignment = row.assignments[0];
@@ -519,14 +586,204 @@ export class AdminDriverService {
         isActive: account.isActive,
         isDefault: account.isDefault,
       })),
-      ledger: walletTxns.map((txn) => ({
-        id: txn.id,
-        date: txn.createdAt.toISOString(),
-        type: String(txn.txnType),
-        amount: Number(txn.amount),
-        balanceAfter: Number(txn.balanceAfter),
-        ...(txn.referenceType === 'ride' && txn.referenceId ? { rideId: txn.referenceId } : {}),
-      })),
+      ...(() => {
+        const commissionLedger = commissionTxns.map((txn) => {
+          const intent =
+            txn.referenceType === 'PAYMENT_INTENT' && txn.referenceId
+              ? intentMap.get(txn.referenceId)
+              : undefined;
+          return {
+            id: txn.id,
+            date: txn.createdAt.toISOString(),
+            type: String(txn.txnType),
+            amount: Number(txn.amount),
+            balanceAfter: Number(txn.balanceAfter),
+            description:
+              txn.description ??
+              (txn.txnType === 'MANUAL_RECHARGE'
+                ? 'Commission wallet recharge'
+                : txn.txnType === 'RIDE_COMMISSION'
+                  ? 'Ride commission deduction'
+                  : String(txn.txnType)),
+            ...(txn.rideId ? { rideId: txn.rideId } : {}),
+            referenceType: txn.referenceType ?? undefined,
+            referenceId: intent?.gatewayIntentId || txn.referenceId || undefined,
+          };
+        });
+
+        const payoutLedger = walletTxns.map((txn) => ({
+          id: txn.id,
+          date: txn.createdAt.toISOString(),
+          type: String(txn.txnType),
+          amount: Number(txn.amount),
+          balanceAfter: Number(txn.balanceAfter),
+          description: txn.description ?? txn.txnType,
+          ...(txn.referenceType === 'ride' && txn.referenceId ? { rideId: txn.referenceId } : {}),
+        }));
+
+        const activeSub =
+          (row.subscriptions ?? []).find((s) => s.status === 'ACTIVE') ?? row.subscriptions?.[0];
+
+        const subscriptionPayments = (row.subscriptions ?? [])
+          .filter(
+            (s) =>
+              s.paymentStatus === 'PAID' || s.status === 'ACTIVE' || Boolean(s.paymentIntentId),
+          )
+          .map((s) => {
+            const intent = s.paymentIntentId ? intentMap.get(s.paymentIntentId) : undefined;
+            const method = intent?.methodType
+              ? intent.methodType.toUpperCase() === 'CARD'
+                ? 'Razorpay (Card)'
+                : intent.methodType.toUpperCase() === 'UPI'
+                  ? 'Razorpay (UPI)'
+                  : `Razorpay (${intent.methodType})`
+              : 'Razorpay (UPI)';
+            const txId = intent?.gatewayIntentId || intent?.id || s.paymentIntentId || s.id;
+            const date = (s.startDate || s.createdAt).toLocaleDateString('en-GB', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+            });
+            return {
+              id: s.id,
+              date,
+              plan: s.plan.name,
+              amount: `₹ ${Number(s.plan.price).toFixed(2)}`,
+              status:
+                s.paymentStatus === 'PAID' || s.status === 'ACTIVE' ? 'Success' : s.paymentStatus,
+              method,
+              txId,
+            };
+          });
+
+        const subscriptionTimeline: Array<{
+          iconType: string;
+          title: string;
+          subtitle?: string;
+          date: string;
+        }> = [];
+        for (const s of row.subscriptions ?? []) {
+          const intent = s.paymentIntentId ? intentMap.get(s.paymentIntentId) : undefined;
+          const formattedDate = (s.startDate || s.createdAt).toLocaleDateString('en-GB', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+          });
+          if (s.status === 'ACTIVE') {
+            const hasPriorCommission = Boolean(
+              row.commissionWallet &&
+              (commissionLedger.length > 0 || Number(row.commissionWallet.balance) > 0),
+            );
+            subscriptionTimeline.push({
+              iconType: 'check',
+              title: hasPriorCommission
+                ? 'Subscription Activated (Switched from Commission)'
+                : 'Subscription Activated',
+              subtitle: hasPriorCommission
+                ? `${s.plan.name} · ₹${Number(row.commissionWallet?.balance || 0).toFixed(2)} Commission Preserved`
+                : s.plan.name,
+              date: formattedDate,
+            });
+            subscriptionTimeline.push({
+              iconType: 'payment',
+              title: 'Payment Successful',
+              subtitle: `₹${Number(s.plan.price).toFixed(2)} via ${intent?.methodType || 'Razorpay'}`,
+              date: formattedDate,
+            });
+            if (s.autoRenew) {
+              subscriptionTimeline.push({
+                iconType: 'shield',
+                title: 'Auto Renewal Enabled',
+                date: formattedDate,
+              });
+            }
+          } else if (s.status === 'EXPIRED') {
+            subscriptionTimeline.push({
+              iconType: 'calendar',
+              title: 'Subscription Expired',
+              subtitle: s.plan.name,
+              date: (s.expiryDate || s.updatedAt).toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+              }),
+            });
+          } else if (s.status === 'CANCELLED') {
+            subscriptionTimeline.push({
+              iconType: 'refresh',
+              title: 'Subscription Cancelled',
+              subtitle: s.plan.name,
+              date: s.updatedAt.toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+              }),
+            });
+          }
+        }
+
+        if (row.pendingPaymentModel === 'COMMISSION' && activeSub?.expiryDate) {
+          subscriptionTimeline.push({
+            iconType: 'refresh',
+            title: 'Switch to Commission Scheduled',
+            subtitle: `Transition effective at period expiry (${activeSub.expiryDate.toLocaleDateString('en-GB')})`,
+            date: activeSub.expiryDate.toLocaleDateString('en-GB', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+            }),
+          });
+        }
+
+        const remainingDays =
+          activeSub && activeSub.expiryDate
+            ? Math.max(
+                0,
+                Math.ceil((activeSub.expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+              )
+            : 0;
+
+        const commBal = row.commissionWallet ? Number(row.commissionWallet.balance) : 0;
+        const earnBal = row.wallet ? Number(row.wallet.balance) : 0;
+        const effectiveBal = row.paymentModel === 'COMMISSION' || commBal > 0 ? commBal : earnBal;
+
+        return {
+          walletBalance: effectiveBal,
+          commissionWalletBalance: commBal,
+          earningsBalance: earnBal,
+          commissionWallet: row.commissionWallet
+            ? {
+                id: row.commissionWallet.id,
+                balance: Number(row.commissionWallet.balance),
+                currency: row.commissionWallet.currency,
+                lastTransactionAt: row.commissionWallet.lastTransactionAt?.toISOString(),
+              }
+            : {
+                balance: 0,
+                currency: 'INR',
+              },
+          ledger: commissionLedger.length > 0 ? commissionLedger : payoutLedger,
+          commissionLedger,
+          subscriptionPayments,
+          subscriptionTimeline,
+          subscription: activeSub
+            ? {
+                id: activeSub.id,
+                planName: activeSub.plan?.name || 'Subscription Plan',
+                status: activeSub.status,
+                startDate: activeSub.startDate
+                  ? activeSub.startDate.toISOString().slice(0, 10)
+                  : undefined,
+                endDate: activeSub.expiryDate
+                  ? activeSub.expiryDate.toISOString().slice(0, 10)
+                  : undefined,
+                amount: activeSub.plan?.price != null ? Number(activeSub.plan.price) : undefined,
+                autoRenew: activeSub.autoRenew,
+                remainingDays,
+              }
+            : null,
+        };
+      })(),
       timeline,
       auditLogs: activityLogs.map((log) => {
         const operator = log.actor
@@ -542,23 +799,52 @@ export class AdminDriverService {
       }),
       // The driver's own choice, made in the driver app after approval; absent until then.
       ...(row.paymentModel ? { paymentModel: row.paymentModel } : {}),
-      subscription: row.subscriptions?.[0]
-        ? {
-            planName: row.subscriptions[0].plan?.name || 'Subscription Plan',
-            status: row.subscriptions[0].status,
-            ...(row.subscriptions[0].startDate
-              ? { startDate: row.subscriptions[0].startDate.toISOString().slice(0, 10) }
-              : {}),
-            ...(row.subscriptions[0].expiryDate
-              ? { endDate: row.subscriptions[0].expiryDate.toISOString().slice(0, 10) }
-              : {}),
-            ...(row.subscriptions[0].plan?.price != null
-              ? { amount: Number(row.subscriptions[0].plan.price) }
-              : {}),
-            autoRenew: row.subscriptions[0].autoRenew,
-          }
-        : null,
+      ...(row.pendingPaymentModel ? { pendingPaymentModel: row.pendingPaymentModel } : {}),
     };
+  }
+
+  async topUpCommissionWallet(
+    driverId: string,
+    amount: number,
+    actor: AuditActor,
+    notes?: string,
+  ): Promise<DriverDetailsDto> {
+    if (amount <= 0) throw new Error('Top-up amount must be greater than zero');
+    await this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'drivers', driverId);
+      let wallet = await tx.driverCommissionWallet.findUnique({ where: { driverId } });
+      if (!wallet) {
+        wallet = await tx.driverCommissionWallet.create({
+          data: { driverId, balance: new Prisma.Decimal(0), currency: 'INR' },
+        });
+      }
+      const newBalance = new Prisma.Decimal(wallet.balance).add(new Prisma.Decimal(amount));
+      await tx.driverCommissionWallet.update({
+        where: { id: wallet.id },
+        data: { balance: newBalance, lastTransactionAt: new Date() },
+      });
+      await tx.driverCommissionWalletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          driverId,
+          txnType: 'ADMIN_CREDIT',
+          amount: new Prisma.Decimal(amount),
+          balanceAfter: newBalance,
+          referenceType: 'ADMIN_ADJUSTMENT',
+          description: notes || `Admin wallet credit by ${actor.actorId}`,
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'driver_wallet',
+        entityId: wallet.id,
+        summary: `Admin credited ₹${amount} to driver commission wallet`,
+        after: { balance: newBalance.toNumber(), amount },
+        result: 'SUCCESS',
+      });
+    });
+    return this.getById(driverId);
   }
 
   async suspend(id: string, actor: AuditActor, notes?: string): Promise<DriverDetailsDto> {
@@ -1054,6 +1340,7 @@ export class AdminDriverService {
       include: {
         profile: true,
         wallet: true,
+        commissionWallet: true,
         onlineStatus: true,
         documents: {
           orderBy: { createdAt: 'asc' },
@@ -1089,7 +1376,7 @@ export class AdminDriverService {
         },
         subscriptions: {
           orderBy: { createdAt: 'desc' },
-          take: 1,
+          take: 50,
           include: { plan: true },
         },
       },
@@ -1121,6 +1408,23 @@ export class AdminDriverService {
     const insuranceDoc = vehicleDocs.find((d) => d.documentType?.toUpperCase() === 'INSURANCE');
     const permitDoc = vehicleDocs.find((d) => d.documentType?.toUpperCase() === 'PERMIT');
 
+    const rawRow = row as {
+      subscriptions?: Array<{
+        status?: string;
+        plan?: { name?: string };
+        expiryDate?: Date;
+      }>;
+      commissionWallet?: { balance: Prisma.Decimal | number | string } | null;
+      wallet?: { balance: Prisma.Decimal | number | string } | null;
+      paymentModel?: string | null;
+      pendingPaymentModel?: string | null;
+    };
+    const activeSub = rawRow.subscriptions?.[0];
+    const commissionBal = rawRow.commissionWallet ? Number(rawRow.commissionWallet.balance) : 0;
+    const earningsBal = rawRow.wallet ? Number(rawRow.wallet.balance) : 0;
+    const effectiveBalance =
+      rawRow.paymentModel === 'COMMISSION' || commissionBal > 0 ? commissionBal : earningsBal;
+
     return {
       id: row.id,
       driverCode: row.driverCode,
@@ -1133,14 +1437,6 @@ export class AdminDriverService {
       ...(vehicle?.make ? { vehicleMake: vehicle.make } : {}),
       ...(vehicle?.model ? { vehicleModel: vehicle.model } : {}),
       ...(() => {
-        const rawRow = row as {
-          subscriptions?: Array<{
-            status?: string;
-            plan?: { name?: string };
-            expiryDate?: Date;
-          }>;
-        };
-        const activeSub = rawRow.subscriptions?.[0];
         if (!activeSub) return {};
         return {
           subscription: {
@@ -1160,7 +1456,11 @@ export class AdminDriverService {
       ...(row.rejectionReason != null ? { rejectionReason: row.rejectionReason } : {}),
       ratingAvg: Number(row.rating),
       totalTrips: row.totalRides,
-      walletBalance: row.wallet ? Number(row.wallet.balance) : 0,
+      walletBalance: effectiveBalance,
+      commissionWalletBalance: commissionBal,
+      earningsBalance: earningsBal,
+      ...(rawRow.paymentModel ? { paymentModel: rawRow.paymentModel } : {}),
+      ...(rawRow.pendingPaymentModel ? { pendingPaymentModel: rawRow.pendingPaymentModel } : {}),
       ...(row.profile?.profilePhoto ? { profilePhotoUrl: row.profile.profilePhoto } : {}),
       documentsCount,
       ...(licenseDoc?.expiresAt

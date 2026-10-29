@@ -31,6 +31,25 @@ export const updatePaymentSettingsSchema = z.object({
         .optional(),
     })
     .optional(),
+  driverPayments: z
+    .object({
+      // A company mailbox for Razorpay's receipts; '' clears it.
+      checkoutEmail: z
+        .string()
+        .trim()
+        .toLowerCase()
+        .max(254)
+        .refine((v) => v === '' || z.email().safeParse(v).success, 'Enter a valid email address')
+        .optional(),
+      methods: z
+        .object({
+          netbanking: z.boolean().optional(),
+          wallet: z.boolean().optional(),
+          card: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   expectedVersion: z.number().int().positive().optional(),
 });
 

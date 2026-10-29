@@ -63,6 +63,9 @@ export async function adminDriverRoutes(fastify: FastifyInstance): Promise<void>
   fastify.post('/drivers/:id/suspend', canWrite, (req, reply) => controller.suspend(req, reply));
   fastify.post('/drivers/:id/block', canWrite, (req, reply) => controller.block(req, reply));
   fastify.post('/drivers/:id/activate', canWrite, (req, reply) => controller.activate(req, reply));
+  fastify.post('/drivers/:id/wallet/topup', canWrite, (req, reply) =>
+    controller.topUpWallet(req, reply),
+  );
 
   // ─── Bank accounts (Phase 1 verification gate; masked data only) ─────────
   const canVerifyBank = {

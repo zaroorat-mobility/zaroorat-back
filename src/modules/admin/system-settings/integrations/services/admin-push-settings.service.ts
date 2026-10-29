@@ -67,7 +67,6 @@ export class AdminPushSettingsService {
         key: PUSH_SETTING_KEYS.FCM_SERVER_KEY,
         value: input.fcmServerKey,
         isSecret: true,
-        expectedVersion: input.expectedVersion,
       });
     }
 
@@ -83,6 +82,7 @@ export class AdminPushSettingsService {
       'integration_push_settings',
       'Updated push integration settings',
       before,
+      input.expectedVersion,
     );
 
     return this.getPushSettings();

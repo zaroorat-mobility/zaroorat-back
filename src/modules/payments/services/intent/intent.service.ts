@@ -23,6 +23,7 @@ import { CommissionWalletService } from '../commission-wallet/commission-wallet.
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
 import { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
 import { PAYMENT_FEATURE_FLAG_KEYS } from '@modules/admin/system-settings/platform/constants/payment-feature-flags.constants.js';
+import type { DriverCheckoutSettings } from '@modules/admin/system-settings/integrations/constants/integration-settings.constants.js';
 import { logger } from '@shared/logger/index.js';
 import {
   DuplicateIdempotencyKeyError,
@@ -57,8 +58,9 @@ export interface CheckoutPayload {
   currency: string;
   name: string;
   description: string;
-  /// UD-9 (a): the paying driver's own number, so checkout does not ask for it.
-  prefill?: { contact: string };
+  /// UD-9 (a): the paying driver's own number, so checkout does not ask for it,
+  /// plus the company checkout email from Admin (never the driver's own).
+  prefill?: { contact: string; email?: string };
 }
 /// `GET /payments/driver-wallet/recharge-options?include=checkout`: the active
 /// gateway's PUBLIC key id, for the Driver App's payment-method discovery
@@ -66,8 +68,15 @@ export interface CheckoutPayload {
 /// provider has no client checkout (the mock in development) or is not usable,
 /// and then `checkoutError` says why when it is a configuration problem.
 export interface CheckoutConfigView {
-  checkout: { provider: string; keyId: string } | null;
-  checkoutError: { code: 'PAYMENT_GATEWAY_NOT_CONFIGURED' | 'PAYMENT_GATEWAY_DISABLED' } | null;
+  checkout: {
+    provider: string;
+    keyId: string;
+    /// Admin's method switches; UPI is always on.
+    methods: DriverCheckoutSettings['methods'];
+  } | null;
+  checkoutError: {
+    code: 'PAYMENT_GATEWAY_NOT_CONFIGURED' | 'PAYMENT_GATEWAY_DISABLED' | 'PAYMENT_EMAIL_NOT_SET';
+  } | null;
 }
 /// A Razorpay public key id; anything else is treated as not configured.
 const RAZORPAY_KEY_ID = /^rzp_(test|live)_[A-Za-z0-9]{6,}$/;
@@ -530,8 +539,10 @@ export class IntentService {
     const gateway = await this.gatewayResolver.forProviderName(intent.gateway);
     const keyId = gateway.checkoutKeyId();
     if (!keyId) return null;
-    // From our database for the intent's owner, never from the request (UD-9 a).
+    // From our database for the intent's owner, never from the request (UD-9 a);
+    // the email is Admin's company address, never the driver's own.
     const contact = await this.driverRepository.findPhoneByUserId(intent.userId);
+    const { email } = await this.gatewayResolver.driverCheckoutSettings();
     return {
       provider: gateway.gatewayName,
       keyId,
@@ -540,7 +551,7 @@ export class IntentService {
       currency: intent.currency,
       name: CHECKOUT_MERCHANT_NAME,
       description,
-      ...(contact ? { prefill: { contact } } : {}),
+      ...(contact ? { prefill: { contact, ...(email ? { email } : {}) } } : {}),
     };
   }
   /// The same key id every new order's `checkout` carries: the active gateway as
@@ -563,7 +574,13 @@ export class IntentService {
     if (gateway.gatewayName === 'razorpay' && !RAZORPAY_KEY_ID.test(keyId)) {
       return { checkout: null, checkoutError: { code: 'PAYMENT_GATEWAY_NOT_CONFIGURED' } };
     }
-    return { checkout: { provider: gateway.gatewayName, keyId }, checkoutError: null };
+    const { email, methods } = await this.gatewayResolver.driverCheckoutSettings();
+    // Razorpay refuses every payment without an email: say so before the
+    // driver picks a method, instead of letting each payment fail.
+    if (gateway.gatewayName === 'razorpay' && !email) {
+      return { checkout: null, checkoutError: { code: 'PAYMENT_EMAIL_NOT_SET' } };
+    }
+    return { checkout: { provider: gateway.gatewayName, keyId, methods }, checkoutError: null };
   }
   /// `GET /payments/intents/:intentId`: our database only, never the provider.
   async statusView(intent: PaymentIntent): Promise<IntentStatusView> {

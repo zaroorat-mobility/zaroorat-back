@@ -19,6 +19,26 @@ import type {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+async function generateUniqueTicketNumber(client: {
+  supportTicket: {
+    findUnique: (args: {
+      where: { ticketNumber: string };
+      select?: { id: boolean };
+    }) => Promise<{ id: string } | null>;
+  };
+}): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const random = Math.floor(100000 + Math.random() * 900000);
+    const candidate = `TKT-${random}`;
+    const exists = await client.supportTicket.findUnique({
+      where: { ticketNumber: candidate },
+      select: { id: true },
+    });
+    if (!exists) return candidate;
+  }
+  return `TKT-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+}
+
 export interface AdminSupportTicketListItemDto {
   id: string;
   ticketNumber: string;
@@ -307,7 +327,7 @@ export class AdminTicketService {
       }
     }
 
-    const ticketNumber = `TKT-${Math.floor(100000 + Math.random() * 900000)}`;
+    const ticketNumber = await generateUniqueTicketNumber(this.client);
 
     const created = await this.client.$transaction(async (tx: PrismaTx) => {
       const ticket = await tx.supportTicket.create({
