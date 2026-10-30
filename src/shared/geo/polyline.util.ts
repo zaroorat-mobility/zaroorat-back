@@ -39,6 +39,39 @@ export function decodeEncodedPolyline(encoded: string): Coordinate[] {
   return coordinates;
 }
 
+function encodeSignedNumber(num: number): string {
+  let sgn_num = num < 0 ? ~(num << 1) : num << 1;
+  let encodeString = '';
+  while (sgn_num >= 0x20) {
+    encodeString += String.fromCharCode((0x20 | (sgn_num & 0x1f)) + 63);
+    sgn_num >>= 5;
+  }
+  encodeString += String.fromCharCode(sgn_num + 63);
+  return encodeString;
+}
+
+/** Encode lat/lng coordinates into a Google-encoded polyline string. */
+export function encodeCoordinatesToPolyline(coordinates: Coordinate[]): string {
+  let output = '';
+  let prevLat = 0;
+  let prevLng = 0;
+
+  for (const coord of coordinates) {
+    const lat = Math.round(coord.latitude * 1e5);
+    const lng = Math.round(coord.longitude * 1e5);
+
+    const dLat = lat - prevLat;
+    const dLng = lng - prevLng;
+
+    prevLat = lat;
+    prevLng = lng;
+
+    output += encodeSignedNumber(dLat) + encodeSignedNumber(dLng);
+  }
+
+  return output;
+}
+
 /** Interpolate a simple path between two points (used in tests / fallback). */
 export function buildInterpolatedPath(
   origin: Coordinate,

@@ -43,7 +43,13 @@ function stubFetch(respond: () => Response | Promise<Response>): Call[] {
 const json = (status: number, body: unknown) => () =>
   new Response(JSON.stringify(body), { status });
 
-const ENV_KEYS = ['MAP_PROVIDER', 'GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_BASE_URL'] as const;
+const ENV_KEYS = [
+  'MAP_PROVIDER',
+  'GOOGLE_MAPS_API_KEY',
+  'GOOGLE_MAPS_BASE_URL',
+  'ALLOW_OFFLINE_ROUTING',
+  'ENABLE_OFFLINE_ROUTING',
+] as const;
 const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 before(() => {
   for (const key of ENV_KEYS) {
@@ -294,5 +300,25 @@ describe('legacy Directions and Geocoding responses (still used for fares, ETA, 
     );
     await assert.rejects(() => service.reverseGeocode(ORIGIN), RoutingProviderUnavailableError);
     assert.equal(calls.length, 0);
+  });
+
+  it('ALLOW_OFFLINE_ROUTING=true returns simulated route with polyline without making upstream calls', async () => {
+    const calls = stubFetch(json(200, {}));
+    const saved = process.env.ALLOW_OFFLINE_ROUTING;
+    process.env.ALLOW_OFFLINE_ROUTING = 'true';
+    try {
+      const provider = new GoogleMapsProvider({ apiKey: KEY });
+      const result = await outsideTestEnv(() => provider.getDirections(ORIGIN, DEST));
+
+      assert.equal(calls.length, 0);
+      assert.equal(result.providerName, 'google');
+      assert.ok(result.distanceMeters > 0);
+      assert.ok(result.durationSeconds > 0);
+      assert.ok(result.path && result.path.length > 0);
+      assert.ok(typeof result.encodedPolyline === 'string');
+    } finally {
+      if (saved === undefined) delete process.env.ALLOW_OFFLINE_ROUTING;
+      else process.env.ALLOW_OFFLINE_ROUTING = saved;
+    }
   });
 });
