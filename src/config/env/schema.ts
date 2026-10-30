@@ -47,6 +47,8 @@ export const EnvironmentSchema = z
     AIRTEL_DRIVER_DOC_REJECTED_MESSAGE: z.string().optional(),
     AIRTEL_DRIVER_ACTIVATED_TEMPLATE_ID: z.string().optional(),
     AIRTEL_DRIVER_ACTIVATED_MESSAGE: z.string().optional(),
+    ALLOW_OFFLINE_ROUTING: z.string().optional(),
+    ENABLE_OFFLINE_ROUTING: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     for (const name of ['BANK_DATA_ENCRYPTION_KEY', 'BANK_ACCOUNT_HASH_KEY'] as const) {

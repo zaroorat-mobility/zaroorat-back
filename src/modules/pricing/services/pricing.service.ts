@@ -7,6 +7,9 @@ import { calculateHaversineDistanceKm } from '../utils/distance.util.js';
 import { MAX_SURGE_MULTIPLIER, MIN_SURGE_MULTIPLIER } from './surge.service.js';
 import { PricingMetrics } from '../metrics/pricing.metrics.js';
 import type { MapProviderService } from '@modules/location';
+import { isOfflineRoutingEnabled, RoutingProviderUnavailableError } from '@modules/location';
+import { buildInterpolatedPath, encodeCoordinatesToPolyline } from '@shared/geo/polyline.util.js';
+import { logger } from '@shared/logger/index.js';
 import type {
   FareCalculationParams,
   FinalFareParams,
@@ -352,25 +355,36 @@ export class PricingService {
     dropLng: number;
   }): Promise<TripEstimate> {
     if (this.mapProviderService) {
-      const result = await this.mapProviderService.getDirections(
-        { latitude: params.pickupLat, longitude: params.pickupLng },
-        { latitude: params.dropLat, longitude: params.dropLng },
-      );
+      try {
+        const result = await this.mapProviderService.getDirections(
+          { latitude: params.pickupLat, longitude: params.pickupLng },
+          { latitude: params.dropLat, longitude: params.dropLng },
+        );
 
-      const distanceKm = money(result.distanceMeters / 1000);
-      if (distanceKm <= 0) throw new ZeroDistanceTripError();
-      const durationMin = Math.max(1, Math.round(result.durationSeconds / 60));
+        const distanceKm = money(result.distanceMeters / 1000);
+        if (distanceKm <= 0) throw new ZeroDistanceTripError();
+        const durationMin = Math.max(1, Math.round(result.durationSeconds / 60));
 
-      return {
-        distanceKm,
-        durationMin,
-        source: result.providerName,
-        ...(result.path?.length ? { path: result.path } : {}),
-        ...(result.encodedPolyline ? { encodedPolyline: result.encodedPolyline } : {}),
-      };
+        return {
+          distanceKm,
+          durationMin,
+          source: result.providerName,
+          ...(result.path?.length ? { path: result.path } : {}),
+          ...(result.encodedPolyline ? { encodedPolyline: result.encodedPolyline } : {}),
+        };
+      } catch (err) {
+        if (isOfflineRoutingEnabled() && err instanceof RoutingProviderUnavailableError) {
+          logger.warn(
+            { err },
+            '[PricingService] Map provider unavailable; falling back to offline route calculation because offline routing is enabled',
+          );
+        } else {
+          throw err;
+        }
+      }
     }
 
-    // ── Haversine fallback (Unit tests only when no MapProviderService is registered) ──
+    // ── Haversine fallback (Unit tests / offline mode when MapProviderService is unregistered or unavailable) ──
     const straightLineKm = calculateHaversineDistanceKm(
       params.pickupLat,
       params.pickupLng,
@@ -379,10 +393,16 @@ export class PricingService {
     );
     const distanceKm = money(straightLineKm * pricingConfig.roadDistanceFactor);
     if (distanceKm <= 0) throw new ZeroDistanceTripError();
+    const durationMin = Math.max(1, Math.round(distanceKm * pricingConfig.minutesPerKm));
+    const origin = { latitude: params.pickupLat, longitude: params.pickupLng };
+    const destination = { latitude: params.dropLat, longitude: params.dropLng };
+    const path = buildInterpolatedPath(origin, destination);
     return {
       distanceKm,
-      durationMin: Math.max(1, Math.round(distanceKm * pricingConfig.minutesPerKm)),
+      durationMin,
       source: 'haversine',
+      path,
+      encodedPolyline: encodeCoordinatesToPolyline(path),
     };
   }
 

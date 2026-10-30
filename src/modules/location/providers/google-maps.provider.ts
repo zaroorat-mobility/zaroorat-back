@@ -22,7 +22,11 @@ import {
   type MapCapability,
 } from '../types/map-capabilities.types.js';
 import { logger } from '@shared/logger/index.js';
-import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
+import {
+  buildInterpolatedPath,
+  decodeEncodedPolyline,
+  encodeCoordinatesToPolyline,
+} from '@shared/geo/polyline.util.js';
 
 interface GoogleDirectionsResponse {
   routes?: Array<{
@@ -264,7 +268,12 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
     // as the source.
     const offline = offlineRoutingResult(origin, destination, this.providerName);
     if (offline) {
-      return { ...offline, path: buildInterpolatedPath(origin, destination) };
+      const path = buildInterpolatedPath(origin, destination);
+      return {
+        ...offline,
+        path,
+        encodedPolyline: encodeCoordinatesToPolyline(path),
+      };
     }
 
     const response = await this.get<GoogleDirectionsResponse>('directions/json', {
