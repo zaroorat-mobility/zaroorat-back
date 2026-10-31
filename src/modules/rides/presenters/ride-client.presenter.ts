@@ -76,6 +76,7 @@ type RideRequestInput = {
   expiresAt?: Date | string | null;
   vehicleType?: VehicleTypeInput | null;
   stops?: RideRequestStopInput[] | null;
+  pricingRule?: { freeWaitingMin?: number | null; waitingPerMin?: unknown } | null;
 };
 
 type FareInput = {
@@ -295,6 +296,7 @@ export const CLIENT_RIDE_INCLUDE = {
         select: { sequence: true, lat: true, lng: true, address: true },
         orderBy: { sequence: 'asc' as const },
       },
+      pricingRule: { select: { freeWaitingMin: true, waitingPerMin: true } },
     },
   },
   stops: {
@@ -461,6 +463,13 @@ export function toClientRideView(
         }
       : null,
     stops,
+    // The booked rule's waiting terms, so the apps show what completion will bill.
+    waitingPolicy: req?.pricingRule
+      ? {
+          freeMinutes: req.pricingRule.freeWaitingMin ?? 0,
+          perMinute: dec(req.pricingRule.waitingPerMin) ?? 0,
+        }
+      : null,
     timeline: ride.statusEvents
       ? ride.statusEvents.map((e) => ({
           id: e.id,
@@ -547,6 +556,8 @@ export function toClientRideView(
     request: req
       ? {
           ...req,
+          // Exposed once, normalised, as `waitingPolicy`.
+          pricingRule: undefined,
           pickupLat,
           pickupLng,
           dropLat,

@@ -468,6 +468,21 @@ describe('Duplicate Ride PIN Customer-Binding & Concurrency Integration Test', (
     assert.equal(world.rides.get('ride-A')?.status, 'IN_PROGRESS');
   });
 
+  it('records the whole minutes waited at the pickup, so completion can bill them', async () => {
+    const world = makeDuplicatePinWorld();
+    const ride = world.rides.get('ride-A')!;
+    world.rides.set('ride-A', { ...ride, arrivedAt: new Date(Date.now() - (5 * 60 + 40) * 1000) });
+    const result = await world.lifecycle.startRide('ride-A', 'drv-A', '8274');
+    assert.equal(world.rides.get('ride-A')?.waitTimeMin, 5);
+    assert.equal(result.waitTimeMin, 5);
+  });
+
+  it('records no waiting when the arrival time is missing', async () => {
+    const world = makeDuplicatePinWorld();
+    await world.lifecycle.startRide('ride-B', 'drv-B', '8274');
+    assert.equal(world.rides.get('ride-B')?.waitTimeMin, 0);
+  });
+
   it('Same ride concurrent start -> exactly one succeeds, database state remains valid IN_PROGRESS', async () => {
     const world = makeDuplicatePinWorld();
     const results = await Promise.allSettled([

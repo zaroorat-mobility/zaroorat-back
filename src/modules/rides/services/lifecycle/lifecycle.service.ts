@@ -354,6 +354,15 @@ export class LifecycleService {
     const elapsedMs = completedAt.getTime() - ride.startedAt.getTime();
     return Math.max(0, Math.round(elapsedMs / 60_000));
   }
+  /// Minutes the driver waited at the pickup, measured like the trip itself:
+  /// from `arrivedAt` (stamped by `markDriverArrived`) to `startedAt`, both on
+  /// the server's clock. `completeRide` bills `waitTimeMin` against the rule's
+  /// free minutes and per-minute rate, and nothing ever wrote it, so waiting was
+  /// always billed as zero. Whole minutes only: a part minute is not charged.
+  private measuredWaitingMin(ride: Ride, startedAt: Date): number {
+    if (!ride.arrivedAt) return 0;
+    return Math.max(0, Math.floor((startedAt.getTime() - ride.arrivedAt.getTime()) / 60_000));
+  }
 
   /// Returns the ride and nothing else — no `plaintextOtp`, and that is the
   /// entire point of the signature.
@@ -672,12 +681,13 @@ export class LifecycleService {
         );
         await this.ridePinVerificationService.verify(ride.customerId, pin, tx);
         const startedAt = new Date();
+        const waitTimeMin = this.measuredWaitingMin(ride, startedAt);
         if (
           !(await this.rideRepo.updateStatusIf(
             rideId,
             ride.status,
             'IN_PROGRESS',
-            { startedAt },
+            { startedAt, waitTimeMin },
             tx,
           ))
         ) {
@@ -698,7 +708,7 @@ export class LifecycleService {
           rideEvent(RIDE_EVENT_CATALOG.STARTED, ride.customerId, { rideId, driverId }),
           tx,
         );
-        return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt };
+        return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt, waitTimeMin };
       });
     } catch (err) {
       // Only a wrong PIN spends a budget. A refused state transition or a driver

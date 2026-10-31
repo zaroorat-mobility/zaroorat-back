@@ -216,6 +216,7 @@ export class RideRepository {
       arrivedAt?: Date;
       dropoffArrivedAt?: Date;
       startedAt?: Date;
+      waitTimeMin?: number;
       completedAt?: Date;
       cancelledAt?: Date;
       actualDistanceKm?: Decimal;
