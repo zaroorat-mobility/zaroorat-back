@@ -209,6 +209,13 @@ export class MapProviderService {
       }
     }
 
+    if (err instanceof Error && /billing|REQUEST_DENIED/i.test(err.message)) {
+      logger.error(
+        { err: err.message },
+        '[MapProviderService] Google Maps API request denied (billing or key restriction). Enable billing in Google Cloud Console or set ALLOW_OFFLINE_ROUTING=true for local development.',
+      );
+    }
+
     throw new RoutingProviderUnavailableError();
   }
 

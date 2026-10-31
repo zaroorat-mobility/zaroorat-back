@@ -21,7 +21,11 @@ import {
   type MapCapability,
 } from '../types/map-capabilities.types.js';
 import { logger } from '@shared/logger/index.js';
-import { buildInterpolatedPath, decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
+import {
+  buildInterpolatedPath,
+  decodeEncodedPolyline,
+  encodeCoordinatesToPolyline,
+} from '@shared/geo/polyline.util.js';
 
 interface MapplsRouteResponse {
   code?: string;
@@ -231,7 +235,12 @@ export class MapplsProvider extends MapplsClient implements MapProvider {
     // as the source.
     const offline = offlineRoutingResult(origin, destination, this.providerName);
     if (offline) {
-      return { ...offline, path: buildInterpolatedPath(origin, destination) };
+      const path = buildInterpolatedPath(origin, destination);
+      return {
+        ...offline,
+        path,
+        encodedPolyline: encodeCoordinatesToPolyline(path),
+      };
     }
 
     const coordinates = `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}`;
