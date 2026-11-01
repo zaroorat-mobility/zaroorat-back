@@ -58,6 +58,7 @@ model File {
   vehicleDocuments     VehicleDocument[] @relation("VehicleDocumentFile")
   vehicleDocumentBacks VehicleDocument[] @relation("VehicleDocumentBackFile")
   promoBannerImage     PromoBanner?      @relation("BannerImage")
+  vehicleTypeImages    VehicleType[]     @relation("VehicleTypeImage")
 
   @@unique([storageKey], map: "uq_files_storage_key")
   @@index([ownerUserId], map: "ix_files_owner")

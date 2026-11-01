@@ -4,6 +4,7 @@ import { LocationService } from '../../../src/modules/drivers/services/location/
 import {
   DriverNotFoundError,
   ImplausibleLocationError,
+  MockLocationRejectedError,
 } from '../../../src/modules/drivers/errors/driver.errors.js';
 import type { UpdateDriverLocationInput } from '../../../src/modules/drivers/repositories/driver-location.repository.js';
 
@@ -92,8 +93,81 @@ function harness(
   );
   const update = (point: { latitude: number; longitude: number }, extra = {}) =>
     service.updateLocation({ driverId: DRIVER_ID, ...point, ...extra });
-  return { repo, calls, update };
+  const verify = (point: { latitude: number; longitude: number }, extra = {}) =>
+    service.verifyUnstoredFix({ driverId: DRIVER_ID, ...point, ...extra });
+  return { repo, calls, update, verify };
 }
+
+describe('LocationService.verifyUnstoredFix — frames that will not be written', () => {
+  it('passes plausible movement and needs no write', async () => {
+    const { repo, calls, verify } = harness({ previous: { ...PUNE, secondsAgo: 30 } });
+
+    const result = await verify({ latitude: PUNE.latitude + 0.002, longitude: PUNE.longitude });
+
+    assert.deepEqual(result, { mustStore: false });
+    assert.equal(repo.writes, 0);
+    assert.equal(calls.heartbeat, 0, 'writes nothing, not even a heartbeat');
+    assert.deepEqual(calls.tripKm, []);
+    assert.equal(calls.geo.length, 0);
+  });
+
+  it('refuses an impossible jump, counts it, and changes nothing', async () => {
+    const { repo, calls, verify } = harness({ previous: { ...PUNE, secondsAgo: 30 } });
+
+    await assert.rejects(verify(EMULATOR_DEFAULT), (err: unknown) => {
+      assert.ok(err instanceof ImplausibleLocationError);
+      assert.equal(err.reason, 'impossible_speed');
+      return true;
+    });
+
+    assert.deepEqual(calls.rejected, [{ driverId: DRIVER_ID, reason: 'impossible_speed' }]);
+    assert.equal(repo.writes, 0);
+    assert.equal(repo.row?.latitude, PUNE.latitude);
+  });
+
+  it('never replaces a stale baseline itself: it asks for the locked write', async () => {
+    const { repo, calls, verify } = harness({ previous: { ...PUNE, secondsAgo: 45_000 } });
+
+    const result = await verify(EMULATOR_DEFAULT, { accuracyMeters: 5 });
+
+    assert.deepEqual(result, { mustStore: true });
+    assert.equal(repo.writes, 0);
+    assert.equal(repo.row?.latitude, PUNE.latitude);
+    assert.equal(calls.resets, 0, 'the reset is reported by the write that performs it');
+  });
+
+  it('asks for the locked write when there is no baseline at all', async () => {
+    const { repo, verify } = harness();
+
+    assert.deepEqual(await verify(PUNE), { mustStore: true });
+    assert.equal(repo.writes, 0);
+  });
+
+  it('applies the accuracy bar a stale reset has to meet', async () => {
+    const { verify } = harness({ previous: { ...PUNE, secondsAgo: 45_000 } });
+
+    await assert.rejects(verify(EMULATOR_DEFAULT, { accuracyMeters: 2_000 }), (err: unknown) => {
+      assert.ok(err instanceof ImplausibleLocationError);
+      assert.equal(err.reason, 'poor_accuracy');
+      return true;
+    });
+  });
+
+  it('refuses a mock location', async () => {
+    const { verify } = harness({ previous: { ...PUNE, secondsAgo: 30 } });
+
+    await assert.rejects(verify(PUNE, { isMockLocation: true }), MockLocationRejectedError);
+  });
+
+  it('fails closed when the baseline cannot be read', async () => {
+    const { repo, verify } = harness({ previous: { ...PUNE, secondsAgo: 30 } });
+    repo.getLocation = async () => {
+      throw new Error('connection terminated unexpectedly');
+    };
+
+    await assert.rejects(verify(PUNE), /connection terminated unexpectedly/);
+  });
+});
 
 describe('LocationService.updateLocation — stale baseline, concurrency and failures', () => {
   it('replaces a stale far-away baseline, persists the fix and reports a reset', async () => {

@@ -37,10 +37,7 @@ export class LocationService {
   ) {}
 
   async updateLocation(input: UpdateDriverLocationInput): Promise<DriverLocation> {
-    if (input.isMockLocation === true && driverConfig.rejectMockLocation) {
-      this.driverMetrics.mockLocationRejected({ driverId: input.driverId });
-      throw new MockLocationRejectedError();
-    }
+    this.refuseMockLocation(input);
     const driver = await this.driverRepo.findById(input.driverId);
     if (!driver) throw new DriverNotFoundError(input.driverId);
     // Read, check and write under a per-driver lock with one server clock
@@ -51,21 +48,7 @@ export class LocationService {
       async (tx) => {
         const previous = await this.locationRepo.getLocation(input.driverId, tx);
         const now = new Date();
-        const verdict = assessPlausibility(
-          {
-            latitude: input.latitude,
-            longitude: input.longitude,
-            ...(input.accuracyMeters !== undefined ? { accuracyMeters: input.accuracyMeters } : {}),
-          },
-          previous
-            ? {
-                latitude: Number(previous.latitude),
-                longitude: Number(previous.longitude),
-                recordedAt: previous.recordedAt,
-              }
-            : null,
-          now,
-        );
+        const verdict = this.assess(input, previous, now);
         if (!verdict.plausible) throw this.implausible(input, verdict);
         const location = await this.locationRepo.updateLocation(input, tx, now);
         // The upsert keeps a newer stored row (only reachable with clock skew
@@ -128,6 +111,54 @@ export class LocationService {
       }
     }
     return location;
+  }
+
+  /// The checks `updateLocation` applies, for a fix that will not be written, so a
+  /// socket frame cannot skip them by arriving between writes.
+  ///
+  /// The baseline is the stored row: the one every write is checked against and
+  /// the arrival geofence reads. A copy in process memory would differ between
+  /// replicas and be empty after a reconnect, letting one replica pass what another
+  /// refused. For the same reason this must read the primary, never a read replica.
+  ///
+  /// Takes no lock because it cannot move the baseline. A fix that would have to
+  /// (there is none yet, or it is stale) comes back as `mustStore`, and the caller
+  /// sends it through `updateLocation`, which decides under the per-driver lock.
+  async verifyUnstoredFix(input: UpdateDriverLocationInput): Promise<{ mustStore: boolean }> {
+    this.refuseMockLocation(input);
+    const previous = await this.locationRepo.getLocation(input.driverId);
+    const verdict = this.assess(input, previous, new Date());
+    if (!verdict.plausible) throw this.implausible(input, verdict);
+    return { mustStore: !previous || verdict.baselineReset !== undefined };
+  }
+
+  private refuseMockLocation(input: UpdateDriverLocationInput): void {
+    if (input.isMockLocation === true && driverConfig.rejectMockLocation) {
+      this.driverMetrics.mockLocationRejected({ driverId: input.driverId });
+      throw new MockLocationRejectedError();
+    }
+  }
+
+  private assess(
+    input: UpdateDriverLocationInput,
+    previous: DriverLocation | null,
+    now: Date,
+  ): PlausibilityVerdict {
+    return assessPlausibility(
+      {
+        latitude: input.latitude,
+        longitude: input.longitude,
+        ...(input.accuracyMeters !== undefined ? { accuracyMeters: input.accuracyMeters } : {}),
+      },
+      previous
+        ? {
+            latitude: Number(previous.latitude),
+            longitude: Number(previous.longitude),
+            recordedAt: previous.recordedAt,
+          }
+        : null,
+      now,
+    );
   }
 
   /// Records and logs a refused fix and returns the error to throw. Logged with

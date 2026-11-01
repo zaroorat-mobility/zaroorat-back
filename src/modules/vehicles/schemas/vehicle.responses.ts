@@ -38,13 +38,19 @@ export const listVehicleTypesQuerySchema = {
   dependencies: { lat: ['lng'], lng: ['lat'] },
 } as const;
 
-const vehicleTypeView = {
+export const vehicleTypeView = {
   type: 'object',
   properties: {
     id: { type: 'string', format: 'uuid', description: 'Pass this as vehicleTypeId elsewhere.' },
     code: { type: 'string', description: 'Stable slug, e.g. BIKE, AUTO, CAB_ECONOMY.' },
     name: { type: 'string' },
-    icon: { type: ['string', 'null'], description: 'Client-side glyph key.' },
+    category: { type: 'string', description: 'Vehicle category e.g. auto, bike, car' },
+    hasAc: { type: 'boolean', description: 'Whether the vehicle has air conditioning' },
+    badge: { type: ['string', 'null'], description: 'Badge label e.g. AC, NON AC, POPULAR' },
+    description: { type: ['string', 'null'], description: 'Service description' },
+    imageUrl: { type: ['string', 'null'], description: 'Hosted image URL' },
+    imageFileId: { type: ['string', 'null'], description: 'ID of uploaded file' },
+    icon: { type: ['string', 'null'], description: 'Client-side glyph key fallback.' },
     displayOrder: { type: 'integer' },
     passengerCapacity: { type: ['integer', 'null'] },
     luggageCapacity: { type: ['integer', 'null'] },

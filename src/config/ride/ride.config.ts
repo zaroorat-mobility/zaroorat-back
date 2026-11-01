@@ -14,6 +14,8 @@ export interface RideConfig {
   arrivalRequiredFixes: number;
   /// Maximum age in ms for an arrival fix to be trusted.
   arrivalMaxFixAgeMs: number;
+  /// Fixes closer together than this count as one reading towards arrival.
+  arrivalMinFixSpacingMs: number;
   /// Maximum dispatch search rounds before expiring the request.
   dispatchMaxRounds: number;
   /// Maximum total unique drivers attempted before expiring the request.
@@ -47,6 +49,7 @@ export const rideConfig: RideConfig = Object.freeze({
   arrivalMaxAccuracyMeters: numericEnv('RIDE_ARRIVAL_MAX_ACCURACY_M', 50, { min: 1 }),
   arrivalRequiredFixes: numericEnv('RIDE_ARRIVAL_REQUIRED_FIXES', 3, { min: 1, integer: true }),
   arrivalMaxFixAgeMs: numericEnv('RIDE_ARRIVAL_MAX_FIX_AGE_MS', 30000, { min: 1000 }),
+  arrivalMinFixSpacingMs: numericEnv('RIDE_ARRIVAL_MIN_FIX_SPACING_MS', 2000, { min: 1 }),
   dispatchMaxRounds: numericEnv('RIDE_DISPATCH_MAX_ROUNDS', 5, { min: 1, integer: true }),
   dispatchMaxAttemptedDrivers: numericEnv('RIDE_DISPATCH_MAX_ATTEMPTED_DRIVERS', 20, {
     min: 1,

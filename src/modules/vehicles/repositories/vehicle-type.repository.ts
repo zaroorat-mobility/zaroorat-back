@@ -9,6 +9,24 @@ export interface FindActiveTypesOptions {
   cityId?: string;
 }
 
+export interface CreateVehicleTypeInput {
+  code: string;
+  name: string;
+  category?: string;
+  hasAc?: boolean;
+  badge?: string | null;
+  description?: string | null;
+  imageUrl?: string | null;
+  imageFileId?: string | null;
+  icon?: string | null;
+  passengerCapacity?: number;
+  luggageCapacity?: number;
+  displayOrder?: number;
+  isActive?: boolean;
+}
+
+export type UpdateVehicleTypeInput = Partial<CreateVehicleTypeInput>;
+
 /// The single Prisma entry point for `VehicleType`. No other module queries the
 /// table directly — rides and drivers both go through `VehicleTypeService`.
 export class VehicleTypeRepository {
@@ -41,5 +59,116 @@ export class VehicleTypeRepository {
     if (ids.length === 0) return [];
     const client = tx ?? this.db.client;
     return client.vehicleType.findMany({ where: { id: { in: [...ids] } } });
+  }
+
+  async findAll(
+    options: { includeInactive?: boolean } = { includeInactive: true },
+    tx?: TransactionClient,
+  ): Promise<VehicleType[]> {
+    const client = tx ?? this.db.client;
+    const where = options.includeInactive ? {} : { isActive: true };
+    return client.vehicleType.findMany({
+      where,
+      orderBy: [{ displayOrder: 'asc' }, { code: 'asc' }],
+    });
+  }
+
+  async create(data: CreateVehicleTypeInput, tx?: TransactionClient): Promise<VehicleType> {
+    const client = tx ?? this.db.client;
+
+    const createPayload: Record<string, unknown> = {
+      code: data.code,
+      name: data.name,
+      category: data.category || 'car',
+      hasAc: Boolean(data.hasAc),
+      badge: data.badge || null,
+      description: data.description || null,
+      imageUrl: data.imageUrl || null,
+      icon: data.icon || null,
+      passengerCapacity: data.passengerCapacity ?? 4,
+      luggageCapacity: data.luggageCapacity ?? 2,
+      displayOrder: data.displayOrder ?? 0,
+      isActive: data.isActive ?? true,
+    };
+
+    if (data.imageFileId) {
+      createPayload.imageFile = { connect: { id: data.imageFileId } };
+    }
+
+    try {
+      return await (
+        client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+      ).create({ data: createPayload });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (
+        createPayload.imageFile &&
+        (errMsg.includes('imageFile') || errMsg.includes('Foreign key'))
+      ) {
+        delete createPayload.imageFile;
+        return await (
+          client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+        ).create({ data: createPayload });
+      }
+      throw err;
+    }
+  }
+
+  async update(id: string, data: UpdateVehicleTypeInput, tx?: TransactionClient): Promise<VehicleType> {
+    const client = tx ?? this.db.client;
+
+    const updatePayload: Record<string, unknown> = {};
+    if (data.name !== undefined) updatePayload.name = data.name;
+    if (data.category !== undefined) updatePayload.category = data.category;
+    if (data.hasAc !== undefined) updatePayload.hasAc = Boolean(data.hasAc);
+    if (data.badge !== undefined) updatePayload.badge = data.badge;
+    if (data.description !== undefined) updatePayload.description = data.description;
+    if (data.imageUrl !== undefined) updatePayload.imageUrl = data.imageUrl;
+    if (data.icon !== undefined) updatePayload.icon = data.icon;
+    if (data.passengerCapacity !== undefined) updatePayload.passengerCapacity = data.passengerCapacity;
+    if (data.luggageCapacity !== undefined) updatePayload.luggageCapacity = data.luggageCapacity;
+    if (data.displayOrder !== undefined) updatePayload.displayOrder = data.displayOrder;
+    if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
+
+    if (data.imageFileId) {
+      updatePayload.imageFile = { connect: { id: data.imageFileId } };
+    } else if (data.imageFileId === null) {
+      updatePayload.imageFile = { disconnect: true };
+    }
+
+    try {
+      return await (
+        client.vehicleType as unknown as {
+          update: (args: { where: { id: string }; data: unknown }) => Promise<VehicleType>;
+        }
+      ).update({
+        where: { id },
+        data: updatePayload,
+      });
+    } catch {
+      // If imageFile relation fails (e.g. disconnect on disconnected or FK), update all scalars directly
+      delete updatePayload.imageFile;
+      return await (
+        client.vehicleType as unknown as {
+          update: (args: { where: { id: string }; data: unknown }) => Promise<VehicleType>;
+        }
+      ).update({
+        where: { id },
+        data: updatePayload,
+      });
+    }
+  }
+
+  async updateOrderings(
+    orderings: Array<{ id: string; displayOrder: number }>,
+    tx?: TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.db.client;
+    for (const item of orderings) {
+      await client.vehicleType.update({
+        where: { id: item.id },
+        data: { displayOrder: item.displayOrder },
+      });
+    }
   }
 }

@@ -9,6 +9,12 @@ export interface VehicleTypeView {
   id: string;
   code: string;
   name: string;
+  category: string;
+  hasAc: boolean;
+  badge: string | null;
+  description: string | null;
+  imageUrl: string | null;
+  imageFileId: string | null;
   icon: string | null;
   displayOrder: number;
   passengerCapacity: number | null;
@@ -28,13 +34,30 @@ export interface VehicleTypeView {
 /// card it priced with. Omitting it leaves the four fare fields null, which the
 /// published response schema allows.
 export function toVehicleTypeView(
-  vehicleType: VehicleType,
+  vehicleType: VehicleType & {
+    category?: string;
+    hasAc?: boolean;
+    badge?: string | null;
+    description?: string | null;
+    imageUrl?: string | null;
+    imageFileId?: string | null;
+  },
   rateCard?: PricingRateCard,
 ): VehicleTypeView {
+  const fileId = vehicleType.imageFileId ?? null;
+  const directUrl = vehicleType.imageUrl ?? null;
+  const resolvedImageUrl = directUrl || (fileId ? `/api/v1/files/${fileId}/url` : null);
+
   return {
     id: vehicleType.id,
     code: vehicleType.code,
     name: vehicleType.name,
+    category: vehicleType.category ?? 'car',
+    hasAc: vehicleType.hasAc ?? false,
+    badge: vehicleType.badge ?? null,
+    description: vehicleType.description ?? null,
+    imageUrl: resolvedImageUrl,
+    imageFileId: fileId,
     icon: vehicleType.icon,
     displayOrder: vehicleType.displayOrder,
     passengerCapacity: vehicleType.passengerCapacity,

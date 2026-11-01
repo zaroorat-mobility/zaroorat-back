@@ -30,6 +30,8 @@ export const RedisKeys = {
   driverNearbySent: (rideId: string): string => `ride:nearby-sent:${rideId}`,
   arrivalFixCount: (rideId: string, target: 'pickup' | 'drop'): string =>
     `ride:arrival:fixes:${rideId}:${target}`,
+  arrivalFixSpacing: (rideId: string, target: 'pickup' | 'drop'): string =>
+    `ride:arrival:spacing:${rideId}:${target}`,
   arrivalLock: (rideId: string, target: 'pickup' | 'drop'): string =>
     `ride:arrival:lock:${rideId}:${target}`,
 } as const;

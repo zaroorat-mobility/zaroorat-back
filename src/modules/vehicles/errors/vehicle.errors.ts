@@ -47,6 +47,17 @@ export class VehicleTypeInactiveError extends VehicleError {
   }
 }
 
+export class VehicleTypeAlreadyExistsError extends VehicleError {
+  constructor(code: string) {
+    super(
+      `A vehicle service with code '${code}' already exists. Please choose a different name or edit the existing service.`,
+      'VEHICLE_TYPE_ALREADY_EXISTS',
+      409,
+    );
+    this.name = 'VehicleTypeAlreadyExistsError';
+  }
+}
+
 /// The caller holds no ACTIVE assignment on the vehicle they are acting on.
 /// 404 rather than 403, matching `FileNotFoundError`'s reasoning: a 403 would
 /// confirm the vehicle exists to somebody with no claim on it.

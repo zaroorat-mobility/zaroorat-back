@@ -18,7 +18,12 @@ import {
   cancelRideSchema,
 } from '../schemas/ride.schemas.js';
 import { DriverNotFoundError } from '@modules/drivers/errors/driver.errors.js';
-import { toClientOfferView, toClientRideView } from '../presenters/ride-client.presenter.js';
+import type { RideRequest } from '../types';
+import {
+  estimatedDriverEarning,
+  toClientOfferView,
+  toClientRideView,
+} from '../presenters/ride-client.presenter.js';
 export class RideStateController {
   constructor(
     private readonly rideService: RideService,
@@ -35,9 +40,29 @@ export class RideStateController {
     if (!driver) throw new DriverNotFoundError(userId);
     return driver.id;
   }
+  /// Null when it cannot be priced: the driver still sees the fare, and an offer
+  /// must never fail to show over an estimate.
+  private async offerEarning(
+    request: RideRequest,
+    paymentModel: string | null,
+  ): Promise<number | null> {
+    try {
+      const quote = await this.rideService.pricing.calculateFinalFare({
+        actualDistanceKm: Number(request.estimatedDistanceKm ?? 0),
+        actualDurationMin: request.estimatedDurationMin ?? 0,
+        vehicleTypeId: request.vehicleTypeId,
+        pricingRuleId: request.pricingRuleId ?? null,
+        surgeMultiplier: Number(request.surgeMultiplier ?? 1),
+      });
+      return estimatedDriverEarning(quote, Number(request.boostAmount ?? 0), paymentModel);
+    } catch {
+      return null;
+    }
+  }
   async listOffers(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const driverId = await this.actingDriverId(req);
-    const offers = await this.dispatchRepo.findPendingForDriver(driverId);
+    const driver = await this.driverRepository.findByUserId(callerId(req));
+    if (!driver) throw new DriverNotFoundError(callerId(req));
+    const offers = await this.dispatchRepo.findPendingForDriver(driver.id);
     const customerIds = [
       ...new Set(
         offers
@@ -45,18 +70,36 @@ export class RideStateController {
           .filter((id): id is string => typeof id === 'string' && id.length > 0),
       ),
     ];
-    const profiles =
+    const [profiles, ratings] =
       customerIds.length === 0
-        ? []
-        : await this.db.client.userProfile.findMany({
-            where: { userId: { in: customerIds } },
-            select: { userId: true, firstName: true, lastName: true },
-          });
+        ? [[], []]
+        : await Promise.all([
+            this.db.client.userProfile.findMany({
+              where: { userId: { in: customerIds } },
+              select: { userId: true, firstName: true, lastName: true },
+            }),
+            this.db.client.customerRatingAggregate.findMany({
+              where: { userId: { in: customerIds } },
+              select: { userId: true, avgRating: true, totalRatings: true },
+            }),
+          ]);
+    const ratingByUser = new Map(ratings.map((r) => [r.userId, r]));
     const customerById = new Map(
-      profiles.map((p) => [p.userId, { firstName: p.firstName, lastName: p.lastName }]),
+      profiles.map((p) => [
+        p.userId,
+        {
+          firstName: p.firstName,
+          lastName: p.lastName,
+          avgRating: ratingByUser.get(p.userId)?.avgRating,
+          totalRatings: ratingByUser.get(p.userId)?.totalRatings,
+        },
+      ]),
+    );
+    const earnings = await Promise.all(
+      offers.map((offer) => this.offerEarning(offer.request, driver.paymentModel)),
     );
     reply.send({
-      data: offers.map((offer) => toClientOfferView(offer, customerById)),
+      data: offers.map((offer, i) => toClientOfferView(offer, customerById, earnings[i] ?? null)),
     });
   }
   async accept(req: FastifyRequest, reply: FastifyReply): Promise<void> {

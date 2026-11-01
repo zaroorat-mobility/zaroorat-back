@@ -595,6 +595,70 @@ describe('realtime socket gateway (integration)', () => {
       assert.equal((response.error as { code: string }).code, 'IMPLAUSIBLE_LOCATION');
     });
 
+    const nextFrameAllowed = () =>
+      new Promise((resolve) => setTimeout(resolve, realtimeConfig.locationMinIntervalMs + 50));
+
+    it('refuses an impossible frame between writes before it can reach the customer', async () => {
+      const world = await rideInProgress({
+        driver: '+919876770042',
+        rider: '+919876770043',
+        code: `LOC10_${randomUUID().slice(0, 6)}`,
+      });
+      const near = { latitude: 12.9718, longitude: 77.5948 };
+      const written = await emit(world.driverSocket, 'driver.location.update', near);
+      assert.equal(written.persisted, true, JSON.stringify(written));
+      await nextFrameAllowed();
+
+      const silent = neverArrives(world.riderSocket, 'ride.driver.location');
+      const fixId = randomUUID();
+      const refused = await emit(world.driverSocket, 'driver.location.update', {
+        latitude: 34.06,
+        longitude: 74.73,
+        accuracyMeters: 5,
+        fixId,
+      });
+      await silent;
+
+      assert.equal(refused.ok, false, JSON.stringify(refused));
+      assert.equal(refused.fixId, fixId, 'the client can tell which frame was refused');
+      const error = refused.error as { code: string; reason: string };
+      assert.equal(error.code, 'IMPLAUSIBLE_LOCATION');
+      assert.equal(error.reason, 'impossible_speed');
+      assert.equal(world.driverSocket.connected, true, 'a refused frame never drops the socket');
+
+      const stored = await db().client.driverLocation.findUniqueOrThrow({
+        where: { driverId: world.driver.driverId },
+      });
+      assert.equal(Number(stored.latitude), near.latitude, 'the baseline did not move');
+      const history = await db().client.rideLocationPoint.count({ where: { fixId } });
+      assert.equal(history, 0, 'a refused frame leaves no ride history');
+    });
+
+    it('forwards normal movement between writes and says it was not stored', async () => {
+      const world = await rideInProgress({
+        driver: '+919876770044',
+        rider: '+919876770045',
+        code: `LOC11_${randomUUID().slice(0, 6)}`,
+      });
+      const near = { latitude: 12.9718, longitude: 77.5948 };
+      await emit(world.driverSocket, 'driver.location.update', near);
+      await nextFrameAllowed();
+
+      const seen = waitFor(world.riderSocket, 'ride.driver.location');
+      const moved = { latitude: 12.97182, longitude: 77.5948 };
+      const ack = await emit(world.driverSocket, 'driver.location.update', moved);
+
+      assert.equal(ack.ok, true, JSON.stringify(ack));
+      assert.equal(ack.persisted, false);
+      assert.equal(ack.rooms, 1);
+      assert.equal(typeof ack.fixId, 'string');
+      assert.equal(((await seen).data as { latitude: number }).latitude, moved.latitude);
+      const stored = await db().client.driverLocation.findUniqueOrThrow({
+        where: { driverId: world.driver.driverId },
+      });
+      assert.equal(Number(stored.latitude), near.latitude);
+    });
+
     it('serialises a REST fix racing a socket frame — only one may replace a stale fix', async () => {
       const vehicleTypeId = await makeVehicleType({ code: `LOC9_${randomUUID().slice(0, 6)}` });
       const driver = await onlineDriver('+919876770041', vehicleTypeId);

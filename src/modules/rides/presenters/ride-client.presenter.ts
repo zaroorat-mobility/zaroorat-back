@@ -19,6 +19,7 @@ type DriverInput = {
 type CustomerInput = {
   id?: string;
   profile?: NameProfile | null;
+  customerRatingAggregate?: { avgRating?: unknown; totalRatings?: number | null | undefined } | null;
 };
 
 type VehicleTypeInput = {
@@ -141,6 +142,7 @@ type RideInput = {
   actualDistanceKm?: unknown;
   actualDurationMin?: number | null;
   driverPaymentModel?: string | null;
+  commissionAmount?: unknown;
   fare?: unknown;
   cancellation?: CancellationInput | null;
   driver?: DriverInput | null;
@@ -222,12 +224,40 @@ export function driverDisplayProfile(driver: DriverInput | null | undefined): {
 export function customerDisplayProfile(customer: CustomerInput | null | undefined): {
   id?: string;
   profile: { firstName: string | null; lastName: string | null };
+  rating: number | null;
+  totalRatings: number;
 } | null {
   if (!customer) return null;
   return {
     ...(customer.id !== undefined ? { id: customer.id } : {}),
     profile: nameFromUserProfile(customer.profile),
+    ...riderRating(customer.customerRatingAggregate),
   };
+}
+
+/// The aggregate row's average is 0 until a first rating exists: that is "new
+/// rider", not a rider rated zero.
+function riderRating(aggregate: CustomerInput['customerRatingAggregate']): {
+  rating: number | null;
+  totalRatings: number;
+} {
+  const totalRatings = aggregate?.totalRatings ?? 0;
+  return { rating: totalRatings > 0 ? dec(aggregate?.avgRating) : null, totalRatings };
+}
+
+/// What this offer should leave the driver with, on the same split the ledger
+/// applies at completion: a SUBSCRIPTION driver pays no per-ride commission, so
+/// that part of the fare stays theirs; a COMMISSION driver pays it from the wallet.
+export function estimatedDriverEarning(
+  quote: { driverEarning: number; platformCommission: number },
+  boostAmount: number,
+  paymentModel: string | null | undefined,
+): number {
+  const earning =
+    quote.driverEarning +
+    boostAmount +
+    (paymentModel === 'SUBSCRIPTION' ? quote.platformCommission : 0);
+  return Math.round(earning * 100) / 100;
 }
 
 /** Shared Prisma include for client-facing ride detail / active ride. */
@@ -271,6 +301,7 @@ export const CLIENT_RIDE_INCLUDE = {
     select: {
       id: true,
       profile: { select: { firstName: true, lastName: true } },
+      customerRatingAggregate: { select: { avgRating: true, totalRatings: true } },
     },
   },
   request: {
@@ -492,6 +523,7 @@ export function toClientRideView(
     distanceKm: dec(ride.actualDistanceKm) ?? dec(req?.estimatedDistanceKm) ?? null,
     durationMin: ride.actualDurationMin ?? req?.estimatedDurationMin ?? null,
     driverPaymentModel: ride.driverPaymentModel ?? null,
+    commissionAmount: dec(ride.commissionAmount),
     fare: ride.fare
       ? (() => {
           const f = ride.fare as FareInput;
@@ -638,7 +670,16 @@ export function toClientRequestView(
 
 export function toClientOfferView(
   offer: OfferInput,
-  customerById: Map<string, { firstName: string | null; lastName: string | null }>,
+  customerById: Map<
+    string,
+    {
+      firstName: string | null;
+      lastName: string | null;
+      avgRating?: unknown;
+      totalRatings?: number | null | undefined;
+    }
+  >,
+  estimatedEarning: number | null = null,
 ): Record<string, unknown> {
   const req = offer.request ?? {};
   const customerId = req.customerId;
@@ -650,6 +691,7 @@ export function toClientOfferView(
           firstName: profile?.firstName ?? null,
           lastName: profile?.lastName ?? null,
         },
+        ...riderRating(profile),
       }
     : null;
   const quotedFare = dec(req.quotedFare);
@@ -665,6 +707,7 @@ export function toClientOfferView(
     driverDistanceM: offer.driverDistanceM,
     driverEtaSeconds: offer.driverEtaSeconds,
     offeredAt: offer.offeredAt,
+    estimatedDriverEarning: estimatedEarning,
     request: {
       id: req.id,
       customerId,
