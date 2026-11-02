@@ -352,8 +352,16 @@ export class GeographicCoverageService {
     lat: number,
     lng: number,
   ): Promise<string | null> {
+    return (await this.resolveServiceZoneIdsAtPoint(cityCode, lat, lng))[0] ?? null;
+  }
+
+  /// The zones a fare can come from at this point, most specific first.
+  async resolveServiceZoneIdsAtPoint(
+    cityCode: string,
+    lat: number,
+    lng: number,
+  ): Promise<string[]> {
     const zones = await this.resolveZonesAtPoint(cityCode, lat, lng);
-    const match = zones.find((z) => z.zoneType === 'SERVICE' || z.zoneType === 'AIRPORT');
-    return match?.id ?? null;
+    return zones.filter(isCoverageZone).map((zone) => zone.id);
   }
 }
