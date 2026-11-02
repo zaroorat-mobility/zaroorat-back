@@ -61,9 +61,16 @@ model SurgeWindow {
   /// @deprecated BD-4. The legacy `SurgeZone` link, nullable so a window can
   /// exist against a service zone alone. Removed with the table.
   zoneId             String?   @map("zone_id") @db.Uuid
+  /// A whole-city rule, instead of a zone.
+  cityCode           String?   @map("city_code")
+  /// @deprecated Replaced by `vehicleTypeIds`, which can name more than one.
   vehicleTypeId      String?   @map("vehicle_type_id") @db.Uuid
+  /// Empty means every vehicle type.
+  vehicleTypeIds     String[]  @default([]) @map("vehicle_type_ids") @db.Uuid
+  /// Empty means every day. 0 is Sunday. An overnight window belongs to the day it starts.
+  daysOfWeek         Int[]     @default([]) @map("days_of_week") @db.SmallInt
   multiplier         Decimal   @db.Decimal(4, 2)
-  source             String    @default("DYNAMIC")
+  source             String    @default("MANUAL")
   reason             String?
   demandThresholdPct Decimal?  @map("demand_threshold_pct") @db.Decimal(5, 2)
   supplyThresholdPct Decimal?  @map("supply_threshold_pct") @db.Decimal(5, 2)
@@ -81,6 +88,7 @@ model SurgeWindow {
 
   @@index([zoneId, startsAt])
   @@index([serviceZoneId, startsAt])
+  @@index([cityCode, startsAt])
   @@map("surge_windows")
 }
 

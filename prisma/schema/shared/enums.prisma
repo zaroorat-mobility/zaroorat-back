@@ -440,6 +440,16 @@ enum ServiceZoneType {
   SERVICE
   AIRPORT
   RESTRICTED
+  /// An area a surge rule can price. Never affects coverage, fares or vehicles.
+  SURGE
+}
+
+/// Where rides can start in a city.
+enum CityCoverageMode {
+  /// Anywhere inside the city's boundary.
+  WHOLE_CITY
+  /// Only inside its active SERVICE and AIRPORT zones.
+  ZONES_ONLY
 }
 
 enum StateDivisionType {
