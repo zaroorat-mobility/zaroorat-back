@@ -5,7 +5,11 @@ import type { ProviderClient } from '@core/database/index.js';
 import { uuidV7 } from '@shared/crypto';
 import { recordAdminAction } from '../audit/index.js';
 import { Prisma } from '../../../generated/prisma/index.js';
-import type { ServiceZoneType, StateDivisionType } from '../../../generated/prisma/index.js';
+import type {
+  CityCoverageMode,
+  ServiceZoneType,
+  StateDivisionType,
+} from '../../../generated/prisma/index.js';
 import {
   assertValidPolygon,
   assertZoneWithinCity,
@@ -49,6 +53,21 @@ function isUniqueViolation(err: unknown): boolean {
     .driverAdapterError?.cause;
   return cause?.kind === 'UniqueConstraintViolation';
 }
+
+/// A restricted zone exists to block, and one that blocks nothing looks enforced
+/// while doing nothing.
+function assertRestrictedBlocksSomething(
+  zoneType: ServiceZoneType,
+  allowsPickup: boolean,
+  allowsDropoff: boolean,
+): void {
+  if (zoneType === 'RESTRICTED' && allowsPickup && allowsDropoff) {
+    throw new GeographicValidationError('A restricted zone must block pickups, drop-offs, or both');
+  }
+}
+
+const parseBoundary = (geoJson: string | null | undefined): number[][][] | null =>
+  geoJson ? (JSON.parse(geoJson) as { coordinates: number[][][] }).coordinates : null;
 
 export interface CountryDto {
   id: string;
@@ -160,6 +179,8 @@ export interface CityListDto {
   isActive: boolean;
   hasBoundary: boolean;
   zoneCount: number;
+  coverageMode: CityCoverageMode;
+  maxSurgeMultiplier: number;
 }
 
 export interface CityDetailDto extends CityListDto {
@@ -180,6 +201,7 @@ export interface ServiceZoneListDto {
   isActive: boolean;
   allowsPickup: boolean;
   allowsDropoff: boolean;
+  riderMessage: string | null;
   fareRuleCount: number;
 }
 
@@ -711,6 +733,8 @@ export class AdminGeographicService {
         isActive: r.isActive,
         hasBoundary: hasBoundaryById.get(r.id) ?? false,
         zoneCount: r.zones.length,
+        coverageMode: r.coverageMode,
+        maxSurgeMultiplier: Number(r.maxSurgeMultiplier),
       })),
     };
   }
@@ -774,6 +798,8 @@ export class AdminGeographicService {
       isActive: row.isActive,
       hasBoundary: g?.has_boundary ?? false,
       zoneCount: row.zones.length,
+      coverageMode: row.coverageMode,
+      maxSurgeMultiplier: Number(row.maxSurgeMultiplier),
       timezone: row.timezone,
       currency: row.currency,
       launchedAt: row.launchedAt?.toISOString().slice(0, 10) ?? null,
@@ -800,6 +826,9 @@ export class AdminGeographicService {
       await assertValidPolygon(this.databaseService, body.boundary).catch(() => {
         throw new GeographicValidationError('Invalid city boundary polygon');
       });
+      if (body.isActive !== false) {
+        await this.assertNoCityOverlap(null, polygonGeoJson(body.boundary));
+      }
     }
 
     const state = body.stateId
@@ -817,6 +846,7 @@ export class AdminGeographicService {
           currency: body.currency ?? 'INR',
           isActive: body.isActive ?? true,
           ...(body.launchedAt ? { launchedAt: new Date(body.launchedAt) } : {}),
+          ...(body.coverageMode ? { coverageMode: body.coverageMode } : {}),
         },
       });
 
@@ -899,6 +929,20 @@ export class AdminGeographicService {
       });
     }
 
+    const nextShape = body.boundary ? polygonGeoJson(body.boundary) : null;
+    const turningOn = nextActive && !existing.isActive;
+    const currentShape =
+      nextShape || turningOn
+        ? ((
+            await this.databaseService.client.$queryRaw<Array<{ boundary: string | null }>>`
+              SELECT ST_AsGeoJSON(boundary::geometry) AS boundary FROM cities WHERE id = ${id}::uuid
+            `
+          )[0]?.boundary ?? null)
+        : null;
+    if (nextShape) await this.assertZonesStayInside(id, nextShape);
+    const shapeToCheck = nextShape ?? (turningOn ? currentShape : null);
+    if (nextActive && shapeToCheck) await this.assertNoCityOverlap(id, shapeToCheck);
+
     const state = body.stateId
       ? await this.databaseService.client.state.findUnique({ where: { id: body.stateId } })
       : null;
@@ -916,6 +960,7 @@ export class AdminGeographicService {
           ...(body.launchedAt !== undefined
             ? { launchedAt: body.launchedAt ? new Date(body.launchedAt) : null }
             : {}),
+          ...(body.coverageMode !== undefined ? { coverageMode: body.coverageMode } : {}),
         },
       });
 
@@ -945,6 +990,9 @@ export class AdminGeographicService {
           currency: existing.currency,
           stateId: existing.stateId,
           launchedAt: existing.launchedAt,
+          coverageMode: existing.coverageMode,
+          // The old shape, so a bad edit can be put back.
+          ...(body.boundary ? { boundary: parseBoundary(currentShape) } : {}),
         },
         after: {
           name: updated.name,
@@ -953,12 +1001,50 @@ export class AdminGeographicService {
           currency: updated.currency,
           stateId: updated.stateId,
           launchedAt: updated.launchedAt,
+          coverageMode: updated.coverageMode,
           ...(body.boundary ? { boundaryReplaced: true } : {}),
         },
       });
     });
 
     return this.getCityById(id);
+  }
+
+  /// A shrunk city must not strand a zone: the zone would stop working without
+  /// anything saying so, because a point outside every city never reaches it.
+  private async assertZonesStayInside(cityId: string, shape: string): Promise<void> {
+    const outside = await this.databaseService.client.$queryRaw<Array<{ code: string }>>`
+      SELECT code FROM service_zones
+      WHERE city_id = ${cityId}::uuid
+        AND is_active = true
+        AND NOT ST_Contains(ST_GeomFromGeoJSON(${shape}), boundary::geometry)
+      ORDER BY code
+    `;
+    if (outside.length > 0) {
+      const codes = outside.map((zone) => zone.code).join(', ');
+      throw new GeographicConflictError(
+        `This Operating Area would leave these zones outside it: ${codes}. Move or deactivate them first.`,
+      );
+    }
+  }
+
+  /// A point in two cities would resolve to whichever launched last. Sharing an
+  /// edge is fine: no point is inside both.
+  private async assertNoCityOverlap(cityId: string | null, shape: string): Promise<void> {
+    const overlapping = await this.databaseService.client.$queryRaw<Array<{ code: string }>>`
+      SELECT code FROM cities
+      WHERE is_active = true
+        AND code != 'GLOBAL'
+        AND boundary IS NOT NULL
+        AND (${cityId}::uuid IS NULL OR id != ${cityId}::uuid)
+        AND ST_Intersects(boundary::geometry, ST_GeomFromGeoJSON(${shape}))
+        AND NOT ST_Touches(boundary::geometry, ST_GeomFromGeoJSON(${shape}))
+      ORDER BY code
+    `;
+    if (overlapping.length > 0) {
+      const codes = overlapping.map((city) => city.code).join(', ');
+      throw new GeographicConflictError(`This Operating Area overlaps another active city: ${codes}.`);
+    }
   }
 
   async listServiceZones(options: {
@@ -969,7 +1055,8 @@ export class AdminGeographicService {
     const rows = await this.databaseService.client.serviceZone.findMany({
       where: {
         ...(options.activeOnly ? { isActive: true } : {}),
-        ...(options.zoneType ? { zoneType: options.zoneType } : {}),
+        // A surge area is pricing's, and has no place in a list of coverage zones.
+        zoneType: options.zoneType ?? { not: 'SURGE' },
         ...(options.cityCode ? { city: { code: options.cityCode } } : {}),
       },
       include: {
@@ -990,6 +1077,7 @@ export class AdminGeographicService {
         isActive: r.isActive,
         allowsPickup: r.allowsPickup,
         allowsDropoff: r.allowsDropoff,
+        riderMessage: r.riderMessage,
         fareRuleCount: r.pricingRules.length,
       })),
     };
@@ -1007,7 +1095,7 @@ export class AdminGeographicService {
     }>
   > {
     const { data } = await this.listServiceZones({ cityCode, activeOnly: true });
-    return data.map((z) => ({
+    return data.filter((z) => z.zoneType === 'SERVICE' || z.zoneType === 'AIRPORT').map((z) => ({
       id: z.id,
       code: z.code,
       name: z.name,
@@ -1054,6 +1142,7 @@ export class AdminGeographicService {
       isActive: row.isActive,
       allowsPickup: row.allowsPickup,
       allowsDropoff: row.allowsDropoff,
+      riderMessage: row.riderMessage,
       fareRuleCount: row.pricingRules.length,
       boundary: parsed.coordinates,
       vehicleTypeIds: row.vehicleTypes.map((v) => v.vehicleTypeId),
@@ -1074,6 +1163,12 @@ export class AdminGeographicService {
       where: { code: body.cityCode },
     });
     if (!city) throw new GeographicValidationError(`City ${body.cityCode} not found`);
+
+    assertRestrictedBlocksSomething(
+      body.zoneType,
+      body.allowsPickup ?? true,
+      body.allowsDropoff ?? true,
+    );
 
     await assertValidPolygon(this.databaseService, body.coordinates).catch(() => {
       throw new GeographicValidationError('Invalid zone polygon');
@@ -1096,7 +1191,7 @@ export class AdminGeographicService {
         // rest of the codebase already uses.
         const inserted = await tx.$queryRaw<Array<{ id: string }>>`
           INSERT INTO service_zones (
-            id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at
+            id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, rider_message, is_active, created_at, updated_at
           )
           VALUES (
             ${uuidV7()}::uuid,
@@ -1107,6 +1202,7 @@ export class AdminGeographicService {
             ST_GeomFromGeoJSON(${geoJson}),
             ${body.allowsPickup ?? true},
             ${body.allowsDropoff ?? true},
+            ${body.riderMessage ?? null},
             ${body.isActive ?? true},
             NOW(),
             NOW()
@@ -1162,6 +1258,27 @@ export class AdminGeographicService {
     });
     if (!existing) throw new ServiceZoneNotFoundError();
 
+    // Only when access is being changed, so an older zone can still be deactivated.
+    if (
+      body.zoneType !== undefined ||
+      body.allowsPickup !== undefined ||
+      body.allowsDropoff !== undefined
+    ) {
+      assertRestrictedBlocksSomething(
+        body.zoneType ?? existing.zoneType,
+        body.allowsPickup ?? existing.allowsPickup,
+        body.allowsDropoff ?? existing.allowsDropoff,
+      );
+    }
+
+    const oldShape = body.coordinates
+      ? ((
+          await this.databaseService.client.$queryRaw<Array<{ boundary: string | null }>>`
+            SELECT ST_AsGeoJSON(boundary::geometry) AS boundary FROM service_zones WHERE id = ${id}::uuid
+          `
+        )[0]?.boundary ?? null)
+      : null;
+
     if (body.coordinates) {
       await assertValidPolygon(this.databaseService, body.coordinates).catch(() => {
         throw new GeographicValidationError('Invalid zone polygon');
@@ -1192,6 +1309,7 @@ export class AdminGeographicService {
           ...(body.zoneType !== undefined ? { zoneType: body.zoneType } : {}),
           ...(body.allowsPickup !== undefined ? { allowsPickup: body.allowsPickup } : {}),
           ...(body.allowsDropoff !== undefined ? { allowsDropoff: body.allowsDropoff } : {}),
+          ...(body.riderMessage !== undefined ? { riderMessage: body.riderMessage } : {}),
           ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
         },
       });
@@ -1211,13 +1329,17 @@ export class AdminGeographicService {
           zoneType: existing.zoneType,
           allowsPickup: existing.allowsPickup,
           allowsDropoff: existing.allowsDropoff,
+          riderMessage: existing.riderMessage,
           isActive: existing.isActive,
+          // The old shape, so a bad edit can be put back.
+          ...(body.coordinates ? { boundary: parseBoundary(oldShape) } : {}),
         },
         after: {
           name: updated.name,
           zoneType: updated.zoneType,
           allowsPickup: updated.allowsPickup,
           allowsDropoff: updated.allowsDropoff,
+          riderMessage: updated.riderMessage,
           isActive: updated.isActive,
           ...(body.coordinates ? { boundaryReplaced: true } : {}),
           ...(body.vehicleTypeIds ? { vehicleTypeIds: body.vehicleTypeIds } : {}),
