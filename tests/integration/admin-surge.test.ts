@@ -144,7 +144,10 @@ describe('admin surge windows (integration)', () => {
         orderBy: { createdAt: 'desc' },
       });
       assert.ok(log, 'the change is audited');
-      assert.equal((log.metadata as { before?: { maxSurgeMultiplier?: number } }).before?.maxSurgeMultiplier, 2);
+      assert.equal(
+        (log.metadata as { before?: { maxSurgeMultiplier?: number } }).before?.maxSurgeMultiplier,
+        2,
+      );
 
       const tooHigh = await app.inject({
         method: 'PATCH',
@@ -235,6 +238,32 @@ describe('admin surge windows (integration)', () => {
       });
       assert.equal(row.vehicleTypeId, cab.id);
       assert.deepEqual(row.vehicleTypeIds, [cab.id]);
+    });
+
+    it('tells the AC variant apart, since it shares its name with the Non-AC one', async () => {
+      const authHeader = await loginAdmin();
+      const ac = await db().client.vehicleType.findUniqueOrThrow({
+        where: { code: 'CAB_ECONOMY_AC' },
+      });
+      const zone = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-zones',
+        headers: authHeader,
+        payload: zonePayload,
+      });
+      const saved = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-windows',
+        headers: authHeader,
+        payload: {
+          zoneId: zone.json().id as string,
+          vehicleTypeId: ac.id,
+          multiplier: 1.5,
+          startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      });
+      assert.equal(saved.statusCode, 201, saved.payload);
+      assert.equal(saved.json().vehicleTypeName, `${ac.name} (AC)`);
     });
   });
 

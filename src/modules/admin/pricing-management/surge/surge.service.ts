@@ -61,7 +61,7 @@ interface SurgeWindowRow {
   createdAt: Date;
   zone?: { name: string } | null;
   serviceZone?: { name: string } | null;
-  vehicleType?: { code: string; name: string } | null;
+  vehicleType?: { code: string; name: string; hasAc: boolean } | null;
 }
 
 /// FR-014. The single place a surge window becomes a response.
@@ -92,7 +92,10 @@ function toWindowDto(row: SurgeWindowRow): SurgeWindowDto {
     ...(row.vehicleType !== undefined
       ? {
           vehicleTypeCode: row.vehicleType?.code ?? null,
-          vehicleTypeName: row.vehicleType?.name ?? null,
+          // AC and Non-AC variants share a name, e.g. two "Cab Economy" types.
+          vehicleTypeName: row.vehicleType
+            ? `${row.vehicleType.name}${row.vehicleType.hasAc ? ' (AC)' : ''}`
+            : null,
         }
       : {}),
   };
@@ -298,7 +301,7 @@ export class AdminSurgeService {
         include: {
           zone: { select: { name: true } },
           serviceZone: { select: { name: true } },
-          vehicleType: { select: { code: true, name: true } },
+          vehicleType: { select: { code: true, name: true, hasAc: true } },
         },
       });
       await recordAdminAction(tx, {
@@ -329,7 +332,7 @@ export class AdminSurgeService {
       include: {
         zone: { select: { name: true } },
         serviceZone: { select: { name: true } },
-        vehicleType: { select: { code: true, name: true } },
+        vehicleType: { select: { code: true, name: true, hasAc: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -343,7 +346,7 @@ export class AdminSurgeService {
       include: {
         zone: { select: { name: true } },
         serviceZone: { select: { name: true } },
-        vehicleType: { select: { code: true, name: true } },
+        vehicleType: { select: { code: true, name: true, hasAc: true } },
       },
     });
     return row ? toWindowDto(row) : null;
@@ -388,7 +391,7 @@ export class AdminSurgeService {
         include: {
           zone: { select: { name: true } },
           serviceZone: { select: { name: true } },
-          vehicleType: { select: { code: true, name: true } },
+          vehicleType: { select: { code: true, name: true, hasAc: true } },
         },
       });
       await recordAdminAction(tx, {
