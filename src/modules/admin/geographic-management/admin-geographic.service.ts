@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseService } from '@core/database';
 import type { ProviderClient } from '@core/database/index.js';
+import { inForce } from '@modules/pricing/repositories/pricing-rule.repository.js';
 import { uuidV7 } from '@shared/crypto';
 import { recordAdminAction } from '../audit/index.js';
 import { Prisma } from '../../../generated/prisma/index.js';
@@ -31,6 +32,12 @@ import {
   ServiceZoneNotFoundError,
   StateNotFoundError,
 } from './geographic.errors.js';
+import {
+  citySetupIssues,
+  type CitySetupFacts,
+  type FareLevel,
+  type SetupIssue,
+} from './city-setup.logic.js';
 
 /// The subset of the client `syncZoneVehicleTypes` needs, so it can run either
 /// standalone or inside a transaction handle.
@@ -209,6 +216,17 @@ export interface ServiceZoneDetailDto extends ServiceZoneListDto {
   boundary: number[][][];
   vehicleTypeIds: string[];
   vehicleTypeCodes: string[];
+}
+
+export interface CitySetupDto {
+  area: { km2: number };
+  coverageMode: CityCoverageMode;
+  /// How much of the Operating Area a ride can start in, as a percentage.
+  coveredPct: number;
+  zones: { service: number; airport: number; restricted: number; surge: number };
+  fares: Array<{ code: string; name: string; level: FareLevel }>;
+  surgeActive: number;
+  issues: SetupIssue[];
 }
 
 export class AdminGeographicService {
@@ -942,6 +960,20 @@ export class AdminGeographicService {
     if (nextShape) await this.assertZonesStayInside(id, nextShape);
     const shapeToCheck = nextShape ?? (turningOn ? currentShape : null);
     if (nextActive && shapeToCheck) await this.assertNoCityOverlap(id, shapeToCheck);
+    if (turningOn) {
+      const { facts } = await this.loadCitySetup(id);
+      const red = citySetupIssues({
+        ...facts,
+        // This request's own changes, and the boundary rule is checked above.
+        coverageMode: body.coverageMode ?? facts.coverageMode,
+        hasBoundary: true,
+      }).filter((issue) => issue.severity === 'RED');
+      if (red.length > 0) {
+        throw new GeographicConflictError(
+          `This city cannot be turned on yet. ${red.map((issue) => issue.message).join(' ')}`,
+        );
+      }
+    }
 
     const state = body.stateId
       ? await this.databaseService.client.state.findUnique({ where: { id: body.stateId } })
@@ -1010,6 +1042,127 @@ export class AdminGeographicService {
     return this.getCityById(id);
   }
 
+  async getCitySetup(id: string): Promise<CitySetupDto> {
+    const { facts, areaKm2, coveredKm2, zoneCounts, surgeActive } = await this.loadCitySetup(id);
+    return {
+      area: { km2: Number(areaKm2.toFixed(1)) },
+      coverageMode: facts.coverageMode,
+      coveredPct:
+        facts.coverageMode === 'WHOLE_CITY'
+          ? 100
+          : areaKm2 > 0
+            ? Number(((coveredKm2 / areaKm2) * 100).toFixed(1))
+            : 0,
+      zones: zoneCounts,
+      fares: facts.fares,
+      surgeActive,
+      issues: citySetupIssues(facts),
+    };
+  }
+
+  private async loadCitySetup(id: string) {
+    const client = this.databaseService.client;
+    const city = await client.city.findUnique({ where: { id } });
+    if (!city) throw new CityNotFoundError();
+
+    const [area] = await client.$queryRaw<
+      Array<{ has_boundary: boolean; area_km2: number | null; covered_km2: number | null }>
+    >`
+      SELECT
+        c.boundary IS NOT NULL AS has_boundary,
+        (ST_Area(c.boundary) / 1000000)::float8 AS area_km2,
+        (
+          SELECT ST_Area(ST_Union(ST_Intersection(z.boundary::geometry, c.boundary::geometry))::geography) / 1000000
+          FROM service_zones z
+          WHERE z.city_id = c.id AND z.is_active = true AND z.zone_type IN ('SERVICE', 'AIRPORT')
+        )::float8 AS covered_km2
+      FROM cities c WHERE c.id = ${id}::uuid
+    `;
+    const zones = await client.$queryRaw<
+      Array<{
+        id: string;
+        code: string;
+        zone_type: ServiceZoneType;
+        allows_pickup: boolean;
+        allows_dropoff: boolean;
+        inside: boolean | null;
+      }>
+    >`
+      SELECT z.id, z.code, z.zone_type, z.allows_pickup, z.allows_dropoff,
+        ST_Contains(c.boundary::geometry, z.boundary::geometry) AS inside
+      FROM service_zones z JOIN cities c ON c.id = z.city_id
+      WHERE z.city_id = ${id}::uuid AND z.is_active = true
+      ORDER BY z.code
+    `;
+    const countOf = (type: ServiceZoneType) => zones.filter((z) => z.zone_type === type).length;
+
+    const now = new Date();
+    const [vehicleTypes, rules, surgeActive] = await Promise.all([
+      client.vehicleType.findMany({
+        where: { isActive: true },
+        select: { id: true, code: true, name: true, hasAc: true },
+        orderBy: { displayOrder: 'asc' },
+      }),
+      client.pricingRule.findMany({
+        where: { cityCode: { in: [city.code, 'GLOBAL'] }, ...inForce(now) },
+        select: { vehicleTypeId: true, cityCode: true, serviceZoneId: true },
+      }),
+      client.surgeWindow.count({
+        where: {
+          isActive: true,
+          startsAt: { lte: now },
+          AND: [
+            { OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
+            {
+              OR: [
+                { cityCode: city.code },
+                { serviceZone: { cityId: id } },
+                { serviceZoneId: null, zone: { cityCode: city.code } },
+              ],
+            },
+          ],
+        },
+      }),
+    ]);
+    const fareLevel = (vehicleTypeId: string): FareLevel => {
+      const mine = rules.filter((rule) => rule.vehicleTypeId === vehicleTypeId);
+      if (mine.some((rule) => rule.cityCode === city.code && rule.serviceZoneId === null)) {
+        return 'CITY';
+      }
+      return mine.some((rule) => rule.cityCode === 'GLOBAL') ? 'GLOBAL' : 'NONE';
+    };
+
+    const facts: CitySetupFacts = {
+      cityId: id,
+      cityCode: city.code,
+      hasBoundary: area?.has_boundary ?? false,
+      coverageMode: city.coverageMode,
+      activeCoverageZones: countOf('SERVICE') + countOf('AIRPORT'),
+      restrictedBlockingNothing: zones
+        .filter((z) => z.zone_type === 'RESTRICTED' && z.allows_pickup && z.allows_dropoff)
+        .map((z) => ({ id: z.id, code: z.code })),
+      zonesOutsideArea: zones.filter((z) => z.inside === false).map((z) => z.code),
+      fares: vehicleTypes.map((type) => ({
+        code: type.code,
+        // AC and Non-AC variants share a name, e.g. two "Cab Economy" rows.
+        name: type.hasAc ? `${type.name} (AC)` : type.name,
+        level: fareLevel(type.id),
+      })),
+    };
+    return {
+      facts,
+      areaKm2: area?.area_km2 ?? 0,
+      coveredKm2: area?.covered_km2 ?? 0,
+      zoneCounts: {
+        service: countOf('SERVICE'),
+        airport: countOf('AIRPORT'),
+        restricted: countOf('RESTRICTED'),
+        surge: countOf('SURGE'),
+      },
+      surgeActive,
+    };
+  }
+
   /// A shrunk city must not strand a zone: the zone would stop working without
   /// anything saying so, because a point outside every city never reaches it.
   private async assertZonesStayInside(cityId: string, shape: string): Promise<void> {
@@ -1043,7 +1196,9 @@ export class AdminGeographicService {
     `;
     if (overlapping.length > 0) {
       const codes = overlapping.map((city) => city.code).join(', ');
-      throw new GeographicConflictError(`This Operating Area overlaps another active city: ${codes}.`);
+      throw new GeographicConflictError(
+        `This Operating Area overlaps another active city: ${codes}.`,
+      );
     }
   }
 
@@ -1095,14 +1250,16 @@ export class AdminGeographicService {
     }>
   > {
     const { data } = await this.listServiceZones({ cityCode, activeOnly: true });
-    return data.filter((z) => z.zoneType === 'SERVICE' || z.zoneType === 'AIRPORT').map((z) => ({
-      id: z.id,
-      code: z.code,
-      name: z.name,
-      zoneType: z.zoneType,
-      cityCode: z.cityCode,
-      isActive: z.isActive,
-    }));
+    return data
+      .filter((z) => z.zoneType === 'SERVICE' || z.zoneType === 'AIRPORT')
+      .map((z) => ({
+        id: z.id,
+        code: z.code,
+        name: z.name,
+        zoneType: z.zoneType,
+        cityCode: z.cityCode,
+        isActive: z.isActive,
+      }));
   }
 
   async assertZoneBelongsToCity(serviceZoneId: string, cityCode: string): Promise<void> {

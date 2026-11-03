@@ -108,6 +108,15 @@ export const updateServiceZoneBodySchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+export const simulateQuerySchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+  dropLat: z.coerce.number().min(-90).max(90).optional(),
+  dropLng: z.coerce.number().min(-180).max(180).optional(),
+  vehicleTypeId: z.string().uuid().optional(),
+  at: z.string().datetime({ offset: true }).optional(),
+});
+
 export type CreateCityBody = z.infer<typeof createCityBodySchema>;
 export type UpdateCityBody = z.infer<typeof updateCityBodySchema>;
 export type CreateStateBody = z.infer<typeof createStateBodySchema>;

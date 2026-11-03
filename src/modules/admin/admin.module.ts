@@ -1,3 +1,4 @@
+import { GeographicSimulationService } from './geographic-management/geographic-simulation.service.js';
 import type { FastifyInstance } from 'fastify';
 import { asClass, AwilixContainer } from 'awilix';
 import { registerFileReference } from '@modules/files';
@@ -199,6 +200,7 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminRiderService: asClass(AdminRiderService).singleton(),
     adminRiderController: asClass(AdminRiderController).singleton(),
     adminGeographicService: asClass(AdminGeographicService).singleton(),
+    geographicSimulationService: asClass(GeographicSimulationService).singleton(),
     adminGeographicController: asClass(AdminGeographicController).singleton(),
     adminRideService: asClass(AdminRideService).singleton(),
     adminRideController: asClass(AdminRideController).singleton(),

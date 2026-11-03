@@ -317,16 +317,23 @@ export class GeographicCoverageService {
   /// and genuinely varies per category, so it stays in the loop. A zone with no
   /// vehicle list admits every type, including one added later.
   async assertVehicleTypeServiceable(context: PickupContext, vehicleTypeId: string): Promise<void> {
-    const zone = context.zones.find(isCoverageZone);
-    if (!zone) return;
+    if (!(await this.isVehicleTypeAllowed(context.zones, vehicleTypeId))) {
+      throw new VehicleNotSupportedInZoneError();
+    }
+  }
+
+  async isVehicleTypeAllowed(
+    zones: readonly ResolvedZone[],
+    vehicleTypeId: string,
+  ): Promise<boolean> {
+    const zone = zones.find(isCoverageZone);
+    if (!zone) return true;
 
     const listed = await this.databaseService.client.serviceZoneVehicleType.findMany({
       where: { serviceZoneId: zone.id },
       select: { vehicleTypeId: true },
     });
-    if (listed.length > 0 && !listed.some((row) => row.vehicleTypeId === vehicleTypeId)) {
-      throw new VehicleNotSupportedInZoneError();
-    }
+    return listed.length === 0 || listed.some((row) => row.vehicleTypeId === vehicleTypeId);
   }
 
   async assertPickupServiceable(input: PickupServiceabilityInput): Promise<ResolvedCity> {

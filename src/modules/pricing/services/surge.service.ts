@@ -52,6 +52,7 @@ export class SurgeService {
       }
       if (!(await this.featureFlagService.isOn(FEATURE_FLAG_KEYS.SURGE))) return fallback;
 
+      const at = options.at ?? new Date();
       const zones = await this.surgeRepository.findZonesForLocation(
         pickupLat,
         pickupLng,
@@ -66,10 +67,10 @@ export class SurgeService {
         zones.legacySurgeZoneIds,
         zones.serviceZoneIds,
         cityCode,
+        at,
       );
       if (windows.length === 0) return fallback;
 
-      const at = options.at ?? new Date();
       const timeZone = options.timeZone ?? FALLBACK_TIME_ZONE;
       const cap = Math.min(options.maxMultiplier ?? MAX_SURGE_MULTIPLIER, MAX_SURGE_MULTIPLIER);
       const resolved = new Map<string, number>();

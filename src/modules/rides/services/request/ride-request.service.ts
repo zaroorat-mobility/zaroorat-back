@@ -159,6 +159,17 @@ export class RideRequestService {
     /// Injected map provider service for driver candidate matrix ETAs
     private readonly mapProviderService?: MapProviderService,
   ) {}
+
+  /// Whether a ride can start at this pin. Riders get a yes or no and the admin's
+  /// message, never a zone's name or shape.
+  async checkServiceability(
+    lat: number,
+    lng: number,
+  ): Promise<{ serviceable: boolean; code: string | null; message: string | null }> {
+    const decision = await this.geographicCoverageService.evaluatePickup(lat, lng);
+    return { serviceable: decision.allowed, code: decision.refusal, message: decision.message };
+  }
+
   /// One request, every category. `vehicleTypeId` narrows the result to a
   /// single option; omitting it prices every active type so the customer app
   /// renders its picker from one call instead of one call per category.

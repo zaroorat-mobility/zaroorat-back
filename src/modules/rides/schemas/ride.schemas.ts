@@ -20,6 +20,12 @@ const passengerPhoneSchema = z
   .transform((raw) => raw.replace(/[\s-]/g, ''))
   .transform((raw) => (/^\d{10}$/.test(raw) ? `+91${raw}` : raw))
   .pipe(z.string().regex(/^\+[1-9]\d{6,14}$/, 'INVALID_FORMAT'));
+
+export const serviceabilityQuerySchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+});
+
 /// Drop coordinates are required, not optional.
 ///
 /// They were optional here while every path behind them insisted on having
@@ -30,6 +36,7 @@ const passengerPhoneSchema = z
 /// INTERNAL**. A client sending exactly what the schema advertised was told the
 /// server had broken. Required here, it is a 400 VALIDATION naming the fields,
 /// like every other required field on these routes.
+
 export const quoteFareSchema = z.object({
   pickupLat: latitudeSchema,
   pickupLng: longitudeSchema,

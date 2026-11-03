@@ -61,10 +61,11 @@ export class SurgeRepository {
     zoneIds: string[],
     serviceZoneIds: string[] = [],
     cityCode?: string,
+    at: Date = new Date(),
   ): Promise<SurgeWindow[]> {
     if (zoneIds.length === 0 && serviceZoneIds.length === 0 && !cityCode) return [];
 
-    const now = new Date();
+    const now = at;
 
     // An active window is one where:
     // 1. isActive is true
