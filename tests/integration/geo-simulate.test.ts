@@ -315,6 +315,7 @@ describe('test a point, city checklist and rider check (integration)', () => {
         area: { km2: number };
         coverageMode: string;
         coveredPct: number;
+        zonesCoveredPct: number;
         zones: { service: number; airport: number; restricted: number };
         fares: Array<{ code: string; name: string; level: string }>;
         surgeActive: number;
@@ -336,6 +337,14 @@ describe('test a point, city checklist and rider check (integration)', () => {
       await setMode('WHOLE_CITY');
       await addZone('SGR_SMALL', 'SERVICE', ZONE);
       assert.equal((await setup()).coveredPct, 100);
+    });
+
+    it('still reports what the zones cover, so switching to zones-only can be previewed', async () => {
+      await setMode('WHOLE_CITY');
+      await addZone('SGR_HALF', 'SERVICE', box(74.7, 34.0, 74.85, 34.2));
+      const data = await setup();
+      assert.equal(data.coveredPct, 100);
+      assert.ok(Math.abs(data.zonesCoveredPct - 50) < 1, `zones cover ${data.zonesCoveredPct}%`);
     });
 
     it('is red when a zones-only city has no active zone', async () => {

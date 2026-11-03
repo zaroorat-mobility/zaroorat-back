@@ -223,6 +223,9 @@ export interface CitySetupDto {
   coverageMode: CityCoverageMode;
   /// How much of the Operating Area a ride can start in, as a percentage.
   coveredPct: number;
+  /// What active service and airport zones cover, whatever the setting, so the
+  /// admin sees what switching to ZONES_ONLY would leave open before saving it.
+  zonesCoveredPct: number;
   zones: { service: number; airport: number; restricted: number; surge: number };
   fares: Array<{ code: string; name: string; level: FareLevel }>;
   surgeActive: number;
@@ -1044,15 +1047,12 @@ export class AdminGeographicService {
 
   async getCitySetup(id: string): Promise<CitySetupDto> {
     const { facts, areaKm2, coveredKm2, zoneCounts, surgeActive } = await this.loadCitySetup(id);
+    const zonesCoveredPct = areaKm2 > 0 ? Number(((coveredKm2 / areaKm2) * 100).toFixed(1)) : 0;
     return {
       area: { km2: Number(areaKm2.toFixed(1)) },
       coverageMode: facts.coverageMode,
-      coveredPct:
-        facts.coverageMode === 'WHOLE_CITY'
-          ? 100
-          : areaKm2 > 0
-            ? Number(((coveredKm2 / areaKm2) * 100).toFixed(1))
-            : 0,
+      coveredPct: facts.coverageMode === 'WHOLE_CITY' ? 100 : zonesCoveredPct,
+      zonesCoveredPct,
       zones: zoneCounts,
       fares: facts.fares,
       surgeActive,
