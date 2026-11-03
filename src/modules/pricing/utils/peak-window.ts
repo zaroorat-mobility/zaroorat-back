@@ -47,7 +47,9 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /// The day of the week for `at`, read in `timeZone`. 0 is Sunday.
 export function dayOfWeekIn(at: Date, timeZone: string): number {
-  return WEEKDAYS.indexOf(new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(at));
+  return WEEKDAYS.indexOf(
+    new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(at),
+  );
 }
 
 export interface PeakWindowSpec {
