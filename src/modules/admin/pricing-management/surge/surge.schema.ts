@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+const daysOfWeekSchema = z.array(z.number().int().min(0).max(6)).max(7);
+
+/// The legal limit in one city. MAX_SURGE_MULTIPLIER stays the platform limit above it.
+export const updateCitySurgeSettingsSchema = z.object({
+  maxSurgeMultiplier: z.number().min(1).max(2),
+});
+
 export const createSurgeZoneSchema = z.object({
   cityCode: z.string().min(1),
   name: z.string().min(1),
@@ -42,6 +49,7 @@ export const createSurgeWindowSchema = z
       .regex(/^\d{2}:\d{2}$/)
       .optional(),
     isPeakHourOnly: z.boolean().optional(),
+    daysOfWeek: daysOfWeekSchema.optional(),
   })
   .refine((data) => !data.endsAt || new Date(data.startsAt) < new Date(data.endsAt), {
     message: 'endsAt must be after startsAt',
@@ -82,6 +90,7 @@ export const updateSurgeWindowSchema = z
       .nullable()
       .optional(),
     isPeakHourOnly: z.boolean().optional(),
+    daysOfWeek: daysOfWeekSchema.optional(),
   })
   .refine(
     (data) => {

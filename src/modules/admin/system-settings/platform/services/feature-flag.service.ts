@@ -46,6 +46,15 @@ export class FeatureFlagService {
     return flag.rolloutPercentage > 0;
   }
 
+  /// For the quote path, where `isEnabled`'s seeding would write on every call.
+  /// A missing row counts as on, so use this only for a flag seeded ON.
+  async isOn(key: string): Promise<boolean> {
+    const flag = await this.client.featureFlag.findUnique({ where: { key } });
+    if (!flag) return true;
+    if (!flag.isActive || flag.status === 'OFF') return false;
+    return flag.status === 'ON' || flag.rolloutPercentage > 0;
+  }
+
   async listFlags() {
     await this.ensureSeeded();
     return this.client.featureFlag.findMany({ orderBy: { key: 'asc' } });

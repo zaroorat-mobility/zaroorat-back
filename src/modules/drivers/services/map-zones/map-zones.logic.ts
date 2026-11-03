@@ -1,5 +1,5 @@
 import { cellToBoundary, latLngToCell } from 'h3-js';
-import { isWithinPeakWindow } from '@modules/pricing/utils/peak-window.js';
+import { isWithinPeakWindow, surgeWindowVehicleIds } from '@modules/pricing/utils/peak-window.js';
 import {
   MAX_SURGE_MULTIPLIER,
   MIN_SURGE_MULTIPLIER,
@@ -136,6 +136,8 @@ export function aggregateDemand(
 
 export interface SurgeWindowInput {
   vehicleTypeId: string | null;
+  vehicleTypeIds?: string[];
+  daysOfWeek?: number[];
   multiplier: number;
   isPeakHourOnly: boolean;
   peakHourStart: string | null;
@@ -156,9 +158,6 @@ export interface ZoneSurge {
   peakHours: { start: string; end: string } | null;
 }
 
-function clampMultiplier(value: number): number {
-  return Math.max(MIN_SURGE_MULTIPLIER, Math.min(MAX_SURGE_MULTIPLIER, value));
-}
 
 /// The same rule pricing applies (SurgeService): windows outside their peak
 /// hours do not count, the highest multiplier wins, clamped to the platform
@@ -168,7 +167,10 @@ export function resolveZoneSurge(
   driverVehicleTypeId: string | null,
   at: Date,
   timeZone: string,
+  cityCap: number = MAX_SURGE_MULTIPLIER,
 ): ZoneSurge | null {
+  const cap = Math.min(cityCap, MAX_SURGE_MULTIPLIER);
+  const clampMultiplier = (value: number) => Math.max(MIN_SURGE_MULTIPLIER, Math.min(cap, value));
   const inForce = windows.filter(
     (w) =>
       Number.isFinite(w.multiplier) &&
@@ -178,8 +180,13 @@ export function resolveZoneSurge(
   );
   if (inForce.length === 0) return null;
 
-  const applies = (w: SurgeWindowInput) =>
-    w.vehicleTypeId === null || w.vehicleTypeId === driverVehicleTypeId;
+  const applies = (w: SurgeWindowInput) => {
+    const vehicleIds = surgeWindowVehicleIds(w);
+    return (
+      vehicleIds.length === 0 ||
+      (driverVehicleTypeId !== null && vehicleIds.includes(driverVehicleTypeId))
+    );
+  };
   const best = (list: readonly SurgeWindowInput[]) =>
     list.reduce((top, w) => (w.multiplier > top.multiplier ? w : top));
 
@@ -190,9 +197,9 @@ export function resolveZoneSurge(
   const mine = driverVehicleTypeId === null ? [] : inForce.filter(applies);
   const myTop = mine.length > 0 ? best(mine) : null;
   const shown = myTop ?? top;
-  const ids = inForce.some((w) => w.vehicleTypeId === null)
+  const ids = inForce.some((w) => surgeWindowVehicleIds(w).length === 0)
     ? null
-    : [...new Set(inForce.map((w) => w.vehicleTypeId as string))];
+    : [...new Set(inForce.flatMap((w) => [...surgeWindowVehicleIds(w)]))];
 
   return {
     multiplier: myTop ? clampMultiplier(myTop.multiplier) : null,

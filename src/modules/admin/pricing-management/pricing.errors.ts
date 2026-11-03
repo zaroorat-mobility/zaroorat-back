@@ -66,6 +66,13 @@ export class SurgeZoneNotFoundError extends PricingAdminError {
   }
 }
 
+export class SurgeCityNotFoundError extends PricingAdminError {
+  constructor(message = 'City was not found') {
+    super(message, 'CITY_NOT_FOUND', 404);
+    this.name = 'SurgeCityNotFoundError';
+  }
+}
+
 export class SurgeWindowNotFoundError extends PricingAdminError {
   constructor(message = 'Surge window was not found') {
     super(message, 'SURGE_WINDOW_NOT_FOUND', 404);

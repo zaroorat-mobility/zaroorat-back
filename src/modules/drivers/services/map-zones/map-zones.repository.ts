@@ -18,6 +18,9 @@ export interface ServiceZoneRow {
 export interface SurgeWindowRow {
   window_id: string;
   vehicle_type_id: string | null;
+  vehicle_type_ids: string[];
+  days_of_week: number[];
+  max_surge_multiplier: number | null;
   multiplier: number;
   is_peak_hour_only: boolean;
   peak_hour_start: string | null;
@@ -80,15 +83,19 @@ export class DriverMapZonesRepository {
     `;
   }
 
-  /// Surge windows in force by date (peak hours are applied by the caller in the
-  /// zone's city timezone), with the polygon they price. Mirrors SurgeRepository:
-  /// a window linked to a service zone resolves through it alone; a window with
-  /// only the legacy link resolves through `surge_zones` for one more release.
+  /// Surge windows in force by date (peak hours and days are applied by the caller
+  /// in the zone's city timezone), with the polygon they price. Mirrors SurgeRepository:
+  /// a window linked to a service zone resolves through it alone, a whole-city window
+  /// through the city's boundary, and a window with only the legacy link through
+  /// `surge_zones` for one more release.
   async findSurgeWindows(viewport: MapViewport, now: Date): Promise<SurgeWindowRow[]> {
     const env = envelope(viewport);
     return this.databaseService.client.$queryRaw<SurgeWindowRow[]>`
       SELECT * FROM (
         SELECT sw.id AS window_id, sw.vehicle_type_id::text AS vehicle_type_id,
+               sw.vehicle_type_ids::text[] AS vehicle_type_ids,
+               sw.days_of_week::int[] AS days_of_week,
+               c.max_surge_multiplier::float8 AS max_surge_multiplier,
                sw.multiplier::float8 AS multiplier, sw.is_peak_hour_only,
                sw.peak_hour_start, sw.peak_hour_end, sw.starts_at, sw.ends_at, sw.created_at,
                sz.id AS zone_id, sz.name AS zone_name, sz.updated_at AS zone_updated_at,
@@ -103,7 +110,25 @@ export class DriverMapZonesRepository {
           AND (sw.ends_at IS NULL OR sw.ends_at > ${now})
           AND ST_Intersects(sz.boundary::geometry, ${env})
         UNION ALL
-        SELECT sw.id, sw.vehicle_type_id::text, sw.multiplier::float8, sw.is_peak_hour_only,
+        SELECT sw.id, sw.vehicle_type_id::text, sw.vehicle_type_ids::text[], sw.days_of_week::int[],
+               c.max_surge_multiplier::float8,
+               sw.multiplier::float8, sw.is_peak_hour_only,
+               sw.peak_hour_start, sw.peak_hour_end, sw.starts_at, sw.ends_at, sw.created_at,
+               c.id, c.name, c.updated_at,
+               c.timezone,
+               ST_IsValid(c.boundary::geometry),
+               ST_AsGeoJSON(c.boundary::geometry, 6)
+        FROM surge_windows sw
+        JOIN cities c ON c.code = sw.city_code AND ${ENFORCED_CITY}
+        WHERE sw.service_zone_id IS NULL
+          AND sw.is_active = true
+          AND sw.starts_at <= ${now}
+          AND (sw.ends_at IS NULL OR sw.ends_at > ${now})
+          AND ST_Intersects(c.boundary::geometry, ${env})
+        UNION ALL
+        SELECT sw.id, sw.vehicle_type_id::text, sw.vehicle_type_ids::text[], sw.days_of_week::int[],
+               c.max_surge_multiplier::float8,
+               sw.multiplier::float8, sw.is_peak_hour_only,
                sw.peak_hour_start, sw.peak_hour_end, sw.starts_at, sw.ends_at, sw.created_at,
                z.id, z.name, z.created_at,
                c.timezone,

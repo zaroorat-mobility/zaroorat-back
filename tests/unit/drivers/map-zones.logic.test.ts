@@ -140,6 +140,26 @@ describe('map zones — demand', () => {
 });
 
 describe('map zones — surge', () => {
+  it('limits the multiplier shown to the city cap, as pricing does', () => {
+    const surge = resolveZoneSurge([window({ multiplier: 2 })], 'mini', AT, IST, 1.5);
+    assert.equal(surge?.multiplier, 1.5);
+    assert.equal(surge?.maxMultiplier, 1.5);
+  });
+
+  it('applies a rule that names several vehicles to each of them only', () => {
+    const w = window({ vehicleTypeIds: ['mini', 'auto'] });
+    const mine = resolveZoneSurge([w], 'mini', AT, IST);
+    assert.equal(mine?.multiplier, 1.5);
+    assert.deepEqual(mine?.vehicleTypeIds, ['mini', 'auto']);
+    assert.equal(resolveZoneSurge([w], 'bike', AT, IST)?.multiplier, null);
+  });
+
+  it('skips a rule limited to another day', () => {
+    // AT is a Saturday.
+    assert.equal(resolveZoneSurge([window({ daysOfWeek: [0] })], 'mini', AT, IST), null);
+    assert.equal(resolveZoneSurge([window({ daysOfWeek: [6] })], 'mini', AT, IST)?.multiplier, 1.5);
+  });
+
   it('reports the multiplier in force, with its real validity', () => {
     const w = window({ multiplier: 1.6, endsAt: new Date(AT.getTime() + 3_600_000) });
     const surge = resolveZoneSurge([w], 'mini', AT, IST);

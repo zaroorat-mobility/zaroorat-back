@@ -317,6 +317,51 @@ describe('driver operations map zones (integration, real PostGIS)', () => {
       assert.equal(zone.details.surge?.multiplier, 1.4);
     });
 
+    it('limits the multiplier to the city cap', async () => {
+      await db().client.city.update({ where: { code: 'BLR' }, data: { maxSurgeMultiplier: 1.5 } });
+      await surgeWindow({ multiplier: 2 });
+      const zone = (await layers()).surge.zones[0]!;
+      assert.equal(zone.details.surge?.maxMultiplier, 1.5);
+      assert.equal(zone.details.surge?.multiplier, 1.5);
+    });
+
+    it('shows a whole-city rule on the whole city', async () => {
+      const city = await db().client.city.findUniqueOrThrow({ where: { code: 'BLR' } });
+      await db().client.surgeWindow.create({
+        data: { cityCode: 'BLR', multiplier: 1.4, startsAt: new Date(Date.now() - HOUR) },
+      });
+      const zone = (await layers()).surge.zones.find((z) => z.id === `SURGE:${city.id}`);
+      assert.ok(zone, 'whole-city rule shown');
+      assert.equal(zone.details.surge?.multiplier, 1.4);
+    });
+
+    it('applies a rule naming several vehicles to mine', async () => {
+      await surgeWindow({ multiplier: 1.6, vehicleTypeIds: [myType, otherType] });
+      const zone = (await layers()).surge.zones[0]!;
+      assert.equal(zone.details.surge?.multiplier, 1.6);
+      assert.equal(zone.eligibleForYourVehicle, true);
+    });
+
+    it('skips a rule limited to another day', async () => {
+      const today = new Date(Date.now() + 5.5 * HOUR).getUTCDay();
+      await surgeWindow({ multiplier: 1.6, daysOfWeek: [(today + 1) % 7] });
+      assert.deepEqual((await layers()).surge, { status: 'ok', zones: [] });
+    });
+
+    it('shows no surge when the off-switch is on', async () => {
+      await surgeWindow({ multiplier: 1.6 });
+      await db().client.featureFlag.upsert({
+        where: { key: 'surge' },
+        update: { status: 'OFF' },
+        create: { key: 'surge', name: 'surge', status: 'OFF', rolloutPercentage: 100, isActive: true },
+      });
+      try {
+        assert.deepEqual((await layers()).surge, { status: 'ok', zones: [] });
+      } finally {
+        await db().client.featureFlag.update({ where: { key: 'surge' }, data: { status: 'ON' } });
+      }
+    });
+
     it('shows nothing when no window is in force', async () => {
       await surgeWindow({ multiplier: 1.6, startsAt: new Date(Date.now() + HOUR) });
       assert.deepEqual((await layers()).surge, { status: 'ok', zones: [] });

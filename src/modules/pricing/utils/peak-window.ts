@@ -43,10 +43,29 @@ export function minutesOfDayIn(at: Date, timeZone: string): number {
   return hour * 60 + minute;
 }
 
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/// The day of the week for `at`, read in `timeZone`. 0 is Sunday.
+export function dayOfWeekIn(at: Date, timeZone: string): number {
+  return WEEKDAYS.indexOf(new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(at));
+}
+
 export interface PeakWindowSpec {
   isPeakHourOnly: boolean;
   peakHourStart: string | null;
   peakHourEnd: string | null;
+  /// Empty or missing means every day.
+  daysOfWeek?: readonly number[] | null | undefined;
+}
+
+/// The vehicles a surge window applies to; empty means all of them. A row written
+/// by the previous application version has only the old single column.
+export function surgeWindowVehicleIds(window: {
+  vehicleTypeIds?: readonly string[] | null | undefined;
+  vehicleTypeId?: string | null | undefined;
+}): readonly string[] {
+  if (window.vehicleTypeIds?.length) return window.vehicleTypeIds;
+  return window.vehicleTypeId ? [window.vehicleTypeId] : [];
 }
 
 /// Whether a window may contribute its multiplier at this instant.
@@ -58,7 +77,11 @@ export interface PeakWindowSpec {
 /// closed here is the safe direction: the alternative is charging a surge
 /// multiplier around the clock because someone typed "8am" into a text column.
 export function isWithinPeakWindow(window: PeakWindowSpec, at: Date, timeZone: string): boolean {
-  if (!window.isPeakHourOnly) return true;
+  const days = window.daysOfWeek ?? [];
+  const today = days.length > 0 ? dayOfWeekIn(at, timeZone) : 0;
+  const allowedOn = (day: number) => days.length === 0 || days.includes(day);
+
+  if (!window.isPeakHourOnly) return allowedOn(today);
 
   const start = parseHhMm(window.peakHourStart);
   const end = parseHhMm(window.peakHourEnd);
@@ -66,9 +89,12 @@ export function isWithinPeakWindow(window: PeakWindowSpec, at: Date, timeZone: s
 
   const now = minutesOfDayIn(at, timeZone);
 
+  if (start <= end) return now >= start && now < end && allowedOn(today);
+
   // A window that ends before it starts crosses midnight: 22:00-02:00 is the
   // late-night peak every ride-hailing operator runs, and treating it as an
-  // empty range would silently switch that surge off.
-  if (start <= end) return now >= start && now < end;
-  return now >= start || now < end;
+  // empty range would silently switch that surge off. It belongs to the day it
+  // started, so the early hours count against yesterday.
+  if (now >= start) return allowedOn(today);
+  return now < end && allowedOn((today + 6) % 7);
 }

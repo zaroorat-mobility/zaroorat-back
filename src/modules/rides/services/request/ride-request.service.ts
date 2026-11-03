@@ -235,7 +235,11 @@ export class RideRequestService {
       params.pickupLat,
       params.pickupLng,
       vehicleTypes.map((type) => type.id),
-      { timeZone: pickupContext.cityTimeZone, cityCode: city.code },
+      {
+        timeZone: pickupContext.cityTimeZone,
+        cityCode: city.code,
+        maxMultiplier: city.maxSurgeMultiplier,
+      },
     );
 
     const options: QuoteOption[] = [];
@@ -550,7 +554,7 @@ export class RideRequestService {
       input.vehicleTypeId,
       // FR-013. Peak hours are read in the pickup city, not on the server.
       // FR-015. The city scopes which service zones can carry a surge window.
-      { timeZone: city.timezone, cityCode: city.code },
+      { timeZone: city.timezone, cityCode: city.code, maxMultiplier: city.maxSurgeMultiplier },
     );
 
     // FR-002. Resolved once, here, and both remembered and reused: the id goes
