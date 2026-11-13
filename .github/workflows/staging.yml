@@ -1,7 +1,18 @@
 name: Deploy staging
 
 # Every green merge to main lands on staging automatically, once DEPLOY_STAGING=true.
-# Production is a separate, tag-gated workflow.
+# Production is a separate, release-gated workflow that PROMOTES the image built here
+# (same digest) — it never rebuilds. See docs/14_Operations/07_digitalocean-deploy.md.
+#
+# Required configuration (Settings > Environments > staging):
+#   secrets.DIGITALOCEAN_ACCESS_TOKEN  scoped DO token: registry read/write + kubernetes read
+#   secrets.MIGRATION_DATABASE_URL     optional; schema-owner URL synced into the cluster
+#                                      Secret. Omit when External Secrets manages it.
+#   vars.DOKS_CLUSTER                  DOKS cluster name or ID for staging
+#   vars.STAGING_URL                   public base URL, e.g. https://api.staging.zaroorat.com
+# Required repository variables (Settings > Variables > Actions):
+#   vars.DEPLOY_STAGING = 'true'       kill switch
+#   vars.DOCR_REGISTRY                 DigitalOcean Container Registry name
 on:
   push:
     branches: [main]
@@ -14,12 +25,16 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   HUSKY: '0'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: registry.digitalocean.com/${{ vars.DOCR_REGISTRY }}
+  IMAGE_NAME: zaroorat-back
+  NAMESPACE: staging
+  RELEASE: zaroorat-backend
+  # Created in every namespace by DOKS registry integration
+  # (doctl kubernetes cluster registry add <cluster>). Override with vars.IMAGE_PULL_SECRET.
+  IMAGE_PULL_SECRET: ${{ vars.IMAGE_PULL_SECRET || format('registry-{0}', vars.DOCR_REGISTRY) }}
 
 jobs:
   build:
@@ -29,22 +44,35 @@ jobs:
     if: vars.DEPLOY_STAGING == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The registry token is scoped to the staging environment, not the whole repo.
+    environment:
+      name: staging
     outputs:
-      image: ${{ steps.meta.outputs.tags }}
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v5
 
+      - name: Check configuration
+        run: |
+          if [ -z "${{ vars.DOCR_REGISTRY }}" ]; then
+            echo "::error::Repository variable DOCR_REGISTRY is not set."
+            exit 1
+          fi
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      # Short-lived registry credentials; nothing long-lived is written to the runner.
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
+      # sha-<full commit> is the promotion key: production.yml looks this tag up
+      # for the released commit and deploys exactly that digest.
       - name: Derive tags
         id: meta
         uses: docker/metadata-action@v5
@@ -68,10 +96,11 @@ jobs:
   deploy:
     name: Migrate & deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     needs: [build]
     environment:
       name: staging
+      url: ${{ vars.STAGING_URL }}
     steps:
       - uses: actions/checkout@v5
 
@@ -80,52 +109,71 @@ jobs:
         run: |
           if [ ! -s infrastructure/helm/Chart.yaml ]; then
             echo "::error::infrastructure/helm/Chart.yaml is empty."
-            echo "The image was built and pushed successfully, but there is no chart to deploy."
-            echo "Populate infrastructure/helm/ (Chart.yaml, values.yaml, values-staging.yaml)"
-            echo "and configure the KUBE_CONFIG secret for the staging environment."
             exit 1
           fi
 
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      # Replaces the old static KUBE_CONFIG secret: a kubeconfig downloaded from DOKS
+      # expires, and a long-lived admin credential in GitHub is a large blast radius.
+      # This one is minted per run and expires in 20 minutes.
       - name: Configure kubectl
         run: |
-          mkdir -p "$HOME/.kube"
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
+          if [ -z "${{ vars.DOKS_CLUSTER }}" ]; then
+            echo "::error::Environment variable DOKS_CLUSTER is not set for staging."
+            exit 1
+          fi
+          doctl kubernetes cluster kubeconfig save --expiry-seconds 1200 "${{ vars.DOKS_CLUSTER }}"
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-      # Gated step, run before the new pods start. Migrations are expand-only and
-      # backward-compatible so old and new instances coexist during the rollout
-      # (docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys").
-      # The schema owner, for migrations only — never the app's DATABASE_URL, which the Helm
-      # secret fills with the restricted runtime login. Two names, so one value cannot serve
-      # both (docs/15_Security/database-roles.md).
-      - name: Run database migrations
+      # The migration Job (Helm pre-upgrade hook, templates/job-migrate.yaml) reads the
+      # schema-owner URL from a Kubernetes Secret, never from a pod env literal. When the
+      # GitHub secret is present it is synced here; otherwise the platform secret store
+      # (External Secrets) must already provide zaroorat-backend-migration.
+      - name: Sync migration secret
         env:
           MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
           if [ -z "$MIGRATION_DATABASE_URL" ]; then
-            echo "::error::secrets.MIGRATION_DATABASE_URL (schema owner) is not set."
-            exit 1
+            echo "secrets.MIGRATION_DATABASE_URL not set; expecting the cluster Secret to be managed externally."
+            kubectl -n "$NAMESPACE" get secret zaroorat-backend-migration > /dev/null
+            exit 0
           fi
-          kubectl run prisma-migrate-${{ github.run_id }} \
-            --namespace staging \
-            --image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" \
-            --restart=Never \
-            --rm -i \
-            --env="MIGRATION_DATABASE_URL=$MIGRATION_DATABASE_URL" \
-            --command -- npx prisma migrate deploy
+          umask 077
+          envfile="$RUNNER_TEMP/migration.env"
+          printf 'MIGRATION_DATABASE_URL=%s\n' "$MIGRATION_DATABASE_URL" > "$envfile"
+          kubectl -n "$NAMESPACE" create secret generic zaroorat-backend-migration \
+            --from-env-file="$envfile" --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$envfile"
 
+      # Migrations run first as a pre-upgrade hook Job; if they fail, no pod is replaced.
+      # Migrations are expand-only and backward-compatible so old and new pods coexist
+      # during the rollout (docs/04_Architecture/05_deployment-architecture.md).
       - name: Deploy
         run: |
-          helm upgrade --install zaroorat-backend infrastructure/helm \
-            --namespace staging \
-            --create-namespace \
+          helm upgrade --install "$RELEASE" infrastructure/helm \
+            --namespace "$NAMESPACE" \
             --values infrastructure/helm/values.yaml \
             --values infrastructure/helm/values-staging.yaml \
-            --set image.repository="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" \
+            --set image.repository="${REGISTRY}/${IMAGE_NAME}" \
             --set image.digest="${{ needs.build.outputs.digest }}" \
+            --set "imagePullSecrets[0].name=${IMAGE_PULL_SECRET}" \
             --wait \
             --timeout 10m
 
+      - name: Post-deploy checks
+        env:
+          BASE_URL: ${{ vars.STAGING_URL }}
+          REALTIME_PATH: ${{ vars.REALTIME_PATH || '/socket.io' }}
+        run: bash scripts/release/post-deploy-check.sh
+
+      - name: Migration logs on failure
+        if: failure()
+        run: kubectl -n "$NAMESPACE" logs "job/${RELEASE}-migrate" --tail=200 || true
+
       - name: Roll back on failure
         if: failure()
-        run: helm rollback zaroorat-backend --namespace staging || true
+        run: helm rollback "$RELEASE" --namespace "$NAMESPACE" || true

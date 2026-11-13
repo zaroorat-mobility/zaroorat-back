@@ -10,6 +10,9 @@ env:
   HOST: 0.0.0.0
   # Verbose logging is affordable here and makes pre-release debugging possible.
   LOG_LEVEL: debug
+  # DO Managed PostgreSQL requires TLS. Keep TLS in one place: strip any
+  # ?sslmode= from DATABASE_URL, or the URL silently overrides this setting.
+  DB_SSL_MODE: require
 
 resources:
   requests:

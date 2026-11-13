@@ -5,14 +5,34 @@
 replicaCount: 2
 
 image:
-  repository: ghcr.io/zaroorat/backend_zaroorat
+  # DigitalOcean Container Registry. The deploy workflows always --set the real
+  # registry/<name> from vars.DOCR_REGISTRY; this default only documents the shape.
+  repository: registry.digitalocean.com/zaroorat/zaroorat-back
   # Deploys pin by digest (immutable). `tag` is only the fallback for a manual
   # `helm install` — a moving tag makes rollbacks ambiguous.
   digest: ''
   tag: ''
   pullPolicy: IfNotPresent
 
+# DOCR is private. With DOKS registry integration
+# (`doctl kubernetes cluster registry add <cluster>`) a `registry-<registry-name>`
+# Secret exists in every namespace; the deploy workflows --set it here.
+# The chart creates its own ServiceAccount, which integration does not patch,
+# so the pull secret must be named explicitly.
 imagePullSecrets: []
+
+# Prisma migrations, run as a pre-install/pre-upgrade hook Job (templates/job-migrate.yaml).
+migration:
+  enabled: true
+  # Secret holding MIGRATION_DATABASE_URL (the schema owner, never the runtime login).
+  existingSecret: zaroorat-backend-migration
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
 
 nameOverride: ''
 fullnameOverride: ''

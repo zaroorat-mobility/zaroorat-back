@@ -8,6 +8,9 @@ env:
   NODE_ENV: production
   HOST: 0.0.0.0
   LOG_LEVEL: info
+  # DO Managed PostgreSQL requires TLS. Keep TLS in one place: strip any
+  # ?sslmode= from DATABASE_URL, or the URL silently overrides this setting.
+  DB_SSL_MODE: require
 
 resources:
   requests:

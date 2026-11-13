@@ -1,8 +1,19 @@
 name: Deploy production
 
 # Production ships from a published GitHub Release only — never straight from a
-# branch push. Pair this with a protected `production` environment requiring
-# manual approval (Settings > Environments).
+# branch push — and it PROMOTES the image staging.yml already built and QA tested
+# for that exact commit (tag sha-<commit>). Nothing is rebuilt here: the digest that
+# runs in production is the digest that ran in staging (handover section 5.1).
+#
+# Pair this with a protected `production` environment requiring manual approval
+# (Settings > Environments). Everything runs in one job so the approval is asked once.
+#
+# Required configuration (Settings > Environments > production):
+#   secrets.DIGITALOCEAN_ACCESS_TOKEN  scoped DO token: registry read/write + kubernetes read
+#   secrets.MIGRATION_DATABASE_URL     optional; see staging.yml
+#   vars.DOKS_CLUSTER                  production DOKS cluster name or ID
+#   vars.PRODUCTION_URL                public base URL, e.g. https://api.zaroorat.com
+# Repository variable: vars.DOCR_REGISTRY
 on:
   release:
     types: [published]
@@ -19,44 +30,25 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   HUSKY: '0'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: registry.digitalocean.com/${{ vars.DOCR_REGISTRY }}
+  IMAGE_NAME: zaroorat-back
+  NAMESPACE: production
+  RELEASE: zaroorat-backend
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+  IMAGE_PULL_SECRET: ${{ vars.IMAGE_PULL_SECRET || format('registry-{0}', vars.DOCR_REGISTRY) }}
 
 jobs:
-  verify:
-    name: Re-verify release commit
+  deploy:
+    name: Promote, migrate & deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - run: npm ci
-
-      # CI already ran on main, but a tag can point anywhere. Prove the exact
-      # commit being shipped is green rather than trusting a branch result.
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run build
-
-  build:
-    name: Build & push image
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [verify]
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
-    # For the OTP release check below: an isolated Redis, never production's.
+    timeout-minutes: 40
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    # For the OTP release check: an isolated Redis, never production's.
     services:
       redis:
         image: redis:8
@@ -69,135 +61,135 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Check configuration
+        run: |
+          missing=0
+          for name in DOCR_REGISTRY DOKS_CLUSTER PRODUCTION_URL; do
+            case "$name" in
+              DOCR_REGISTRY) value="${{ vars.DOCR_REGISTRY }}" ;;
+              DOKS_CLUSTER) value="${{ vars.DOKS_CLUSTER }}" ;;
+              PRODUCTION_URL) value="${{ vars.PRODUCTION_URL }}" ;;
+            esac
+            if [ -z "$value" ]; then echo "::error::Variable $name is not set."; missing=1; fi
+          done
+          if [ ! -s infrastructure/helm/Chart.yaml ]; then
+            echo "::error::infrastructure/helm/Chart.yaml is empty."
+            missing=1
+          fi
+          exit $missing
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1800
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # The tag's commit must already have been built and deployed to staging by
+      # staging.yml. If it was not (tag on an unmerged commit, staging disabled),
+      # stop: shipping an image QA never saw is exactly what this guards against.
+      - name: Resolve staging-tested image digest
+        id: image
+        run: |
+          commit="$(git rev-parse HEAD)"
+          ref="${REGISTRY}/${IMAGE_NAME}:sha-${commit}"
+          if ! digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r '.digest')" || [ -z "$digest" ] || [ "$digest" = "null" ]; then
+            echo "::error::No image found for commit ${commit} (${ref})."
+            echo "::error::Release tags must point at a commit that staging.yml built. Merge to main, let staging deploy, then tag."
+            exit 1
+          fi
+          echo "Promoting ${ref} -> ${digest}"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
 
-      - name: Derive tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ inputs.tag || github.event.release.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.event.release.tag_name }}
-            type=raw,value=production
-            type=sha,format=long
-
-      # Verify the image before it can be pushed: built from this commit's source (the
-      # Dockerfile compiles dist/ itself; .dockerignore keeps any host build out), then the
-      # compiled job browser is driven with real auth-otp jobs and must not expose a code
-      # or phone. The push below reuses this build's layers.
-      - name: Build for release check
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          load: true
-          tags: zaroorat-backend:release-check
-          cache-from: type=gha
-
+      # Run the compiled job browser in the exact image being promoted: real auth-otp
+      # jobs in every state must never expose a code or a phone number.
       - name: Release check — job browser never exposes auth-otp payloads
         run: |
+          image="${REGISTRY}/${IMAGE_NAME}@${{ steps.image.outputs.digest }}"
+          docker pull "$image"
           docker run --rm --network host \
             -v "$PWD/scripts/release:/release:ro" \
             -e RELEASE_CHECK_REDIS_URL=redis://127.0.0.1:6379/9 \
-            zaroorat-backend:release-check node /release/verify-otp-job-browser.js
+            "$image" node /release/verify-otp-job-browser.js
 
-      - name: Build & push
-        id: push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-
-  deploy:
-    name: Migrate & deploy
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: [build]
-    environment:
-      name: production
-      url: ${{ vars.PRODUCTION_URL }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
-
-      - name: Check Helm chart is populated
+      # Add release tags to the same manifest — a registry-side copy, no rebuild.
+      - name: Tag promoted image
         run: |
-          if [ ! -s infrastructure/helm/Chart.yaml ]; then
-            echo "::error::infrastructure/helm/Chart.yaml is empty."
-            echo "The image was built and pushed, but there is no chart to deploy."
-            echo "Populate infrastructure/helm/ and set the KUBE_CONFIG secret"
-            echo "for the production environment before enabling this workflow."
-            exit 1
-          fi
+          version="${RELEASE_TAG#v}"
+          docker buildx imagetools create \
+            --tag "${REGISTRY}/${IMAGE_NAME}:${version}" \
+            --tag "${REGISTRY}/${IMAGE_NAME}:production" \
+            "${REGISTRY}/${IMAGE_NAME}@${{ steps.image.outputs.digest }}"
 
       - name: Configure kubectl
         run: |
-          mkdir -p "$HOME/.kube"
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
+          doctl kubernetes cluster kubeconfig save --expiry-seconds 1800 "${{ vars.DOKS_CLUSTER }}"
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-      # The schema owner, for migrations only — never the app's DATABASE_URL, which the Helm
-      # secret fills with the restricted runtime login. Two names, so one value cannot serve
-      # both (docs/15_Security/database-roles.md).
-      - name: Run database migrations
+      - name: Sync migration secret
         env:
           MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
           if [ -z "$MIGRATION_DATABASE_URL" ]; then
-            echo "::error::secrets.MIGRATION_DATABASE_URL (schema owner) is not set."
-            exit 1
+            echo "secrets.MIGRATION_DATABASE_URL not set; expecting the cluster Secret to be managed externally."
+            kubectl -n "$NAMESPACE" get secret zaroorat-backend-migration > /dev/null
+            exit 0
           fi
-          kubectl run prisma-migrate-${{ github.run_id }} \
-            --namespace production \
-            --image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" \
-            --restart=Never \
-            --rm -i \
-            --env="MIGRATION_DATABASE_URL=$MIGRATION_DATABASE_URL" \
-            --command -- npx prisma migrate deploy
+          umask 077
+          envfile="$RUNNER_TEMP/migration.env"
+          printf 'MIGRATION_DATABASE_URL=%s\n' "$MIGRATION_DATABASE_URL" > "$envfile"
+          kubectl -n "$NAMESPACE" create secret generic zaroorat-backend-migration \
+            --from-env-file="$envfile" --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$envfile"
 
-      # Rolling update; readiness gates each pod (docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys").
+      # Rolling update; readiness gates each pod. The migration Job runs first as a
+      # pre-upgrade hook; --atomic reverts the release if the hook or rollout fails.
       - name: Deploy
         run: |
-          helm upgrade --install zaroorat-backend infrastructure/helm \
-            --namespace production \
-            --create-namespace \
+          helm upgrade --install "$RELEASE" infrastructure/helm \
+            --namespace "$NAMESPACE" \
             --values infrastructure/helm/values.yaml \
             --values infrastructure/helm/values-production.yaml \
-            --set image.repository="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" \
-            --set image.digest="${{ needs.build.outputs.digest }}" \
+            --set image.repository="${REGISTRY}/${IMAGE_NAME}" \
+            --set image.digest="${{ steps.image.outputs.digest }}" \
+            --set "imagePullSecrets[0].name=${IMAGE_PULL_SECRET}" \
             --atomic \
             --wait \
             --timeout 15m
 
       # --atomic already reverts a failed release; this covers a deploy that
-      # succeeded but failed the post-deploy smoke check below.
-      - name: Smoke-check the core loop
+      # succeeded but fails the post-deploy checks (handover Appendix A.2).
+      - name: Post-deploy checks
+        env:
+          BASE_URL: ${{ vars.PRODUCTION_URL }}
+          REALTIME_PATH: ${{ vars.REALTIME_PATH || '/socket.io' }}
+          REQUIRE_BASE_URL: 'true'
+        run: bash scripts/release/post-deploy-check.sh
+
+      - name: Record release
+        if: success()
         run: |
-          for _ in $(seq 1 10); do
-            if curl -fsS "${{ vars.PRODUCTION_URL }}/health" > /dev/null; then
-              echo "Health check passed."
-              exit 0
-            fi
-            sleep 6
-          done
-          echo "::error::Health check never passed after deploy."
-          exit 1
+          {
+            echo "### Production release ${RELEASE_TAG}"
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Commit | \`${{ steps.image.outputs.commit }}\` |"
+            echo "| Image | \`${REGISTRY}/${IMAGE_NAME}@${{ steps.image.outputs.digest }}\` |"
+            echo "| Triggered by | ${{ github.actor }} |"
+            echo "| Finished (UTC) | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Migration logs on failure
+        if: failure()
+        run: kubectl -n "$NAMESPACE" logs "job/${RELEASE}-migrate" --tail=200 || true
 
       - name: Roll back on failure
         if: failure()
-        run: helm rollback zaroorat-backend --namespace production || true
+        run: helm rollback "$RELEASE" --namespace "$NAMESPACE" || true

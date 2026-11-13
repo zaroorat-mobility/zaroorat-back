@@ -20,7 +20,32 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    # npm test includes the integration suites, which need the same PostGIS and
+    # Redis service containers as ci.yml. Without them every release run failed,
+    # no GitHub Release was published, and production.yml never triggered.
+    # Credentials must match the committed .env.test.
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_USER: zaroorat
+          POSTGRES_PASSWORD: zaroorat
+          POSTGRES_DB: zaroorat_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U zaroorat -d zaroorat_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
         with:
@@ -36,6 +61,24 @@ jobs:
       # Do not tag something that does not build.
       - run: npm run lint
       - run: npm run typecheck
+
+      # Same database preparation as ci.yml's test job.
+      - name: Create database extensions
+        run: |
+          PGPASSWORD=zaroorat psql -h localhost -U zaroorat -d zaroorat_test \
+            -c 'CREATE EXTENSION IF NOT EXISTS postgis;' \
+            -c 'CREATE EXTENSION IF NOT EXISTS pgcrypto;'
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+        env:
+          APP_ENV: test
+
+      - name: Seed the test database
+        run: npx prisma db seed
+        env:
+          APP_ENV: test
+
       - run: npm test
         env:
           APP_ENV: test
