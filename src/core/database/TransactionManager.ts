@@ -1,4 +1,4 @@
-import { ProviderClient, PrismaClientProvider } from './client/PrismaClientProvider';
+import { type ProviderClient, PrismaClientProvider } from './client/PrismaClientProvider';
 import { PrismaErrorMapper } from './errors/PrismaErrorMapper';
 import { Prisma } from '../../generated/prisma';
 export interface TransactionOptions {

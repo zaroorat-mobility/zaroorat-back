@@ -5,6 +5,7 @@ import {
   estimatedDriverEarning,
   toClientOfferView,
   toClientRideView,
+  toClientRideViewWithMedia,
 } from '../../../src/modules/rides/presenters/ride-client.presenter.js';
 
 function ride(pricingRule: unknown) {
@@ -80,5 +81,82 @@ describe('what the driver sees about the rider and the money', () => {
     assert.equal(estimatedDriverEarning(quote, 5, 'COMMISSION'), 85);
     assert.equal(estimatedDriverEarning(quote, 5, 'SUBSCRIPTION'), 105);
     assert.equal(estimatedDriverEarning(quote, 0, null), 80);
+  });
+});
+
+describe('client ride media presentation', () => {
+  const fileId = '01a1389a-c3b9-75a6-99e9-382fdce1a351';
+  const vtFileId = '01a1bbd2-eb95-75da-b3d8-00705f731b99';
+
+  it('derives stable vehicleType imageUrl from imageFileId and drops expired S3 URLs', () => {
+    const view = toClientRideView({
+      ...ride(null),
+      vehicleType: {
+        id: 'vt-auto',
+        name: 'Auto',
+        code: 'AUTO',
+        imageFileId: vtFileId,
+        imageUrl: 'https://bucket.s3.ap-south-1.amazonaws.com/old.png?X-Amz-Signature=deadbeef',
+        icon: '/api/v1/vehicle-types/images/373ab05c12018c12465b81036977e033efa0',
+      },
+    } as never);
+    assert.deepEqual(view?.vehicleType, {
+      id: 'vt-auto',
+      name: 'Auto',
+      code: 'AUTO',
+      imageFileId: vtFileId,
+      imageUrl: `/api/v1/vehicle-types/images/${vtFileId}`,
+      icon: null,
+    });
+  });
+
+  it('does not leak raw file UUIDs when presented without media signing', () => {
+    const view = toClientRideView({
+      ...ride(null),
+      driver: {
+        id: 'd-1',
+        profile: { fullLegalName: 'Mir Saqib', profilePhoto: fileId },
+        user: { profile: { firstName: 'Mir', lastName: 'Saqib', profileImageFileId: null } },
+      },
+    } as never);
+    const driver = view?.driver as { profileImageUrl: string | null };
+    assert.equal(driver.profileImageUrl, null);
+  });
+
+  it('signs readable driver profile photo via file storage for ride parties', async () => {
+    const signedUrl = 'https://bucket.s3.ap-south-1.amazonaws.com/dd/avatar.jpg?X-Amz-Signature=ok';
+    const view = await toClientRideViewWithMedia(
+      {
+        ...ride(null),
+        driver: {
+          id: 'd-1',
+          profile: { fullLegalName: 'Mir Saqib', profilePhoto: fileId },
+          user: { profile: { firstName: 'Mir', lastName: 'Saqib', profileImageFileId: null } },
+        },
+      } as never,
+      null,
+      {
+        fileRepository: {
+          findReadable: async (id: string) =>
+            id === fileId
+              ? ({
+                  id,
+                  storageKey: 'dd/avatar.jpg',
+                  contentType: 'image/jpeg',
+                  fileName: 'avatar.jpg',
+                } as never)
+              : null,
+        } as never,
+        fileStorageService: {
+          signDownload: async () => ({ url: signedUrl, expiresAt: new Date() }),
+        } as never,
+      },
+    );
+    const driver = view?.driver as {
+      profileImageUrl: string | null;
+      profile: { profileImageUrl?: string | null };
+    };
+    assert.equal(driver.profileImageUrl, signedUrl);
+    assert.equal(driver.profile.profileImageUrl, signedUrl);
   });
 });

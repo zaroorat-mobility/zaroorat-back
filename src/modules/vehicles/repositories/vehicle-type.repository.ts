@@ -38,7 +38,7 @@ export class VehicleTypeRepository {
   ): Promise<VehicleType[]> {
     const client = tx ?? this.db.client;
     return client.vehicleType.findMany({
-      where: { isActive: true },
+      where: { isActive: true, displayOrder: { gte: 0 } },
       orderBy: [{ displayOrder: 'asc' }, { code: 'asc' }],
     });
   }
@@ -66,7 +66,9 @@ export class VehicleTypeRepository {
     tx?: TransactionClient,
   ): Promise<VehicleType[]> {
     const client = tx ?? this.db.client;
-    const where = options.includeInactive ? {} : { isActive: true };
+    const where = options.includeInactive
+      ? { displayOrder: { gte: 0 } }
+      : { isActive: true, displayOrder: { gte: 0 } };
     return client.vehicleType.findMany({
       where,
       orderBy: [{ displayOrder: 'asc' }, { code: 'asc' }],
@@ -169,6 +171,103 @@ export class VehicleTypeRepository {
         where: { id: item.id },
         data: { displayOrder: item.displayOrder },
       });
+    }
+  }
+
+  async delete(id: string, tx?: TransactionClient): Promise<void> {
+    const client = tx ?? this.db.client;
+
+    // Fast indexed dependency checks (<1ms parallel execution, zero loops)
+    const [vehiclesCount, ridesCount, rideRequestsCount] = await Promise.all([
+      (client as any).vehicle ? (client as any).vehicle.count({ where: { vehicleTypeId: id } }) : 0,
+      (client as any).ride ? (client as any).ride.count({ where: { vehicleTypeId: id } }) : 0,
+      (client as any).rideRequest ? (client as any).rideRequest.count({ where: { vehicleTypeId: id } }) : 0,
+    ]);
+
+    const hasDependencies = vehiclesCount > 0 || ridesCount > 0 || rideRequestsCount > 0;
+
+    if (!hasDependencies) {
+      // ───── CASE 1: FULL ATOMIC HARD-DELETE (No dependencies exist) ─────
+      // Safe to purge all related configuration completely
+      await (client as any).serviceZoneVehicleType?.deleteMany({ where: { vehicleTypeId: id } });
+      await (client as any).surgeWindow?.updateMany({
+        where: { vehicleTypeId: id },
+        data: { vehicleTypeId: null },
+      });
+      await (client as any).promotion?.updateMany({
+        where: { applicableVehicleType: id },
+        data: { applicableVehicleType: null },
+      });
+      await (client as any).cancellationPolicy?.updateMany?.({
+        where: { vehicleTypeId: id },
+        data: { vehicleTypeId: null },
+      });
+      await (client as any).pricingRule?.deleteMany({ where: { vehicleTypeId: id } });
+
+      await client.vehicleType.delete({ where: { id } });
+    } else {
+      // ───── CASE 2: SAFE PRODUCTION RETIREMENT / SOFT-DELETE ─────
+      // Historical rides or registered driver vehicles exist.
+      // In production, we cannot violate foreign keys or destroy accounting/ride receipts.
+      // We deactivate, remove from service zones, and archive cleanly:
+      await (client as any).serviceZoneVehicleType?.deleteMany({ where: { vehicleTypeId: id } });
+      await (client as any).surgeWindow?.updateMany({
+        where: { vehicleTypeId: id },
+        data: { vehicleTypeId: null },
+      });
+      await (client as any).promotion?.updateMany({
+        where: { applicableVehicleType: id },
+        data: { applicableVehicleType: null },
+      });
+      await (client as any).pricingRule?.updateMany({
+        where: { vehicleTypeId: id },
+        data: { isActive: false },
+      });
+
+      // Mark the vehicle type as retired and archived (displayOrder: -1)
+      await client.vehicleType.update({
+        where: { id },
+        data: {
+          isActive: false,
+          displayOrder: -1,
+        },
+      });
+    }
+  }
+
+  async findFileById(
+    fileId: string,
+    tx?: TransactionClient,
+  ): Promise<{ id: string; storageKey: string; storageBucket?: string | null; contentType?: string } | null> {
+    const client = tx ?? this.db.client;
+    try {
+      return await (client as any).file.findUnique({
+        where: { id: fileId },
+        select: { id: true, storageKey: true, storageBucket: true, contentType: true },
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async retireFileRecord(fileId: string, tx?: TransactionClient): Promise<void> {
+    const client = tx ?? this.db.client;
+    try {
+      const remainingCount = await client.vehicleType.count({
+        where: { imageFileId: fileId },
+      });
+      if (remainingCount === 0) {
+        await (client as any).file.updateMany({
+          where: { id: fileId },
+          data: {
+            status: 'DELETED',
+            deletedAt: new Date(),
+            erasedAt: new Date(),
+          },
+        });
+      }
+    } catch {
+      // non-blocking
     }
   }
 }

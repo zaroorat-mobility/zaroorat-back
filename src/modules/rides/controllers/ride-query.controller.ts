@@ -1,13 +1,15 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { assertRideParty, callerId } from '@core/auth';
 import { GeoService } from '@modules/location';
-import type { RideEtaService } from '@modules/location/services/ride-eta.service.js';
+import type { RideEtaService, RideEtaSnapshot } from '@modules/location/services/ride-eta.service.js';
+import type { FileRepository } from '@modules/files/repositories/file.repository.js';
+import type { FileStorageService } from '@modules/files/services/file-storage.service.js';
 import { RideRepository } from '../repositories/ride.repository.js';
 import { ReceiptService } from '../services/receipt/receipt.service.js';
 import { RideNotFoundError } from '../errors/ride.errors.js';
 import { RIDE_CANCEL_REASONS } from '../constants/ride.constants.js';
 import { ridePartyIds } from '../types/ride-party.js';
-import { toClientRideView } from '../presenters/ride-client.presenter.js';
+import { toClientRideViewWithMedia } from '../presenters/ride-client.presenter.js';
 
 const LIVE_TRACKING_STATUSES = new Set([
   'ACCEPTED',
@@ -23,7 +25,19 @@ export class RideQueryController {
     private readonly receiptService: ReceiptService,
     private readonly geoService: GeoService,
     private readonly rideEtaService?: RideEtaService,
+    private readonly fileRepository?: FileRepository,
+    private readonly fileStorageService?: FileStorageService,
   ) {}
+
+  private presentRide(
+    ride: Parameters<typeof toClientRideViewWithMedia>[0],
+    eta?: RideEtaSnapshot | null,
+  ) {
+    return toClientRideViewWithMedia(ride, eta, {
+      fileRepository: this.fileRepository,
+      fileStorageService: this.fileStorageService,
+    });
+  }
 
   /// The caller's live ride, whichever side of it they are on.
   ///
@@ -36,7 +50,7 @@ export class RideQueryController {
     const activeRide = await this.rideRepo.findActiveForUser(callerId(req));
     const eta =
       activeRide && this.rideEtaService ? this.rideEtaService.getEta(activeRide.id) : null;
-    return reply.send({ data: toClientRideView(activeRide, eta) });
+    return reply.send({ data: await this.presentRide(activeRide, eta) });
   }
 
   /// Static list of cancel reasons. Filtered by optional `?actor=DRIVER|CUSTOMER`.
@@ -58,7 +72,7 @@ export class RideQueryController {
     if (!ride) throw new RideNotFoundError(id);
     assertRideParty(req, ridePartyIds(ride));
     const eta = this.rideEtaService ? this.rideEtaService.getEta(ride.id) : null;
-    reply.send({ data: toClientRideView(ride, eta) });
+    reply.send({ data: await this.presentRide(ride, eta) });
   }
 
   async getReceipt(req: FastifyRequest, reply: FastifyReply): Promise<void> {

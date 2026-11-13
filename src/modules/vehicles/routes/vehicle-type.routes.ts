@@ -12,12 +12,12 @@ export async function vehicleTypeRoutes(fastify: FastifyInstance): Promise<void>
   const controller = container.resolve<VehicleTypeController>('vehicleTypeController');
   fastify.setErrorHandler(handleVehicleError);
 
-  // Authenticated, not public: the catalog carries the platform's pricing, and
-  // every caller that needs it (customer app, driver app) already holds a token
-  // by the time it renders a picker. Left on the deny-by-default path.
+  // Public catalog: allows HomeScreen and ServicesScreen to browse available vehicle
+  // categories dynamically without requiring an upfront bearer token.
   fastify.get(
     '/',
     {
+      config: { public: true },
       schema: {
         tags: ['Vehicles'],
         summary: 'List active vehicle types',
@@ -25,11 +25,33 @@ export async function vehicleTypeRoutes(fastify: FastifyInstance): Promise<void>
           'The category catalog. Returns active vehicle types in display order with their ' +
           'pricing, and is the only sanctioned source of the `vehicleTypeId` required by ' +
           'POST /rides/quote, POST /rides/requests and POST /vehicles/me/claim.',
-        security: [{ bearerAuth: [] }],
         querystring: listVehicleTypesQuerySchema,
-        response: { 200: vehicleTypeListResponse, 401: err, 500: err },
+        response: { 200: vehicleTypeListResponse, 500: err },
       },
     },
     (req, reply) => controller.list(req, reply),
+  );
+
+  // Public permanent vehicle image asset proxy:
+  // Allows the mobile app to load and cache vehicle icons at 60fps with zero authentication overhead.
+  fastify.get(
+    '/images/:fileId',
+    {
+      config: { public: true },
+      schema: {
+        tags: ['Vehicles'],
+        summary: 'Get public vehicle icon asset',
+        description:
+          'Permanent public redirect to vehicle icon in cloud storage with 7-day client cache headers.',
+        params: {
+          type: 'object',
+          required: ['fileId'],
+          properties: {
+            fileId: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+    },
+    (req, reply) => controller.serveVehicleImage(req, reply),
   );
 }

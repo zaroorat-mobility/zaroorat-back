@@ -18,11 +18,13 @@ import {
   cancelRideSchema,
 } from '../schemas/ride.schemas.js';
 import { DriverNotFoundError } from '@modules/drivers/errors/driver.errors.js';
+import type { FileRepository } from '@modules/files/repositories/file.repository.js';
+import type { FileStorageService } from '@modules/files/services/file-storage.service.js';
 import type { RideRequest } from '../types';
 import {
   estimatedDriverEarning,
   toClientOfferView,
-  toClientRideView,
+  toClientRideViewWithMedia,
 } from '../presenters/ride-client.presenter.js';
 export class RideStateController {
   constructor(
@@ -33,7 +35,16 @@ export class RideStateController {
     private readonly rideRepo: RideRepository,
     private readonly db: DatabaseService,
     private readonly redisService?: RedisService,
+    private readonly fileRepository?: FileRepository,
+    private readonly fileStorageService?: FileStorageService,
   ) {}
+
+  private presentRide(ride: Parameters<typeof toClientRideViewWithMedia>[0]) {
+    return toClientRideViewWithMedia(ride, undefined, {
+      fileRepository: this.fileRepository,
+      fileStorageService: this.fileStorageService,
+    });
+  }
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
     const driver = await this.driverRepository.findByUserId(userId);
@@ -113,7 +124,7 @@ export class RideStateController {
     // Re-fetch enriched ride so the driver app gets customer name immediately.
     const enriched = result?.ride?.id ? await this.rideRepo.findById(result.ride.id) : null;
     reply.send({
-      data: enriched ? { ...result, ride: toClientRideView(enriched) } : result,
+      data: enriched ? { ...result, ride: await this.presentRide(enriched) } : result,
     });
   }
   /// Declining an offer, so the next drivers are asked immediately instead of
@@ -138,7 +149,7 @@ export class RideStateController {
     };
     await this.rideService.lifecycle.markDriverArriving(id, driverId);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   async arrive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -147,7 +158,7 @@ export class RideStateController {
     };
     await this.rideService.lifecycle.markDriverArrived(id, driverId);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
 
   async arriveDropoff(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -157,7 +168,7 @@ export class RideStateController {
     };
     await this.rideService.lifecycle.markDriverArrivedAtDropoff(id, driverId);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   async start(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -167,7 +178,7 @@ export class RideStateController {
     const body = startRideSchema.parse(req.body);
     await this.rideService.lifecycle.startRide(id, driverId, body.pin);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   async complete(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -186,7 +197,7 @@ export class RideStateController {
       },
     );
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   /// Which side of the ride is cancelling comes from the ride, not from the
   /// caller's roles.
@@ -248,6 +259,6 @@ export class RideStateController {
     }
 
     const enriched = await this.rideRepo.findById(id);
-    return reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    return reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
 }

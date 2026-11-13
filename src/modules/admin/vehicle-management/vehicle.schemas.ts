@@ -50,7 +50,7 @@ export const createVehicleTypeBodySchema = z.object({
   icon: z
     .string()
     .trim()
-    .max(50)
+    .max(1000)
     .nullable()
     .optional()
     .transform((v) => (v && v.trim() ? v.trim() : null)),
@@ -95,7 +95,7 @@ export const updateVehicleTypeBodySchema = z.object({
   icon: z
     .string()
     .trim()
-    .max(50)
+    .max(1000)
     .nullable()
     .optional()
     .transform((v) => (v && v.trim() ? v.trim() : null)),

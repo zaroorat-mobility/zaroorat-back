@@ -9,6 +9,7 @@ import {
 } from '../../../src/modules/location/errors/location.errors.js';
 import { AdminMapSettingsService } from '../../../src/modules/admin/system-settings/map/services/admin-map-settings.service.js';
 import { MAP_SETTING_KEYS } from '../../../src/modules/admin/system-settings/map/constants/map-settings.constants.js';
+import { autocompleteQuerySchema } from '../../../src/modules/location/schemas/maps-api.schemas.js';
 
 const SERVER_KEY = 'unit-test-server-key';
 const PUNE = { latitude: 18.5308, longitude: 73.8475 };
@@ -137,6 +138,31 @@ describe('Google Places (New) autocomplete', () => {
     assert.equal(calls.length, 3);
   });
 
+  it('sends the rider position as origin and returns each distance', async () => {
+    const calls = stubFetch(200, {
+      suggestions: [
+        {
+          placePrediction: {
+            placeId: 'ChIJstation',
+            text: { text: 'Pune Station, Pune, Maharashtra, India' },
+            structuredFormat: {
+              mainText: { text: 'Pune Station' },
+              secondaryText: { text: 'Pune, Maharashtra, India' },
+            },
+            distanceMeters: 2400,
+          },
+        },
+      ],
+    });
+    const provider = new GoogleMapsProvider({ apiKey: SERVER_KEY });
+
+    const result = await provider.autocomplete('pune stat', PUNE);
+
+    assert.deepEqual(calls[0]?.body?.['origin'], PUNE);
+    assert.ok(calls[0]?.headers['X-Goog-FieldMask']?.includes('placePrediction.distanceMeters'));
+    assert.equal(result.predictions[0]?.distanceMeters, 2400);
+  });
+
   it('returns places outside Pune: the rider position biases, it does not fence', async () => {
     const calls = stubFetch(200, {
       suggestions: [
@@ -198,6 +224,83 @@ describe('Google Places (New) place details', () => {
     const provider = new GoogleMapsProvider({ apiKey: SERVER_KEY });
 
     await assert.rejects(() => provider.getPlaceDetails('ChIJnowhere'), /missing coordinates/);
+  });
+});
+
+describe('GET /maps/places/autocomplete query', () => {
+  it('accepts the rider position as query-string text and range-checks it', () => {
+    const query = { input: 'Lalchok', sessionToken: 'session-1' };
+
+    assert.deepEqual(
+      autocompleteQuerySchema.parse({ ...query, latitude: '34.06', longitude: '74.73' }),
+      { ...query, latitude: 34.06, longitude: 74.73 },
+    );
+    assert.deepEqual(autocompleteQuerySchema.parse(query), query);
+    assert.equal(
+      autocompleteQuerySchema.safeParse({ ...query, latitude: '91', longitude: '74.73' }).success,
+      false,
+    );
+    assert.equal(
+      autocompleteQuerySchema.safeParse({ ...query, latitude: 'abc', longitude: '74.73' }).success,
+      false,
+    );
+  });
+});
+
+describe('Google reverse geocode pin label', () => {
+  const address = {
+    formatted_address: 'Nagar Rd, Viman Nagar, Pune, Maharashtra 411014, India',
+    types: ['route'],
+    address_components: [{ long_name: 'Pune', short_name: 'Pune', types: ['locality'] }],
+  };
+  const plusCode = { formatted_address: '8FQ7+RX Pune, Maharashtra, India', types: ['plus_code'] };
+
+  it('asks for landmarks, skips the plus code and names the pin by its landmark', async () => {
+    const calls = stubFetch(200, {
+      status: 'OK',
+      results: [plusCode, address],
+      address_descriptor: {
+        landmarks: [
+          {
+            display_name: { text: 'Phoenix Marketcity' },
+            spatial_relationship: 'ACROSS_THE_ROAD',
+            straight_line_distance_meters: 40,
+          },
+        ],
+        areas: [{ display_name: { text: 'Viman Nagar' } }],
+      },
+    });
+    const provider = new GoogleMapsProvider({ apiKey: SERVER_KEY });
+
+    const result = await provider.reverseGeocode(PUNE);
+
+    assert.equal(calls[0]?.url.searchParams.get('extra_computations'), 'ADDRESS_DESCRIPTORS');
+    assert.equal(result.formattedAddress, address.formatted_address);
+    assert.equal(result.placeName, 'Opposite Phoenix Marketcity');
+    assert.equal(result.area, 'Viman Nagar');
+    assert.equal(result.city, 'Pune');
+  });
+
+  it('ignores a landmark too far away to describe the pin', async () => {
+    stubFetch(200, {
+      status: 'OK',
+      results: [address],
+      address_descriptor: {
+        landmarks: [
+          {
+            display_name: { text: 'Pune Airport' },
+            spatial_relationship: 'NEAR',
+            straight_line_distance_meters: 1200,
+          },
+        ],
+      },
+    });
+    const provider = new GoogleMapsProvider({ apiKey: SERVER_KEY });
+
+    const result = await provider.reverseGeocode(PUNE);
+
+    assert.equal(result.placeName, undefined);
+    assert.equal(result.formattedAddress, address.formatted_address);
   });
 });
 

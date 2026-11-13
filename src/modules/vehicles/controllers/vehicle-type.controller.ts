@@ -46,7 +46,30 @@ export function toVehicleTypeView(
 ): VehicleTypeView {
   const fileId = vehicleType.imageFileId ?? null;
   const directUrl = vehicleType.imageUrl ?? null;
-  const resolvedImageUrl = directUrl || (fileId ? `/api/v1/files/${fileId}/url` : null);
+  let resolvedFileId = fileId;
+  if (!resolvedFileId && directUrl && typeof directUrl === 'string') {
+    const match = directUrl.match(/vehicles\/([0-9a-fA-F-]{36})/);
+    if (match) {
+      resolvedFileId = match[1];
+    }
+  }
+
+  // If directUrl is already a direct https:// S3/CDN URL, preserve it so clients download directly.
+  // Otherwise use the public backend proxy endpoint if a fileId exists.
+  const isDirectRemote = directUrl && /^https?:\/\//i.test(directUrl);
+  const resolvedImageUrl = isDirectRemote
+    ? directUrl
+    : (resolvedFileId ? `/api/v1/vehicle-types/images/${resolvedFileId}` : directUrl || null);
+
+  let resolvedIcon = vehicleType.icon ?? null;
+  if (resolvedIcon && typeof resolvedIcon === 'string') {
+    // If the icon contains a file UUID (either in an S3 presigned URL or relative path),
+    // always resolve to the permanent public proxy endpoint to prevent S3 expiration.
+    const iconMatch = resolvedIcon.match(/([0-9a-fA-F-]{36})/);
+    if (iconMatch && !resolvedIcon.startsWith('/api/v1/vehicle-types/images/')) {
+      resolvedIcon = `/api/v1/vehicle-types/images/${iconMatch[1]}`;
+    }
+  }
 
   return {
     id: vehicleType.id,
@@ -58,7 +81,7 @@ export function toVehicleTypeView(
     description: vehicleType.description ?? null,
     imageUrl: resolvedImageUrl,
     imageFileId: fileId,
-    icon: vehicleType.icon,
+    icon: resolvedIcon,
     displayOrder: vehicleType.displayOrder,
     passengerCapacity: vehicleType.passengerCapacity,
     luggageCapacity: vehicleType.luggageCapacity,
@@ -109,5 +132,44 @@ export class VehicleTypeController {
       pickupLng: lng,
     });
     reply.send({ data: types.map((type) => toVehicleTypeView(type, rateCards.get(type.id))) });
+  }
+
+  /// Public permanent asset streaming / redirect endpoint for mobile apps and browsers.
+  /// Bypasses authorization requirements, sets 7-day browser/device caching headers,
+  /// proxies image bytes directly with HTTP 200 (avoiding Android OkHttp redirect blocks),
+  /// and falls back to a fresh S3 redirect.
+  async serveVehicleImage(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { fileId } = (req.params ?? {}) as { fileId?: string };
+    if (!fileId) {
+      reply.status(400).send({ message: 'Missing fileId parameter' });
+      return;
+    }
+
+    const downloadUrl = await this.vehicleTypeService.getImageReadUrl(fileId);
+    if (!downloadUrl) {
+      reply.status(404).send({ message: 'Vehicle image not found' });
+      return;
+    }
+
+    // High performance device caching: cached for 7 days with stale-while-revalidate
+    reply.header('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
+    reply.header('Access-Control-Allow-Origin', '*');
+
+    // Attempt to stream image buffer directly to guarantee HTTP 200 without cross-protocol redirect issues
+    try {
+      const response = await fetch(downloadUrl);
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || 'image/png';
+        const arrayBuffer = await response.arrayBuffer();
+        reply.header('Content-Type', contentType);
+        reply.send(Buffer.from(arrayBuffer));
+        return;
+      }
+    } catch {
+      // Fallback to redirect if proxy fetch fails
+    }
+
+    reply.redirect(downloadUrl);
   }
 }

@@ -49,7 +49,12 @@ export interface QuoteOption {
   vehicleTypeId: string;
   vehicleTypeCode: string;
   displayName: string;
+  category?: string;
+  hasAc?: boolean;
+  badge?: string | null;
+  description?: string | null;
   icon: string | null;
+  imageUrl?: string | null;
   passengerCapacity: number | null;
   luggageCapacity: number | null;
   estimatedFare: number;
@@ -292,7 +297,12 @@ export class RideRequestService {
         vehicleTypeId: vehicleType.id,
         vehicleTypeCode: view.code,
         displayName: view.name,
+        category: view.category,
+        hasAc: view.hasAc,
+        badge: view.badge,
+        description: view.description,
         icon: view.icon,
+        imageUrl: view.imageUrl,
         passengerCapacity: view.passengerCapacity,
         luggageCapacity: view.luggageCapacity,
         estimatedFare: fare.totalFare,

@@ -86,5 +86,6 @@ export async function adminVehicleRoutes(fastify: FastifyInstance): Promise<void
   fastify.post('/vehicle-types', canWrite, (req, reply) => controller.createVehicleType(req, reply));
   fastify.put('/vehicle-types/:id', canWrite, (req, reply) => controller.updateVehicleType(req, reply));
   fastify.patch('/vehicle-types/:id/toggle', canWrite, (req, reply) => controller.toggleVehicleType(req, reply));
+  fastify.delete('/vehicle-types/:id', canWrite, (req, reply) => controller.deleteVehicleType(req, reply));
   fastify.put('/vehicle-types/reorder', canWrite, (req, reply) => controller.reorderVehicleTypes(req, reply));
 }

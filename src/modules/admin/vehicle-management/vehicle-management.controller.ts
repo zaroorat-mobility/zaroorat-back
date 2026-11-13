@@ -105,7 +105,7 @@ export class AdminVehicleManagementController {
   async updateVehicleType(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = vehicleIdParamSchema.parse(req.params);
     const body = updateVehicleTypeBodySchema.parse(req.body);
-    const updated = await this.vehicleTypeService.updateVehicleType(id, body);
+    const updated = await this.vehicleTypeService.updateVehicleType(id, body as any);
     req.log.info({ vehicleTypeId: id }, '[admin-vehicles] vehicle type updated');
     reply.send({ data: toVehicleTypeView(updated) });
   }
@@ -122,5 +122,12 @@ export class AdminVehicleManagementController {
     await this.vehicleTypeService.reorder(body.orderings);
     req.log.info({ count: body.orderings.length }, '[admin-vehicles] vehicle types reordered');
     reply.send({ success: true });
+  }
+
+  async deleteVehicleType(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = vehicleIdParamSchema.parse(req.params);
+    await this.vehicleTypeService.deleteVehicleType(id);
+    req.log.info({ vehicleTypeId: id }, '[admin-vehicles] vehicle type deleted');
+    reply.status(200).send({ success: true });
   }
 }

@@ -47,6 +47,7 @@ interface PlacesAutocompleteResponse {
       placeId?: string;
       text?: { text?: string };
       structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
+      distanceMeters?: number;
     };
   }>;
 }
@@ -66,11 +67,44 @@ const PLACES_BIAS_RADIUS_METERS = 50_000;
 interface GoogleGeocodeResponse {
   results?: Array<{
     formatted_address?: string;
+    types?: string[];
     geometry?: { location?: { lat?: number; lng?: number } };
     address_components?: Array<{ long_name: string; short_name: string; types: string[] }>;
   }>;
+  /// Reverse geocoding with `extra_computations=ADDRESS_DESCRIPTORS` (GA in India).
+  address_descriptor?: {
+    landmarks?: Array<{
+      display_name?: { text?: string };
+      spatial_relationship?: string;
+      straight_line_distance_meters?: number;
+    }>;
+    areas?: Array<{ display_name?: { text?: string } }>;
+  };
   status?: string;
   error_message?: string;
+}
+
+/// A landmark further than this from the pin describes somewhere else.
+const LANDMARK_MAX_METERS = 300;
+
+/// "Opposite X" / "Near X": how Indian riders describe a pickup spot.
+function landmarkPlaceName(
+  descriptor: GoogleGeocodeResponse['address_descriptor'],
+): string | undefined {
+  const landmark = descriptor?.landmarks?.[0];
+  const name = landmark?.display_name?.text?.trim();
+  if (!name) return undefined;
+  if ((landmark?.straight_line_distance_meters ?? 0) > LANDMARK_MAX_METERS) return undefined;
+  switch (landmark?.spatial_relationship) {
+    case 'WITHIN':
+      return name;
+    case 'ACROSS_THE_ROAD':
+      return `Opposite ${name}`;
+    case 'BEHIND':
+      return `Behind ${name}`;
+    default:
+      return `Near ${name}`;
+  }
 }
 
 interface GoogleMatrixResponse {
@@ -148,7 +182,7 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
         method: 'POST',
         label: 'places:autocomplete',
         fieldMask:
-          'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat',
+          'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.distanceMeters',
         body: {
           input,
           includedRegionCodes: PLACES_REGION_CODES,
@@ -161,6 +195,8 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
                     radius: PLACES_BIAS_RADIUS_METERS,
                   },
                 },
+                // Gives each suggestion a distance the app shows ("2.4 km").
+                origin: { latitude: location.latitude, longitude: location.longitude },
               }
             : {}),
           ...(options?.sessionToken ? { sessionToken: options.sessionToken } : {}),
@@ -177,6 +213,7 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
             placeName: p.structuredFormat?.mainText?.text ?? full.split(',')[0]?.trim() ?? '',
             placeAddress: p.structuredFormat?.secondaryText?.text ?? full,
             provider: this.providerName,
+            ...(typeof p.distanceMeters === 'number' ? { distanceMeters: p.distanceMeters } : {}),
           },
         ];
       });
@@ -234,6 +271,8 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
   async reverseGeocode(coordinate: Coordinate): Promise<ReverseGeocodeResult> {
     const response = await this.get<GoogleGeocodeResponse>('geocode/json', {
       latlng: `${coordinate.latitude},${coordinate.longitude}`,
+      // Landmarks ("Near X") at no extra charge on the India Essentials SKU.
+      extra_computations: 'ADDRESS_DESCRIPTORS',
     });
 
     if (response.status && response.status !== 'OK' && response.status !== 'ZERO_RESULTS') {
@@ -246,13 +285,19 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
       throw new Error('[GoogleMaps] reverseGeocode: no result');
     }
 
-    const result = response.results[0]!;
+    // A bare plus code ("8FQ7+RX Pune") means nothing to a rider; take the first real address.
+    const result =
+      response.results.find((r) => !r.types?.includes('plus_code')) ?? response.results[0]!;
     const components = result.address_components ?? [];
     const find = (...types: string[]): string =>
       components.find((c) => types.some((t) => c.types.includes(t)))?.long_name ?? '';
+    const placeName = landmarkPlaceName(response.address_descriptor);
+    const area = response.address_descriptor?.areas?.[0]?.display_name?.text?.trim();
 
     return {
       formattedAddress: result.formatted_address ?? '',
+      ...(placeName ? { placeName } : {}),
+      ...(area ? { area } : {}),
       city: find('locality', 'administrative_area_level_2'),
       state: find('administrative_area_level_1'),
       pincode: find('postal_code'),
@@ -260,14 +305,57 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
     };
   }
 
+  private async fetchOsrmRoute(
+    origin: Coordinate,
+    destination: Coordinate,
+  ): Promise<RoutingResult | null> {
+    const endpoints = [
+      `https://router.project-osrm.org/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=polyline`,
+      `https://routing.openstreetmap.de/routed-car/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=polyline`,
+    ];
+
+    for (const url of endpoints) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) continue;
+        const json: any = await res.json();
+        const route = json?.routes?.[0];
+        if (route && typeof route.geometry === 'string' && route.geometry.trim()) {
+          const encodedPolyline = route.geometry.trim();
+          const path = decodeEncodedPolyline(encodedPolyline);
+          if (path.length > 2) {
+            return {
+              distanceMeters: Math.round(route.distance ?? 0),
+              durationSeconds: Math.round(route.duration ?? 0),
+              providerName: 'osrm',
+              encodedPolyline,
+              path,
+            };
+          }
+        }
+      } catch {
+        // try next endpoint
+      }
+    }
+    return null;
+  }
+
   async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    // The offline stand-in is gated on the environment alone. It used to also
-    // fire on a credential *shape* — `apiKey.startsWith('test_')`/`'mock_'` — so a
-    // production key that happened to begin with those characters served a fixed
-    // 12.4 km / 31 min route for every journey, while still naming this provider
-    // as the source.
+    // The offline stand-in is gated on the environment alone. When active,
+    // attempt OSRM first to deliver genuine road geometry before synthetic fallback.
     const offline = offlineRoutingResult(origin, destination, this.providerName);
     if (offline) {
+      const osrm = await this.fetchOsrmRoute(origin, destination);
+      if (osrm) {
+        return osrm;
+      }
       const path = buildInterpolatedPath(origin, destination);
       return {
         ...offline,
@@ -276,39 +364,50 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
       };
     }
 
-    const response = await this.get<GoogleDirectionsResponse>('directions/json', {
-      origin: `${origin.latitude},${origin.longitude}`,
-      destination: `${destination.latitude},${destination.longitude}`,
-      mode: 'driving',
-    });
+    try {
+      const response = await this.get<GoogleDirectionsResponse>('directions/json', {
+        origin: `${origin.latitude},${origin.longitude}`,
+        destination: `${destination.latitude},${destination.longitude}`,
+        mode: 'driving',
+      });
 
-    if (response.status && response.status !== 'OK') {
-      const msg = response.error_message ? `: ${response.error_message}` : '';
-      throw new Error(`[GoogleMaps] getDirections failed (${response.status})${msg}`);
+      if (response.status && response.status !== 'OK') {
+        const msg = response.error_message ? `: ${response.error_message}` : '';
+        logger.warn(`[GoogleMaps] getDirections status: ${response.status}${msg}, attempting OSRM fallback`);
+        const osrm = await this.fetchOsrmRoute(origin, destination);
+        if (osrm) return osrm;
+        throw new Error(`[GoogleMaps] getDirections failed (${response.status})${msg}`);
+      }
+
+      if (!response.routes || response.routes.length === 0) {
+        const osrm = await this.fetchOsrmRoute(origin, destination);
+        if (osrm) return osrm;
+        throw new Error('[GoogleMaps] getDirections: no route found');
+      }
+
+      const route = response.routes[0]!;
+      const leg = route.legs?.[0];
+      if (!leg?.distance?.value || !leg?.duration?.value) {
+        throw new Error('[GoogleMaps] getDirections: route leg has no distance/duration');
+      }
+
+      const encodedPolyline = route.overview_polyline?.points;
+      const path = encodedPolyline
+        ? decodeEncodedPolyline(encodedPolyline)
+        : buildInterpolatedPath(origin, destination);
+
+      return {
+        distanceMeters: leg.distance.value,
+        durationSeconds: leg.duration.value,
+        providerName: this.providerName,
+        ...(encodedPolyline ? { encodedPolyline } : {}),
+        path,
+      };
+    } catch (err) {
+      const osrm = await this.fetchOsrmRoute(origin, destination);
+      if (osrm) return osrm;
+      throw err;
     }
-
-    if (!response.routes || response.routes.length === 0) {
-      throw new Error('[GoogleMaps] getDirections: no route found');
-    }
-
-    const route = response.routes[0]!;
-    const leg = route.legs?.[0];
-    if (!leg?.distance?.value || !leg?.duration?.value) {
-      throw new Error('[GoogleMaps] getDirections: route leg has no distance/duration');
-    }
-
-    const encodedPolyline = route.overview_polyline?.points;
-    const path = encodedPolyline
-      ? decodeEncodedPolyline(encodedPolyline)
-      : buildInterpolatedPath(origin, destination);
-
-    return {
-      distanceMeters: leg.distance.value,
-      durationSeconds: leg.duration.value,
-      providerName: this.providerName,
-      ...(encodedPolyline ? { encodedPolyline } : {}),
-      path,
-    };
   }
 
   async getDistanceMatrix(

@@ -364,6 +364,27 @@ export class DriverNotAtLocationError extends RideError {
   }
 }
 
+/// The stored fix cannot say where the driver is now: too old, or less precise than
+/// the radius being checked. Distinct from DRIVER_NOT_AT_LOCATION so the app can ask
+/// for a fresh fix rather than tell the driver to move.
+export class DriverLocationNotTrustedError extends RideError {
+  constructor(
+    target: 'pickup' | 'drop',
+    reason: 'stale' | 'imprecise',
+    detail: { ageSeconds?: number; accuracyMeters?: number; requiredMeters: number },
+  ) {
+    super(
+      reason === 'stale'
+        ? `Your last location is ${detail.ageSeconds}s old. Wait for a fresh GPS fix at the ${target} and try again`
+        : `Your GPS is only accurate to ${Math.round(detail.accuracyMeters ?? 0)}m; it must be within ${detail.requiredMeters}m to confirm the ${target}`,
+      'DRIVER_LOCATION_NOT_TRUSTED',
+      422,
+      { target, reason, ...detail },
+    );
+    this.name = 'DriverLocationNotTrustedError';
+  }
+}
+
 /// D1. A new ride may only be booked as CASH, UPI or CARD. Rides booked before
 /// that rule keep working — this refuses the booking, never the processing of
 /// an existing WALLET ride.

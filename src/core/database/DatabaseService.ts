@@ -1,4 +1,4 @@
-import { ProviderClient, PrismaClientProvider } from './client/PrismaClientProvider';
+import { type ProviderClient, PrismaClientProvider } from './client/PrismaClientProvider';
 import { TransactionManager } from './TransactionManager';
 export class DatabaseService {
   constructor(
