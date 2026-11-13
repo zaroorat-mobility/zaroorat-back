@@ -97,20 +97,27 @@ export class LocationStreamService {
       throw new StaleLocationError();
     }
 
-    const shouldPersist =
-      !previous || now - previous.lastPersistedAtMs >= realtimeConfig.locationPersistIntervalMs;
+    const fix = {
+      driverId,
+      latitude: frame.latitude,
+      longitude: frame.longitude,
+      ...(frame.heading !== undefined ? { heading: frame.heading } : {}),
+      ...(frame.bearing !== undefined ? { bearing: frame.bearing } : {}),
+      ...(frame.speedKmh !== undefined ? { speedKmh: frame.speedKmh } : {}),
+      ...(frame.accuracyMeters !== undefined ? { accuracyMeters: frame.accuracyMeters } : {}),
+      ...(frame.isMockLocation !== undefined ? { isMockLocation: frame.isMockLocation } : {}),
+    };
 
+    // `state` only paces this replica's writes and throttles this driver. It says
+    // nothing about whether a position is believable: every frame is judged against
+    // the stored fix, here or inside `updateLocation`, before anything below sees it.
+    let shouldPersist =
+      !previous || now - previous.lastPersistedAtMs >= realtimeConfig.locationPersistIntervalMs;
+    if (!shouldPersist) {
+      shouldPersist = (await this.locationService.verifyUnstoredFix(fix)).mustStore;
+    }
     if (shouldPersist) {
-      await this.locationService.updateLocation({
-        driverId,
-        latitude: frame.latitude,
-        longitude: frame.longitude,
-        ...(frame.heading !== undefined ? { heading: frame.heading } : {}),
-        ...(frame.bearing !== undefined ? { bearing: frame.bearing } : {}),
-        ...(frame.speedKmh !== undefined ? { speedKmh: frame.speedKmh } : {}),
-        ...(frame.accuracyMeters !== undefined ? { accuracyMeters: frame.accuracyMeters } : {}),
-        ...(frame.isMockLocation !== undefined ? { isMockLocation: frame.isMockLocation } : {}),
-      });
+      await this.locationService.updateLocation(fix);
     }
 
     const fixId = frame.fixId ?? randomUUID();

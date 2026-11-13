@@ -101,7 +101,7 @@ export const changeDestinationQuoteSchema = z.object({
   /// D1. WALLET is not accepted for a new ride — see NEW_RIDE_PAYMENT_METHODS.
   paymentMethod: z.enum(NEW_RIDE_PAYMENT_METHODS).optional(),
   promoCode: z.string().max(50).optional(),
-  /// Optional ₹ offset from the quoted fare (−10 … +60) applied at create time.
+  /// Optional ₹ offset from the quoted fare (0 … +60) applied at create time.
   boostAmount: rideBoostAmountSchema.optional(),
 });
 export type ChangeDestinationQuoteBody = z.infer<typeof changeDestinationQuoteSchema>;

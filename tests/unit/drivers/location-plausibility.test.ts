@@ -260,6 +260,59 @@ describe('Driver location plausibility — stale baseline handling', () => {
     assert.ok(verdict.plausible && verdict.baselineReset);
   });
 
+  describe('the reported 2,362.68 km incident', () => {
+    const BENGALURU = { latitude: 12.971998, longitude: 77.594998 };
+    const SRINAGAR = { latitude: 34.06, longitude: 74.73, accuracyMeters: 5 };
+
+    it('refuses it 244.1 s after the last accepted fix', () => {
+      const verdict = assessPlausibility(
+        SRINAGAR,
+        { ...BENGALURU, recordedAt: secondsBefore(244.1) },
+        NOW,
+        policy,
+      );
+      assert.equal(verdict.plausible === false && verdict.reason, 'impossible_speed');
+      assert.equal(
+        verdict.plausible === false && verdict.detail,
+        '2362.68km in 244.1s implies 34845km/h, limit 200km/h',
+      );
+    });
+
+    it('refuses it 2 s after the last accepted fix', () => {
+      const verdict = assessPlausibility(
+        SRINAGAR,
+        { ...BENGALURU, recordedAt: secondsBefore(2) },
+        NOW,
+        policy,
+      );
+      assert.equal(verdict.plausible === false && verdict.reason, 'impossible_speed');
+    });
+
+    it('treats it as a baseline reset only past the stale window', () => {
+      const atLimit = assessPlausibility(
+        SRINAGAR,
+        { ...BENGALURU, recordedAt: secondsBefore(policy.staleBaselineSeconds) },
+        NOW,
+        policy,
+      );
+      assert.equal(atLimit.plausible, false);
+
+      const pastLimit = assessPlausibility(
+        SRINAGAR,
+        { ...BENGALURU, recordedAt: secondsBefore(policy.staleBaselineSeconds + 1) },
+        NOW,
+        policy,
+      );
+      assert.ok(pastLimit.plausible && pastLimit.baselineReset);
+    });
+
+    it('keeps the default speed limit at 200 km/h', () => {
+      if (process.env.DRIVER_LOCATION_MAX_SPEED_KMH === undefined) {
+        assert.equal(driverConfig.locationMaxSpeedKmh, 200);
+      }
+    });
+  });
+
   it('rejects the (0, 0) null fix', () => {
     const verdict = assessPlausibility({ latitude: 0, longitude: 0 }, null, NOW);
     assert.equal(verdict.plausible === false && verdict.reason, 'out_of_range');

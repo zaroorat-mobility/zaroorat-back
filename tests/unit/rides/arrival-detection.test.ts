@@ -27,6 +27,10 @@ describe('Arrival Detection Service Tests', () => {
 
   function createFixture(initialRide: MockRideRecord | null = null) {
     const memory = new Map<string, string>();
+    const expiries = new Map<string, number>();
+    // Each evaluated fix is one GPS reading, 5s after the last, unless frozen.
+    let clock = 0;
+    let clockFrozen = false;
     let activeRide = initialRide;
     let markArrivedCalls = 0;
     let markDropoffCalls = 0;
@@ -44,8 +48,11 @@ describe('Arrival Detection Service Tests', () => {
       },
       set: async (key: string, val: string, ...args: (string | number)[]) => {
         if (args.includes('NX')) {
-          if (memory.has(key)) return null;
+          const expired = (expiries.get(key) ?? Infinity) <= clock;
+          if (memory.has(key) && !expired) return null;
           memory.set(key, val);
+          const px = args.indexOf('PX');
+          if (px !== -1) expiries.set(key, clock + Number(args[px + 1]));
           return 'OK';
         }
         memory.set(key, val);
@@ -61,7 +68,10 @@ describe('Arrival Detection Service Tests', () => {
     } as unknown as RedisService;
 
     const mockRideRepo = {
-      findActiveByDriver: async () => activeRide,
+      findActiveByDriver: async () => {
+        if (!clockFrozen) clock += 5000;
+        return activeRide;
+      },
     } as unknown as RideRepository;
 
     const mockLifecycle = {
@@ -82,6 +92,9 @@ describe('Arrival Detection Service Tests', () => {
     return {
       service,
       memory,
+      freezeClock: () => {
+        clockFrozen = true;
+      },
       getActiveRide: () => activeRide,
       setActiveRide: (r: MockRideRecord | null) => {
         activeRide = r;
@@ -245,6 +258,30 @@ describe('Arrival Detection Service Tests', () => {
     assert.equal(res3.consecutiveFixes, 3);
     assert.equal(res3.transitioned, true);
     assert.equal(fixture.getMarkArrivedCalls(), 1);
+  });
+
+  it('the same reading evaluated twice counts once towards arrival', async () => {
+    const fixture = createFixture({
+      id: 'ride-1',
+      driverId: 'd-1',
+      status: 'ACCEPTED',
+      request: { pickupLat, pickupLng, dropLat, dropLng },
+    });
+    const fix = { driverId: 'd-1', latitude: pickupLat, longitude: pickupLng, accuracyMeters: 10 };
+
+    const first = await fixture.service.evaluateFix(fix);
+    assert.equal(first.consecutiveFixes, 1);
+
+    // Persisted socket frame: updateLocation and the stream both evaluate it.
+    fixture.freezeClock();
+    const repeat = await fixture.service.evaluateFix(fix);
+    assert.equal(repeat.reason, 'DUPLICATE_FIX');
+    assert.equal(repeat.transitioned, false);
+    const again = await fixture.service.evaluateFix(fix);
+    assert.equal(again.reason, 'DUPLICATE_FIX');
+
+    assert.equal(fixture.memory.get('ride:arrival:fixes:ride-1:pickup'), '1');
+    assert.equal(fixture.getMarkArrivedCalls(), 0);
   });
 
   it('3 valid drop fixes mark drop-off arrived', async () => {

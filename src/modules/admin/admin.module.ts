@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { asClass, AwilixContainer } from 'awilix';
 import { registerFileReference } from '@modules/files';
+import type { DatabaseService } from '@core/database';
 
 import {
   pricingManagementRoutes,
@@ -230,6 +231,18 @@ export function registerAdminModule(container: AwilixContainer): void {
     module: 'promotions',
     isReferenced: (fileId, tx) =>
       container.resolve<AdminBannerService>('adminBannerService').isBannerImage(fileId, tx),
+  });
+
+  registerFileReference('VEHICLE_IMAGE', {
+    module: 'vehicles',
+    isReferenced: async (fileId, tx) => {
+      const db = container.resolve<DatabaseService>('db');
+      const client = (tx ?? db.client) as unknown as {
+        vehicleType: { count: (args: { where: { imageFileId: string } }) => Promise<number> };
+      };
+      const count = await client.vehicleType.count({ where: { imageFileId: fileId } });
+      return count > 0;
+    },
   });
 }
 

@@ -117,6 +117,25 @@ export class ArrivalDetectionService {
     const fixKey = RedisKeys.arrivalFixCount(ride.id, target);
 
     if (distanceMeters <= radiusMeters) {
+      // One GPS reading reaches here more than once: a persisted socket frame is
+      // evaluated by updateLocation and again by the stream, and the REST copy of
+      // the same fix counts too. Without this, "3 fixes" could be 2 readings.
+      const counted = await client.set(
+        RedisKeys.arrivalFixSpacing(ride.id, target),
+        '1',
+        'PX',
+        rideConfig.arrivalMinFixSpacingMs,
+        'NX',
+      );
+      if (!counted) {
+        return {
+          evaluated: true,
+          target,
+          distanceMeters,
+          transitioned: false,
+          reason: 'DUPLICATE_FIX',
+        };
+      }
       const count = await client.incr(fixKey);
       await client.expire(fixKey, 300);
 

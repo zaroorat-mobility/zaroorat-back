@@ -41,6 +41,7 @@ import {
   InsufficientCommissionBalanceError,
   WalletRidesNotAcceptedError,
   DriverNotAtLocationError,
+  DriverLocationNotTrustedError,
 } from '../../errors/ride.errors.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import {
@@ -147,6 +148,22 @@ export class LifecycleService {
     const location = await this.driverLocationRepository.getLocation(driverId);
     if (!location || location.latitude == null || location.longitude == null) {
       throw new DriverNotAtLocationError(target, requiredMeters + 1, requiredMeters);
+    }
+    // A fix near the target says nothing about now if it is old, or if its own
+    // uncertainty is wider than the radius being checked.
+    const ageMs = Date.now() - location.recordedAt.getTime();
+    if (ageMs > rideConfig.manualArrivalFixMaxAgeMs) {
+      throw new DriverLocationNotTrustedError(target, 'stale', {
+        ageSeconds: Math.round(ageMs / 1000),
+        requiredMeters,
+      });
+    }
+    const accuracyMeters = location.accuracyMeters != null ? Number(location.accuracyMeters) : null;
+    if (accuracyMeters != null && accuracyMeters > requiredMeters) {
+      throw new DriverLocationNotTrustedError(target, 'imprecise', {
+        accuracyMeters,
+        requiredMeters,
+      });
     }
     const distanceMeters = haversineMeters(
       Number(location.latitude),
@@ -353,6 +370,15 @@ export class LifecycleService {
     }
     const elapsedMs = completedAt.getTime() - ride.startedAt.getTime();
     return Math.max(0, Math.round(elapsedMs / 60_000));
+  }
+  /// Minutes the driver waited at the pickup, measured like the trip itself:
+  /// from `arrivedAt` (stamped by `markDriverArrived`) to `startedAt`, both on
+  /// the server's clock. `completeRide` bills `waitTimeMin` against the rule's
+  /// free minutes and per-minute rate, and nothing ever wrote it, so waiting was
+  /// always billed as zero. Whole minutes only: a part minute is not charged.
+  private measuredWaitingMin(ride: Ride, startedAt: Date): number {
+    if (!ride.arrivedAt) return 0;
+    return Math.max(0, Math.floor((startedAt.getTime() - ride.arrivedAt.getTime()) / 60_000));
   }
 
   /// Returns the ride and nothing else — no `plaintextOtp`, and that is the
@@ -585,6 +611,11 @@ export class LifecycleService {
   }
   async markDriverArrived(rideId: string, driverId: string): Promise<Ride> {
     return this.txManager.execute(async (tx) => {
+      // A retried "I've arrived" (lost response, double tap) after the first one
+      // succeeded answers with the arrived ride rather than a transition error,
+      // and records nothing twice.
+      const current = await this.rideRepo.lockForUpdate(rideId, tx);
+      if (current?.status === 'DRIVER_ARRIVED' && current.driverId === driverId) return current;
       const ride = await this.lockAndValidate(
         rideId,
         { kind: 'driver', driverId },
@@ -672,12 +703,13 @@ export class LifecycleService {
         );
         await this.ridePinVerificationService.verify(ride.customerId, pin, tx);
         const startedAt = new Date();
+        const waitTimeMin = this.measuredWaitingMin(ride, startedAt);
         if (
           !(await this.rideRepo.updateStatusIf(
             rideId,
             ride.status,
             'IN_PROGRESS',
-            { startedAt },
+            { startedAt, waitTimeMin },
             tx,
           ))
         ) {
@@ -698,7 +730,7 @@ export class LifecycleService {
           rideEvent(RIDE_EVENT_CATALOG.STARTED, ride.customerId, { rideId, driverId }),
           tx,
         );
-        return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt };
+        return { ...ride, status: 'IN_PROGRESS' as RideStatus, startedAt, waitTimeMin };
       });
     } catch (err) {
       // Only a wrong PIN spends a budget. A refused state transition or a driver
@@ -723,6 +755,9 @@ export class LifecycleService {
   }
   async markDriverArrivedAtDropoff(rideId: string, driverId: string): Promise<Ride> {
     return this.txManager.execute(async (tx) => {
+      // Same as pickup arrival: a repeat answers with the ride, records nothing twice.
+      const current = await this.rideRepo.lockForUpdate(rideId, tx);
+      if (current?.status === 'DRIVER_AT_DROPOFF' && current.driverId === driverId) return current;
       const ride = await this.lockAndValidate(
         rideId,
         { kind: 'driver', driverId },

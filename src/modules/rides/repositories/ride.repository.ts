@@ -216,6 +216,7 @@ export class RideRepository {
       arrivedAt?: Date;
       dropoffArrivedAt?: Date;
       startedAt?: Date;
+      waitTimeMin?: number;
       completedAt?: Date;
       cancelledAt?: Date;
       actualDistanceKm?: Decimal;
@@ -289,11 +290,11 @@ export class RideRepository {
   }
   async listCustomerRides(customerId: string, limit = 20, tx?: TransactionClient): Promise<Ride[]> {
     const client = tx ?? this.db.client;
-    return client.ride.findMany({
+    return (await client.ride.findMany({
       where: { customerId },
       orderBy: { createdAt: 'desc' },
       take: limit,
-      include: { fare: true },
-    });
+      include: { fare: true, vehicleType: true },
+    })) as unknown as Ride[];
   }
 }

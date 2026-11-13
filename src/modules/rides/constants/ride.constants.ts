@@ -39,8 +39,9 @@ export type NewRidePaymentMethod = (typeof NEW_RIDE_PAYMENT_METHODS)[number];
 
 /// The only fare boosts a rider may offer, in rupees. A fixed list rather than
 /// a range so the driver app can render them as chips and nobody can send ₹1.
-/// Negative = offer below quote; 0 = keep quote; positive = bump.
-export const RIDE_BOOST_AMOUNTS = [-10, 0, 20, 30, 40, 50, 60] as const;
+/// 0 = keep quote (Base); positive = bump offer higher to attract drivers faster.
+/// Riders cannot undercut below the rate card base fare.
+export const RIDE_BOOST_AMOUNTS = [0, 10, 20, 30, 40, 50, 60] as const;
 export type RideBoostAmount = (typeof RIDE_BOOST_AMOUNTS)[number];
 
 /// Ride states in which the rider may still change where they are going.

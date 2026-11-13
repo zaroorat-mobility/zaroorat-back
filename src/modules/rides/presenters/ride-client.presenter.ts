@@ -1,9 +1,26 @@
 import { decodeEncodedPolyline } from '@shared/geo/polyline.util.js';
 import type { RideEtaSnapshot } from '@modules/location/services/ride-eta.service.js';
+import type { FileRepository } from '@modules/files/repositories/file.repository.js';
+import type { FileStorageService } from '@modules/files/services/file-storage.service.js';
+import { logger } from '@shared/logger/index.js';
 /**
  * Shapes Prisma ride / offer rows for customer + driver mobile clients.
  * Backend never returns the Ride PIN plaintext — only party/vehicle details.
  */
+
+const FILE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DRIVER_PHOTO_TTL_SECONDS = 3600;
+
+export interface ClientRideMedia {
+  driverProfileImageUrl?: string | null;
+  vehicleTypeImageUrl?: string | null;
+  vehicleTypeIconUrl?: string | null;
+}
+
+export interface RideMediaDependencies {
+  fileRepository?: FileRepository | undefined;
+  fileStorageService?: FileStorageService | undefined;
+}
 
 type NameProfile = { firstName?: string | null; lastName?: string | null };
 
@@ -12,19 +29,25 @@ type DriverInput = {
   userId?: string;
   rating?: unknown;
   totalRides?: unknown;
-  profile?: { fullLegalName?: string | null } | null;
-  user?: { profile?: NameProfile | null } | null;
+  approvedAt?: Date | string | null;
+  createdAt?: Date | string | null;
+  profile?: { fullLegalName?: string | null; profilePhoto?: string | null } | null;
+  user?: { profile?: (NameProfile & { profileImageFileId?: string | null }) | null } | null;
 };
 
 type CustomerInput = {
   id?: string;
   profile?: NameProfile | null;
+  customerRatingAggregate?: { avgRating?: unknown; totalRatings?: number | null | undefined } | null;
 };
 
 type VehicleTypeInput = {
   id: string;
   name: string;
   code: string;
+  icon?: string | null;
+  imageUrl?: string | null;
+  imageFileId?: string | null;
 };
 
 type VehicleInput = {
@@ -76,6 +99,7 @@ type RideRequestInput = {
   expiresAt?: Date | string | null;
   vehicleType?: VehicleTypeInput | null;
   stops?: RideRequestStopInput[] | null;
+  pricingRule?: { freeWaitingMin?: number | null; waitingPerMin?: unknown } | null;
 };
 
 type FareInput = {
@@ -140,6 +164,7 @@ type RideInput = {
   actualDistanceKm?: unknown;
   actualDurationMin?: number | null;
   driverPaymentModel?: string | null;
+  commissionAmount?: unknown;
   fare?: unknown;
   cancellation?: CancellationInput | null;
   driver?: DriverInput | null;
@@ -197,36 +222,154 @@ function nameFromUserProfile(profile?: NameProfile | null): {
   };
 }
 
-export function driverDisplayProfile(driver: DriverInput | null | undefined): {
+export const VEHICLE_TYPE_CLIENT_SELECT = {
+  id: true,
+  name: true,
+  code: true,
+  icon: true,
+  imageUrl: true,
+  imageFileId: true,
+} as const;
+
+function isPresignedS3Url(url: string): boolean {
+  return url.includes('X-Amz-Signature=') || url.includes('X-Amz-Date=');
+}
+
+/** Filters out stale S3 presigned URLs or broken non-UUID image paths. */
+export function resolveSafeClientImageUrl(raw: string | null | undefined): string | null {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (!value) return null;
+  if (value.startsWith('/api/v1/vehicle-types/images/')) {
+    const fileId = value.slice('/api/v1/vehicle-types/images/'.length).split('?')[0] ?? '';
+    return FILE_UUID_RE.test(fileId) ? value : null;
+  }
+  if (value.startsWith('/api/')) return value;
+  if (/^https?:\/\//i.test(value) && !isPresignedS3Url(value)) {
+    return value;
+  }
+  return null;
+}
+
+export function extractDriverPhotoRef(driver: DriverInput | null | undefined): string | null {
+  const fromDriverProfile =
+    typeof driver?.profile?.profilePhoto === 'string' ? driver.profile.profilePhoto.trim() : '';
+  if (fromDriverProfile) return fromDriverProfile;
+  const fromUserProfile =
+    typeof driver?.user?.profile?.profileImageFileId === 'string'
+      ? driver.user.profile.profileImageFileId.trim()
+      : '';
+  return fromUserProfile || null;
+}
+
+export function resolveVehicleTypeImageUrl(vt: VehicleTypeInput | null | undefined): string | null {
+  const fileId = typeof vt?.imageFileId === 'string' ? vt.imageFileId.trim() : '';
+  if (fileId && FILE_UUID_RE.test(fileId)) {
+    return `/api/v1/vehicle-types/images/${fileId}`;
+  }
+  return resolveSafeClientImageUrl(vt?.imageUrl);
+}
+
+function presentVehicleType(
+  vt: VehicleTypeInput | null | undefined,
+  media?: ClientRideMedia | null,
+): Record<string, unknown> | null {
+  if (!vt) return null;
+  return {
+    id: vt.id,
+    name: vt.name,
+    code: vt.code,
+    imageFileId: vt.imageFileId ?? null,
+    imageUrl: media?.vehicleTypeImageUrl ?? resolveVehicleTypeImageUrl(vt),
+    icon: media?.vehicleTypeIconUrl ?? resolveSafeClientImageUrl(vt.icon),
+  };
+}
+
+export function driverDisplayProfile(
+  driver: DriverInput | null | undefined,
+  resolvedProfileImageUrl?: string | null,
+): {
   id: string;
   userId?: string;
   rating: number | null;
   totalTrips: number | null;
-  profile: { firstName: string | null; lastName: string | null };
+  monthsActive?: number;
+  profileImageUrl: string | null;
+  profile: {
+    firstName: string | null;
+    lastName: string | null;
+    profileImageUrl?: string | null;
+  };
 } | null {
   if (!driver) return null;
   const fromLegal = splitLegalName(driver.profile?.fullLegalName);
   const fromUser = nameFromUserProfile(driver.user?.profile);
   const firstName = fromLegal.firstName || fromUser.firstName;
   const lastName = fromLegal.lastName || fromUser.lastName;
+  const profileImageUrl =
+    resolvedProfileImageUrl ?? resolveSafeClientImageUrl(extractDriverPhotoRef(driver));
+  const sinceRaw = driver.approvedAt ?? driver.createdAt;
+  let monthsActive: number | undefined;
+  if (sinceRaw != null) {
+    const sinceMs = new Date(sinceRaw).getTime();
+    if (Number.isFinite(sinceMs)) {
+      monthsActive = Math.max(
+        1,
+        Math.floor((Date.now() - sinceMs) / (1000 * 60 * 60 * 24 * 30.44)),
+      );
+    }
+  }
   return {
     id: driver.id,
     ...(driver.userId !== undefined ? { userId: driver.userId } : {}),
     rating: dec(driver.rating),
     totalTrips: driver.totalRides != null ? Number(driver.totalRides) : null,
-    profile: { firstName, lastName },
+    ...(monthsActive !== undefined ? { monthsActive } : {}),
+    profileImageUrl,
+    profile: {
+      firstName,
+      lastName,
+      ...(profileImageUrl ? { profileImageUrl } : {}),
+    },
   };
 }
 
 export function customerDisplayProfile(customer: CustomerInput | null | undefined): {
   id?: string;
   profile: { firstName: string | null; lastName: string | null };
+  rating: number | null;
+  totalRatings: number;
 } | null {
   if (!customer) return null;
   return {
     ...(customer.id !== undefined ? { id: customer.id } : {}),
     profile: nameFromUserProfile(customer.profile),
+    ...riderRating(customer.customerRatingAggregate),
   };
+}
+
+/// The aggregate row's average is 0 until a first rating exists: that is "new
+/// rider", not a rider rated zero.
+function riderRating(aggregate: CustomerInput['customerRatingAggregate']): {
+  rating: number | null;
+  totalRatings: number;
+} {
+  const totalRatings = aggregate?.totalRatings ?? 0;
+  return { rating: totalRatings > 0 ? dec(aggregate?.avgRating) : null, totalRatings };
+}
+
+/// What this offer should leave the driver with, on the same split the ledger
+/// applies at completion: a SUBSCRIPTION driver pays no per-ride commission, so
+/// that part of the fare stays theirs; a COMMISSION driver pays it from the wallet.
+export function estimatedDriverEarning(
+  quote: { driverEarning: number; platformCommission: number },
+  boostAmount: number,
+  paymentModel: string | null | undefined,
+): number {
+  const earning =
+    quote.driverEarning +
+    boostAmount +
+    (paymentModel === 'SUBSCRIPTION' ? quote.platformCommission : 0);
+  return Math.round(earning * 100) / 100;
 }
 
 /** Shared Prisma include for client-facing ride detail / active ride. */
@@ -247,10 +390,12 @@ export const CLIENT_RIDE_INCLUDE = {
       userId: true,
       rating: true,
       totalRides: true,
-      profile: { select: { fullLegalName: true } },
+      approvedAt: true,
+      createdAt: true,
+      profile: { select: { fullLegalName: true, profilePhoto: true } },
       user: {
         select: {
-          profile: { select: { firstName: true, lastName: true } },
+          profile: { select: { firstName: true, lastName: true, profileImageFileId: true } },
         },
       },
     },
@@ -262,14 +407,15 @@ export const CLIENT_RIDE_INCLUDE = {
       color: true,
       make: true,
       model: true,
-      vehicleType: { select: { id: true, name: true, code: true } },
+      vehicleType: { select: VEHICLE_TYPE_CLIENT_SELECT },
     },
   },
-  vehicleType: { select: { id: true, name: true, code: true } },
+  vehicleType: { select: VEHICLE_TYPE_CLIENT_SELECT },
   customer: {
     select: {
       id: true,
       profile: { select: { firstName: true, lastName: true } },
+      customerRatingAggregate: { select: { avgRating: true, totalRatings: true } },
     },
   },
   request: {
@@ -295,6 +441,7 @@ export const CLIENT_RIDE_INCLUDE = {
         select: { sequence: true, lat: true, lng: true, address: true },
         orderBy: { sequence: 'asc' as const },
       },
+      pricingRule: { select: { freeWaitingMin: true, waitingPerMin: true } },
     },
   },
   stops: {
@@ -322,7 +469,7 @@ function mapStops(stops: RideRequestStopInput[] | RideStopInput[] | null | undef
 
 /** Shared Prisma include for customer-facing pending request reads. */
 export const CLIENT_REQUEST_INCLUDE = {
-  vehicleType: { select: { id: true, name: true, code: true } },
+  vehicleType: { select: VEHICLE_TYPE_CLIENT_SELECT },
   stops: {
     select: { sequence: true, lat: true, lng: true, address: true },
     orderBy: { sequence: 'asc' as const },
@@ -350,13 +497,7 @@ export function toClientRideRequestView(
     customerId: request.customerId ?? null,
     status: request.status ?? null,
     vehicleTypeId: request.vehicleTypeId ?? null,
-    vehicleType: vehicleType
-      ? {
-          id: vehicleType.id,
-          name: vehicleType.name,
-          code: vehicleType.code,
-        }
-      : null,
+    vehicleType: presentVehicleType(vehicleType),
     pickupLat: dec(request.pickupLat),
     pickupLng: dec(request.pickupLng),
     dropLat: dec(request.dropLat),
@@ -395,6 +536,7 @@ export function toClientRideRequestView(
 export function toClientRideView(
   ride: RideInput | null | undefined,
   eta?: RideEtaSnapshot | null,
+  media?: ClientRideMedia | null,
 ): Record<string, unknown> | null {
   if (!ride) return null;
 
@@ -406,7 +548,7 @@ export function toClientRideView(
   const quotedFare = dec(req?.quotedFare);
   const boostAmount = dec(req?.boostAmount) ?? 0;
   const totalOffered = quotedFare != null ? quotedFare + boostAmount : null;
-  const driver = driverDisplayProfile(ride.driver);
+  const driver = driverDisplayProfile(ride.driver, media?.driverProfileImageUrl);
   const customer = customerDisplayProfile(ride.customer);
   const vehicleType = ride.vehicleType ?? ride.vehicle?.vehicleType ?? null;
   const stops = mapStops(req?.stops?.length ? req.stops : undefined);
@@ -461,6 +603,13 @@ export function toClientRideView(
         }
       : null,
     stops,
+    // The booked rule's waiting terms, so the apps show what completion will bill.
+    waitingPolicy: req?.pricingRule
+      ? {
+          freeMinutes: req.pricingRule.freeWaitingMin ?? 0,
+          perMinute: dec(req.pricingRule.waitingPerMin) ?? 0,
+        }
+      : null,
     timeline: ride.statusEvents
       ? ride.statusEvents.map((e) => ({
           id: e.id,
@@ -483,6 +632,7 @@ export function toClientRideView(
     distanceKm: dec(ride.actualDistanceKm) ?? dec(req?.estimatedDistanceKm) ?? null,
     durationMin: ride.actualDurationMin ?? req?.estimatedDurationMin ?? null,
     driverPaymentModel: ride.driverPaymentModel ?? null,
+    commissionAmount: dec(ride.commissionAmount),
     fare: ride.fare
       ? (() => {
           const f = ride.fare as FareInput;
@@ -537,16 +687,12 @@ export function toClientRideView(
           model: ride.vehicle.model,
         }
       : null,
-    vehicleType: vehicleType
-      ? {
-          id: vehicleType.id,
-          name: vehicleType.name,
-          code: vehicleType.code,
-        }
-      : null,
+    vehicleType: presentVehicleType(vehicleType, media),
     request: req
       ? {
           ...req,
+          // Exposed once, normalised, as `waitingPolicy`.
+          pricingRule: undefined,
           pickupLat,
           pickupLng,
           dropLat,
@@ -564,6 +710,44 @@ export function toClientRideView(
         }
       : null,
   };
+}
+
+/**
+ * Resolves ride-party-scoped media (signing stored driver profile photo file IDs
+ * when file dependencies are injected) and returns the client ride view.
+ */
+export async function toClientRideViewWithMedia(
+  ride: RideInput | null | undefined,
+  eta?: RideEtaSnapshot | null,
+  deps?: RideMediaDependencies,
+): Promise<Record<string, unknown> | null> {
+  if (!ride) return null;
+
+  let driverProfileImageUrl: string | null = null;
+  const photoRef = extractDriverPhotoRef(ride.driver);
+  if (photoRef) {
+    if (FILE_UUID_RE.test(photoRef) && deps?.fileRepository && deps?.fileStorageService) {
+      try {
+        const file = await deps.fileRepository.findReadable(photoRef);
+        if (file?.storageKey) {
+          const signed = await deps.fileStorageService.signDownload({
+            key: file.storageKey,
+            ttlSeconds: DRIVER_PHOTO_TTL_SECONDS,
+            contentType: file.contentType || 'image/jpeg',
+            disposition: 'inline',
+            fileName: file.fileName || 'driver-profile.jpg',
+          });
+          driverProfileImageUrl = signed.url;
+        }
+      } catch (err) {
+        logger.warn({ err, rideId: ride.id }, '[rides] failed to sign driver profile photo');
+      }
+    } else {
+      driverProfileImageUrl = resolveSafeClientImageUrl(photoRef);
+    }
+  }
+
+  return toClientRideView(ride, eta, { driverProfileImageUrl });
 }
 
 /** Shape a RideRequest row for the customer app (active search / resume). */
@@ -627,7 +811,16 @@ export function toClientRequestView(
 
 export function toClientOfferView(
   offer: OfferInput,
-  customerById: Map<string, { firstName: string | null; lastName: string | null }>,
+  customerById: Map<
+    string,
+    {
+      firstName: string | null;
+      lastName: string | null;
+      avgRating?: unknown;
+      totalRatings?: number | null | undefined;
+    }
+  >,
+  estimatedEarning: number | null = null,
 ): Record<string, unknown> {
   const req = offer.request ?? {};
   const customerId = req.customerId;
@@ -639,6 +832,7 @@ export function toClientOfferView(
           firstName: profile?.firstName ?? null,
           lastName: profile?.lastName ?? null,
         },
+        ...riderRating(profile),
       }
     : null;
   const quotedFare = dec(req.quotedFare);
@@ -654,6 +848,7 @@ export function toClientOfferView(
     driverDistanceM: offer.driverDistanceM,
     driverEtaSeconds: offer.driverEtaSeconds,
     offeredAt: offer.offeredAt,
+    estimatedDriverEarning: estimatedEarning,
     request: {
       id: req.id,
       customerId,

@@ -11,8 +11,9 @@ const sessionTokenSchema = z
 
 export const autocompleteQuerySchema = z.object({
   input: z.string().min(1).max(200),
-  latitude: latitudeSchema.optional(),
-  longitude: longitudeSchema.optional(),
+  // Query-string values are always strings ("34.06"): convert, then range-check.
+  latitude: z.coerce.number().pipe(latitudeSchema).optional(),
+  longitude: z.coerce.number().pipe(longitudeSchema).optional(),
   sessionToken: sessionTokenSchema,
 });
 

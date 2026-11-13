@@ -22,6 +22,8 @@ export interface SuggestedPlace {
   placeName: string;
   placeAddress: string;
   provider?: MapProviderName;
+  /// Straight-line distance from the rider's position, when the provider gives it.
+  distanceMeters?: number;
 }
 
 export interface AutocompleteResult {
@@ -36,6 +38,11 @@ export interface AutocompleteResult {
 
 export interface ReverseGeocodeResult {
   formattedAddress: string;
+  /// Short rider-facing name for the pin, e.g. "Opposite Phoenix Marketcity".
+  /// Absent when the provider has nothing better than the address.
+  placeName?: string;
+  /// Neighbourhood / locality the pin is in, when known.
+  area?: string;
   city: string;
   state: string;
   pincode: string;

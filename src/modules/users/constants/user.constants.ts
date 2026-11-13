@@ -17,7 +17,7 @@ export const IMMUTABLE_PROFILE_FIELDS = Object.freeze([
   'roles',
   'referralCode',
 ]);
-export const NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M}\s'-]*$/u;
+export const NAME_PATTERN = /^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}\s'.-]*$/u;
 export const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 export { E164_PATTERN } from '@shared/validation';
 export const ERASURE_LOCK = 'user:erasure';

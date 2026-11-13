@@ -29,6 +29,10 @@ export async function createApp(): Promise<FastifyInstance> {
     requestIdHeader: 'x-request-id',
     trustProxy,
     bodyLimit: 10 * 1024 * 1024,
+    // Google Places API (New) returns >100-char street/route Place IDs that
+    // `placeDetailsParamsSchema` accepts up to 256 chars; Fastify's default 100
+    // rejected them with 414 before route validation.
+    maxParamLength: 512,
   });
   app.setErrorHandler(errorHandler);
   app.setNotFoundHandler(notFoundHandler);

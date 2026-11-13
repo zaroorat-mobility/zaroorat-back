@@ -16,6 +16,7 @@ import { RealtimeError, SocketUnauthenticatedError } from './realtime.errors.js'
 import { SocketAuthService, type SocketPrincipal } from './socket-auth.service.js';
 import { RoomAuthorizationService } from './room-authorization.service.js';
 import { LocationStreamService } from './location-stream.service.js';
+import { ImplausibleLocationError } from '@modules/drivers/errors/driver.errors.js';
 import { RideChatService } from '@modules/rides/services/chat/ride-chat.service.js';
 import { uuidV7 } from '@shared/crypto';
 import { z } from 'zod';
@@ -29,6 +30,13 @@ interface AuthedSocket extends Socket {
 
 function ack(callback: unknown, response: Record<string, unknown>): void {
   if (typeof callback === 'function') (callback as (r: unknown) => void)(response);
+}
+
+/// Tells a publisher which frame was refused and, when a position was not
+/// believable, why. Only ever added to the acknowledgement of a location frame.
+interface LocationRejection {
+  fixId: string | null;
+  reason?: string;
 }
 
 const chatSendSchema = z.object({
@@ -253,7 +261,11 @@ export class RealtimeGateway {
         fixId: accepted.envelope.data.fixId ?? null,
       });
     } catch (err) {
-      this.failFrom(socket, callback, err);
+      const fixId = (payload as { fixId?: unknown } | null)?.fixId;
+      this.failFrom(socket, callback, err, {
+        fixId: typeof fixId === 'string' && RealtimeGateway.UUID.test(fixId) ? fixId : null,
+        ...(err instanceof ImplausibleLocationError ? { reason: err.reason } : {}),
+      });
     }
   }
 
@@ -350,9 +362,14 @@ export class RealtimeGateway {
     for (const name of DASHBOARD_ROOMS) await socket.leave(name);
   }
 
-  private failFrom(socket: AuthedSocket, callback: unknown, err: unknown): void {
+  private failFrom(
+    socket: AuthedSocket,
+    callback: unknown,
+    err: unknown,
+    rejection?: LocationRejection,
+  ): void {
     if (err instanceof RealtimeError) {
-      return this.fail(socket, callback, err.code, err.message);
+      return this.fail(socket, callback, err.code, err.message, rejection);
     }
     // Domain errors reach here too — a location frame runs through
     // `LocationService`, which raises IMPLAUSIBLE_LOCATION or
@@ -360,10 +377,16 @@ export class RealtimeGateway {
     // can act on, so they are relayed rather than flattened into a generic
     // failure, exactly as `handleRideError` relays them over HTTP.
     if (isCodedError(err) && err.statusCode < 500) {
-      return this.fail(socket, callback, err.code, err.message);
+      return this.fail(socket, callback, err.code, err.message, rejection);
     }
     logger.error({ err }, '[realtime] unhandled socket handler error');
-    this.fail(socket, callback, 'REALTIME_ERROR', 'An unexpected realtime error occurred');
+    this.fail(
+      socket,
+      callback,
+      'REALTIME_ERROR',
+      'An unexpected realtime error occurred',
+      rejection,
+    );
   }
 
   /// Runs before every command. A principal that is no longer true — session
@@ -388,8 +411,18 @@ export class RealtimeGateway {
 
   /// A bad command is answered and logged; it never tears the socket down. Only
   /// a failed handshake, or a failed re-authorisation, ends a connection.
-  private fail(socket: AuthedSocket, callback: unknown, code: string, message: string): void {
-    ack(callback, { ok: false, error: { code, message } });
+  private fail(
+    socket: AuthedSocket,
+    callback: unknown,
+    code: string,
+    message: string,
+    rejection?: LocationRejection,
+  ): void {
+    ack(callback, {
+      ok: false,
+      ...(rejection ? { fixId: rejection.fixId } : {}),
+      error: { code, message, ...(rejection?.reason ? { reason: rejection.reason } : {}) },
+    });
     socket.emit(SOCKET_EVENT.ERROR, { code, message });
   }
 

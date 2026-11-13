@@ -18,7 +18,14 @@ import {
   cancelRideSchema,
 } from '../schemas/ride.schemas.js';
 import { DriverNotFoundError } from '@modules/drivers/errors/driver.errors.js';
-import { toClientOfferView, toClientRideView } from '../presenters/ride-client.presenter.js';
+import type { FileRepository } from '@modules/files/repositories/file.repository.js';
+import type { FileStorageService } from '@modules/files/services/file-storage.service.js';
+import type { RideRequest } from '../types';
+import {
+  estimatedDriverEarning,
+  toClientOfferView,
+  toClientRideViewWithMedia,
+} from '../presenters/ride-client.presenter.js';
 export class RideStateController {
   constructor(
     private readonly rideService: RideService,
@@ -28,16 +35,45 @@ export class RideStateController {
     private readonly rideRepo: RideRepository,
     private readonly db: DatabaseService,
     private readonly redisService?: RedisService,
+    private readonly fileRepository?: FileRepository,
+    private readonly fileStorageService?: FileStorageService,
   ) {}
+
+  private presentRide(ride: Parameters<typeof toClientRideViewWithMedia>[0]) {
+    return toClientRideViewWithMedia(ride, undefined, {
+      fileRepository: this.fileRepository,
+      fileStorageService: this.fileStorageService,
+    });
+  }
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
     const driver = await this.driverRepository.findByUserId(userId);
     if (!driver) throw new DriverNotFoundError(userId);
     return driver.id;
   }
+  /// Null when it cannot be priced: the driver still sees the fare, and an offer
+  /// must never fail to show over an estimate.
+  private async offerEarning(
+    request: RideRequest,
+    paymentModel: string | null,
+  ): Promise<number | null> {
+    try {
+      const quote = await this.rideService.pricing.calculateFinalFare({
+        actualDistanceKm: Number(request.estimatedDistanceKm ?? 0),
+        actualDurationMin: request.estimatedDurationMin ?? 0,
+        vehicleTypeId: request.vehicleTypeId,
+        pricingRuleId: request.pricingRuleId ?? null,
+        surgeMultiplier: Number(request.surgeMultiplier ?? 1),
+      });
+      return estimatedDriverEarning(quote, Number(request.boostAmount ?? 0), paymentModel);
+    } catch {
+      return null;
+    }
+  }
   async listOffers(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const driverId = await this.actingDriverId(req);
-    const offers = await this.dispatchRepo.findPendingForDriver(driverId);
+    const driver = await this.driverRepository.findByUserId(callerId(req));
+    if (!driver) throw new DriverNotFoundError(callerId(req));
+    const offers = await this.dispatchRepo.findPendingForDriver(driver.id);
     const customerIds = [
       ...new Set(
         offers
@@ -45,18 +81,36 @@ export class RideStateController {
           .filter((id): id is string => typeof id === 'string' && id.length > 0),
       ),
     ];
-    const profiles =
+    const [profiles, ratings] =
       customerIds.length === 0
-        ? []
-        : await this.db.client.userProfile.findMany({
-            where: { userId: { in: customerIds } },
-            select: { userId: true, firstName: true, lastName: true },
-          });
+        ? [[], []]
+        : await Promise.all([
+            this.db.client.userProfile.findMany({
+              where: { userId: { in: customerIds } },
+              select: { userId: true, firstName: true, lastName: true },
+            }),
+            this.db.client.customerRatingAggregate.findMany({
+              where: { userId: { in: customerIds } },
+              select: { userId: true, avgRating: true, totalRatings: true },
+            }),
+          ]);
+    const ratingByUser = new Map(ratings.map((r) => [r.userId, r]));
     const customerById = new Map(
-      profiles.map((p) => [p.userId, { firstName: p.firstName, lastName: p.lastName }]),
+      profiles.map((p) => [
+        p.userId,
+        {
+          firstName: p.firstName,
+          lastName: p.lastName,
+          avgRating: ratingByUser.get(p.userId)?.avgRating,
+          totalRatings: ratingByUser.get(p.userId)?.totalRatings,
+        },
+      ]),
+    );
+    const earnings = await Promise.all(
+      offers.map((offer) => this.offerEarning(offer.request, driver.paymentModel)),
     );
     reply.send({
-      data: offers.map((offer) => toClientOfferView(offer, customerById)),
+      data: offers.map((offer, i) => toClientOfferView(offer, customerById, earnings[i] ?? null)),
     });
   }
   async accept(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -70,7 +124,7 @@ export class RideStateController {
     // Re-fetch enriched ride so the driver app gets customer name immediately.
     const enriched = result?.ride?.id ? await this.rideRepo.findById(result.ride.id) : null;
     reply.send({
-      data: enriched ? { ...result, ride: toClientRideView(enriched) } : result,
+      data: enriched ? { ...result, ride: await this.presentRide(enriched) } : result,
     });
   }
   /// Declining an offer, so the next drivers are asked immediately instead of
@@ -95,7 +149,7 @@ export class RideStateController {
     };
     await this.rideService.lifecycle.markDriverArriving(id, driverId);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   async arrive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -104,7 +158,7 @@ export class RideStateController {
     };
     await this.rideService.lifecycle.markDriverArrived(id, driverId);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
 
   async arriveDropoff(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -114,7 +168,7 @@ export class RideStateController {
     };
     await this.rideService.lifecycle.markDriverArrivedAtDropoff(id, driverId);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   async start(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -124,7 +178,7 @@ export class RideStateController {
     const body = startRideSchema.parse(req.body);
     await this.rideService.lifecycle.startRide(id, driverId, body.pin);
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   async complete(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const driverId = await this.actingDriverId(req);
@@ -143,7 +197,7 @@ export class RideStateController {
       },
     );
     const enriched = await this.rideRepo.findById(id);
-    reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
   /// Which side of the ride is cancelling comes from the ride, not from the
   /// caller's roles.
@@ -205,6 +259,6 @@ export class RideStateController {
     }
 
     const enriched = await this.rideRepo.findById(id);
-    return reply.send({ data: enriched ? toClientRideView(enriched) : null });
+    return reply.send({ data: enriched ? await this.presentRide(enriched) : null });
   }
 }
