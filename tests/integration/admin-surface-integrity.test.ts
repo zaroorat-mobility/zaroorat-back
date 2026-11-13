@@ -103,7 +103,7 @@ describe('admin surface integrity (Phase 6)', () => {
     it('rejects a code change and leaves the fare rule resolvable', async () => {
       const { headers } = await loginAdmin();
       const cityId = await ensureCityWithBoundary('SGR', 'Srinagar', CITY_POLYGON);
-      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       await createPricingRuleDirect({ vehicleTypeId, cityCode: 'SGR', baseFare: 99 });
 
       const renamed = await app.inject({
@@ -234,7 +234,7 @@ describe('admin surface integrity (Phase 6)', () => {
   it('creates a zone, its vehicle links and its audit row together (FR-031, FR-035)', async () => {
     const { headers, userId } = await loginAdmin();
     await ensureCityWithBoundary('SGR', 'Srinagar', CITY_POLYGON);
-    const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+    const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
 
     const created = await app.inject({
       method: 'POST',
@@ -349,7 +349,7 @@ describe('admin surface integrity (Phase 6)', () => {
   describe('one active rule per key is decided by the database (FR-034)', () => {
     it('rejects a concurrent second active rule on the same key', async () => {
       await loginAdmin();
-      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       await ensureCityWithBoundary('SGR', 'Srinagar', CITY_POLYGON);
 
       // Both inserts race with no read between them, which is what two admins
@@ -372,7 +372,7 @@ describe('admin surface integrity (Phase 6)', () => {
 
     it('still allows an inactive version history on the same key', async () => {
       await loginAdmin();
-      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       await ensureCityWithBoundary('SGR', 'Srinagar', CITY_POLYGON);
 
       await createPricingRuleDirect({ vehicleTypeId, cityCode: 'SGR', baseFare: 100 });
@@ -395,7 +395,7 @@ describe('admin surface integrity (Phase 6)', () => {
 
     it('an edit that revises a rule leaves exactly one active version', async () => {
       const { headers } = await loginAdmin();
-      const cab = await vehicleTypeIdByCode('CAB_ECONOMY');
+      const cab = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       const nextYear = new Date().getFullYear() + 1;
 
       const created = await app.inject({
@@ -441,7 +441,7 @@ describe('admin surface integrity (Phase 6)', () => {
     // `CAB_PREMIUM` was rejected by a hardcoded enum while the same file's
     // `CODE_TO_UI` map already knew how to render it. Creating a category made
     // it impossible to price.
-    await vehicleTypeIdByCode('CAB_PREMIUM');
+    await vehicleTypeIdByCode('CAB_PREMIUM_AC');
     const nextYear = new Date().getFullYear() + 1;
 
     const created = await app.inject({
@@ -449,7 +449,7 @@ describe('admin surface integrity (Phase 6)', () => {
       url: '/api/v1/admin/fare-rules',
       headers,
       payload: {
-        vehicleType: 'CAB_PREMIUM',
+        vehicleType: 'CAB_PREMIUM_AC',
         cityCode: 'GLOBAL',
         baseFare: 120,
         minimumFare: 150,
@@ -459,7 +459,7 @@ describe('admin surface integrity (Phase 6)', () => {
       },
     });
     assert.equal(created.statusCode, 201, created.payload);
-    assert.equal(created.json().data.vehicleTypeCode, 'CAB_PREMIUM');
+    assert.equal(created.json().data.vehicleTypeCode, 'CAB_PREMIUM_AC');
   });
 
   it('rejects a vehicle type that is not in the table (FR-036)', async () => {
@@ -487,7 +487,7 @@ describe('admin surface integrity (Phase 6)', () => {
   // ---------------------------------------------------------------- FR-040 --
   it('paginates and filters fare rules in the database (FR-040)', async () => {
     const { headers } = await loginAdmin();
-    const cab = await vehicleTypeIdByCode('CAB_ECONOMY');
+    const cab = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
     const auto = await vehicleTypeIdByCode('AUTO');
     const bike = await vehicleTypeIdByCode('BIKE');
     await ensureCityWithBoundary('SGR', 'Srinagar', CITY_POLYGON);
@@ -552,7 +552,7 @@ describe('admin surface integrity (Phase 6)', () => {
   // ------------------------------------------------------- FR-035 (pricing) --
   it('records the actor and the full before/after of a fare-rule revision (FR-035)', async () => {
     const { headers, userId } = await loginAdmin();
-    await vehicleTypeIdByCode('CAB_ECONOMY');
+    await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
     const nextYear = new Date().getFullYear() + 1;
 
     const created = await app.inject({

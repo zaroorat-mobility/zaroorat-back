@@ -319,7 +319,7 @@ describe('Admin Dashboard Phase 3 — Analytics, Live Drivers, Activity & Health
     // Driver 2: ON_TRIP, Car, Stale GPS, Active Ride
     const d2User = await loginAs(app, '+919876546202');
     const d2Id = await makeDriver(d2User.userId);
-    const vCarTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+    const vCarTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
     const vCarId = await makeVehicle(vCarTypeId);
 
     await db().client.vehicleAssignment.create({

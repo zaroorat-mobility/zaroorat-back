@@ -84,10 +84,12 @@ export interface ApplicationDetailsDto extends ApplicationListItemDto {
 }
 
 const VEHICLE_TYPE_CODE: Record<CreateManualApplicationBody['vehicleType'], string> = {
-  cab: 'CAB_ECONOMY',
+  // The seed catalog (ad0185a) split CAB_ECONOMY/CAB_PREMIUM into AC/NON_AC codes.
+  // `cab` and the legacy CAB_ECONOMY alias resolve to the base non-AC economy cab.
+  cab: 'CAB_ECONOMY_NON_AC',
   auto: 'AUTO',
   bike: 'BIKE',
-  carpool: 'CAB_ECONOMY',
+  carpool: 'CAB_ECONOMY_NON_AC',
 };
 
 function normalizePhone(raw: string): string {

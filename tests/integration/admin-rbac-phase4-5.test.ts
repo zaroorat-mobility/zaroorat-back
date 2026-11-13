@@ -310,7 +310,7 @@ describe('Production Security & RBAC Verification (Phase 4.5)', () => {
       const rider = await loginAs(app, CUSTOMER_PHONE);
       const driverUser = await loginAs(app, DRIVER1_PHONE);
       const driverId = await makeDriver(driverUser.userId);
-      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       const vehicleId = await makeVehicle(vehicleTypeId);
       const requestId = await makeRideRequest(rider.userId, vehicleTypeId);
 
@@ -338,7 +338,7 @@ describe('Production Security & RBAC Verification (Phase 4.5)', () => {
       const rider = await loginAs(app, CUSTOMER_PHONE);
       const driverUser = await loginAs(app, DRIVER1_PHONE);
       const driverId = await makeDriver(driverUser.userId);
-      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+      const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       const vehicleId = await makeVehicle(vehicleTypeId);
       const requestId = await makeRideRequest(rider.userId, vehicleTypeId);
 
@@ -382,7 +382,7 @@ describe('Production Security & RBAC Verification (Phase 4.5)', () => {
         ADMIN_PASSWORD,
         'admin',
       );
-      await vehicleTypeIdByCode('CAB_ECONOMY');
+      await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       const nextYear = new Date().getFullYear() + 1;
 
       // 1. Create a fare rule
@@ -428,7 +428,7 @@ describe('Production Security & RBAC Verification (Phase 4.5)', () => {
         FINANCE_PASSWORD,
         'finance',
       );
-      await vehicleTypeIdByCode('CAB_ECONOMY');
+      await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       const nextYear = new Date().getFullYear() + 1;
 
       // Finance user does not have pricing:write permission

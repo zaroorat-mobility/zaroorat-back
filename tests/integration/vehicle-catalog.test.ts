@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState, type LoggedInUser } from './helpers/harness.js';
 import { grantRole, makeDriver, makeVehicleType, setRidePin } from './helpers/fixtures.js';
-import { seedVehicleTypes } from '../../prisma/seed/shared/vehicle-types.js';
+import { seedVehicleTypes, VEHICLE_TYPE_SEED } from '../../prisma/seed/shared/vehicle-types.js';
 
 const CUSTOMER = '+919876710001';
 const DRIVER = '+919876710002';
@@ -62,7 +62,7 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
       assert.ok(types.length >= 3, `expected the seeded catalog, got ${types.length}`);
 
       const codes = types.map((type) => type.code);
-      for (const expected of ['BIKE', 'AUTO', 'CAB_ECONOMY']) {
+      for (const expected of ['BIKE', 'AUTO', 'CAB_ECONOMY_NON_AC']) {
         assert.ok(codes.includes(expected), `catalog is missing ${expected}`);
       }
 
@@ -157,7 +157,7 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
         .data.options as { vehicleTypeCode: string; estimatedFare: number }[];
 
       const bike = options.find((option) => option.vehicleTypeCode === 'BIKE')!;
-      const premium = options.find((option) => option.vehicleTypeCode === 'CAB_PREMIUM')!;
+      const premium = options.find((option) => option.vehicleTypeCode === 'CAB_PREMIUM_AC')!;
       assert.ok(
         premium.estimatedFare > bike.estimatedFare,
         `premium (${premium.estimatedFare}) must cost more than bike (${bike.estimatedFare})`,
@@ -331,18 +331,23 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
   /// any. `rateCardForTypeId` found nothing, fell back to
   /// `pricingConfig.defaultRateCard`, and billed a bike as an economy cab.
   describe('each category is priced on its own rate card (M-1)', () => {
-    const LADDER = ['BIKE', 'AUTO', 'CAB_ECONOMY', 'CAB_PREMIUM'];
+    const LADDER = ['BIKE', 'AUTO', 'CAB_ECONOMY_NON_AC', 'CAB_PREMIUM_AC'];
 
     it('seeds one GLOBAL rule per category, and re-seeding does not duplicate them', async () => {
+      // One GLOBAL rule per seeded category (the catalog grew from 4 to 8 in ad0185a).
       const rules = await db().client.pricingRule.findMany({ where: { cityCode: 'GLOBAL' } });
-      assert.equal(rules.length, LADDER.length);
+      assert.equal(rules.length, VEHICLE_TYPE_SEED.length);
 
       // `resetState` re-seeds after every test, so this table is written
       // repeatedly against a database that already has it. `pricing_rules` has
       // no unique key to lean on, so idempotency is the seed's own job.
       await seedVehicleTypes(db().client);
       const after = await db().client.pricingRule.findMany({ where: { cityCode: 'GLOBAL' } });
-      assert.equal(after.length, LADDER.length, 're-seeding must not stack duplicate rules');
+      assert.equal(
+        after.length,
+        VEHICLE_TYPE_SEED.length,
+        're-seeding must not stack duplicate rules',
+      );
     });
 
     it('quotes the whole ladder in ascending order, not four identical fares', async () => {
@@ -371,7 +376,7 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
         code: string;
         perKmRate: number;
       }[];
-      const premium = types.find((type) => type.code === 'CAB_PREMIUM')!;
+      const premium = types.find((type) => type.code === 'CAB_PREMIUM_AC')!;
       const bike = types.find((type) => type.code === 'BIKE')!;
       assert.ok(premium.perKmRate > bike.perKmRate, 'the catalog must show the ladder too');
 

@@ -10,10 +10,13 @@ import {
 } from '../service-zone/service-zone.service.js';
 
 const UI_TO_CODE: Record<string, string> = {
-  cab: 'CAB_ECONOMY',
+  // The seed catalog (ad0185a) split CAB_ECONOMY/CAB_PREMIUM into AC/NON_AC codes.
+  // `cab` and the legacy CAB_ECONOMY alias resolve to the base non-AC economy cab.
+  cab: 'CAB_ECONOMY_NON_AC',
   auto: 'AUTO',
   bike: 'BIKE',
-  CAB_ECONOMY: 'CAB_ECONOMY',
+  CAB_ECONOMY: 'CAB_ECONOMY_NON_AC',
+  CAB_PREMIUM: 'CAB_PREMIUM_AC',
   AUTO: 'AUTO',
   BIKE: 'BIKE',
 };
@@ -21,6 +24,12 @@ const UI_TO_CODE: Record<string, string> = {
 const CODE_TO_UI: Record<string, 'cab' | 'auto' | 'bike'> = {
   CAB_ECONOMY: 'cab',
   CAB_PREMIUM: 'cab',
+  CAB_MINI_NON_AC: 'cab',
+  CAB_MINI_AC: 'cab',
+  CAB_ECONOMY_NON_AC: 'cab',
+  CAB_ECONOMY_AC: 'cab',
+  CAB_PREMIUM_AC: 'cab',
+  CAB_XL_AC: 'cab',
   AUTO: 'auto',
   BIKE: 'bike',
 };

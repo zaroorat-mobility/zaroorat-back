@@ -9,6 +9,7 @@ import {
   DEFAULT_MAP_PROVIDERS,
   MAP_SETTING_KEYS,
   MAP_SETTINGS_CATEGORY,
+  normalizeMapProviderName,
 } from '@modules/admin/system-settings/map/constants/map-settings.constants.js';
 import { resolveMapCredential } from '../../../integrations/mappls/mappls-credentials.util.js';
 import type { SystemSettingService } from '@modules/admin/system-settings/services/system-setting.service.js';
@@ -20,9 +21,9 @@ export interface CachedMapSettings extends MapPolicySettings {
 }
 
 export function buildMapSettingsFromEnv(): CachedMapSettings {
-  const primary = (process.env.MAP_PROVIDER ?? DEFAULT_MAP_PROVIDERS.PRIMARY)
-    .trim()
-    .toLowerCase() as MapProviderName;
+  const primary: MapProviderName = normalizeMapProviderName(
+    process.env.MAP_PROVIDER ?? DEFAULT_MAP_PROVIDERS.PRIMARY,
+  );
   const enabled: MapProviderName[] = [];
   if (resolveMapCredential(process.env.GOOGLE_MAPS_API_KEY)) enabled.push('google');
   if (
@@ -50,13 +51,11 @@ export async function resolveMapPolicyFromSettings(
     return buildMapSettingsFromEnv();
   }
 
-  const primaryProvider = (
+  const primaryProvider: MapProviderName = normalizeMapProviderName(
     settingsMap.get(MAP_SETTING_KEYS.PRIMARY_PROVIDER)?.value ??
-    process.env.MAP_PROVIDER ??
-    DEFAULT_MAP_PROVIDERS.PRIMARY
-  )
-    .trim()
-    .toLowerCase() as MapProviderName;
+      process.env.MAP_PROVIDER ??
+      DEFAULT_MAP_PROVIDERS.PRIMARY,
+  );
 
   const enabledProviders: MapProviderName[] = [primaryProvider];
 

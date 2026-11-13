@@ -42,7 +42,7 @@ export const vehicleTypeView = {
   type: 'object',
   properties: {
     id: { type: 'string', format: 'uuid', description: 'Pass this as vehicleTypeId elsewhere.' },
-    code: { type: 'string', description: 'Stable slug, e.g. BIKE, AUTO, CAB_ECONOMY.' },
+    code: { type: 'string', description: 'Stable slug, e.g. BIKE, AUTO, CAB_ECONOMY_NON_AC.' },
     name: { type: 'string' },
     category: { type: 'string', description: 'Vehicle category e.g. auto, bike, car' },
     hasAc: { type: 'boolean', description: 'Whether the vehicle has air conditioning' },

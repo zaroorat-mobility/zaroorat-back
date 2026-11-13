@@ -190,7 +190,7 @@ async function ensureAssignedVehicle(
   },
 ) {
   const vehicleType = await prisma.vehicleType.findUniqueOrThrow({
-    where: { code: 'CAB_ECONOMY' },
+    where: { code: 'CAB_ECONOMY_NON_AC' },
   });
   let vehicle = await prisma.vehicle.findUnique({
     where: { registrationNumber: input.registrationNumber },
@@ -670,7 +670,7 @@ async function seedPricingFixtures(prisma: Prisma) {
     commissionRatePct: number;
   }> = [
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'GLOBAL',
       baseFare: 60,
       minimumFare: 80,
@@ -712,7 +712,7 @@ async function seedPricingFixtures(prisma: Prisma) {
       commissionRatePct: 10,
     },
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'SGR',
       baseFare: 65,
       minimumFare: 85,
@@ -740,7 +740,7 @@ async function seedPricingFixtures(prisma: Prisma) {
       commissionRatePct: 12,
     },
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'SGR',
       serviceType: 'SCHEDULED',
       baseFare: 70,
@@ -755,7 +755,7 @@ async function seedPricingFixtures(prisma: Prisma) {
       commissionRatePct: 15,
     },
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'SGR',
       serviceZoneCode: 'SGR_AIRPORT',
       baseFare: 90,
@@ -851,7 +851,7 @@ async function seedPricingFixtures(prisma: Prisma) {
   }
 
   if (zoneId) {
-    const cab = byCode['CAB_ECONOMY'];
+    const cab = byCode['CAB_ECONOMY_NON_AC'];
     const auto = byCode['AUTO'];
     // The daily hours live in peakHourStart/End, read in the city's timezone
     // (pricing/utils/peak-window.ts). startsAt/endsAt only bound validity: pinning
@@ -958,7 +958,7 @@ async function seedPromotionsFixtures(prisma: Prisma) {
     return;
   }
 
-  const cab = await prisma.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+  const cab = await prisma.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
 
   const welcomePromo = await prisma.promotion.upsert({
     where: { code: 'WELCOME20' },
@@ -1555,7 +1555,7 @@ async function seedBillingFixtures(prisma: Prisma) {
   if (!driver?.currentVehicleId) return;
 
   const vehicle = await prisma.vehicle.findUnique({ where: { id: driver.currentVehicleId } });
-  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY' } });
+  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY_NON_AC' } });
   if (!vehicle || !cabType) return;
 
   const driverName =
@@ -1953,7 +1953,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
   if (!driver?.currentVehicleId) return;
 
   const vehicle = await prisma.vehicle.findUnique({ where: { id: driver.currentVehicleId } });
-  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY' } });
+  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY_NON_AC' } });
   if (!vehicle || !cabType) return;
 
   // Active rides are unique per driver/customer — use dedicated ops drivers for demo fixtures.

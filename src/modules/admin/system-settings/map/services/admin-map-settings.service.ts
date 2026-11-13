@@ -11,6 +11,7 @@ import {
   DEFAULT_MAP_PROVIDERS,
   MAP_SETTING_KEYS,
   MAP_SETTINGS_CATEGORY,
+  normalizeMapProviderName,
 } from '../constants/map-settings.constants.js';
 import { resolveMapCredential } from '../../../../../integrations/mappls/mappls-credentials.util.js';
 import { maxSettingVersion } from '../../integrations/utils/integration-settings.util.js';
@@ -48,10 +49,11 @@ export class AdminMapSettingsService {
   async getMapSettings(): Promise<MapSettingsView> {
     const settings = await this.systemSettingService.getCategorySettings(MAP_SETTINGS_CATEGORY);
 
-    const primaryProvider =
+    const primaryProvider = normalizeMapProviderName(
       settings.get(MAP_SETTING_KEYS.PRIMARY_PROVIDER)?.value ??
-      process.env.MAP_PROVIDER ??
-      DEFAULT_MAP_PROVIDERS.PRIMARY;
+        process.env.MAP_PROVIDER ??
+        DEFAULT_MAP_PROVIDERS.PRIMARY,
+    );
 
     const maxVersion = maxSettingVersion(settings);
     const configVersion =

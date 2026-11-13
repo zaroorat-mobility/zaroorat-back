@@ -25,6 +25,21 @@ export const DEFAULT_MAP_PROVIDERS = {
   PRIMARY: 'google',
 } as const;
 
+/// Providers an operator can select. Ola was retired (the save path forces
+/// map.ola.enabled=false), but databases and env files written before that can
+/// still say `ola`. Reading such a value used to crash GET /maps/config
+/// (`providerCapabilities('ola')` is undefined) — it now falls back to the default.
+export const SUPPORTED_MAP_PROVIDERS = ['google', 'mappls'] as const;
+
+export function normalizeMapProviderName(
+  raw: string | null | undefined,
+): (typeof SUPPORTED_MAP_PROVIDERS)[number] {
+  const value = (raw ?? '').trim().toLowerCase();
+  return (SUPPORTED_MAP_PROVIDERS as readonly string[]).includes(value)
+    ? (value as (typeof SUPPORTED_MAP_PROVIDERS)[number])
+    : DEFAULT_MAP_PROVIDERS.PRIMARY;
+}
+
 export const DEFAULT_BASE_URLS = {
   OLA: 'https://api.olamaps.io',
   GOOGLE: 'https://maps.googleapis.com/maps/api',

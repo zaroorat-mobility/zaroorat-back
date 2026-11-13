@@ -48,7 +48,7 @@ describe('admin surge windows (integration)', () => {
 
   it('creates a surge zone/window and lists enriched windows', async () => {
     const authHeader = await loginAdmin();
-    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
     assert.ok(cab);
 
     const zone = await app.inject({
@@ -104,7 +104,7 @@ describe('admin surge windows (integration)', () => {
     const row = windows.find((w) => w.id === created.json().id);
     assert.ok(row);
     assert.equal(row!.zoneName, 'Test Citywide');
-    assert.equal(row!.vehicleTypeCode, 'CAB_ECONOMY');
+    assert.equal(row!.vehicleTypeCode, 'CAB_ECONOMY_NON_AC');
     assert.equal(row!.reason, 'Morning Peak Cab Surge');
   });
 
@@ -115,7 +115,7 @@ describe('admin surge windows (integration)', () => {
   /// inert.
   it('stores peak-hour rules and no longer accepts inert thresholds', async () => {
     const authHeader = await loginAdmin();
-    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
     assert.ok(cab);
 
     const zone = await app.inject({
