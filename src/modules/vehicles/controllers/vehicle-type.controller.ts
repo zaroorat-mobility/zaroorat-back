@@ -59,7 +59,9 @@ export function toVehicleTypeView(
   const isDirectRemote = directUrl && /^https?:\/\//i.test(directUrl);
   const resolvedImageUrl = isDirectRemote
     ? directUrl
-    : (resolvedFileId ? `/api/v1/vehicle-types/images/${resolvedFileId}` : directUrl || null);
+    : resolvedFileId
+      ? `/api/v1/vehicle-types/images/${resolvedFileId}`
+      : directUrl || null;
 
   let resolvedIcon = vehicleType.icon ?? null;
   if (resolvedIcon && typeof resolvedIcon === 'string') {

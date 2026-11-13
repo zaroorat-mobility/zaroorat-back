@@ -373,7 +373,9 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
 
       if (response.status && response.status !== 'OK') {
         const msg = response.error_message ? `: ${response.error_message}` : '';
-        logger.warn(`[GoogleMaps] getDirections status: ${response.status}${msg}, attempting OSRM fallback`);
+        logger.warn(
+          `[GoogleMaps] getDirections status: ${response.status}${msg}, attempting OSRM fallback`,
+        );
         const osrm = await this.fetchOsrmRoute(origin, destination);
         if (osrm) return osrm;
         throw new Error(`[GoogleMaps] getDirections failed (${response.status})${msg}`);

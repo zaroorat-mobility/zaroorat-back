@@ -38,7 +38,10 @@ type DriverInput = {
 type CustomerInput = {
   id?: string;
   profile?: NameProfile | null;
-  customerRatingAggregate?: { avgRating?: unknown; totalRatings?: number | null | undefined } | null;
+  customerRatingAggregate?: {
+    avgRating?: unknown;
+    totalRatings?: number | null | undefined;
+  } | null;
 };
 
 type VehicleTypeInput = {

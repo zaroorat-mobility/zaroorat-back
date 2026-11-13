@@ -56,7 +56,13 @@ export const VEHICLE_TYPE_SEED = [
     displayOrder: 20,
     passengerCapacity: 4,
     luggageCapacity: 2,
-    rateCard: { baseFare: 40, perKmRate: 10, perMinuteRate: 1.5, waitingPerMin: 2, minimumFare: 45 },
+    rateCard: {
+      baseFare: 40,
+      perKmRate: 10,
+      perMinuteRate: 1.5,
+      waitingPerMin: 2,
+      minimumFare: 45,
+    },
   },
   {
     code: 'CAB_ECONOMY_NON_AC',
@@ -104,7 +110,13 @@ export const VEHICLE_TYPE_SEED = [
     displayOrder: 60,
     passengerCapacity: 4,
     luggageCapacity: 2,
-    rateCard: { baseFare: 45, perKmRate: 11, perMinuteRate: 2, waitingPerMin: 2.5, minimumFare: 50 },
+    rateCard: {
+      baseFare: 45,
+      perKmRate: 11,
+      perMinuteRate: 2,
+      waitingPerMin: 2.5,
+      minimumFare: 50,
+    },
   },
   {
     code: 'CAB_ECONOMY_AC',
@@ -128,7 +140,13 @@ export const VEHICLE_TYPE_SEED = [
     displayOrder: 80,
     passengerCapacity: 6,
     luggageCapacity: 4,
-    rateCard: { baseFare: 100, perKmRate: 22, perMinuteRate: 4, waitingPerMin: 5, minimumFare: 120 },
+    rateCard: {
+      baseFare: 100,
+      perKmRate: 22,
+      perMinuteRate: 4,
+      waitingPerMin: 5,
+      minimumFare: 120,
+    },
   },
 ] as const;
 

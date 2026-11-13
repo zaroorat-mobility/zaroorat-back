@@ -99,7 +99,9 @@ export class VehicleTypeRepository {
 
     try {
       return await (
-        client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+        client.vehicleType as unknown as {
+          create: (args: { data: unknown }) => Promise<VehicleType>;
+        }
       ).create({ data: createPayload });
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -109,14 +111,20 @@ export class VehicleTypeRepository {
       ) {
         delete createPayload.imageFile;
         return await (
-          client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+          client.vehicleType as unknown as {
+            create: (args: { data: unknown }) => Promise<VehicleType>;
+          }
         ).create({ data: createPayload });
       }
       throw err;
     }
   }
 
-  async update(id: string, data: UpdateVehicleTypeInput, tx?: TransactionClient): Promise<VehicleType> {
+  async update(
+    id: string,
+    data: UpdateVehicleTypeInput,
+    tx?: TransactionClient,
+  ): Promise<VehicleType> {
     const client = tx ?? this.db.client;
 
     const updatePayload: Record<string, unknown> = {};
@@ -127,7 +135,8 @@ export class VehicleTypeRepository {
     if (data.description !== undefined) updatePayload.description = data.description;
     if (data.imageUrl !== undefined) updatePayload.imageUrl = data.imageUrl;
     if (data.icon !== undefined) updatePayload.icon = data.icon;
-    if (data.passengerCapacity !== undefined) updatePayload.passengerCapacity = data.passengerCapacity;
+    if (data.passengerCapacity !== undefined)
+      updatePayload.passengerCapacity = data.passengerCapacity;
     if (data.luggageCapacity !== undefined) updatePayload.luggageCapacity = data.luggageCapacity;
     if (data.displayOrder !== undefined) updatePayload.displayOrder = data.displayOrder;
     if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
@@ -181,7 +190,9 @@ export class VehicleTypeRepository {
     const [vehiclesCount, ridesCount, rideRequestsCount] = await Promise.all([
       (client as any).vehicle ? (client as any).vehicle.count({ where: { vehicleTypeId: id } }) : 0,
       (client as any).ride ? (client as any).ride.count({ where: { vehicleTypeId: id } }) : 0,
-      (client as any).rideRequest ? (client as any).rideRequest.count({ where: { vehicleTypeId: id } }) : 0,
+      (client as any).rideRequest
+        ? (client as any).rideRequest.count({ where: { vehicleTypeId: id } })
+        : 0,
     ]);
 
     const hasDependencies = vehiclesCount > 0 || ridesCount > 0 || rideRequestsCount > 0;
@@ -238,7 +249,12 @@ export class VehicleTypeRepository {
   async findFileById(
     fileId: string,
     tx?: TransactionClient,
-  ): Promise<{ id: string; storageKey: string; storageBucket?: string | null; contentType?: string } | null> {
+  ): Promise<{
+    id: string;
+    storageKey: string;
+    storageBucket?: string | null;
+    contentType?: string;
+  } | null> {
     const client = tx ?? this.db.client;
     try {
       return await (client as any).file.findUnique({
