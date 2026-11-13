@@ -112,9 +112,12 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
       assert.ok(!codes.includes('RETIRED'), 'a retired type must not be offered');
     });
 
-    it('requires authentication', async () => {
+    // 6facad4 made the catalog public so Home/Services can render before sign-in
+    // (sanctioned in route-graph.test.ts). It must still expose no user data.
+    it('is public, read-only reference data', async () => {
       const response = await app.inject({ method: 'GET', url: '/api/v1/vehicle-types' });
-      assert.equal(response.statusCode, 401, response.payload);
+      assert.equal(response.statusCode, 200, response.payload);
+      assert.ok(Array.isArray(response.json().data));
     });
   });
 

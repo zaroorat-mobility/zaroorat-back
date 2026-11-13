@@ -42,7 +42,7 @@ describe('maps public API (integration)', () => {
     assert.equal(typeof body.configVersion, 'number');
     assert.ok(Array.isArray(body.capabilities));
     assert.ok(body.attribution?.text);
-    assert.equal(body.providers.ola.clientSdkKey, undefined);
+    assert.equal(body.providers.ola, undefined); // Ola is retired
     assert.equal(body.providers.google.clientSdkKey, undefined);
   });
 

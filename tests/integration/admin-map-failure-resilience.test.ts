@@ -144,7 +144,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     // A row that decrypts, and a row that cannot — the shape left behind by a
     // key rotation that only some values were re-encrypted under.
     await systemSettingService.setSetting({
-      key: 'map.ola.api_key',
+      key: 'map.mappls.rest_api_key',
       value: 'readable_key_value',
       category: 'maps',
       isSecret: true,
@@ -165,7 +165,7 @@ describe('admin map configuration failure, fallback & resilience (integration)',
 
     // The bad row does not take the category down with it, and it reads as null
     // rather than as a usable empty credential.
-    assert.equal(settings.get('map.ola.api_key')?.value, 'readable_key_value');
+    assert.equal(settings.get('map.mappls.rest_api_key')?.value, 'readable_key_value');
     assert.equal(settings.get('map.google.api_key')?.value, null);
   });
 
@@ -174,16 +174,16 @@ describe('admin map configuration failure, fallback & resilience (integration)',
   it('3.1 protects secrets from leaking in API responses and redacts in audit logs', async () => {
     const adminHeaders = await loginAdmin();
 
-    const realSecretKey = 'super_secret_ola_api_key_abc_123';
+    const realSecretKey = 'super_secret_google_api_key_abc_123';
     const updateRes = await app.inject({
       method: 'PUT',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
 
         providers: {
-          ola: { apiKey: realSecretKey },
+          google: { apiKey: realSecretKey },
         },
       },
     });
@@ -203,8 +203,8 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     // placeholder — `configured` is what the admin UI needs, and a field that is
     // never populated cannot leak. This asserted `apiKey === '********'` against an
     // older response shape that did carry the field.
-    assert.equal(getRes.json().data.providers.ola.apiKey, undefined);
-    assert.equal(getRes.json().data.providers.ola.configured, true);
+    assert.equal(getRes.json().data.providers.google.apiKey, undefined);
+    assert.equal(getRes.json().data.providers.google.configured, true);
 
     // 2. Verify Database Audit Log redacts secret value as '[REDACTED]'
     const auditLogs = await db().client.adminActivityLog.findMany({
@@ -239,9 +239,9 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
         providers: {
-          ola: { enabled: false, apiKey: 'test_ola_key' },
+          google: { enabled: false, apiKey: 'test_google_key' },
         },
       },
     });
@@ -259,9 +259,9 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
 
-        providers: { ola: { apiKey: 'test_ola_key' } },
+        providers: { google: { apiKey: 'test_google_key' } },
       },
     });
     assert.equal(firstUpdate.statusCode, 200, firstUpdate.payload);
@@ -272,10 +272,10 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'google',
+        primaryProvider: 'mappls',
 
         expectedVersion: 1, // Stale version!
-        providers: { google: { apiKey: 'test_google_key' } },
+        providers: { mappls: { clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' } },
       },
     });
 
@@ -291,8 +291,10 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
-        providers: { ola: { apiKey: 'test_ola_key', baseUrl: 'https://api.olamaps.io' } },
+        primaryProvider: 'google',
+        providers: {
+          google: { apiKey: 'test_google_key', baseUrl: 'https://maps.googleapis.com/maps/api' },
+        },
       },
     });
     assert.equal(firstUpdate.statusCode, 200, firstUpdate.payload);
@@ -304,12 +306,12 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     });
     const categoryVersion = current.json().data.version as number;
 
-    const olaBaseUrlRow = await db().client.systemSetting.findUnique({
-      where: { key: 'map.ola.base_url' },
+    const googleBaseUrlRow = await db().client.systemSetting.findUnique({
+      where: { key: 'map.google.base_url' },
     });
-    assert.ok(olaBaseUrlRow);
+    assert.ok(googleBaseUrlRow);
     assert.ok(
-      olaBaseUrlRow.version <= categoryVersion,
+      googleBaseUrlRow.version <= categoryVersion,
       'individual keys may lag behind category maxVersion',
     );
 
@@ -318,14 +320,17 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
         expectedVersion: categoryVersion,
-        providers: { ola: { baseUrl: 'https://api.olamaps.io/v2' } },
+        providers: { google: { baseUrl: 'https://maps.googleapis.com/maps/api/v2' } },
       },
     });
 
     assert.equal(saveRes.statusCode, 200, saveRes.payload);
-    assert.equal(saveRes.json().data.providers.ola.baseUrl, 'https://api.olamaps.io/v2');
+    assert.equal(
+      saveRes.json().data.providers.google.baseUrl,
+      'https://maps.googleapis.com/maps/api/v2',
+    );
   });
 
   // ─── 6. DYNAMIC RUNTIME SWITCHING & REDIS CACHE INVALIDATION ───────────────
@@ -334,22 +339,22 @@ describe('admin map configuration failure, fallback & resilience (integration)',
     const adminHeaders = await loginAdmin();
     const mapProviderService = container.resolve<MapProviderService>('mapProviderService');
 
-    // 1. Initial State -> Ola Primary
+    // 1. Initial State -> Mappls Primary
     const initialRes = await app.inject({
       method: 'PUT',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'mappls',
 
-        providers: { ola: { apiKey: 'test_ola_key_111' } },
+        providers: { mappls: { clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' } },
       },
     });
     assert.equal(initialRes.statusCode, 200, initialRes.payload);
 
     let chain = await mapProviderService.resolveProviderChain();
     assert.ok(chain.length === 1);
-    assert.equal(chain[0]?.providerName, 'ola');
+    assert.equal(chain[0]?.providerName, 'mappls');
 
     // 2. Switch Primary to Google (Zero Restart)
     const switchRes = await app.inject({
@@ -433,9 +438,9 @@ describe('admin map configuration failure, fallback & resilience (integration)',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'mappls',
 
-        providers: { ola: { apiKey: 'test_ola_key_888' } },
+        providers: { mappls: { clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' } },
       },
     });
     assert.equal(updateRes.statusCode, 200, updateRes.payload);
@@ -445,6 +450,6 @@ describe('admin map configuration failure, fallback & resilience (integration)',
 
     // 3. Query category settings from DB directly
     const dbSettings = await systemSettingService.getCategorySettings('maps');
-    assert.equal(dbSettings.get('map.primary_provider')?.value, 'ola');
+    assert.equal(dbSettings.get('map.primary_provider')?.value, 'mappls');
   });
 });

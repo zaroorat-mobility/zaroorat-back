@@ -350,13 +350,16 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
   }
 
   async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
-    // The offline stand-in is gated on the environment alone. When active,
-    // attempt OSRM first to deliver genuine road geometry before synthetic fallback.
+    // The offline stand-in is gated on the environment alone. Offline means no
+    // network: tests and CI must stay hermetic, so the public OSRM road-geometry
+    // lookup is opt-in for local development via OFFLINE_ROUTING_USE_OSRM=true.
     const offline = offlineRoutingResult(origin, destination, this.providerName);
     if (offline) {
-      const osrm = await this.fetchOsrmRoute(origin, destination);
-      if (osrm) {
-        return osrm;
+      if (process.env.OFFLINE_ROUTING_USE_OSRM === 'true') {
+        const osrm = await this.fetchOsrmRoute(origin, destination);
+        if (osrm) {
+          return osrm;
+        }
       }
       const path = buildInterpolatedPath(origin, destination);
       return {

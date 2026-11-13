@@ -90,7 +90,10 @@ describe('admin drivers (integration)', () => {
     const match = listed.json().data.find((row: { id: string }) => row.id === driver.driverId);
     assert.ok(match);
     assert.equal(match.driverName, 'Rajesh Kumar');
-    assert.equal(match.walletBalance, 1250);
+    // Since 6339075 a COMMISSION driver's listed balance is the commission wallet
+    // (makeDriver funds it by default), not the earnings wallet seeded above.
+    assert.equal(match.walletBalance, match.commissionWalletBalance);
+    assert.ok(match.commissionWalletBalance > 0);
     assert.equal(match.isSuspended, false);
 
     const detail = await app.inject({

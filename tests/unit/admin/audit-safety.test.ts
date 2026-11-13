@@ -163,7 +163,14 @@ describe('trust proxy (V5)', () => {
   it('parses the declared topology and refuses a malformed one', () => {
     assert.equal(resolveTrustProxy({}), false, 'nothing declared trusts nothing');
     assert.equal(resolveTrustProxy({ TRUSTED_PROXY_HOPS: '0' }), false);
-    assert.equal(resolveTrustProxy({ TRUSTED_PROXY_HOPS: '2' }), 2);
+    // 585ddd7: a hop count is expressed as a trust function (hop < count)
+    // rather than a bare number, after the Fastify trust-proxy update.
+    const twoHops = resolveTrustProxy({ TRUSTED_PROXY_HOPS: '2' });
+    assert.equal(typeof twoHops, 'function');
+    const trusts = twoHops as (addr: string, hop: number) => boolean;
+    assert.equal(trusts('10.0.0.1', 0), true);
+    assert.equal(trusts('10.0.0.1', 1), true);
+    assert.equal(trusts('10.0.0.1', 2), false);
     assert.deepEqual(resolveTrustProxy({ TRUSTED_PROXIES: ' 10.0.0.0/8, loopback ,::1 ' }), [
       '10.0.0.0/8',
       'loopback',

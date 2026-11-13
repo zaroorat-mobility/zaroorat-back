@@ -1493,6 +1493,8 @@ describe('admin audit remediation (integration)', () => {
       );
       assert.equal(Number(owned[0]!.n), 0, 'owns no table, so cannot ALTER or DROP one');
 
+      // Append-only by design: the audit tables, and the payment ledgers since
+      // migration 20261021120000_razorpay_payment_safeguards (REVOKE UPDATE, DELETE).
       const missing = await db().client.$queryRawUnsafe<
         Array<{ table_name: string; privilege: string }>
       >(
@@ -1500,7 +1502,7 @@ describe('admin audit remediation (integration)', () => {
            CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) AS p(privilege)
           WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
             AND t.table_name NOT IN ('_prisma_migrations', 'spatial_ref_sys')
-            AND NOT (t.table_name IN ('admin_activity_logs', 'audit_field_changes') AND p.privilege IN ('UPDATE', 'DELETE'))
+            AND NOT (t.table_name IN ('admin_activity_logs', 'audit_field_changes', 'payment_ledger_entries', 'driver_commission_wallet_transactions') AND p.privilege IN ('UPDATE', 'DELETE'))
             AND NOT has_table_privilege('${RUNTIME}', 'public.' || quote_ident(t.table_name), p.privilege)`,
       );
       assert.deepEqual(missing, [], 'CRUD on every application table');

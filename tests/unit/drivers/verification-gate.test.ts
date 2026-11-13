@@ -140,9 +140,11 @@ describe('Driver Operational Verification Gate Tests', () => {
   it('prevents a verified driver with a missing required document from going ONLINE', async () => {
     const service = makeStatusService({
       driverRepo: verifiedDriverRepo('driver-3'),
+      // Only DRIVING_LICENSE is a required *driver* document now (RC and
+      // INSURANCE are gated on the vehicle), so "missing" means no licence.
       eligibilityService: new DriverEligibilityService(
         makeDocRepo([
-          { documentType: 'DRIVING_LICENSE', verificationStatus: 'VERIFIED', expiresAt: null },
+          { documentType: 'AADHAAR', verificationStatus: 'VERIFIED', expiresAt: null },
         ]) as never,
       ),
     });

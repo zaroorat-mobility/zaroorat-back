@@ -66,6 +66,31 @@ const SANCTIONED_PUBLIC: ReadonlyMap<string, string> = new Map([
       'and without the trailing slash.',
   ],
   [
+    'GET /api/v1/app-config/brand-logo',
+    'Pre-authentication brand logo for the login/splash screen (same reason as the bundle). ' +
+      'Redirects to a fresh presigned URL for a non-sensitive public asset; no user data. ' +
+      'IP rate limited by rateLimits.appConfig.',
+  ],
+  [
+    'GET /api/v1/promotions/home',
+    'Marketing banners on the home screen, shown before sign-in (6facad4/84cc104). Read-only ' +
+      'public campaign content, no user data. NOTE: not rate limited yet — add one.',
+  ],
+  [
+    'GET /api/v1/vehicle-types',
+    'Public category catalog so Home/Services screens render before sign-in (6facad4). ' +
+      'Read-only reference data (names, icons, published rates); no user data.',
+  ],
+  [
+    'GET /api/v1/vehicle-types/',
+    'Same handler as GET /api/v1/vehicle-types — prefixed `/` route with trailing slash.',
+  ],
+  [
+    'GET /api/v1/vehicle-types/images/:fileId',
+    'Public redirect to a vehicle icon (UUID file id) with client cache headers (6facad4). ' +
+      'Catalog artwork only, never user uploads.',
+  ],
+  [
     'GET /api/v1/app-config/locales/:code',
     'Pre-authentication locale strings for one language, for the same reason as the bundle: ' +
       'switching language on the login screen happens before a token exists. Read-only, IP ' +

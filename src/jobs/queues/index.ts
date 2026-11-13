@@ -12,7 +12,9 @@ export const QUEUE_NAMES = Object.freeze({
   SUBSCRIPTIONS_MAINTENANCE: 'subscriptions-maintenance',
   NOTIFICATIONS_MAINTENANCE: 'notifications-maintenance',
   AUTH_OTP: 'auth-otp',
-  NOTIFICATIONS: 'notifications',
+  // Domain-prefixed kebab-case like every other queue (§16). Renamed from
+  // 'notifications' before any deployed environment held jobs in it.
+  NOTIFICATIONS: 'notifications-delivery',
 } as const);
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 export const JOB_NAMES = Object.freeze({

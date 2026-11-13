@@ -15,10 +15,18 @@ describe('Dispatch counters and limits tests (Step 3)', () => {
         { response: 'CANCELLED', _count: { _all: 5 } }, // e.g. cancelled because another driver accepted
       ];
 
+      // countOfferStatsForRequest now reads the offers (findMany) and counts
+      // distinct drivers, so expand the grouped counts into one row per driver.
+      const rows = mockGroups.flatMap((group) =>
+        Array.from({ length: group._count._all }, (_, i) => ({
+          driverId: `${group.response}-${i}`,
+          response: group.response,
+        })),
+      );
       const mockDb = {
         client: {
           rideDispatch: {
-            groupBy: async () => mockGroups,
+            findMany: async () => rows,
           },
         },
       };
@@ -103,8 +111,22 @@ describe('Dispatch counters and limits tests (Step 3)', () => {
         },
       };
 
+      // expireRequestIfExhausted flips the request inside the transaction with a
+      // guarded updateMany (CREATED/SEARCHING -> EXPIRED), so the tx needs it.
+      const mockTx = {
+        rideRequest: {
+          async updateMany(args: {
+            where: { status: { in: string[] } };
+            data: { status: string };
+          }) {
+            if (!args.where.status.in.includes(requestStatus)) return { count: 0 };
+            requestStatus = args.data.status;
+            return { count: 1 };
+          },
+        },
+      };
       const mockTxManager = {
-        execute: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn({}),
+        execute: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(mockTx),
       };
 
       const mockEventPublisher = {

@@ -56,25 +56,20 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
 
   // ─── 1. TEST ALL INDIVIDUAL PROVIDER SELECTIONS (PASS) ─────────────────────
 
-  it('1.1 allows Ola only active', async () => {
+  // Ola was retired as a selectable provider (settings schema: google | mappls).
+  it('1.1 rejects Ola, which is no longer a selectable provider', async () => {
     const adminHeaders = await loginAdmin();
     const res = await app.inject({
       method: 'PUT',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
-
+        primaryProvider: 'ola' as unknown as MapProviderName,
         providers: { ola: { apiKey: 'test_ola_key_111' } },
       },
     });
 
-    assert.equal(res.statusCode, 200, res.payload);
-    const body = res.json().data;
-    assert.equal(body.primaryProvider, 'ola');
-    assert.equal(body.providers.ola.enabled, true);
-    assert.equal(body.providers.google.enabled, false);
-    assert.equal(body.providers.mappls.enabled, false);
+    assert.equal(res.statusCode, 400, res.payload);
   });
 
   it('1.2 allows Google only active', async () => {
@@ -94,7 +89,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
     const body = res.json().data;
     assert.equal(body.primaryProvider, 'google');
     assert.equal(body.providers.google.enabled, true);
-    assert.equal(body.providers.ola.enabled, false);
+    assert.equal(body.providers.ola, undefined);
     assert.equal(body.providers.mappls.enabled, false);
   });
 
@@ -115,7 +110,7 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
     const body = res.json().data;
     assert.equal(body.primaryProvider, 'mappls');
     assert.equal(body.providers.mappls.enabled, true);
-    assert.equal(body.providers.ola.enabled, false);
+    assert.equal(body.providers.ola, undefined);
     assert.equal(body.providers.google.enabled, false);
   });
 
@@ -128,10 +123,10 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
         providers: {
-          ola: { apiKey: 'test_ola_key' },
-          google: { enabled: true, apiKey: 'test_google_key' },
+          google: { apiKey: 'test_google_key' },
+          mappls: { enabled: true, clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' },
         },
       },
     });
@@ -147,17 +142,17 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
-        fallbackProviders: ['google'], // ignored / stripped — not part of API
-        providers: { ola: { apiKey: 'test_ola_key' } },
+        primaryProvider: 'google',
+        fallbackProviders: ['mappls'], // ignored / stripped — not part of API
+        providers: { google: { apiKey: 'test_google_key' } },
       },
     });
 
     assert.equal(res.statusCode, 200, res.payload);
-    assert.equal(res.json().data.primaryProvider, 'ola');
+    assert.equal(res.json().data.primaryProvider, 'google');
     assert.equal(res.json().data.fallbackProviders, undefined);
-    assert.equal(res.json().data.providers.ola.enabled, true);
-    assert.equal(res.json().data.providers.google.enabled, false);
+    assert.equal(res.json().data.providers.google.enabled, true);
+    assert.equal(res.json().data.providers.mappls.enabled, false);
   });
 
   // ─── 3. REJECT ZERO ACTIVE PROVIDERS / INVALID PROVIDERS ──────────────────
@@ -169,10 +164,10 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
 
         providers: {
-          ola: { enabled: false }, // REJECT!
+          google: { enabled: false }, // REJECT!
         },
       },
     });
@@ -200,17 +195,18 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
   it('4.1 preserves existing active provider if target provider health check fails', async () => {
     const adminHeaders = await loginAdmin();
 
-    // 1. Activate Ola
-    await app.inject({
+    // 1. Activate Mappls
+    const activated = await app.inject({
       method: 'PUT',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'mappls',
 
-        providers: { ola: { apiKey: 'test_ola_key' } },
+        providers: { mappls: { clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' } },
       },
     });
+    assert.equal(activated.statusCode, 200, activated.payload);
 
     // 2. Try to switch to Google with missing key (health fails)
     const failedSwitch = await app.inject({
@@ -226,14 +222,14 @@ describe('PHASE MAP-03 — strict single active map provider verification (integ
 
     assert.equal(failedSwitch.statusCode, 400);
 
-    // 3. Verify Ola remains active in DB
+    // 3. Verify Mappls remains active in DB
     const currentSettings = await app.inject({
       method: 'GET',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
     });
 
-    assert.equal(currentSettings.json().data.primaryProvider, 'ola');
+    assert.equal(currentSettings.json().data.primaryProvider, 'mappls');
   });
 
   // ─── 5. RUNTIME RESOLUTION & FAILURE CONTROLS ─────────────────────────────

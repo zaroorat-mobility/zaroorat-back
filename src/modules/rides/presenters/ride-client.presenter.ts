@@ -136,6 +136,7 @@ type CancellationInput = {
   cancelledBy?: string | null;
   reasonCode?: string | null;
   reasonText?: string | null;
+  cancelledAtStatus?: string | null;
   cancellationFee?: unknown;
   feeCharged?: boolean | null;
   createdAt?: Date | string | null;
@@ -674,6 +675,9 @@ export function toClientRideView(
           cancelledBy: ride.cancellation.cancelledBy,
           reasonCode: ride.cancellation.reasonCode,
           reasonText: ride.cancellation.reasonText ?? null,
+          // Restored: dropped from the client view in c134a7e; clients and the
+          // cancellation tests rely on knowing the state the ride was cancelled in.
+          cancelledAtStatus: ride.cancellation.cancelledAtStatus ?? null,
           cancellationFee: dec(ride.cancellation.cancellationFee),
           feeCharged: Boolean(ride.cancellation.feeCharged),
           createdAt: ride.cancellation.createdAt,
