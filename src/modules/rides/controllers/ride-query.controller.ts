@@ -1,7 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { assertRideParty, callerId } from '@core/auth';
 import { GeoService } from '@modules/location';
-import type { RideEtaService, RideEtaSnapshot } from '@modules/location/services/ride-eta.service.js';
+import type {
+  RideEtaService,
+  RideEtaSnapshot,
+} from '@modules/location/services/ride-eta.service.js';
 import type { FileRepository } from '@modules/files/repositories/file.repository.js';
 import type { FileStorageService } from '@modules/files/services/file-storage.service.js';
 import { RideRepository } from '../repositories/ride.repository.js';

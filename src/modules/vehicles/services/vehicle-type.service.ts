@@ -1,6 +1,7 @@
 import {
   VehicleTypeRepository,
   type FindActiveTypesOptions,
+  type UpdateVehicleTypeInput,
 } from '../repositories/vehicle-type.repository.js';
 import {
   VehicleTypeInactiveError,
@@ -117,7 +118,10 @@ export class VehicleTypeService {
         '[VehicleType] Successfully deleted vehicle image from S3 bucket and marked file DELETED',
       );
     } catch (err) {
-      logger.warn({ err, fileId }, '[VehicleType] Non-blocking storage file deletion encountered error');
+      logger.warn(
+        { err, fileId },
+        '[VehicleType] Non-blocking storage file deletion encountered error',
+      );
     }
   }
 
@@ -212,7 +216,8 @@ export class VehicleTypeService {
           icon: data.icon || null,
           passengerCapacity: data.passengerCapacity ?? 4,
           luggageCapacity: data.luggageCapacity ?? 2,
-          displayOrder: data.displayOrder !== undefined && data.displayOrder >= 0 ? data.displayOrder : 0,
+          displayOrder:
+            data.displayOrder !== undefined && data.displayOrder >= 0 ? data.displayOrder : 0,
           isActive: true,
         });
       }
@@ -272,15 +277,19 @@ export class VehicleTypeService {
       ...(data.category !== undefined ? { category: data.category } : {}),
       ...(data.hasAc !== undefined ? { hasAc: data.hasAc } : {}),
       ...(data.badge !== undefined ? { badge: data.badge ? data.badge.trim() : null } : {}),
-      ...(data.description !== undefined ? { description: data.description ? data.description.trim() : null } : {}),
+      ...(data.description !== undefined
+        ? { description: data.description ? data.description.trim() : null }
+        : {}),
       ...(data.imageUrl !== undefined ? { imageUrl: data.imageUrl || null } : {}),
       ...(data.imageFileId !== undefined ? { imageFileId: data.imageFileId || null } : {}),
       ...(data.icon !== undefined ? { icon: data.icon || null } : {}),
-      ...(data.passengerCapacity !== undefined ? { passengerCapacity: data.passengerCapacity } : {}),
+      ...(data.passengerCapacity !== undefined
+        ? { passengerCapacity: data.passengerCapacity }
+        : {}),
       ...(data.luggageCapacity !== undefined ? { luggageCapacity: data.luggageCapacity } : {}),
       ...(data.displayOrder !== undefined ? { displayOrder: data.displayOrder } : {}),
       ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-    } as any);
+    } as UpdateVehicleTypeInput);
     return this.enrichWithDirectUrls(updated);
   }
 

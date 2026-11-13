@@ -325,7 +325,13 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
         clearTimeout(timeoutId);
 
         if (!res.ok) continue;
-        const json: any = await res.json();
+        const json = (await res.json()) as {
+          routes?: Array<{
+            geometry?: string;
+            distance?: number;
+            duration?: number;
+          }>;
+        };
         const route = json?.routes?.[0];
         if (route && typeof route.geometry === 'string' && route.geometry.trim()) {
           const encodedPolyline = route.geometry.trim();
@@ -373,7 +379,9 @@ export class GoogleMapsProvider extends GoogleMapsClient implements MapProvider 
 
       if (response.status && response.status !== 'OK') {
         const msg = response.error_message ? `: ${response.error_message}` : '';
-        logger.warn(`[GoogleMaps] getDirections status: ${response.status}${msg}, attempting OSRM fallback`);
+        logger.warn(
+          `[GoogleMaps] getDirections status: ${response.status}${msg}, attempting OSRM fallback`,
+        );
         const osrm = await this.fetchOsrmRoute(origin, destination);
         if (osrm) return osrm;
         throw new Error(`[GoogleMaps] getDirections failed (${response.status})${msg}`);

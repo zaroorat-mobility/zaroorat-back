@@ -1,0 +1,9 @@
+# Gitleaks ignore list for false positives / test fixtures in git history
+633907518de3fd5979c5b4595f0889a90abf2deb:tests/unit/payments/checkout-config.test.ts:generic-api-key:45
+633907518de3fd5979c5b4595f0889a90abf2deb:tests/integration/admin-payment-gateway-settings.test.ts:generic-api-key:201
+6ab86655e30806b20c1a3e0dc472701514fcc58f:.github/workflows/ci.yml:generic-api-key:200
+c134a7eee03857b663aaab397cbf2dcaf6b537d9:tests/unit/payments/checkout-config.test.ts:generic-api-key:39
+eff1f9bb81dedc70907683a630684aad031084c6:tests/unit/admin/audit-safety.test.ts:jwt:19
+c7113a811015b2b4b77b9f461dc0a45be2ec9dbe:tests/unit/integrations/airtel-failure-matrix.test.ts:generic-api-key:7
+c7113a811015b2b4b77b9f461dc0a45be2ec9dbe:tests/unit/integrations/network-failure-sim.test.ts:generic-api-key:7
+e35f9bf08feae46aaf7fd68e62c5258ca61c486a:tests/integration/admin-payment-gateway-settings.test.ts:generic-api-key:129

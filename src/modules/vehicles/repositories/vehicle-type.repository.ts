@@ -29,6 +29,26 @@ export type UpdateVehicleTypeInput = Partial<CreateVehicleTypeInput>;
 
 /// The single Prisma entry point for `VehicleType`. No other module queries the
 /// table directly — rides and drivers both go through `VehicleTypeService`.
+interface ExtendedPrismaDelegate {
+  count?: (args: { where: Record<string, unknown> }) => Promise<number>;
+  deleteMany?: (args: { where: Record<string, unknown> }) => Promise<unknown>;
+  updateMany?: (args: {
+    where: Record<string, unknown>;
+    data?: Record<string, unknown>;
+  }) => Promise<unknown>;
+  findUnique?: (args: {
+    where: Record<string, unknown>;
+    select?: Record<string, boolean>;
+  }) => Promise<{
+    id: string;
+    storageKey: string;
+    storageBucket?: string | null;
+    contentType?: string;
+  } | null>;
+}
+
+type ExtendedPrismaClient = Record<string, ExtendedPrismaDelegate | undefined>;
+
 export class VehicleTypeRepository {
   constructor(private readonly db: DatabaseService) {}
 
@@ -99,7 +119,9 @@ export class VehicleTypeRepository {
 
     try {
       return await (
-        client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+        client.vehicleType as unknown as {
+          create: (args: { data: unknown }) => Promise<VehicleType>;
+        }
       ).create({ data: createPayload });
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -109,14 +131,20 @@ export class VehicleTypeRepository {
       ) {
         delete createPayload.imageFile;
         return await (
-          client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+          client.vehicleType as unknown as {
+            create: (args: { data: unknown }) => Promise<VehicleType>;
+          }
         ).create({ data: createPayload });
       }
       throw err;
     }
   }
 
-  async update(id: string, data: UpdateVehicleTypeInput, tx?: TransactionClient): Promise<VehicleType> {
+  async update(
+    id: string,
+    data: UpdateVehicleTypeInput,
+    tx?: TransactionClient,
+  ): Promise<VehicleType> {
     const client = tx ?? this.db.client;
 
     const updatePayload: Record<string, unknown> = {};
@@ -127,7 +155,8 @@ export class VehicleTypeRepository {
     if (data.description !== undefined) updatePayload.description = data.description;
     if (data.imageUrl !== undefined) updatePayload.imageUrl = data.imageUrl;
     if (data.icon !== undefined) updatePayload.icon = data.icon;
-    if (data.passengerCapacity !== undefined) updatePayload.passengerCapacity = data.passengerCapacity;
+    if (data.passengerCapacity !== undefined)
+      updatePayload.passengerCapacity = data.passengerCapacity;
     if (data.luggageCapacity !== undefined) updatePayload.luggageCapacity = data.luggageCapacity;
     if (data.displayOrder !== undefined) updatePayload.displayOrder = data.displayOrder;
     if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
@@ -176,12 +205,17 @@ export class VehicleTypeRepository {
 
   async delete(id: string, tx?: TransactionClient): Promise<void> {
     const client = tx ?? this.db.client;
+    const extendedClient = client as unknown as ExtendedPrismaClient;
 
     // Fast indexed dependency checks (<1ms parallel execution, zero loops)
     const [vehiclesCount, ridesCount, rideRequestsCount] = await Promise.all([
-      (client as any).vehicle ? (client as any).vehicle.count({ where: { vehicleTypeId: id } }) : 0,
-      (client as any).ride ? (client as any).ride.count({ where: { vehicleTypeId: id } }) : 0,
-      (client as any).rideRequest ? (client as any).rideRequest.count({ where: { vehicleTypeId: id } }) : 0,
+      extendedClient.vehicle?.count
+        ? extendedClient.vehicle.count({ where: { vehicleTypeId: id } })
+        : 0,
+      extendedClient.ride?.count ? extendedClient.ride.count({ where: { vehicleTypeId: id } }) : 0,
+      extendedClient.rideRequest?.count
+        ? extendedClient.rideRequest.count({ where: { vehicleTypeId: id } })
+        : 0,
     ]);
 
     const hasDependencies = vehiclesCount > 0 || ridesCount > 0 || rideRequestsCount > 0;
@@ -189,20 +223,20 @@ export class VehicleTypeRepository {
     if (!hasDependencies) {
       // ───── CASE 1: FULL ATOMIC HARD-DELETE (No dependencies exist) ─────
       // Safe to purge all related configuration completely
-      await (client as any).serviceZoneVehicleType?.deleteMany({ where: { vehicleTypeId: id } });
-      await (client as any).surgeWindow?.updateMany({
+      await extendedClient.serviceZoneVehicleType?.deleteMany?.({ where: { vehicleTypeId: id } });
+      await extendedClient.surgeWindow?.updateMany?.({
         where: { vehicleTypeId: id },
         data: { vehicleTypeId: null },
       });
-      await (client as any).promotion?.updateMany({
+      await extendedClient.promotion?.updateMany?.({
         where: { applicableVehicleType: id },
         data: { applicableVehicleType: null },
       });
-      await (client as any).cancellationPolicy?.updateMany?.({
+      await extendedClient.cancellationPolicy?.updateMany?.({
         where: { vehicleTypeId: id },
         data: { vehicleTypeId: null },
       });
-      await (client as any).pricingRule?.deleteMany({ where: { vehicleTypeId: id } });
+      await extendedClient.pricingRule?.deleteMany?.({ where: { vehicleTypeId: id } });
 
       await client.vehicleType.delete({ where: { id } });
     } else {
@@ -210,16 +244,16 @@ export class VehicleTypeRepository {
       // Historical rides or registered driver vehicles exist.
       // In production, we cannot violate foreign keys or destroy accounting/ride receipts.
       // We deactivate, remove from service zones, and archive cleanly:
-      await (client as any).serviceZoneVehicleType?.deleteMany({ where: { vehicleTypeId: id } });
-      await (client as any).surgeWindow?.updateMany({
+      await extendedClient.serviceZoneVehicleType?.deleteMany?.({ where: { vehicleTypeId: id } });
+      await extendedClient.surgeWindow?.updateMany?.({
         where: { vehicleTypeId: id },
         data: { vehicleTypeId: null },
       });
-      await (client as any).promotion?.updateMany({
+      await extendedClient.promotion?.updateMany?.({
         where: { applicableVehicleType: id },
         data: { applicableVehicleType: null },
       });
-      await (client as any).pricingRule?.updateMany({
+      await extendedClient.pricingRule?.updateMany?.({
         where: { vehicleTypeId: id },
         data: { isActive: false },
       });
@@ -238,13 +272,21 @@ export class VehicleTypeRepository {
   async findFileById(
     fileId: string,
     tx?: TransactionClient,
-  ): Promise<{ id: string; storageKey: string; storageBucket?: string | null; contentType?: string } | null> {
+  ): Promise<{
+    id: string;
+    storageKey: string;
+    storageBucket?: string | null;
+    contentType?: string;
+  } | null> {
     const client = tx ?? this.db.client;
+    const extendedClient = client as unknown as ExtendedPrismaClient;
     try {
-      return await (client as any).file.findUnique({
-        where: { id: fileId },
-        select: { id: true, storageKey: true, storageBucket: true, contentType: true },
-      });
+      return (
+        (await extendedClient.file?.findUnique?.({
+          where: { id: fileId },
+          select: { id: true, storageKey: true, storageBucket: true, contentType: true },
+        })) ?? null
+      );
     } catch {
       return null;
     }
@@ -252,12 +294,13 @@ export class VehicleTypeRepository {
 
   async retireFileRecord(fileId: string, tx?: TransactionClient): Promise<void> {
     const client = tx ?? this.db.client;
+    const extendedClient = client as unknown as ExtendedPrismaClient;
     try {
       const remainingCount = await client.vehicleType.count({
         where: { imageFileId: fileId },
       });
       if (remainingCount === 0) {
-        await (client as any).file.updateMany({
+        await extendedClient.file?.updateMany?.({
           where: { id: fileId },
           data: {
             status: 'DELETED',
