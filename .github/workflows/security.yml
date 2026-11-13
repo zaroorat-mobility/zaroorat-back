@@ -46,7 +46,9 @@ jobs:
           sudo mv gitleaks /usr/local/bin/
 
       - name: Run Gitleaks
-        run: gitleaks detect --source . -v
+        # --redact: this repository is public, so job logs must never print the
+        # secret values Gitleaks finds — only the file, line, commit and rule.
+        run: gitleaks detect --source . -v --redact
 
   dependencies:
     name: Dependency audit

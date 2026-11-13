@@ -55,7 +55,9 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Every run since October was cancelled at the old 15-minute limit, so the
+    # suite (~1,280 tests, --test-concurrency=1) never reported a result.
+    timeout-minutes: 40
     services:
       postgres:
         # PostGIS variant: prisma/schema.prisma declares
@@ -119,8 +121,10 @@ jobs:
         env:
           APP_ENV: test
 
+      # --test-timeout fails a single hung test (and names it in the log) instead
+      # of letting it hold the whole job until the job timeout cancels everything.
       - name: Run tests
-        run: npm test
+        run: npm run test:ci
         env:
           APP_ENV: test
 

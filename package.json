@@ -15,6 +15,7 @@
     "start": "node dist/server.js",
     "worker": "node dist/worker.js",
     "test": "cross-env APP_ENV=test tsx --test --test-concurrency=1 --test-force-exit \"tests/**/*.test.ts\"",
+    "test:ci": "cross-env APP_ENV=test tsx --test --test-concurrency=1 --test-force-exit --test-timeout=120000 \"tests/**/*.test.ts\"",
     "test:watch": "cross-env APP_ENV=test tsx --test --watch \"tests/**/*.test.ts\"",
     "test:unit": "cross-env APP_ENV=test tsx --test \"tests/unit/**/*.test.ts\"",
     "test:integration": "cross-env APP_ENV=test tsx --test --test-concurrency=1 --test-force-exit \"tests/integration/**/*.test.ts\"",
