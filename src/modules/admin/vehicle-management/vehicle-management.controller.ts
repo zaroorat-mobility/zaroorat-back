@@ -108,7 +108,10 @@ export class AdminVehicleManagementController {
   async updateVehicleType(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = vehicleIdParamSchema.parse(req.params);
     const body = updateVehicleTypeBodySchema.parse(req.body);
-    const updated = await this.vehicleTypeService.updateVehicleType(id, body as any);
+    const updated = await this.vehicleTypeService.updateVehicleType(
+      id,
+      body as Parameters<typeof this.vehicleTypeService.updateVehicleType>[1],
+    );
     req.log.info({ vehicleTypeId: id }, '[admin-vehicles] vehicle type updated');
     reply.send({ data: toVehicleTypeView(updated) });
   }

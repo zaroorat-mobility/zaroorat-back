@@ -1,6 +1,7 @@
 import {
   VehicleTypeRepository,
   type FindActiveTypesOptions,
+  type UpdateVehicleTypeInput,
 } from '../repositories/vehicle-type.repository.js';
 import {
   VehicleTypeInactiveError,
@@ -288,7 +289,7 @@ export class VehicleTypeService {
       ...(data.luggageCapacity !== undefined ? { luggageCapacity: data.luggageCapacity } : {}),
       ...(data.displayOrder !== undefined ? { displayOrder: data.displayOrder } : {}),
       ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-    } as any);
+    } as UpdateVehicleTypeInput);
     return this.enrichWithDirectUrls(updated);
   }
 
