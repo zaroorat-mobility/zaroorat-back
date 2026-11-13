@@ -2,6 +2,31 @@ import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import type { VehicleType } from '../types/index.js';
 
+/// Prisma delegates this repository reaches without importing their modules. The
+/// optional chaining at each call site keeps the cleanup working when a model is
+/// absent from the generated client; this type replaces the former `as any` casts.
+interface LooseDelegate {
+  count(args: unknown): Promise<number>;
+  deleteMany(args: unknown): Promise<unknown>;
+  updateMany(args: unknown): Promise<unknown>;
+  findUnique<T>(args: unknown): Promise<T>;
+}
+type LooseModels = Record<
+  | 'vehicle'
+  | 'ride'
+  | 'rideRequest'
+  | 'serviceZoneVehicleType'
+  | 'surgeWindow'
+  | 'promotion'
+  | 'cancellationPolicy'
+  | 'pricingRule'
+  | 'file',
+  LooseDelegate
+>;
+function looseModels(client: TransactionClient | DatabaseService['client']): LooseModels {
+  return client as unknown as LooseModels;
+}
+
 export interface FindActiveTypesOptions {
   /// Reserved for the city/service-zone scoping the schema already models via
   /// `ServiceZone` but nothing yet writes. Accepting it here means callers do
@@ -19,8 +44,8 @@ export interface CreateVehicleTypeInput {
   imageUrl?: string | null;
   imageFileId?: string | null;
   icon?: string | null;
-  passengerCapacity?: number;
-  luggageCapacity?: number;
+  passengerCapacity?: number | null;
+  luggageCapacity?: number | null;
   displayOrder?: number;
   isActive?: boolean;
 }
@@ -99,7 +124,9 @@ export class VehicleTypeRepository {
 
     try {
       return await (
-        client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+        client.vehicleType as unknown as {
+          create: (args: { data: unknown }) => Promise<VehicleType>;
+        }
       ).create({ data: createPayload });
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -109,14 +136,20 @@ export class VehicleTypeRepository {
       ) {
         delete createPayload.imageFile;
         return await (
-          client.vehicleType as unknown as { create: (args: { data: unknown }) => Promise<VehicleType> }
+          client.vehicleType as unknown as {
+            create: (args: { data: unknown }) => Promise<VehicleType>;
+          }
         ).create({ data: createPayload });
       }
       throw err;
     }
   }
 
-  async update(id: string, data: UpdateVehicleTypeInput, tx?: TransactionClient): Promise<VehicleType> {
+  async update(
+    id: string,
+    data: UpdateVehicleTypeInput,
+    tx?: TransactionClient,
+  ): Promise<VehicleType> {
     const client = tx ?? this.db.client;
 
     const updatePayload: Record<string, unknown> = {};
@@ -127,7 +160,8 @@ export class VehicleTypeRepository {
     if (data.description !== undefined) updatePayload.description = data.description;
     if (data.imageUrl !== undefined) updatePayload.imageUrl = data.imageUrl;
     if (data.icon !== undefined) updatePayload.icon = data.icon;
-    if (data.passengerCapacity !== undefined) updatePayload.passengerCapacity = data.passengerCapacity;
+    if (data.passengerCapacity !== undefined)
+      updatePayload.passengerCapacity = data.passengerCapacity;
     if (data.luggageCapacity !== undefined) updatePayload.luggageCapacity = data.luggageCapacity;
     if (data.displayOrder !== undefined) updatePayload.displayOrder = data.displayOrder;
     if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
@@ -179,9 +213,15 @@ export class VehicleTypeRepository {
 
     // Fast indexed dependency checks (<1ms parallel execution, zero loops)
     const [vehiclesCount, ridesCount, rideRequestsCount] = await Promise.all([
-      (client as any).vehicle ? (client as any).vehicle.count({ where: { vehicleTypeId: id } }) : 0,
-      (client as any).ride ? (client as any).ride.count({ where: { vehicleTypeId: id } }) : 0,
-      (client as any).rideRequest ? (client as any).rideRequest.count({ where: { vehicleTypeId: id } }) : 0,
+      looseModels(client).vehicle
+        ? looseModels(client).vehicle.count({ where: { vehicleTypeId: id } })
+        : 0,
+      looseModels(client).ride
+        ? looseModels(client).ride.count({ where: { vehicleTypeId: id } })
+        : 0,
+      looseModels(client).rideRequest
+        ? looseModels(client).rideRequest.count({ where: { vehicleTypeId: id } })
+        : 0,
     ]);
 
     const hasDependencies = vehiclesCount > 0 || ridesCount > 0 || rideRequestsCount > 0;
@@ -189,20 +229,22 @@ export class VehicleTypeRepository {
     if (!hasDependencies) {
       // ───── CASE 1: FULL ATOMIC HARD-DELETE (No dependencies exist) ─────
       // Safe to purge all related configuration completely
-      await (client as any).serviceZoneVehicleType?.deleteMany({ where: { vehicleTypeId: id } });
-      await (client as any).surgeWindow?.updateMany({
+      await looseModels(client).serviceZoneVehicleType?.deleteMany({
+        where: { vehicleTypeId: id },
+      });
+      await looseModels(client).surgeWindow?.updateMany({
         where: { vehicleTypeId: id },
         data: { vehicleTypeId: null },
       });
-      await (client as any).promotion?.updateMany({
+      await looseModels(client).promotion?.updateMany({
         where: { applicableVehicleType: id },
         data: { applicableVehicleType: null },
       });
-      await (client as any).cancellationPolicy?.updateMany?.({
+      await looseModels(client).cancellationPolicy?.updateMany?.({
         where: { vehicleTypeId: id },
         data: { vehicleTypeId: null },
       });
-      await (client as any).pricingRule?.deleteMany({ where: { vehicleTypeId: id } });
+      await looseModels(client).pricingRule?.deleteMany({ where: { vehicleTypeId: id } });
 
       await client.vehicleType.delete({ where: { id } });
     } else {
@@ -210,16 +252,18 @@ export class VehicleTypeRepository {
       // Historical rides or registered driver vehicles exist.
       // In production, we cannot violate foreign keys or destroy accounting/ride receipts.
       // We deactivate, remove from service zones, and archive cleanly:
-      await (client as any).serviceZoneVehicleType?.deleteMany({ where: { vehicleTypeId: id } });
-      await (client as any).surgeWindow?.updateMany({
+      await looseModels(client).serviceZoneVehicleType?.deleteMany({
+        where: { vehicleTypeId: id },
+      });
+      await looseModels(client).surgeWindow?.updateMany({
         where: { vehicleTypeId: id },
         data: { vehicleTypeId: null },
       });
-      await (client as any).promotion?.updateMany({
+      await looseModels(client).promotion?.updateMany({
         where: { applicableVehicleType: id },
         data: { applicableVehicleType: null },
       });
-      await (client as any).pricingRule?.updateMany({
+      await looseModels(client).pricingRule?.updateMany({
         where: { vehicleTypeId: id },
         data: { isActive: false },
       });
@@ -238,10 +282,20 @@ export class VehicleTypeRepository {
   async findFileById(
     fileId: string,
     tx?: TransactionClient,
-  ): Promise<{ id: string; storageKey: string; storageBucket?: string | null; contentType?: string } | null> {
+  ): Promise<{
+    id: string;
+    storageKey: string;
+    storageBucket?: string | null;
+    contentType?: string;
+  } | null> {
     const client = tx ?? this.db.client;
     try {
-      return await (client as any).file.findUnique({
+      return await looseModels(client).file.findUnique<{
+        id: string;
+        storageKey: string;
+        storageBucket?: string | null;
+        contentType?: string;
+      } | null>({
         where: { id: fileId },
         select: { id: true, storageKey: true, storageBucket: true, contentType: true },
       });
@@ -257,7 +311,7 @@ export class VehicleTypeRepository {
         where: { imageFileId: fileId },
       });
       if (remainingCount === 0) {
-        await (client as any).file.updateMany({
+        await looseModels(client).file.updateMany({
           where: { id: fileId },
           data: {
             status: 'DELETED',

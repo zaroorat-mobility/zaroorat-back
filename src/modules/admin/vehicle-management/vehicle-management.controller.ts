@@ -98,14 +98,17 @@ export class AdminVehicleManagementController {
   async createVehicleType(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createVehicleTypeBodySchema.parse(req.body);
     const created = await this.vehicleTypeService.createVehicleType(body);
-    req.log.info({ vehicleTypeId: created.id, code: created.code }, '[admin-vehicles] vehicle type created');
+    req.log.info(
+      { vehicleTypeId: created.id, code: created.code },
+      '[admin-vehicles] vehicle type created',
+    );
     reply.status(201).send({ data: toVehicleTypeView(created) });
   }
 
   async updateVehicleType(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = vehicleIdParamSchema.parse(req.params);
     const body = updateVehicleTypeBodySchema.parse(req.body);
-    const updated = await this.vehicleTypeService.updateVehicleType(id, body as any);
+    const updated = await this.vehicleTypeService.updateVehicleType(id, body);
     req.log.info({ vehicleTypeId: id }, '[admin-vehicles] vehicle type updated');
     reply.send({ data: toVehicleTypeView(updated) });
   }
@@ -113,7 +116,10 @@ export class AdminVehicleManagementController {
   async toggleVehicleType(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = vehicleIdParamSchema.parse(req.params);
     const updated = await this.vehicleTypeService.toggleActive(id);
-    req.log.info({ vehicleTypeId: id, isActive: updated.isActive }, '[admin-vehicles] vehicle type active status toggled');
+    req.log.info(
+      { vehicleTypeId: id, isActive: updated.isActive },
+      '[admin-vehicles] vehicle type active status toggled',
+    );
     reply.send({ data: toVehicleTypeView(updated) });
   }
 

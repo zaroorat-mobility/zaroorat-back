@@ -37,13 +37,15 @@ export function handleVehicleError(
     const meta = errRecord.meta as { target?: string[] | string } | undefined;
     const target = meta?.target;
     const targetStr = Array.isArray(target) ? target.join(', ') : (target ?? 'field');
-    reply.status(409).send(
-      errorEnvelope(
-        'CONFLICT',
-        `A vehicle service with this ${targetStr} already exists. Please choose a different name or edit the existing service.`,
-        request.id,
-      ),
-    );
+    reply
+      .status(409)
+      .send(
+        errorEnvelope(
+          'CONFLICT',
+          `A vehicle service with this ${targetStr} already exists. Please choose a different name or edit the existing service.`,
+          request.id,
+        ),
+      );
     return;
   }
   request.log.error({ err }, '[vehicles] unhandled error');
@@ -53,8 +55,6 @@ export function handleVehicleError(
       : typeof errRecord?.message === 'string'
         ? errRecord.message
         : 'An unexpected vehicles error occurred';
-  reply
-    .status(500)
-    .send(errorEnvelope('INTERNAL', message, request.id));
+  reply.status(500).send(errorEnvelope('INTERNAL', message, request.id));
 }
 export { VehicleError };

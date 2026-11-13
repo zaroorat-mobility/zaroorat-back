@@ -50,7 +50,8 @@ export function toVehicleTypeView(
   if (!resolvedFileId && directUrl && typeof directUrl === 'string') {
     const match = directUrl.match(/vehicles\/([0-9a-fA-F-]{36})/);
     if (match) {
-      resolvedFileId = match[1];
+      // noUncheckedIndexedAccess types a capture group as string | undefined.
+      resolvedFileId = match[1] ?? null;
     }
   }
 
@@ -59,7 +60,9 @@ export function toVehicleTypeView(
   const isDirectRemote = directUrl && /^https?:\/\//i.test(directUrl);
   const resolvedImageUrl = isDirectRemote
     ? directUrl
-    : (resolvedFileId ? `/api/v1/vehicle-types/images/${resolvedFileId}` : directUrl || null);
+    : resolvedFileId
+      ? `/api/v1/vehicle-types/images/${resolvedFileId}`
+      : directUrl || null;
 
   let resolvedIcon = vehicleType.icon ?? null;
   if (resolvedIcon && typeof resolvedIcon === 'string') {

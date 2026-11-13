@@ -117,7 +117,10 @@ export class VehicleTypeService {
         '[VehicleType] Successfully deleted vehicle image from S3 bucket and marked file DELETED',
       );
     } catch (err) {
-      logger.warn({ err, fileId }, '[VehicleType] Non-blocking storage file deletion encountered error');
+      logger.warn(
+        { err, fileId },
+        '[VehicleType] Non-blocking storage file deletion encountered error',
+      );
     }
   }
 
@@ -212,7 +215,8 @@ export class VehicleTypeService {
           icon: data.icon || null,
           passengerCapacity: data.passengerCapacity ?? 4,
           luggageCapacity: data.luggageCapacity ?? 2,
-          displayOrder: data.displayOrder !== undefined && data.displayOrder >= 0 ? data.displayOrder : 0,
+          displayOrder:
+            data.displayOrder !== undefined && data.displayOrder >= 0 ? data.displayOrder : 0,
           isActive: true,
         });
       }
@@ -241,18 +245,18 @@ export class VehicleTypeService {
   async updateVehicleType(
     id: string,
     data: {
-      name?: string;
-      category?: string;
-      hasAc?: boolean;
-      badge?: string | null;
-      description?: string | null;
-      imageUrl?: string | null;
-      imageFileId?: string | null;
-      icon?: string | null;
-      passengerCapacity?: number | null;
-      luggageCapacity?: number | null;
-      displayOrder?: number;
-      isActive?: boolean;
+      name?: string | undefined;
+      category?: string | undefined;
+      hasAc?: boolean | undefined;
+      badge?: string | null | undefined;
+      description?: string | null | undefined;
+      imageUrl?: string | null | undefined;
+      imageFileId?: string | null | undefined;
+      icon?: string | null | undefined;
+      passengerCapacity?: number | null | undefined;
+      luggageCapacity?: number | null | undefined;
+      displayOrder?: number | undefined;
+      isActive?: boolean | undefined;
     },
   ): Promise<VehicleType> {
     const existing = await this.vehicleTypeRepository.findById(id);
@@ -272,15 +276,19 @@ export class VehicleTypeService {
       ...(data.category !== undefined ? { category: data.category } : {}),
       ...(data.hasAc !== undefined ? { hasAc: data.hasAc } : {}),
       ...(data.badge !== undefined ? { badge: data.badge ? data.badge.trim() : null } : {}),
-      ...(data.description !== undefined ? { description: data.description ? data.description.trim() : null } : {}),
+      ...(data.description !== undefined
+        ? { description: data.description ? data.description.trim() : null }
+        : {}),
       ...(data.imageUrl !== undefined ? { imageUrl: data.imageUrl || null } : {}),
       ...(data.imageFileId !== undefined ? { imageFileId: data.imageFileId || null } : {}),
       ...(data.icon !== undefined ? { icon: data.icon || null } : {}),
-      ...(data.passengerCapacity !== undefined ? { passengerCapacity: data.passengerCapacity } : {}),
+      ...(data.passengerCapacity !== undefined
+        ? { passengerCapacity: data.passengerCapacity }
+        : {}),
       ...(data.luggageCapacity !== undefined ? { luggageCapacity: data.luggageCapacity } : {}),
       ...(data.displayOrder !== undefined ? { displayOrder: data.displayOrder } : {}),
       ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-    } as any);
+    });
     return this.enrichWithDirectUrls(updated);
   }
 
