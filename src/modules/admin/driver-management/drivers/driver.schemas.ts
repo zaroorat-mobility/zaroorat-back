@@ -24,9 +24,11 @@ export const suspendDriverBodySchema = z.object({
 export type ListDriversQuery = z.infer<typeof listDriversQuerySchema>;
 export type SuspendDriverBody = z.infer<typeof suspendDriverBodySchema>;
 
+/// A manual credit is money the platform hands a driver, so it carries the
+/// operator's reason: it is stored on the wallet transaction and the audit row.
 export const topUpDriverWalletBodySchema = z.object({
   amount: z.coerce.number().positive(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().min(5, 'Give a reason for this credit').max(500),
 });
 export type TopUpDriverWalletBody = z.infer<typeof topUpDriverWalletBodySchema>;
 

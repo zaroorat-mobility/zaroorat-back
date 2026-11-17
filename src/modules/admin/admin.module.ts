@@ -1,4 +1,6 @@
 import { GeographicSimulationService } from './geographic-management/geographic-simulation.service.js';
+import { AdminDriverMonetizationService } from './payment-management/driver-monetization.service.js';
+import { AdminDriverMonetizationController } from './payment-management/driver-monetization.controller.js';
 import type { FastifyInstance } from 'fastify';
 import { asClass, AwilixContainer } from 'awilix';
 import { registerFileReference } from '@modules/files';
@@ -191,6 +193,8 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminPaymentManagementController: asClass(AdminPaymentManagementController).singleton(),
     adminFinanceService: asClass(AdminFinanceService).singleton(),
     adminFinanceController: asClass(AdminFinanceController).singleton(),
+    adminDriverMonetizationService: asClass(AdminDriverMonetizationService).singleton(),
+    adminDriverMonetizationController: asClass(AdminDriverMonetizationController).singleton(),
     documentComplianceService: asClass(DocumentComplianceService).singleton(),
     documentComplianceController: asClass(DocumentComplianceController).singleton(),
     adminStaffService: asClass(AdminStaffService).singleton(),

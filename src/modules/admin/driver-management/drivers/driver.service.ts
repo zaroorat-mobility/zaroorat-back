@@ -1,4 +1,6 @@
 import { DatabaseService } from '@core/database';
+import { vehicleTypeGroup } from '@modules/vehicles/services/vehicle-type.service.js';
+import { CommissionWalletRepository } from '@modules/payments/repositories/commission-wallet.repository.js';
 import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type { UserStatus } from '@core/database/types';
 import { Prisma } from '../../../../generated/prisma/index.js';
@@ -15,6 +17,8 @@ export type DriverStatusDto =
 
 export interface DriverListItemDto {
   id: string;
+  /// The driver's own app account: what an admin push message is addressed to.
+  userId: string;
   driverCode: string;
   applicationId: string;
   driverName: string;
@@ -269,17 +273,6 @@ function vehicleDocFields(
   };
 }
 
-function mapVehicleTypeLabel(
-  code: string | null | undefined,
-  name: string | null | undefined,
-): string {
-  const raw = (code ?? name ?? 'cab').toLowerCase();
-  if (raw.includes('auto')) return 'auto';
-  if (raw.includes('bike') || raw.includes('scooter')) return 'bike';
-  if (raw.includes('pool') || raw.includes('share')) return 'carpool';
-  return 'cab';
-}
-
 export class AdminDriverService {
   constructor(
     private readonly databaseService: DatabaseService,
@@ -287,6 +280,7 @@ export class AdminDriverService {
     private readonly userRepository: UserRepository,
     private readonly sessionService: SessionService,
     private readonly epochService: EpochService,
+    private readonly commissionWalletRepository: CommissionWalletRepository,
   ) {}
 
   /// `narrow` filters the rows in the query itself, so paging and the total count are over
@@ -541,10 +535,7 @@ export class AdminDriverService {
             vehicle: {
               id: vehicle.id,
               driverId: row.id,
-              vehicleType: mapVehicleTypeLabel(
-                vehicle.vehicleType?.code,
-                vehicle.vehicleType?.name,
-              ),
+              vehicleType: vehicleTypeGroup(vehicle.vehicleType?.category),
               ...(vehicle.vehicleType?.name ? { vehicleCategory: vehicle.vehicleType.name } : {}),
               ...(vehicle.make ? { brand: vehicle.make } : {}),
               ...(vehicle.model ? { model: vehicle.model } : {}),
@@ -807,17 +798,18 @@ export class AdminDriverService {
     driverId: string,
     amount: number,
     actor: AuditActor,
-    notes?: string,
+    notes: string,
   ): Promise<DriverDetailsDto> {
     if (amount <= 0) throw new Error('Top-up amount must be greater than zero');
     await this.databaseService.transactionManager.execute(async (tx) => {
       await lockForAudit(tx, 'drivers', driverId);
-      let wallet = await tx.driverCommissionWallet.findUnique({ where: { driverId } });
-      if (!wallet) {
-        wallet = await tx.driverCommissionWallet.create({
-          data: { driverId, balance: new Prisma.Decimal(0), currency: 'INR' },
-        });
-      }
+      // The wallet row lock every other balance writer takes (ride commission
+      // deduction, recharge, refund). Locking only the driver row let a ride's
+      // commission deduction commit between this read and the write below, and
+      // the write then put the pre-deduction balance back — commission lost.
+      await this.commissionWalletRepository.getOrCreateWallet(driverId, tx);
+      const wallet = await this.commissionWalletRepository.lockForUpdate(driverId, tx);
+      if (!wallet) throw new Error('Commission wallet could not be locked');
       const newBalance = new Prisma.Decimal(wallet.balance).add(new Prisma.Decimal(amount));
       await tx.driverCommissionWallet.update({
         where: { id: wallet.id },
@@ -831,7 +823,7 @@ export class AdminDriverService {
           amount: new Prisma.Decimal(amount),
           balanceAfter: newBalance,
           referenceType: 'ADMIN_ADJUSTMENT',
-          description: notes || `Admin wallet credit by ${actor.actorId}`,
+          description: notes,
         },
       });
       await recordAdminAction(tx, {
@@ -840,7 +832,7 @@ export class AdminDriverService {
         entityType: 'driver_wallet',
         entityId: wallet.id,
         summary: `Admin credited ₹${amount} to driver commission wallet`,
-        after: { balance: newBalance.toNumber(), amount },
+        after: { balance: newBalance.toNumber(), amount, reason: notes },
         result: 'SUCCESS',
       });
     });
@@ -1427,12 +1419,13 @@ export class AdminDriverService {
 
     return {
       id: row.id,
+      userId: row.userId,
       driverCode: row.driverCode,
       applicationId: row.id,
       driverName: name,
       mobileNumber: row.user.phoneNumber,
       ...(row.user.email ? { email: row.user.email } : {}),
-      vehicleType: mapVehicleTypeLabel(vehicle?.vehicleType?.code, vehicle?.vehicleType?.name),
+      vehicleType: vehicleTypeGroup(vehicle?.vehicleType?.category),
       ...(vehicle?.registrationNumber ? { registrationPlate: vehicle.registrationNumber } : {}),
       ...(vehicle?.make ? { vehicleMake: vehicle.make } : {}),
       ...(vehicle?.model ? { vehicleModel: vehicle.model } : {}),
