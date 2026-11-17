@@ -2,35 +2,36 @@ import { DatabaseService } from '@core/database';
 import { Prisma, type RideServiceType } from '../../../../generated/prisma/index.js';
 import { recordAdminAction } from '../../audit/index.js';
 import { FareRuleConflictError, FareRuleNotFoundError } from '../pricing.errors.js';
-import type { CreateFareRuleBody, ListFareRulesQuery, UpdateFareRuleBody } from './fare.schemas.js';
+import type {
+  CreateFareRuleBody,
+  ListFareRulesQuery,
+  PreviewFareRuleBody,
+  UpdateFareRuleBody,
+} from './fare.schemas.js';
+import { PricingService } from '@modules/pricing';
 import {
   AdminServiceZoneService,
   parseServiceType,
   serviceTypeUi,
 } from '../service-zone/service-zone.service.js';
-
-const UI_TO_CODE: Record<string, string> = {
-  cab: 'CAB_ECONOMY',
-  auto: 'AUTO',
-  bike: 'BIKE',
-  CAB_ECONOMY: 'CAB_ECONOMY',
-  AUTO: 'AUTO',
-  BIKE: 'BIKE',
-};
-
-const CODE_TO_UI: Record<string, 'cab' | 'auto' | 'bike'> = {
-  CAB_ECONOMY: 'cab',
-  CAB_PREMIUM: 'cab',
-  AUTO: 'auto',
-  BIKE: 'bike',
-};
+import {
+  VehicleTypeService,
+  vehicleTypeDisplayName,
+} from '@modules/vehicles/services/vehicle-type.service.js';
 
 export interface FareRuleDto {
   id: string;
   ruleName: string;
   version: number;
-  vehicleType: 'cab' | 'auto' | 'bike';
+  /// The exact vehicle type code. This used to be a `cab | auto | bike` guess
+  /// that called every cab variant "cab", so an edit form loaded from it could
+  /// only post "cab" back and move a Cab Mini (AC) rule onto another type.
+  vehicleType: string;
+  vehicleTypeId: string;
   vehicleTypeCode: string;
+  vehicleTypeName: string;
+  /// The type's own `category` column (car, auto, bike) — for grouping only.
+  vehicleCategory: string;
   cityCode: string;
   serviceType: string | null;
   serviceZoneId: string | null;
@@ -110,7 +111,66 @@ export class AdminFareService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly adminServiceZoneService: AdminServiceZoneService,
+    private readonly vehicleTypeService: VehicleTypeService,
+    private readonly pricingService: PricingService,
   ) {}
+
+  /// The fare an unsaved rule would charge, priced by PricingService itself (rate card defaults,
+  /// minimum fare, surge, discount, ceiling, tax, platform fee, driver earning). The admin
+  /// preview used to price it in React with a different commission formula. Read-only.
+  async preview(body: PreviewFareRuleBody) {
+    const card = this.pricingService.rateCardFor({
+      baseFare: body.baseFare,
+      perKmRate: body.perKmRate,
+      perMinuteRate: body.perMinuteRate,
+      waitingPerMin: body.waitingChargePerMinute,
+      freeWaitingMin: body.freeWaitingMinutes,
+      bookingFee: body.bookingFee,
+      platformFeePct: body.platformFeePct,
+      platformFeeFlat: body.platformFeeFlat ?? null,
+      taxRatePct: body.taxRatePct ?? null,
+      commissionRatePct: body.commissionRatePct ?? null,
+      minimumFare: body.minimumFare,
+    });
+    const trip = {
+      actualDistanceKm: body.distanceKm,
+      actualDurationMin: body.durationMin,
+      // Unused when a rate card is given; a preview has no vehicle row of its own.
+      vehicleTypeId: '',
+      rateCard: card,
+    };
+    const fare = await this.pricingService.calculateFinalFare({
+      ...trip,
+      surgeMultiplier: body.surgeMultiplier,
+      waitingMinutes: body.waitingMinutes,
+      discountAmount: body.discountAmount,
+      ...(body.fareCeiling !== undefined ? { fareCeiling: body.fareCeiling } : {}),
+    });
+    // What acceptance locks for a COMMISSION driver: the trip as quoted, no discount
+    // (PricingService.estimatedCommission prices it the same way).
+    const atAcceptance = await this.pricingService.calculateFinalFare(trip);
+    return {
+      fare,
+      commissionAtAcceptance: atAcceptance.platformCommission,
+      rates: {
+        taxRatePct: card.taxRatePct,
+        taxRateIsDefault: body.taxRatePct === undefined,
+        commissionRatePct: card.commissionRatePct,
+        commissionRateIsDefault: body.commissionRatePct === undefined,
+      },
+    };
+  }
+
+  /// The rates a rule inherits when it leaves them blank (environment configuration).
+  platformDefaults() {
+    const card = this.pricingService.rateCardFor(null);
+    return {
+      taxRatePct: card.taxRatePct,
+      commissionRatePct: card.commissionRatePct,
+      platformFeePct: card.platformFeePct,
+      platformFeeFlat: card.platformFeeFlat,
+    };
+  }
 
   async list(query: ListFareRulesQuery): Promise<{
     data: FareRuleDto[];
@@ -169,7 +229,10 @@ export class AdminFareService {
   }
 
   async create(body: CreateFareRuleBody, actorId?: string): Promise<FareRuleDto> {
-    const vehicleType = await this.resolveVehicleType(body.vehicleType);
+    const vehicleType = await this.vehicleTypeService.resolveForConfig({
+      id: body.vehicleTypeId,
+      code: body.vehicleType,
+    });
     const isActive = body.status !== 'inactive';
     const cityCode = body.cityCode || 'GLOBAL';
     const serviceType = parseServiceType(body.serviceType ?? null);
@@ -252,10 +315,15 @@ export class AdminFareService {
     });
     if (!existing) throw new FareRuleNotFoundError();
 
-    const vehicleTypeCode = body.vehicleType
-      ? (UI_TO_CODE[body.vehicleType] ?? body.vehicleType)
-      : existing.vehicleType.code;
-    const vehicleType = await this.resolveVehicleType(vehicleTypeCode, existing.vehicleType.code);
+    // The rule's own type stays editable even once retired; moving a rule onto
+    // another type must name that type exactly.
+    const vehicleType =
+      body.vehicleTypeId || body.vehicleType
+        ? await this.vehicleTypeService.resolveForConfig(
+            { id: body.vehicleTypeId, code: body.vehicleType },
+            existing.vehicleTypeId,
+          )
+        : existing.vehicleType;
     const cityCode = body.cityCode ?? existing.cityCode;
     const serviceType =
       body.serviceType !== undefined ? parseServiceType(body.serviceType) : existing.serviceType;
@@ -411,32 +479,6 @@ export class AdminFareService {
     await this.deactivate(id, actorId);
   }
 
-  /// FR-036. The only correct source of truth for a vehicle type is the table.
-  ///
-  /// `UI_TO_CODE` stays as the alias map the admin UI posts (`cab`, `auto`,
-  /// `bike`); anything else is upper-cased and looked up, so a category created
-  /// through vehicle-type management is priceable the moment it exists.
-  ///
-  /// A retired type is refused unless it is the rule's own (`keepCode`): no rider
-  /// can book it, so a new rule on it charges nobody. `cab` still maps to the
-  /// retired `CAB_ECONOMY`, so an old admin form editing a Cab Mini (AC) rule
-  /// would otherwise move that rule onto CAB_ECONOMY and drop the city's fare.
-  private async resolveVehicleType(raw: string, keepCode?: string) {
-    const code = UI_TO_CODE[raw] ?? raw.toUpperCase();
-    const vehicleType = await this.databaseService.client.vehicleType.findUnique({
-      where: { code },
-    });
-    if (!vehicleType) {
-      throw new FareRuleConflictError(`Vehicle type ${code} is not configured`);
-    }
-    if (!vehicleType.isActive && code !== keepCode) {
-      throw new FareRuleConflictError(
-        `Vehicle type ${code} is retired, so no ride can use this fare. Choose an active vehicle type.`,
-      );
-    }
-    return vehicleType;
-  }
-
   private toDto(row: {
     id: string;
     cityCode: string;
@@ -458,10 +500,10 @@ export class AdminFareService {
     effectiveFrom: Date;
     effectiveTo: Date | null;
     createdAt: Date;
-    vehicleType: { code: string };
+    vehicleTypeId: string;
+    vehicleType: { code: string; name: string; hasAc: boolean; category: string };
     serviceZone?: { name: string } | null;
   }): FareRuleDto {
-    const uiType = CODE_TO_UI[row.vehicleType.code] ?? 'cab';
     const zoneLabel = row.serviceZone?.name ?? null;
     const svcLabel = serviceTypeUi(row.serviceType);
     const nameParts = [row.vehicleType.code, row.cityCode];
@@ -472,8 +514,11 @@ export class AdminFareService {
       id: row.id,
       ruleName: nameParts.join(' · '),
       version: row.version,
-      vehicleType: uiType,
+      vehicleType: row.vehicleType.code,
+      vehicleTypeId: row.vehicleTypeId,
       vehicleTypeCode: row.vehicleType.code,
+      vehicleTypeName: vehicleTypeDisplayName(row.vehicleType),
+      vehicleCategory: row.vehicleType.category,
       cityCode: row.cityCode,
       serviceType: svcLabel,
       serviceZoneId: row.serviceZoneId,

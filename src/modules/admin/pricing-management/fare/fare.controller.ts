@@ -5,6 +5,7 @@ import {
   createFareRuleBodySchema,
   fareRuleIdParamSchema,
   listFareRulesQuerySchema,
+  previewFareRuleBodySchema,
   updateFareRuleBodySchema,
 } from './fare.schemas.js';
 
@@ -15,6 +16,15 @@ export class AdminFareController {
     const query = listFareRulesQuerySchema.parse(req.query);
     const result = await this.adminFareService.list(query);
     reply.send(result);
+  }
+
+  async preview(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = previewFareRuleBodySchema.parse(req.body ?? {});
+    reply.send({ data: await this.adminFareService.preview(body) });
+  }
+
+  async platformDefaults(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    reply.send({ data: this.adminFareService.platformDefaults() });
   }
 
   async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {

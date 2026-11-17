@@ -59,6 +59,21 @@ function decimal(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/// What `rateCardFor` reads from a rule. A blank (null) rate inherits the environment default.
+export type RateCardSource = Pick<
+  Record<keyof PricingRule, unknown>,
+  | 'baseFare'
+  | 'perKmRate'
+  | 'perMinuteRate'
+  | 'waitingPerMin'
+  | 'bookingFee'
+  | 'platformFeePct'
+  | 'platformFeeFlat'
+  | 'taxRatePct'
+  | 'commissionRatePct'
+  | 'minimumFare'
+> & { freeWaitingMin: number | null };
+
 export class PricingService {
   constructor(
     private readonly pricingRuleRepository: PricingRuleRepository,
@@ -68,7 +83,9 @@ export class PricingService {
     private readonly mapProviderService?: MapProviderService,
   ) {}
 
-  rateCardFor(rule: PricingRule | null): PricingRateCard {
+  /// Takes a stored rule or an unsaved one (the admin fare preview), so both are turned
+  /// into a rate card — defaults included — by this one mapping.
+  rateCardFor(rule: RateCardSource | null): PricingRateCard {
     const fallback = pricingConfig.defaultRateCard;
     if (!rule) return fallback;
     return Object.freeze({
@@ -499,5 +516,25 @@ export class PricingService {
         },
       }));
     return this.price(params.actualDistanceKm, params.actualDurationMin, card, params);
+  }
+
+  /// BD-7. What a COMMISSION-model driver is charged for a request: its own
+  /// quote-time distance, duration and pinned rule, never the trip as driven.
+  /// `acceptRideRequest` locks exactly this onto the ride; dispatch asks the same
+  /// question first so it never offers a ride acceptance would refuse.
+  async estimatedCommission(request: {
+    estimatedDistanceKm: { toString(): string } | number | null;
+    estimatedDurationMin: number | null;
+    vehicleTypeId: string;
+    pricingRuleId: string | null;
+  }): Promise<number> {
+    const fare = await this.calculateFinalFare({
+      actualDistanceKm:
+        request.estimatedDistanceKm != null ? Number(request.estimatedDistanceKm) : 0,
+      actualDurationMin: request.estimatedDurationMin ?? 0,
+      vehicleTypeId: request.vehicleTypeId,
+      pricingRuleId: request.pricingRuleId,
+    });
+    return fare.platformCommission;
   }
 }

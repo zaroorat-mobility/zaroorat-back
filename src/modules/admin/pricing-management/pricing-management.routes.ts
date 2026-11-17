@@ -61,6 +61,13 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
 
   // Fare rules
   fastify.get('/fare-rules', canRead, (req, reply) => adminFareController.list(req, reply));
+  // Static paths before `/fare-rules/:id`. Both are read-only (pricing:read).
+  fastify.get('/fare-rules/platform-defaults', canRead, (req, reply) =>
+    adminFareController.platformDefaults(req, reply),
+  );
+  fastify.post('/fare-rules/preview', canRead, (req, reply) =>
+    adminFareController.preview(req, reply),
+  );
   fastify.get('/fare-rules/:id', canRead, (req, reply) => adminFareController.getById(req, reply));
   fastify.post('/fare-rules', canWrite, (req, reply) => adminFareController.create(req, reply));
   fastify.patch('/fare-rules/:id', canWrite, (req, reply) =>

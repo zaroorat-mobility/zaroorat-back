@@ -48,8 +48,12 @@ export const listServiceZonesQuerySchema = z.object({
 ///
 /// A field an admin form can submit and the server discards is worse than a
 /// missing field: the operator sets it, sees it accepted, and believes it holds.
+///
+/// `vehicleTypeId` is the preferred way to name the type; `vehicleType` (the
+/// exact code) is still accepted for older admin builds. Both must name one row.
 const fareRuleFieldsSchema = z.object({
-  vehicleType: vehicleTypeCodeSchema,
+  vehicleTypeId: z.string().uuid().optional(),
+  vehicleType: vehicleTypeCodeSchema.optional(),
   cityCode: z.string().trim().min(1).max(20).default('GLOBAL'),
   serviceType: rideServiceTypeSchema.optional().nullable(),
   serviceZoneId: z.string().uuid().optional().nullable(),
@@ -73,14 +77,39 @@ const fareRuleFieldsSchema = z.object({
   effectiveTo: z.string().optional(),
 });
 
-export const createFareRuleBodySchema = fareRuleFieldsSchema;
+export const createFareRuleBodySchema = fareRuleFieldsSchema.refine(
+  (body) => Boolean(body.vehicleTypeId || body.vehicleType),
+  { message: 'vehicleTypeId (or the exact vehicleType code) is required', path: ['vehicleTypeId'] },
+);
 
 export const updateFareRuleBodySchema = fareRuleFieldsSchema.partial().extend({
-  vehicleType: vehicleTypeCodeSchema.optional(),
   cityCode: z.string().trim().min(1).max(20).optional(),
   effectiveFrom: z.string().min(1).optional(),
 });
 
+/// An unsaved rule plus a trip, priced by PricingService exactly as a ride would be. Rates use
+/// the same fields and rules as saving: an omitted tax or commission rate is the platform default.
+export const previewFareRuleBodySchema = z.object({
+  baseFare: z.coerce.number().min(0),
+  minimumFare: z.coerce.number().min(0),
+  perKmRate: z.coerce.number().min(0),
+  perMinuteRate: z.coerce.number().min(0),
+  freeWaitingMinutes: z.coerce.number().int().min(0).default(3),
+  waitingChargePerMinute: z.coerce.number().min(0).default(0),
+  bookingFee: z.coerce.number().min(0).default(0),
+  platformFeePct: z.coerce.number().min(0).max(100).default(0),
+  platformFeeFlat: z.coerce.number().min(0).optional(),
+  taxRatePct: z.coerce.number().min(0).max(100).optional(),
+  commissionRatePct: z.coerce.number().min(0).max(100).optional(),
+  distanceKm: z.coerce.number().min(0).max(2000),
+  durationMin: z.coerce.number().min(0).max(1440),
+  waitingMinutes: z.coerce.number().min(0).max(600).default(0),
+  surgeMultiplier: z.coerce.number().min(1).max(10).default(1),
+  discountAmount: z.coerce.number().min(0).default(0),
+  fareCeiling: z.coerce.number().min(0).optional(),
+});
+
+export type PreviewFareRuleBody = z.infer<typeof previewFareRuleBodySchema>;
 export type ListFareRulesQuery = z.infer<typeof listFareRulesQuerySchema>;
 export type CreateFareRuleBody = z.infer<typeof createFareRuleBodySchema>;
 export type UpdateFareRuleBody = z.infer<typeof updateFareRuleBodySchema>;
