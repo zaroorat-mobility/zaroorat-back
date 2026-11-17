@@ -4,7 +4,11 @@ import type { SurgeZone } from '../../../../generated/prisma/index.js';
 import { assertValidPolygon, polygonGeoJson } from '@modules/location';
 import { uuidV7 } from '@shared/crypto';
 import { recordAdminAction } from '../../audit/index.js';
-import { SurgeWindowNotFoundError, SurgeZoneNotFoundError } from '../pricing.errors.js';
+import {
+  SurgeCityNotFoundError,
+  SurgeWindowNotFoundError,
+  SurgeZoneNotFoundError,
+} from '../pricing.errors.js';
 
 /// FR-014. The admin view of a surge window, with the two inert threshold
 /// columns gone. They remain on the table until the deferred-drop release
@@ -22,12 +26,14 @@ export interface SurgeWindowDto {
   peakHourStart: string | null;
   peakHourEnd: string | null;
   isPeakHourOnly: boolean;
+  daysOfWeek: number[];
   startsAt: Date;
   endsAt: Date | null;
   isActive: boolean;
   createdAt: Date;
   zoneName?: string | undefined;
   vehicleTypeCode?: string | null | undefined;
+  vehicleTypeName?: string | null | undefined;
 }
 
 export interface SurgeZoneDetail extends Pick<
@@ -48,13 +54,14 @@ interface SurgeWindowRow {
   peakHourStart: string | null;
   peakHourEnd: string | null;
   isPeakHourOnly: boolean;
+  daysOfWeek: number[];
   startsAt: Date;
   endsAt: Date | null;
   isActive: boolean;
   createdAt: Date;
   zone?: { name: string } | null;
   serviceZone?: { name: string } | null;
-  vehicleType?: { code: string } | null;
+  vehicleType?: { code: string; name: string; hasAc: boolean } | null;
 }
 
 /// FR-014. The single place a surge window becomes a response.
@@ -74,6 +81,7 @@ function toWindowDto(row: SurgeWindowRow): SurgeWindowDto {
     peakHourStart: row.peakHourStart,
     peakHourEnd: row.peakHourEnd,
     isPeakHourOnly: row.isPeakHourOnly,
+    daysOfWeek: row.daysOfWeek,
     startsAt: row.startsAt,
     endsAt: row.endsAt,
     isActive: row.isActive,
@@ -81,7 +89,15 @@ function toWindowDto(row: SurgeWindowRow): SurgeWindowDto {
     ...((row.serviceZone?.name ?? row.zone?.name)
       ? { zoneName: row.serviceZone?.name ?? row.zone?.name }
       : {}),
-    ...(row.vehicleType !== undefined ? { vehicleTypeCode: row.vehicleType?.code ?? null } : {}),
+    ...(row.vehicleType !== undefined
+      ? {
+          vehicleTypeCode: row.vehicleType?.code ?? null,
+          // AC and Non-AC variants share a name, e.g. two "Cab Economy" types.
+          vehicleTypeName: row.vehicleType
+            ? `${row.vehicleType.name}${row.vehicleType.hasAc ? ' (AC)' : ''}`
+            : null,
+        }
+      : {}),
   };
 }
 
@@ -250,6 +266,7 @@ export class AdminSurgeService {
       peakHourStart?: string | undefined;
       peakHourEnd?: string | undefined;
       isPeakHourOnly?: boolean | undefined;
+      daysOfWeek?: number[] | undefined;
     },
     actorId?: string,
   ): Promise<SurgeWindowDto> {
@@ -268,7 +285,10 @@ export class AdminSurgeService {
           // foreign key to `surge_zones`, so it cannot be filled with a service
           // zone's id — the migration makes it nullable for exactly this reason.
           ...(data.zoneId !== undefined ? { zoneId: data.zoneId } : {}),
+          // Both columns, until the old one is dropped. A previous version still
+          // running during a rollout reads only the first.
           vehicleTypeId: data.vehicleTypeId ?? null,
+          vehicleTypeIds: data.vehicleTypeId ? [data.vehicleTypeId] : [],
           multiplier: new Prisma.Decimal(data.multiplier),
           startsAt: data.startsAt,
           endsAt: data.endsAt ?? null,
@@ -276,11 +296,12 @@ export class AdminSurgeService {
           ...(data.peakHourStart !== undefined ? { peakHourStart: data.peakHourStart } : {}),
           ...(data.peakHourEnd !== undefined ? { peakHourEnd: data.peakHourEnd } : {}),
           ...(data.isPeakHourOnly !== undefined ? { isPeakHourOnly: data.isPeakHourOnly } : {}),
+          ...(data.daysOfWeek !== undefined ? { daysOfWeek: data.daysOfWeek } : {}),
         },
         include: {
           zone: { select: { name: true } },
           serviceZone: { select: { name: true } },
-          vehicleType: { select: { code: true } },
+          vehicleType: { select: { code: true, name: true, hasAc: true } },
         },
       });
       await recordAdminAction(tx, {
@@ -299,6 +320,7 @@ export class AdminSurgeService {
           peakHourStart: created.peakHourStart,
           peakHourEnd: created.peakHourEnd,
           isPeakHourOnly: created.isPeakHourOnly,
+          daysOfWeek: created.daysOfWeek,
         },
       });
       return toWindowDto(created);
@@ -310,7 +332,7 @@ export class AdminSurgeService {
       include: {
         zone: { select: { name: true } },
         serviceZone: { select: { name: true } },
-        vehicleType: { select: { code: true } },
+        vehicleType: { select: { code: true, name: true, hasAc: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -324,7 +346,7 @@ export class AdminSurgeService {
       include: {
         zone: { select: { name: true } },
         serviceZone: { select: { name: true } },
-        vehicleType: { select: { code: true } },
+        vehicleType: { select: { code: true, name: true, hasAc: true } },
       },
     });
     return row ? toWindowDto(row) : null;
@@ -341,6 +363,7 @@ export class AdminSurgeService {
       peakHourStart?: string | null | undefined;
       peakHourEnd?: string | null | undefined;
       isPeakHourOnly?: boolean | undefined;
+      daysOfWeek?: number[] | undefined;
     },
     actorId?: string,
   ): Promise<SurgeWindowDto> {
@@ -359,6 +382,7 @@ export class AdminSurgeService {
     if (data.peakHourStart !== undefined) updateData.peakHourStart = data.peakHourStart;
     if (data.peakHourEnd !== undefined) updateData.peakHourEnd = data.peakHourEnd;
     if (data.isPeakHourOnly !== undefined) updateData.isPeakHourOnly = data.isPeakHourOnly;
+    if (data.daysOfWeek !== undefined) updateData.daysOfWeek = data.daysOfWeek;
 
     return this.db.transactionManager.execute(async (tx) => {
       const updated = await tx.surgeWindow.update({
@@ -367,7 +391,7 @@ export class AdminSurgeService {
         include: {
           zone: { select: { name: true } },
           serviceZone: { select: { name: true } },
-          vehicleType: { select: { code: true } },
+          vehicleType: { select: { code: true, name: true, hasAc: true } },
         },
       });
       await recordAdminAction(tx, {
@@ -384,11 +408,41 @@ export class AdminSurgeService {
           peakHourStart: existing.peakHourStart,
           peakHourEnd: existing.peakHourEnd,
           isPeakHourOnly: existing.isPeakHourOnly,
+          daysOfWeek: existing.daysOfWeek,
         },
         after: updateData,
       });
       return toWindowDto(updated);
     });
+  }
+
+  /// The legal surge limit in one city. A money setting, so it needs pricing:write
+  /// rather than the geography permission the rest of the city form uses.
+  async updateCitySurgeSettings(
+    cityCode: string,
+    maxSurgeMultiplier: number,
+    actorId?: string,
+  ): Promise<{ cityCode: string; maxSurgeMultiplier: number }> {
+    const code = cityCode.toUpperCase();
+    const existing = await this.db.client.city.findUnique({ where: { code } });
+    if (!existing) throw new SurgeCityNotFoundError();
+
+    await this.db.transactionManager.execute(async (tx) => {
+      await tx.city.update({
+        where: { id: existing.id },
+        data: { maxSurgeMultiplier: new Prisma.Decimal(maxSurgeMultiplier) },
+      });
+      await recordAdminAction(tx, {
+        actorId,
+        action: 'UPDATE',
+        entityType: 'city',
+        entityId: existing.id,
+        summary: `Set surge cap for ${code} to ${String(maxSurgeMultiplier)}x`,
+        before: { maxSurgeMultiplier: Number(existing.maxSurgeMultiplier) },
+        after: { maxSurgeMultiplier },
+      });
+    });
+    return { cityCode: code, maxSurgeMultiplier };
   }
 
   async deleteSurgeWindow(id: string, actorId?: string): Promise<void> {

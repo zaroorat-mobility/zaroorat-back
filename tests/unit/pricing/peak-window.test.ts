@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  dayOfWeekIn,
   isWithinPeakWindow,
   minutesOfDayIn,
   parseHhMm,
+  surgeWindowVehicleIds,
 } from '../../../src/modules/pricing/utils/peak-window.js';
 
 /// FR-013. The admin form validated peak hours, the service stored them, the API
@@ -38,6 +40,84 @@ describe('peak window evaluation (FR-013)', () => {
       const at = new Date('2026-08-29T03:00:00Z');
       assert.equal(minutesOfDayIn(at, 'UTC'), 180);
       assert.equal(minutesOfDayIn(at, 'Asia/Kolkata'), 510);
+    });
+  });
+
+  describe('days of the week', () => {
+    const IST = 'Asia/Kolkata';
+    // 10 October 2026 is a Saturday. All times below are written in IST.
+    const SAT_0100 = new Date('2026-10-10T01:00:00+05:30');
+    const SAT_2300 = new Date('2026-10-10T23:00:00+05:30');
+    const SUN_0100 = new Date('2026-10-11T01:00:00+05:30');
+    const SUN_2300 = new Date('2026-10-11T23:00:00+05:30');
+
+    const saturdayNight = {
+      isPeakHourOnly: true,
+      peakHourStart: '22:00',
+      peakHourEnd: '02:00',
+      daysOfWeek: [6],
+    };
+
+    it('reads the day in the city, not on the server', () => {
+      // 19:30 UTC on Saturday is already 01:00 on Sunday in Kolkata.
+      const at = new Date('2026-10-10T19:30:00Z');
+      assert.equal(dayOfWeekIn(at, 'UTC'), 6);
+      assert.equal(dayOfWeekIn(at, IST), 0);
+    });
+
+    it('keeps a Saturday overnight window running into early Sunday', () => {
+      assert.equal(isWithinPeakWindow(saturdayNight, SAT_2300, IST), true);
+      assert.equal(isWithinPeakWindow(saturdayNight, SUN_0100, IST), true);
+    });
+
+    it('does not start a Saturday overnight window on Friday night or Sunday night', () => {
+      assert.equal(isWithinPeakWindow(saturdayNight, SAT_0100, IST), false);
+      assert.equal(isWithinPeakWindow(saturdayNight, SUN_2300, IST), false);
+    });
+
+    it('treats an empty list as every day', () => {
+      const everyDay = { ...saturdayNight, daysOfWeek: [] };
+      assert.equal(isWithinPeakWindow(everyDay, SAT_0100, IST), true);
+      assert.equal(isWithinPeakWindow(everyDay, SUN_2300, IST), true);
+    });
+
+    it('applies a day limit to a rule with no daily hours', () => {
+      const saturdays = {
+        isPeakHourOnly: false,
+        peakHourStart: null,
+        peakHourEnd: null,
+        daysOfWeek: [6],
+      };
+      assert.equal(isWithinPeakWindow(saturdays, SAT_2300, IST), true);
+      assert.equal(isWithinPeakWindow(saturdays, SUN_0100, IST), false);
+    });
+
+    it('keeps a same-day window on its own day', () => {
+      const sundayMorning = {
+        isPeakHourOnly: true,
+        peakHourStart: '00:00',
+        peakHourEnd: '12:00',
+        daysOfWeek: [0],
+      };
+      assert.equal(isWithinPeakWindow(sundayMorning, SUN_0100, IST), true);
+      assert.equal(isWithinPeakWindow(sundayMorning, SAT_0100, IST), false);
+    });
+  });
+
+  describe('surgeWindowVehicleIds', () => {
+    it('reads the new list first', () => {
+      assert.deepEqual(surgeWindowVehicleIds({ vehicleTypeIds: ['a', 'b'], vehicleTypeId: 'c' }), [
+        'a',
+        'b',
+      ]);
+    });
+
+    it('falls back to the old column for a row written by the previous version', () => {
+      assert.deepEqual(surgeWindowVehicleIds({ vehicleTypeIds: [], vehicleTypeId: 'c' }), ['c']);
+    });
+
+    it('means every vehicle when both are empty', () => {
+      assert.deepEqual(surgeWindowVehicleIds({ vehicleTypeIds: [], vehicleTypeId: null }), []);
     });
   });
 

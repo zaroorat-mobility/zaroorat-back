@@ -3,7 +3,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
-import { grantRole } from './helpers/fixtures.js';
+import { grantRole, ensureCity } from './helpers/fixtures.js';
 import { hashPassword } from '../../src/modules/auth/utils/password.js';
 
 const ADMIN_PHONE = '+919876545021';
@@ -48,7 +48,7 @@ describe('admin surge windows (integration)', () => {
 
   it('creates a surge zone/window and lists enriched windows', async () => {
     const authHeader = await loginAdmin();
-    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
     assert.ok(cab);
 
     const zone = await app.inject({
@@ -104,8 +104,167 @@ describe('admin surge windows (integration)', () => {
     const row = windows.find((w) => w.id === created.json().id);
     assert.ok(row);
     assert.equal(row!.zoneName, 'Test Citywide');
-    assert.equal(row!.vehicleTypeCode, 'CAB_ECONOMY');
+    assert.equal(row!.vehicleTypeCode, 'CAB_ECONOMY_NON_AC');
     assert.equal(row!.reason, 'Morning Peak Cab Surge');
+  });
+
+  describe('surge cap and schedule', () => {
+    const zonePayload = {
+      cityCode: 'SGR',
+      name: 'Schedule Zone',
+      coordinates: [
+        [
+          [74.7, 34.0],
+          [75.0, 34.0],
+          [75.0, 34.2],
+          [74.7, 34.2],
+          [74.7, 34.0],
+        ],
+      ],
+    };
+
+    it('sets a city cap, records who did it, and refuses one above the platform limit', async () => {
+      const authHeader = await loginAdmin();
+      const cityId = await ensureCity('PNQ', 'Pune');
+
+      const saved = await app.inject({
+        method: 'PATCH',
+        url: '/api/v1/admin/surge-settings/PNQ',
+        headers: authHeader,
+        payload: { maxSurgeMultiplier: 1.5 },
+      });
+      assert.equal(saved.statusCode, 200, saved.payload);
+      assert.equal(saved.json().maxSurgeMultiplier, 1.5);
+
+      const city = await db().client.city.findUniqueOrThrow({ where: { id: cityId } });
+      assert.equal(Number(city.maxSurgeMultiplier), 1.5);
+
+      const log = await db().client.adminActivityLog.findFirst({
+        where: { entityType: 'city', entityId: cityId },
+        orderBy: { createdAt: 'desc' },
+      });
+      assert.ok(log, 'the change is audited');
+      assert.equal(
+        (log.metadata as { before?: { maxSurgeMultiplier?: number } }).before?.maxSurgeMultiplier,
+        2,
+      );
+
+      const tooHigh = await app.inject({
+        method: 'PATCH',
+        url: '/api/v1/admin/surge-settings/PNQ',
+        headers: authHeader,
+        payload: { maxSurgeMultiplier: 2.5 },
+      });
+      assert.equal(tooHigh.statusCode, 400, tooHigh.payload);
+
+      const unknown = await app.inject({
+        method: 'PATCH',
+        url: '/api/v1/admin/surge-settings/NOPE',
+        headers: authHeader,
+        payload: { maxSurgeMultiplier: 1.5 },
+      });
+      assert.equal(unknown.statusCode, 404, unknown.payload);
+    });
+
+    it('stores days of the week, and refuses a day that does not exist', async () => {
+      const authHeader = await loginAdmin();
+      const zone = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-zones',
+        headers: authHeader,
+        payload: zonePayload,
+      });
+      const base = {
+        zoneId: zone.json().id as string,
+        multiplier: 1.5,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+      };
+
+      const saved = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-windows',
+        headers: authHeader,
+        payload: { ...base, daysOfWeek: [6, 0] },
+      });
+      assert.equal(saved.statusCode, 201, saved.payload);
+      assert.deepEqual(saved.json().daysOfWeek, [6, 0]);
+
+      const updated = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/surge-windows/${saved.json().id}`,
+        headers: authHeader,
+        payload: { daysOfWeek: [1] },
+      });
+      assert.equal(updated.statusCode, 200, updated.payload);
+      assert.deepEqual(updated.json().daysOfWeek, [1]);
+
+      const bad = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-windows',
+        headers: authHeader,
+        payload: { ...base, daysOfWeek: [7] },
+      });
+      assert.equal(bad.statusCode, 400, bad.payload);
+    });
+
+    it('fills both vehicle columns, names the vehicle, and marks new rules as manual', async () => {
+      const authHeader = await loginAdmin();
+      const cab = await db().client.vehicleType.findUniqueOrThrow({
+        where: { code: 'CAB_ECONOMY_NON_AC' },
+      });
+      const zone = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-zones',
+        headers: authHeader,
+        payload: zonePayload,
+      });
+      const saved = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-windows',
+        headers: authHeader,
+        payload: {
+          zoneId: zone.json().id as string,
+          vehicleTypeId: cab.id,
+          multiplier: 1.5,
+          startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      });
+      assert.equal(saved.statusCode, 201, saved.payload);
+      assert.equal(saved.json().vehicleTypeName, cab.name);
+      assert.equal(saved.json().source, 'MANUAL');
+
+      const row = await db().client.surgeWindow.findUniqueOrThrow({
+        where: { id: saved.json().id as string },
+      });
+      assert.equal(row.vehicleTypeId, cab.id);
+      assert.deepEqual(row.vehicleTypeIds, [cab.id]);
+    });
+
+    it('tells the AC variant apart, since it shares its name with the Non-AC one', async () => {
+      const authHeader = await loginAdmin();
+      const ac = await db().client.vehicleType.findUniqueOrThrow({
+        where: { code: 'CAB_ECONOMY_AC' },
+      });
+      const zone = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-zones',
+        headers: authHeader,
+        payload: zonePayload,
+      });
+      const saved = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-windows',
+        headers: authHeader,
+        payload: {
+          zoneId: zone.json().id as string,
+          vehicleTypeId: ac.id,
+          multiplier: 1.5,
+          startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      });
+      assert.equal(saved.statusCode, 201, saved.payload);
+      assert.equal(saved.json().vehicleTypeName, `${ac.name} (AC)`);
+    });
   });
 
   /// FR-013 / FR-014. Peak-hour rules are stored AND evaluated now; the demand
@@ -115,7 +274,7 @@ describe('admin surge windows (integration)', () => {
   /// inert.
   it('stores peak-hour rules and no longer accepts inert thresholds', async () => {
     const authHeader = await loginAdmin();
-    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
     assert.ok(cab);
 
     const zone = await app.inject({

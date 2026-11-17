@@ -5,6 +5,7 @@ import {
   updateSurgeZoneSchema,
   createSurgeWindowSchema,
   updateSurgeWindowSchema,
+  updateCitySurgeSettingsSchema,
 } from './surge.schema.js';
 import { AdminSurgeService } from './surge.service.js';
 
@@ -80,6 +81,17 @@ export class AdminSurgeController {
       callerId(req),
     );
     return reply.send(window);
+  }
+
+  async updateCitySurgeSettings(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { cityCode } = req.params as { cityCode: string };
+    const { maxSurgeMultiplier } = updateCitySurgeSettingsSchema.parse(req.body);
+    const saved = await this.adminSurgeService.updateCitySurgeSettings(
+      cityCode,
+      maxSurgeMultiplier,
+      callerId(req),
+    );
+    return reply.send(saved);
   }
 
   async deleteSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {

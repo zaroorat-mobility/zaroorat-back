@@ -8,6 +8,7 @@ import {
   MAX_SURGE_MULTIPLIER,
 } from '../../../src/modules/pricing/services/surge.service.js';
 import type { SurgeRepository } from '../../../src/modules/pricing/repositories/surge.repository.js';
+import type { FeatureFlagService } from '../../../src/modules/admin/system-settings/platform/services/feature-flag.service.js';
 import { Prisma, type SurgeZone, type SurgeWindow } from '../../../src/generated/prisma/index.js';
 
 describe('SurgeService', () => {
@@ -30,19 +31,35 @@ describe('SurgeService', () => {
     }),
     findActiveWindowsForZones: async (
       zoneIds: string[],
-      vehicleTypeId?: string,
       serviceZoneIds: string[] = [],
+      cityCode?: string,
     ) => {
-      findWindowsArgs = [zoneIds, vehicleTypeId, serviceZoneIds];
+      findWindowsArgs = [zoneIds, serviceZoneIds, cityCode];
       return mockActiveWindows;
     },
   } as unknown as SurgeRepository;
+
+  let surgeOn: boolean | Error = true;
+  const flags = {
+    isOn: async () => {
+      if (surgeOn instanceof Error) throw surgeOn;
+      return surgeOn;
+    },
+  } as unknown as FeatureFlagService;
+  let failures = 0;
+  class CountingMetrics extends PricingMetrics {
+    override surgeResolutionFailed() {
+      failures++;
+    }
+  }
 
   beforeEach(() => {
     mockActiveZones = [];
     mockActiveWindows = [];
     findWindowsArgs = [];
-    surgeService = new SurgeService(mockSurgeRepo, new PricingMetrics());
+    surgeOn = true;
+    failures = 0;
+    surgeService = new SurgeService(mockSurgeRepo, new CountingMetrics(), flags);
   });
 
   const baseLat = 12.9716;
@@ -63,7 +80,7 @@ describe('SurgeService', () => {
 
     // BD-4. The repository is now asked for both geographies; a point with no
     // service zones passes an empty list alongside the legacy ids.
-    assert.deepEqual(findWindowsArgs, [['z1'], vehicleTypeId, []]);
+    assert.deepEqual(findWindowsArgs, [['z1'], [], undefined]);
     assert.equal(surge, DEFAULT_SURGE_MULTIPLIER);
   });
 
@@ -96,6 +113,108 @@ describe('SurgeService', () => {
     const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId);
 
     assert.equal(surge, MIN_SURGE_MULTIPLIER);
+  });
+
+  describe('the city cap', () => {
+    it('limits a window to the legal cap in this city', async () => {
+      mockActiveZones = [{ id: 'z1' } as SurgeZone];
+      mockActiveWindows = [{ multiplier: new Prisma.Decimal(2) } as unknown as SurgeWindow];
+      const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId, {
+        maxMultiplier: 1.5,
+      });
+      assert.equal(surge, 1.5);
+    });
+
+    it('never goes above the platform limit, whatever a city is set to', async () => {
+      mockActiveZones = [{ id: 'z1' } as SurgeZone];
+      mockActiveWindows = [{ multiplier: new Prisma.Decimal(2.5) } as unknown as SurgeWindow];
+      const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId, {
+        maxMultiplier: 3,
+      });
+      assert.equal(surge, MAX_SURGE_MULTIPLIER);
+    });
+
+    it('applies the cap to every vehicle type in a quote', async () => {
+      mockActiveZones = [{ id: 'z1' } as SurgeZone];
+      mockActiveWindows = [{ multiplier: new Prisma.Decimal(2) } as unknown as SurgeWindow];
+      const surges = await surgeService.resolveSurgeMultipliersForTypes(
+        baseLat,
+        baseLng,
+        ['a', 'b'],
+        { maxMultiplier: 1.5 },
+      );
+      assert.equal(surges.get('a'), 1.5);
+      assert.equal(surges.get('b'), 1.5);
+    });
+  });
+
+  describe('the off-switch', () => {
+    it('charges no surge when the flag is off', async () => {
+      surgeOn = false;
+      mockActiveZones = [{ id: 'z1' } as SurgeZone];
+      mockActiveWindows = [{ multiplier: new Prisma.Decimal(2) } as unknown as SurgeWindow];
+      const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId);
+      assert.equal(surge, DEFAULT_SURGE_MULTIPLIER);
+    });
+
+    it('charges no surge and counts a failure when the flag cannot be read', async () => {
+      surgeOn = new Error('database unavailable');
+      mockActiveZones = [{ id: 'z1' } as SurgeZone];
+      mockActiveWindows = [{ multiplier: new Prisma.Decimal(2) } as unknown as SurgeWindow];
+      const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId);
+      assert.equal(surge, DEFAULT_SURGE_MULTIPLIER);
+      assert.equal(failures, 1);
+    });
+  });
+
+  describe('whole-city rules', () => {
+    it('asks for city rules even when the point is in no zone', async () => {
+      mockActiveZones = [];
+      mockActiveWindows = [{ multiplier: new Prisma.Decimal(1.5) } as unknown as SurgeWindow];
+      const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId, {
+        cityCode: 'SGR',
+      });
+      assert.equal(surge, 1.5);
+      assert.deepEqual(findWindowsArgs, [[], [], 'SGR']);
+    });
+
+    it('asks for no city rules on global pricing', async () => {
+      mockActiveZones = [];
+      mockActiveWindows = [{ multiplier: new Prisma.Decimal(1.5) } as unknown as SurgeWindow];
+      const surge = await surgeService.resolveSurgeMultiplier(baseLat, baseLng, vehicleTypeId, {
+        cityCode: 'GLOBAL',
+      });
+      assert.equal(surge, DEFAULT_SURGE_MULTIPLIER);
+      assert.equal(findWindowsArgs.length, 0);
+    });
+  });
+
+  describe('vehicles', () => {
+    const windowFor = (fields: Record<string, unknown>) =>
+      ({ multiplier: new Prisma.Decimal(1.5), ...fields }) as unknown as SurgeWindow;
+
+    it('charges each vehicle on a rule that names several, and no other', async () => {
+      mockActiveZones = [{ id: 'z1' } as SurgeZone];
+      mockActiveWindows = [windowFor({ vehicleTypeIds: ['cab', 'auto'] })];
+      const surges = await surgeService.resolveSurgeMultipliersForTypes(baseLat, baseLng, [
+        'cab',
+        'auto',
+        'bike',
+      ]);
+      assert.equal(surges.get('cab'), 1.5);
+      assert.equal(surges.get('auto'), 1.5);
+      assert.equal(surges.get('bike'), DEFAULT_SURGE_MULTIPLIER);
+    });
+
+    it('still honours a row that only has the old vehicle column', async () => {
+      mockActiveZones = [{ id: 'z1' } as SurgeZone];
+      mockActiveWindows = [windowFor({ vehicleTypeIds: [], vehicleTypeId: 'cab' })];
+      assert.equal(await surgeService.resolveSurgeMultiplier(baseLat, baseLng, 'cab'), 1.5);
+      assert.equal(
+        await surgeService.resolveSurgeMultiplier(baseLat, baseLng, 'bike'),
+        DEFAULT_SURGE_MULTIPLIER,
+      );
+    });
   });
 
   it('should return DEFAULT_SURGE on invalid coordinates', async () => {

@@ -21,6 +21,11 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
   const controller = container.resolve<RideController>('rideController');
   fastify.setErrorHandler(handleRideError);
 
+  fastify.get(
+    '/serviceability',
+    { preHandler: fastify.rateLimit(rateLimits.riderServiceability) },
+    (req, reply) => controller.request.serviceability(req, reply),
+  );
   fastify.post('/quote', (req, reply) => controller.request.quote(req, reply));
   fastify.get('/nearby-drivers', (req, reply) => controller.request.nearbyDrivers(req, reply));
   fastify.post('/requests', { preHandler: fastify.rateLimit(rateLimits.rideWrite) }, (req, reply) =>

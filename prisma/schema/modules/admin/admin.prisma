@@ -236,6 +236,9 @@ model City {
   boundary   Unsupported("geography(Polygon,4326)")?
   isActive   Boolean                                 @default(true) @map("is_active")
   launchedAt DateTime?                               @map("launched_at") @db.Date
+  coverageMode       CityCoverageMode                 @default(WHOLE_CITY) @map("coverage_mode")
+  /// The legal surge limit here. Never above MAX_SURGE_MULTIPLIER.
+  maxSurgeMultiplier Decimal                          @default(2.00) @map("max_surge_multiplier") @db.Decimal(4, 2)
   createdAt  DateTime                                @default(now()) @map("created_at")
   updatedAt  DateTime                                @updatedAt @map("updated_at")
 
@@ -256,6 +259,8 @@ model ServiceZone {
   priority      Int                                    @default(0) @db.SmallInt
   allowsPickup  Boolean                                @default(true) @map("allows_pickup")
   allowsDropoff Boolean                                @default(true) @map("allows_dropoff")
+  /// Shown to a rider refused here. Riders never receive a zone's name or shape.
+  riderMessage  String?                                @map("rider_message")
   isActive      Boolean                                @default(true) @map("is_active")
   createdAt     DateTime                               @default(now()) @map("created_at")
   updatedAt     DateTime                               @updatedAt @map("updated_at")

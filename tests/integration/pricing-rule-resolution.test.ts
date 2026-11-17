@@ -50,13 +50,96 @@ describe('pricing rule resolution (integration)', () => {
   });
   beforeEach(async () => {
     await resetState();
-    const cab = await db().client.vehicleType.findUniqueOrThrow({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUniqueOrThrow({ where: { code: 'CAB_ECONOMY_NON_AC' } });
     vehicleTypeId = cab.id;
     await ensureCity('SGR', 'Srinagar');
     await ensureServiceZone('SGR', 'SGR_CITYWIDE', 'Srinagar Citywide', SGR_CITYWIDE_POLYGON);
   });
   afterEach(async () => {
     await resetState();
+  });
+
+  describe('zones inside zones', () => {
+    /// A small zone is often drawn for another reason, such as a vehicle limit. It
+    /// must not silently drop the fare of the larger zone around it.
+    it('uses the larger zone fare when the smallest zone has none', async () => {
+      const citywide = await db().client.serviceZone.findFirstOrThrow({
+        where: { code: 'SGR_CITYWIDE' },
+      });
+      await ensureServiceZone('SGR', 'SGR_AIRPORT', 'SGR Airport', SGR_AIRPORT_POLYGON);
+      await createPricingRuleDirect({ vehicleTypeId, cityCode: 'SGR', baseFare: 50 });
+      await createPricingRuleDirect({
+        vehicleTypeId,
+        cityCode: 'SGR',
+        baseFare: 77,
+        serviceZoneId: citywide.id,
+      });
+      const point = { cityCode: 'SGR', pickupLat: AIRPORT_LAT, pickupLng: AIRPORT_LNG };
+
+      const one = await repo.findBestActiveRule({ vehicleTypeId, ...point });
+      assert.equal(Number(one?.baseFare), 77);
+
+      const many = await repo.findBestActiveRulesForPoint({
+        vehicleTypeIds: [vehicleTypeId],
+        ...point,
+      });
+      assert.equal(Number(many.get(vehicleTypeId)?.baseFare), 77);
+    });
+
+    it('still prefers the smallest zone when it has its own fare', async () => {
+      const citywide = await db().client.serviceZone.findFirstOrThrow({
+        where: { code: 'SGR_CITYWIDE' },
+      });
+      const airportId = await ensureServiceZone(
+        'SGR',
+        'SGR_AIRPORT',
+        'SGR Airport',
+        SGR_AIRPORT_POLYGON,
+      );
+      await createPricingRuleDirect({
+        vehicleTypeId,
+        cityCode: 'SGR',
+        baseFare: 77,
+        serviceZoneId: citywide.id,
+      });
+      await createPricingRuleDirect({
+        vehicleTypeId,
+        cityCode: 'SGR',
+        baseFare: 99,
+        serviceZoneId: airportId,
+      });
+
+      const rule = await repo.findBestActiveRule({
+        vehicleTypeId,
+        cityCode: 'SGR',
+        pickupLat: AIRPORT_LAT,
+        pickupLng: AIRPORT_LNG,
+      });
+      assert.equal(Number(rule?.baseFare), 99);
+    });
+
+    it('never prices from a restricted zone or a surge area around the point', async () => {
+      const zoneId = await ensureServiceZone('SGR', 'SGR_NO_GO', 'No go', SGR_AIRPORT_POLYGON);
+      await db().client.serviceZone.update({
+        where: { id: zoneId },
+        data: { zoneType: 'RESTRICTED' },
+      });
+      await createPricingRuleDirect({ vehicleTypeId, cityCode: 'SGR', baseFare: 50 });
+      await createPricingRuleDirect({
+        vehicleTypeId,
+        cityCode: 'SGR',
+        baseFare: 500,
+        serviceZoneId: zoneId,
+      });
+
+      const rule = await repo.findBestActiveRule({
+        vehicleTypeId,
+        cityCode: 'SGR',
+        pickupLat: AIRPORT_LAT,
+        pickupLng: AIRPORT_LNG,
+      });
+      assert.equal(Number(rule?.baseFare), 50);
+    });
   });
 
   it('prefers zone-specific rule over citywide rule at pickup inside the zone', async () => {

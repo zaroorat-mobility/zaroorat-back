@@ -43,6 +43,8 @@ export async function geographicManagementRoutes(fastify: FastifyInstance): Prom
 
   fastify.get('/cities', canRead, (req, reply) => controller.listCities(req, reply));
   fastify.get('/cities/:id', canRead, (req, reply) => controller.getCity(req, reply));
+  fastify.get('/cities/:id/setup', canRead, (req, reply) => controller.getCitySetup(req, reply));
+  fastify.get('/simulate', canRead, (req, reply) => controller.simulate(req, reply));
   fastify.post('/cities', canWrite, (req, reply) => controller.createCity(req, reply));
   fastify.patch('/cities/:id', canWrite, (req, reply) => controller.updateCity(req, reply));
 

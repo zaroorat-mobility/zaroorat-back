@@ -9,6 +9,7 @@ import { hashPassword } from '../../src/modules/auth/utils/password.js';
 const ADMIN_PHONE = '+919876545001';
 const ADMIN_EMAIL = 'fare-admin@zaroorat.test';
 const ADMIN_PASSWORD = 'Admin@12345';
+const RETIRED_IN_TESTS = ['CAB_MINI_AC', 'CAB_XL_AC'];
 
 const SGR_CITYWIDE_POLYGON: number[][][] = [
   [
@@ -43,6 +44,11 @@ describe('admin fare rules (integration)', () => {
     await resetState();
   });
   afterEach(async () => {
+    // resetState reseeds vehicle types but leaves isActive alone, so undo any retiring here.
+    await db().client.vehicleType.updateMany({
+      where: { code: { in: RETIRED_IN_TESTS } },
+      data: { isActive: true },
+    });
     await resetState();
   });
 
@@ -69,7 +75,7 @@ describe('admin fare rules (integration)', () => {
   function basePayload(overrides: Record<string, unknown> = {}) {
     const nextYear = new Date().getFullYear() + 1;
     return {
-      vehicleType: 'cab',
+      vehicleType: 'CAB_ECONOMY_NON_AC',
       cityCode: 'GLOBAL',
       baseFare: 60,
       minimumFare: 80,
@@ -94,7 +100,7 @@ describe('admin fare rules (integration)', () => {
     });
     assert.equal(created.statusCode, 201, created.payload);
     const rule = created.json().data;
-    assert.equal(rule.vehicleType, 'cab');
+    assert.equal(rule.vehicleTypeCode, 'CAB_ECONOMY_NON_AC');
     assert.equal(rule.status, 'active');
     // FR-047. `nightEnabled` and `nightChargePercentage` are gone from the DTO:
     // they reached `night_multiplier`, which only a branch gated on an
@@ -125,6 +131,71 @@ describe('admin fare rules (integration)', () => {
     });
     assert.equal(activated.statusCode, 200, activated.payload);
     assert.equal(activated.json().data.status, 'active');
+  });
+
+  const retire = (code: string) =>
+    db().client.vehicleType.update({ where: { code }, data: { isActive: false } });
+
+  it('refuses a new fare on a retired vehicle type, which no ride can use', async () => {
+    const authHeader = await loginAdmin();
+    await retire('CAB_MINI_AC');
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/fare-rules',
+      headers: authHeader,
+      payload: basePayload({ vehicleType: 'CAB_MINI_AC' }),
+    });
+    assert.equal(created.statusCode, 409, created.payload);
+    assert.match(created.payload, /retired/);
+  });
+
+  it('never moves an edited rule onto a retired type, and the rule keeps its fare', async () => {
+    const authHeader = await loginAdmin();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/fare-rules',
+      headers: authHeader,
+      payload: basePayload({ vehicleType: 'CAB_MINI_AC' }),
+    });
+    assert.equal(created.statusCode, 201, created.payload);
+    const id = created.json().data.id as string;
+    await retire('CAB_XL_AC');
+
+    const moved = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/fare-rules/${id}`,
+      headers: authHeader,
+      payload: { vehicleType: 'CAB_XL_AC', baseFare: 75 },
+    });
+    assert.equal(moved.statusCode, 409, moved.payload);
+    const row = await db().client.pricingRule.findUniqueOrThrow({
+      where: { id },
+      include: { vehicleType: true },
+    });
+    assert.equal(row.isActive, true);
+    assert.equal(row.vehicleType.code, 'CAB_MINI_AC');
+  });
+
+  it('still edits a rule whose own vehicle type was retired', async () => {
+    const authHeader = await loginAdmin();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/fare-rules',
+      headers: authHeader,
+      payload: basePayload({ vehicleType: 'CAB_MINI_AC' }),
+    });
+    assert.equal(created.statusCode, 201, created.payload);
+    await retire('CAB_MINI_AC');
+
+    const edited = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/fare-rules/${created.json().data.id as string}`,
+      headers: authHeader,
+      payload: { vehicleType: 'CAB_MINI_AC', status: 'inactive' },
+    });
+    assert.equal(edited.statusCode, 200, edited.payload);
+    assert.equal(edited.json().data.vehicleTypeCode, 'CAB_MINI_AC');
+    assert.equal(edited.json().data.status, 'inactive');
   });
 
   /// BD-5 B. `scheduled`, `rental` and `outstation` are no longer creatable:

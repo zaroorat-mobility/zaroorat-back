@@ -197,6 +197,15 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
     handler: adminSurgeController.deleteSurgeWindow.bind(adminSurgeController),
   });
 
+  fastify.patch('/surge-settings/:cityCode', {
+    ...canWrite,
+    schema: {
+      tags: ['Admin', 'Surge'],
+      summary: 'Set the surge cap for a city',
+    },
+    handler: adminSurgeController.updateCitySurgeSettings.bind(adminSurgeController),
+  });
+
   // Billing invoices
   fastify.get('/invoices', canRead, (req, reply) =>
     adminInvoiceController.listInvoices(req, reply),

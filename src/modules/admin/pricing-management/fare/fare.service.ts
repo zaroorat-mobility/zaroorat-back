@@ -255,7 +255,7 @@ export class AdminFareService {
     const vehicleTypeCode = body.vehicleType
       ? (UI_TO_CODE[body.vehicleType] ?? body.vehicleType)
       : existing.vehicleType.code;
-    const vehicleType = await this.resolveVehicleType(vehicleTypeCode);
+    const vehicleType = await this.resolveVehicleType(vehicleTypeCode, existing.vehicleType.code);
     const cityCode = body.cityCode ?? existing.cityCode;
     const serviceType =
       body.serviceType !== undefined ? parseServiceType(body.serviceType) : existing.serviceType;
@@ -416,13 +416,23 @@ export class AdminFareService {
   /// `UI_TO_CODE` stays as the alias map the admin UI posts (`cab`, `auto`,
   /// `bike`); anything else is upper-cased and looked up, so a category created
   /// through vehicle-type management is priceable the moment it exists.
-  private async resolveVehicleType(raw: string) {
+  ///
+  /// A retired type is refused unless it is the rule's own (`keepCode`): no rider
+  /// can book it, so a new rule on it charges nobody. `cab` still maps to the
+  /// retired `CAB_ECONOMY`, so an old admin form editing a Cab Mini (AC) rule
+  /// would otherwise move that rule onto CAB_ECONOMY and drop the city's fare.
+  private async resolveVehicleType(raw: string, keepCode?: string) {
     const code = UI_TO_CODE[raw] ?? raw.toUpperCase();
     const vehicleType = await this.databaseService.client.vehicleType.findUnique({
       where: { code },
     });
     if (!vehicleType) {
       throw new FareRuleConflictError(`Vehicle type ${code} is not configured`);
+    }
+    if (!vehicleType.isActive && code !== keepCode) {
+      throw new FareRuleConflictError(
+        `Vehicle type ${code} is retired, so no ride can use this fare. Choose an active vehicle type.`,
+      );
     }
     return vehicleType;
   }

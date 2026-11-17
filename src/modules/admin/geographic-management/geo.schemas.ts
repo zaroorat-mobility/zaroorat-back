@@ -9,6 +9,8 @@ const pointSchema = z.object({
 
 export const serviceZoneTypeSchema = z.enum(['SERVICE', 'AIRPORT', 'RESTRICTED']);
 export const stateDivisionTypeSchema = z.enum(['STATE', 'UNION_TERRITORY']);
+export const coverageModeSchema = z.enum(['WHOLE_CITY', 'ZONES_ONLY']);
+const riderMessageSchema = z.string().trim().max(200).nullable();
 
 export const listStatesQuerySchema = z.object({
   countryCode: z.string().trim().min(1).max(10).optional(),
@@ -36,6 +38,7 @@ export const createCityBodySchema = z.object({
   center: pointSchema.optional(),
   boundary: polygonCoordinatesSchema.optional(),
   isActive: z.boolean().optional().default(true),
+  coverageMode: coverageModeSchema.optional(),
 });
 
 export const updateCityBodySchema = createCityBodySchema.partial().extend({
@@ -89,6 +92,7 @@ export const createServiceZoneBodySchema = z.object({
   coordinates: polygonCoordinatesSchema,
   allowsPickup: z.boolean().optional().default(true),
   allowsDropoff: z.boolean().optional().default(true),
+  riderMessage: riderMessageSchema.optional(),
   vehicleTypeIds: z.array(z.string().uuid()).optional(),
   isActive: z.boolean().optional().default(true),
 });
@@ -99,8 +103,18 @@ export const updateServiceZoneBodySchema = z.object({
   coordinates: polygonCoordinatesSchema.optional(),
   allowsPickup: z.boolean().optional(),
   allowsDropoff: z.boolean().optional(),
+  riderMessage: riderMessageSchema.optional(),
   vehicleTypeIds: z.array(z.string().uuid()).optional(),
   isActive: z.boolean().optional(),
+});
+
+export const simulateQuerySchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+  dropLat: z.coerce.number().min(-90).max(90).optional(),
+  dropLng: z.coerce.number().min(-180).max(180).optional(),
+  vehicleTypeId: z.string().uuid().optional(),
+  at: z.string().datetime({ offset: true }).optional(),
 });
 
 export type CreateCityBody = z.infer<typeof createCityBodySchema>;

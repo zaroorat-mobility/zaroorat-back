@@ -1,3 +1,5 @@
+import { FEATURE_FLAG_KEYS } from '@modules/admin/system-settings/platform/constants/platform-settings.constants.js';
+import type { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
 import { geoConfig } from '@config/geo';
 import { logger } from '@shared/logger/index.js';
 import type { PostgisProvider } from '@modules/location/providers/postgis.provider.js';
@@ -74,6 +76,7 @@ export class DriverMapZonesService {
   constructor(
     private readonly driverMapZonesRepository: DriverMapZonesRepository,
     private readonly postgisProvider: PostgisProvider,
+    private readonly featureFlagService: FeatureFlagService,
   ) {}
 
   async getZones(
@@ -179,6 +182,7 @@ export class DriverMapZonesService {
     vehicleTypeId: string | null,
     now: Date,
   ): Promise<ZoneDraft[]> {
+    if (!(await this.featureFlagService.isOn(FEATURE_FLAG_KEYS.SURGE))) return [];
     const rows = await this.driverMapZonesRepository.findSurgeWindows(viewport, now);
     const byZone = new Map<string, SurgeWindowRow[]>();
     for (const row of rows) byZone.set(row.zone_id, [...(byZone.get(row.zone_id) ?? []), row]);
@@ -194,6 +198,8 @@ export class DriverMapZonesService {
       const surge = resolveZoneSurge(
         windows.map((w) => ({
           vehicleTypeId: w.vehicle_type_id,
+          vehicleTypeIds: w.vehicle_type_ids,
+          daysOfWeek: w.days_of_week,
           multiplier: Number(w.multiplier),
           isPeakHourOnly: w.is_peak_hour_only,
           peakHourStart: w.peak_hour_start,
@@ -204,6 +210,7 @@ export class DriverMapZonesService {
         vehicleTypeId,
         now,
         head.timezone ?? FALLBACK_TIME_ZONE,
+        head.max_surge_multiplier ?? undefined,
       );
       if (!surge) continue;
       const updatedAt = windows.reduce(
