@@ -9,6 +9,10 @@ import {
   SurgeWindowNotFoundError,
   SurgeZoneNotFoundError,
 } from '../pricing.errors.js';
+import {
+  VehicleTypeService,
+  vehicleTypeDisplayName,
+} from '@modules/vehicles/services/vehicle-type.service.js';
 
 /// FR-014. The admin view of a surge window, with the two inert threshold
 /// columns gone. They remain on the table until the deferred-drop release
@@ -92,17 +96,17 @@ function toWindowDto(row: SurgeWindowRow): SurgeWindowDto {
     ...(row.vehicleType !== undefined
       ? {
           vehicleTypeCode: row.vehicleType?.code ?? null,
-          // AC and Non-AC variants share a name, e.g. two "Cab Economy" types.
-          vehicleTypeName: row.vehicleType
-            ? `${row.vehicleType.name}${row.vehicleType.hasAc ? ' (AC)' : ''}`
-            : null,
+          vehicleTypeName: row.vehicleType ? vehicleTypeDisplayName(row.vehicleType) : null,
         }
       : {}),
   };
 }
 
 export class AdminSurgeService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly vehicleTypeService: VehicleTypeService,
+  ) {}
 
   /// FR-032. `assertValidPolygon` guarded the update path but not this one, so a
   /// self-intersecting or unclosed ring could be inserted here and would then
@@ -275,6 +279,11 @@ export class AdminSurgeService {
     // legacy surge polygons still exist.
     if (!data.serviceZoneId && !data.zoneId) {
       throw new Error('A surge window requires a serviceZoneId');
+    }
+    // An unknown id reached the foreign key as a 500, and a retired type was
+    // accepted though no ride can book it. Absent still means every vehicle.
+    if (data.vehicleTypeId) {
+      await this.vehicleTypeService.resolveForConfig({ id: data.vehicleTypeId });
     }
 
     return this.db.transactionManager.execute(async (tx) => {

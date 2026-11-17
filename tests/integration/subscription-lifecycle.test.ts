@@ -469,6 +469,11 @@ describe('subscription expiry (integration, real HTTP)', () => {
     const subscription = await purchaseAndActivate(world);
     await expireNow(subscription.id);
     await expiryJob().run();
+    // The sweep takes the driver off shift, so no new offer reaches them at all.
+    const status = await db().client.driverOnlineStatus.findUnique({
+      where: { driverId: world.driverId },
+    });
+    assert.equal(status?.status, 'OFFLINE');
 
     const requested = await app.inject({
       method: 'POST',
@@ -492,8 +497,11 @@ describe('subscription expiry (integration, real HTTP)', () => {
       headers: world.driver.authHeader,
       payload: { requestId, vehicleId: world.vehicleId },
     });
+    // Refused at the first gate it now meets — being offline. The subscription
+    // check itself is pinned by driver-payment-model-flow's "no active
+    // subscription" case, which keeps the driver online.
     assert.equal(accepted.statusCode, 409, accepted.payload);
-    assert.equal(accepted.json().error.code, 'DRIVER_SUBSCRIPTION_REQUIRED');
+    assert.equal(accepted.json().error.code, 'DRIVER_NOT_AVAILABLE');
   });
 
   it('an already-accepted ride continues and completes normally even if the subscription expires mid-ride', async () => {

@@ -1,10 +1,8 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
-import {
-  CancellationPolicyConflictError,
-  CancellationPolicyNotFoundError,
-} from '../pricing.errors.js';
+import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
+import { CancellationPolicyNotFoundError } from '../pricing.errors.js';
 import type {
   CreateCancellationPolicyBody,
   ListCancellationPoliciesQuery,
@@ -36,15 +34,6 @@ const FEE_MAP: Record<string, string> = {
   PERCENT: 'PERCENT',
 };
 
-const UI_TO_CODE: Record<string, string> = {
-  cab: 'CAB_ECONOMY',
-  auto: 'AUTO',
-  bike: 'BIKE',
-  CAB_ECONOMY: 'CAB_ECONOMY',
-  AUTO: 'AUTO',
-  BIKE: 'BIKE',
-};
-
 export interface CancellationPolicyDto {
   id: string;
   ruleName: string;
@@ -55,7 +44,8 @@ export interface CancellationPolicyDto {
   freeCancelWindowSec: number;
   status: 'active' | 'inactive';
   cityCode?: string;
-  vehicleType?: 'cab' | 'auto' | 'bike';
+  /// The exact vehicle type this policy is scoped to; absent means every type.
+  vehicleTypeId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,7 +73,10 @@ function feeUi(value: string): 'fixed' | 'percentage' {
 }
 
 export class AdminCancellationService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly vehicleTypeService: VehicleTypeService,
+  ) {}
 
   async list(query: ListCancellationPoliciesQuery): Promise<{
     data: CancellationPolicyDto[];
@@ -137,9 +130,15 @@ export class AdminCancellationService {
     const minStatus = SCENARIO_MAP[body.scenario] ?? 'AFTER_ASSIGNMENT';
     const feeType = FEE_MAP[body.chargeType] ?? 'FLAT';
     const isActive = body.status !== 'inactive';
-    const vehicleTypeId = body.vehicleType
-      ? (await this.resolveVehicleType(body.vehicleType)).id
-      : null;
+    const vehicleTypeId =
+      body.vehicleTypeId || body.vehicleType
+        ? (
+            await this.vehicleTypeService.resolveForConfig({
+              id: body.vehicleTypeId,
+              code: body.vehicleType,
+            })
+          ).id
+        : null;
     const cityCode = body.cityCode ?? null;
 
     return this.databaseService.transactionManager.execute(async (tx) => {
@@ -193,11 +192,16 @@ export class AdminCancellationService {
         : existing.feeType;
       const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
       const nextVehicleTypeId =
-        body.vehicleType !== undefined
-          ? body.vehicleType
-            ? (await this.resolveVehicleType(body.vehicleType)).id
-            : null
-          : existing.vehicleTypeId;
+        body.vehicleTypeId === null
+          ? null
+          : body.vehicleTypeId || body.vehicleType
+            ? (
+                await this.vehicleTypeService.resolveForConfig(
+                  { id: body.vehicleTypeId, code: body.vehicleType },
+                  existing.vehicleTypeId,
+                )
+              ).id
+            : existing.vehicleTypeId;
       const cityCode = body.cityCode !== undefined ? body.cityCode : existing.cityCode;
 
       if (isActive) {
@@ -320,17 +324,6 @@ export class AdminCancellationService {
     }
   }
 
-  private async resolveVehicleType(raw: string) {
-    const code = UI_TO_CODE[raw] ?? raw.toUpperCase();
-    const vehicleType = await this.databaseService.client.vehicleType.findUnique({
-      where: { code },
-    });
-    if (!vehicleType) {
-      throw new CancellationPolicyConflictError(`Vehicle type ${code} is not configured`);
-    }
-    return vehicleType;
-  }
-
   private toDto(row: {
     id: string;
     cancelledBy: string;
@@ -340,6 +333,7 @@ export class AdminCancellationService {
     freeCancelWindowSec: number;
     isActive: boolean;
     cityCode: string | null;
+    vehicleTypeId: string | null;
     createdAt: Date;
   }): CancellationPolicyDto {
     const actor = actorUi(row.cancelledBy);
@@ -355,6 +349,7 @@ export class AdminCancellationService {
       freeCancelWindowSec: row.freeCancelWindowSec,
       status: row.isActive ? 'active' : 'inactive',
       ...(row.cityCode ? { cityCode: row.cityCode } : {}),
+      ...(row.vehicleTypeId ? { vehicleTypeId: row.vehicleTypeId } : {}),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.createdAt.toISOString(),
     };

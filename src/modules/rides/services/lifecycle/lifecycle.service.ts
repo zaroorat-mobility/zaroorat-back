@@ -466,16 +466,14 @@ export class LifecycleService {
           throw new DriverSubscriptionRequiredError();
         }
       } else {
-        const estimatedDistanceKm =
-          request.estimatedDistanceKm != null ? Number(request.estimatedDistanceKm) : 0;
-        const estimatedDurationMin = request.estimatedDurationMin ?? 0;
-        const quoteFare = await this.pricingService.calculateFinalFare({
-          actualDistanceKm: estimatedDistanceKm,
-          actualDurationMin: estimatedDurationMin,
-          vehicleTypeId: request.vehicleTypeId,
-          pricingRuleId: request.pricingRuleId ?? null,
-        });
-        commissionAmount = new Decimal(quoteFare.platformCommission);
+        commissionAmount = new Decimal(
+          await this.pricingService.estimatedCommission({
+            estimatedDistanceKm: request.estimatedDistanceKm,
+            estimatedDurationMin: request.estimatedDurationMin,
+            vehicleTypeId: request.vehicleTypeId,
+            pricingRuleId: request.pricingRuleId ?? null,
+          }),
+        );
         if (
           !(await this.commissionWalletService.hasSufficientBalance(
             data.driverId,

@@ -224,6 +224,7 @@ describe('Driver Document System Flow & Security (Phase 18)', () => {
         {} as never,
         mockVehicleVerificationService as never,
         {} as never,
+        {} as never,
       );
 
       // Review vehicle document
@@ -298,6 +299,7 @@ describe('Driver Document System Flow & Security (Phase 18)', () => {
         {} as never,
         mockVehicleVerificationService as never,
         {} as never,
+        {} as never,
       );
 
       await adminAppService.reviewDocument(
@@ -328,6 +330,7 @@ describe('Driver Document System Flow & Security (Phase 18)', () => {
         mockAdminDriverService as never,
         {} as never,
         mockDatabaseService as never,
+        {} as never,
         {} as never,
         {} as never,
         {} as never,

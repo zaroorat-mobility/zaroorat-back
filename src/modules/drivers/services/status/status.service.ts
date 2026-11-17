@@ -16,6 +16,7 @@ import {
 import { driverEvent, DRIVER_EVENT_CATALOG } from '../../events/catalog.js';
 import { DriverMetrics } from '../../metrics/driver.metrics.js';
 import { GeoService } from '@modules/location';
+import { DriverSubscriptionRepository } from '@modules/subscriptions/repositories/driver-subscription.repository.js';
 import type { DriverOnlineStatus } from '../../types';
 export class StatusService {
   constructor(
@@ -28,6 +29,7 @@ export class StatusService {
     private readonly eventPublisher: EventPublisher,
     private readonly driverMetrics: DriverMetrics,
     private readonly geoService: GeoService,
+    private readonly driverSubscriptionRepository: DriverSubscriptionRepository,
   ) {}
   async setOnline(
     driverId: string,
@@ -68,6 +70,21 @@ export class StatusService {
           'PAYMENT_MODEL_NOT_SELECTED',
           409,
         );
+      }
+      // Same rule and code as acceptance (DRIVER_SUBSCRIPTION_REQUIRED): an
+      // expired or unpaid plan can never accept, so it must not go online to
+      // collect offers. Server time decides expiry, not the device's clock.
+      // ponytail: no wallet gate for COMMISSION here — no minimum balance to go
+      // online is defined; dispatch skips drivers whose wallet cannot cover a ride.
+      if (driver.paymentModel === 'SUBSCRIPTION') {
+        const subscription = await this.driverSubscriptionRepository.findActive(driverId, tx);
+        if (!subscription?.expiryDate || subscription.expiryDate <= new Date()) {
+          throw new DriverError(
+            'Your subscription is not active. Renew it, or switch to Commission, to go online',
+            'DRIVER_SUBSCRIPTION_REQUIRED',
+            409,
+          );
+        }
       }
       const shift = await this.shiftRepo.startShift(driverId, tx);
       await this.driverRepo.updateAvailability(driverId, true, tx);

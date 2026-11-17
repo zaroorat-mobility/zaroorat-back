@@ -13,6 +13,20 @@ import type { StorageProvider } from '@modules/files/utils/storage/storage.provi
 import { container } from '@core/di.js';
 import { logger } from '@shared/logger/index.js';
 
+/// The one human label for a vehicle type. AC and Non-AC variants share a
+/// `name` ("Cab Mini" twice), so the AC one says so — the same rule the admin
+/// panel's picker uses, so a rule and its picker never disagree.
+export function vehicleTypeDisplayName(vehicleType: { name: string; hasAc: boolean }): string {
+  return vehicleType.hasAc ? `${vehicleType.name} (AC)` : vehicleType.name;
+}
+
+/// The admin lists' coarse badge, read from the type's own `category` column.
+/// It used to be guessed from the code's spelling ("auto", "bike", "pool"), so
+/// a new type named anything else was shown as a cab whatever it was.
+export function vehicleTypeGroup(category: string | null | undefined): 'cab' | 'auto' | 'bike' {
+  return category === 'auto' || category === 'bike' ? category : 'cab';
+}
+
 /// The reusable lookup every other module goes through. Rides (quote, request)
 /// and vehicles (claim) all validate a client-supplied `vehicleTypeId` here
 /// rather than each reaching for Prisma and each inventing its own error.
@@ -176,6 +190,33 @@ export class VehicleTypeService {
     if (!vehicleType) throw new VehicleTypeNotFoundError(id);
     if (!vehicleType.isActive) throw new VehicleTypeInactiveError(id);
     return this.enrichWithDirectUrls(vehicleType);
+  }
+
+  /// The exact type a configuration row (fare rule, surge window, cancellation
+  /// policy, manually registered vehicle) points at — by id, or by exact code.
+  /// There is no alias map: a generic `cab` names no row, so it is refused
+  /// rather than guessed, because a guess is how one variant's fare overwrote
+  /// another's. A retired type is refused too, unless it is the one the row
+  /// already holds (`keepId`), so an edit to an old rule's price still saves.
+  async resolveForConfig(
+    ref: { id?: string | null | undefined; code?: string | null | undefined },
+    keepId?: string | null,
+  ): Promise<VehicleType> {
+    const code = ref.code?.trim().toUpperCase();
+    const vehicleType = ref.id
+      ? await this.vehicleTypeRepository.findById(ref.id)
+      : code
+        ? await this.vehicleTypeRepository.findByCode(code)
+        : null;
+    const label = ref.id ?? code ?? '';
+    if (!vehicleType || (ref.id && code && vehicleType.code !== code)) {
+      throw new VehicleTypeNotFoundError(label);
+    }
+    // displayOrder < 0 is how a deleted type is kept for history.
+    if (vehicleType.id !== keepId && (!vehicleType.isActive || vehicleType.displayOrder < 0)) {
+      throw new VehicleTypeInactiveError(label);
+    }
+    return vehicleType;
   }
 
   async listAll(includeInactive = true): Promise<VehicleType[]> {

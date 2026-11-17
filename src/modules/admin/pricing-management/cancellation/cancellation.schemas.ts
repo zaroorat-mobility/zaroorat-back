@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { vehicleTypeCodeSchema } from '../fare/fare.schemas.js';
 
 export const listCancellationPoliciesQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -28,7 +29,10 @@ export const createCancellationPolicyBodySchema = z.object({
   chargeAmount: z.coerce.number().min(0),
   freeCancelWindowSec: z.coerce.number().int().min(0).optional().default(120),
   cityCode: z.string().trim().max(20).optional().nullable(),
-  vehicleType: z.enum(['cab', 'auto', 'bike', 'CAB_ECONOMY', 'AUTO', 'BIKE']).optional(),
+  /// Exact type only (`vehicleTypeId`, or the exact code in `vehicleType`); the
+  /// old `cab -> CAB_ECONOMY` alias named a type the catalog no longer has.
+  vehicleTypeId: z.string().uuid().optional().nullable(),
+  vehicleType: vehicleTypeCodeSchema.optional(),
   status: z.enum(['active', 'inactive']).optional().default('active'),
 });
 

@@ -5,6 +5,10 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { grantRole, ensureCity } from './helpers/fixtures.js';
 import { hashPassword } from '../../src/modules/auth/utils/password.js';
+import { VEHICLE_TYPE_SEED } from '../../prisma/seed/shared/vehicle-types.js';
+
+const CAR = VEHICLE_TYPE_SEED.find((type) => type.category === 'car');
+if (!CAR) throw new Error('the vehicle seed needs a car variant');
 
 const ADMIN_PHONE = '+919876545021';
 const ADMIN_EMAIL = 'surge-admin@zaroorat.test';
@@ -48,7 +52,7 @@ describe('admin surge windows (integration)', () => {
 
   it('creates a surge zone/window and lists enriched windows', async () => {
     const authHeader = await loginAdmin();
-    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
+    const cab = await db().client.vehicleType.findUnique({ where: { code: CAR.code } });
     assert.ok(cab);
 
     const zone = await app.inject({
@@ -99,12 +103,14 @@ describe('admin surge windows (integration)', () => {
       id: string;
       zoneName?: string;
       vehicleTypeCode?: string | null;
+      vehicleTypeName?: string | null;
       reason?: string | null;
     }>;
     const row = windows.find((w) => w.id === created.json().id);
     assert.ok(row);
     assert.equal(row!.zoneName, 'Test Citywide');
-    assert.equal(row!.vehicleTypeCode, 'CAB_ECONOMY_NON_AC');
+    assert.equal(row!.vehicleTypeCode, CAR.code);
+    assert.equal(row!.vehicleTypeName, CAR.hasAc ? `${CAR.name} (AC)` : CAR.name);
     assert.equal(row!.reason, 'Morning Peak Cab Surge');
   });
 
@@ -274,7 +280,7 @@ describe('admin surge windows (integration)', () => {
   /// inert.
   it('stores peak-hour rules and no longer accepts inert thresholds', async () => {
     const authHeader = await loginAdmin();
-    const cab = await db().client.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
+    const cab = await db().client.vehicleType.findUnique({ where: { code: CAR.code } });
     assert.ok(cab);
 
     const zone = await app.inject({
@@ -325,5 +331,50 @@ describe('admin surge windows (integration)', () => {
       'a field nothing evaluates must not be returned',
     );
     assert.equal(body.supplyThresholdPct, undefined);
+  });
+  it('refuses an unknown or retired vehicle type instead of a 500 or a dead rule', async () => {
+    const authHeader = await loginAdmin();
+    const zone = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/surge-zones',
+      headers: authHeader,
+      payload: {
+        cityCode: 'SGR',
+        name: 'Vehicle Check Zone',
+        coordinates: [
+          [
+            [74.7, 34.0],
+            [75.0, 34.0],
+            [75.0, 34.2],
+            [74.7, 34.2],
+            [74.7, 34.0],
+          ],
+        ],
+      },
+    });
+    assert.equal(zone.statusCode, 201, zone.payload);
+    const window = (vehicleTypeId: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/surge-windows',
+        headers: authHeader,
+        payload: {
+          zoneId: zone.json().id as string,
+          vehicleTypeId,
+          multiplier: 1.4,
+          startsAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      });
+
+    const unknown = await window('00000000-0000-7000-8000-000000000000');
+    assert.equal(unknown.statusCode, 404, unknown.payload);
+    assert.equal(unknown.json().error.code, 'VEHICLE_TYPE_NOT_FOUND');
+
+    const car = await db().client.vehicleType.findUniqueOrThrow({ where: { code: CAR.code } });
+    await db().client.vehicleType.update({ where: { id: car.id }, data: { isActive: false } });
+    const retired = await window(car.id);
+    assert.equal(retired.statusCode, 409, retired.payload);
+    assert.equal(retired.json().error.code, 'VEHICLE_TYPE_INACTIVE');
+    assert.equal(await db().client.surgeWindow.count({ where: { vehicleTypeId: car.id } }), 0);
   });
 });

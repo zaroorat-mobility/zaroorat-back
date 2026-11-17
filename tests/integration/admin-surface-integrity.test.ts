@@ -480,8 +480,10 @@ describe('admin surface integrity (Phase 6)', () => {
         effectiveFrom: `${nextYear}-01-01`,
       },
     });
-    // Loosening the schema must not loosen the check — it moves it to the table.
-    assert.equal(created.statusCode, 409, created.payload);
+    // Loosening the schema must not loosen the check — it moves it to the table,
+    // through VehicleTypeService, which reports an unknown type as a 404.
+    assert.equal(created.statusCode, 404, created.payload);
+    assert.equal(created.json().error.code, 'VEHICLE_TYPE_NOT_FOUND');
   });
 
   // ---------------------------------------------------------------- FR-040 --
