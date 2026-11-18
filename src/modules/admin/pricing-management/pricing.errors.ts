@@ -24,6 +24,17 @@ export class FareRuleConflictError extends PricingAdminError {
   }
 }
 
+export class FareRuleStaleError extends PricingAdminError {
+  constructor(expectedVersion: number, actualVersion: number) {
+    super(
+      `Fare rule version mismatch: expected v${expectedVersion}, current is v${actualVersion}. Reload and retry.`,
+      'FARE_RULE_STALE',
+      409,
+    );
+    this.name = 'FareRuleStaleError';
+  }
+}
+
 export class CancellationPolicyNotFoundError extends PricingAdminError {
   constructor(message = 'Cancellation policy was not found') {
     super(message, 'CANCELLATION_POLICY_NOT_FOUND', 404);

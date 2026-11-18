@@ -80,6 +80,8 @@ export class RideRequestController {
         ...(body.pickupNotes !== undefined ? { pickupNotes: body.pickupNotes } : {}),
         ...(body.scheduledFor !== undefined ? { scheduledFor: body.scheduledFor } : {}),
         ...(body.boostAmount !== undefined ? { boostAmount: body.boostAmount } : {}),
+        ...(body.quoteId !== undefined ? { quoteId: body.quoteId } : {}),
+        ...(body.expectedFare !== undefined ? { expectedFare: body.expectedFare } : {}),
       });
     // Optional, unlike payments' mandatory Idempotency-Key: a client retrying
     // a timed-out POST /rides/requests with the same key gets back the

@@ -1,7 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
 import { Prisma, type RideServiceType } from '../../../../generated/prisma/index.js';
 import { recordAdminAction } from '../../audit/index.js';
-import { FareRuleConflictError, FareRuleNotFoundError } from '../pricing.errors.js';
+import {
+  FareRuleConflictError,
+  FareRuleNotFoundError,
+  FareRuleStaleError,
+  PricingAdminError,
+} from '../pricing.errors.js';
 import type {
   CreateFareRuleBody,
   ListFareRulesQuery,
@@ -19,10 +26,17 @@ import {
   vehicleTypeDisplayName,
 } from '@modules/vehicles/services/vehicle-type.service.js';
 
+export interface FareRuleWarning {
+  code: 'FARE_RULE_GAP';
+  message: string;
+}
+
 export interface FareRuleDto {
   id: string;
   ruleName: string;
   version: number;
+  ruleFamilyId: string;
+  supersedesId: string | null;
   /// The exact vehicle type code. This used to be a `cab | auto | bike` guess
   /// that called every cab variant "cab", so an edit form loaded from it could
   /// only post "cab" back and move a Cab Mini (AC) rule onto another type.
@@ -49,7 +63,10 @@ export interface FareRuleDto {
   commissionRatePct: number | null;
   status: 'active' | 'inactive';
   effectiveFrom: string;
+  effectiveFromIso: string;
   effectiveTo?: string;
+  effectiveToIso?: string | null;
+  warnings?: FareRuleWarning[];
   createdAt: string;
   updatedAt: string;
 }
@@ -154,9 +171,9 @@ export class AdminFareService {
       commissionAtAcceptance: atAcceptance.platformCommission,
       rates: {
         taxRatePct: card.taxRatePct,
-        taxRateIsDefault: body.taxRatePct === undefined,
+        taxRateIsDefault: body.taxRatePct == null,
         commissionRatePct: card.commissionRatePct,
-        commissionRateIsDefault: body.commissionRatePct === undefined,
+        commissionRateIsDefault: body.commissionRatePct == null,
       },
     };
   }
@@ -228,6 +245,90 @@ export class AdminFareService {
     return this.toDto(row);
   }
 
+  /// Phase 1.1: Time-aware exclusivity for active fare rules on a RuleKey.
+  /// - An overlapping incumbent starting STRICTLY earlier than `effectiveFrom` is
+  ///   closed at `effectiveTo = effectiveFrom` (staying active until handoff).
+  /// - An overlapping incumbent starting at or after `effectiveFrom` is retired
+  ///   (`isActive = false`).
+  /// - Detects any scheduling gap between a prior rule's `effectiveTo` and `effectiveFrom`.
+  private async applyTimeAwareExclusivity(
+    tx: TransactionClient,
+    key: RuleKey,
+    effectiveFrom: Date,
+    effectiveTo: Date | null,
+    excludeId?: string,
+  ): Promise<FareRuleWarning[]> {
+    const activeSiblings = await tx.pricingRule.findMany({
+      where: {
+        ...exclusivityWhere(key),
+        ...(excludeId ? { NOT: { id: excludeId } } : {}),
+      },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+
+    const newFromMs = effectiveFrom.getTime();
+    const newToMs = effectiveTo ? effectiveTo.getTime() : Number.POSITIVE_INFINITY;
+    let coveredBefore = false;
+    let latestPriorEnd: Date | null = null;
+
+    for (const inc of activeSiblings) {
+      const incFromMs = inc.effectiveFrom.getTime();
+      const incToMs = inc.effectiveTo ? inc.effectiveTo.getTime() : Number.POSITIVE_INFINITY;
+      const overlaps = incToMs > newFromMs && incFromMs < newToMs;
+
+      if (overlaps) {
+        if (incFromMs < newFromMs) {
+          // Close incumbent cleanly at the successor's start time without turning it off early.
+          await tx.pricingRule.update({
+            where: { id: inc.id },
+            data: { effectiveTo: effectiveFrom },
+          });
+          coveredBefore = true;
+        } else {
+          // Incumbent starts at or after successor start -> replace/retire it.
+          await tx.pricingRule.update({
+            where: { id: inc.id },
+            data: { isActive: false },
+          });
+        }
+      } else if (inc.effectiveTo) {
+        if (inc.effectiveTo.getTime() === newFromMs) {
+          coveredBefore = true;
+        } else if (inc.effectiveTo.getTime() < newFromMs) {
+          if (!latestPriorEnd || inc.effectiveTo.getTime() > latestPriorEnd.getTime()) {
+            latestPriorEnd = inc.effectiveTo;
+          }
+        }
+      }
+    }
+
+    const warnings: FareRuleWarning[] = [];
+    if (!coveredBefore && latestPriorEnd) {
+      warnings.push({
+        code: 'FARE_RULE_GAP',
+        message: `There is an uncovered pricing gap between ${latestPriorEnd.toISOString()} and ${effectiveFrom.toISOString()}.`,
+      });
+    }
+    return warnings;
+  }
+
+  async listVersions(id: string): Promise<FareRuleDto[]> {
+    const row = await this.databaseService.client.pricingRule.findUnique({
+      where: { id },
+      select: { id: true, ruleFamilyId: true },
+    });
+    if (!row) throw new FareRuleNotFoundError();
+    const familyId = row.ruleFamilyId ?? row.id;
+    const versions = await this.databaseService.client.pricingRule.findMany({
+      where: {
+        OR: [{ ruleFamilyId: familyId }, { id: familyId }],
+      },
+      include: { vehicleType: true, serviceZone: true },
+      orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+    });
+    return versions.map((v) => this.toDto(v));
+  }
+
   async create(body: CreateFareRuleBody, actorId?: string): Promise<FareRuleDto> {
     const vehicleType = await this.vehicleTypeService.resolveForConfig({
       id: body.vehicleTypeId,
@@ -237,6 +338,12 @@ export class AdminFareService {
     const cityCode = body.cityCode || 'GLOBAL';
     const serviceType = parseServiceType(body.serviceType ?? null);
     const serviceZoneId = body.serviceZoneId ?? null;
+    const effectiveFrom = new Date(body.effectiveFrom);
+    const effectiveTo = body.effectiveTo ? new Date(body.effectiveTo) : null;
+
+    if (effectiveTo && effectiveTo.getTime() <= effectiveFrom.getTime()) {
+      throw new PricingAdminError('effectiveTo must be strictly after effectiveFrom', 'VALIDATION', 400);
+    }
 
     if (serviceZoneId) {
       await this.adminServiceZoneService.assertZoneBelongsToCity(serviceZoneId, cityCode);
@@ -249,21 +356,18 @@ export class AdminFareService {
       serviceZoneId,
     };
 
-    /// FR-034. Deactivating the incumbent and inserting its replacement is one
-    /// change. Untransacted, a failure between them left the key with no active
-    /// rule at all — and a key with no active rule does not fail loudly, it
-    /// falls through to the GLOBAL card and quietly prices the city wrong.
     const created = await this.databaseService.transactionManager
       .execute(async (tx) => {
-        if (isActive) {
-          await tx.pricingRule.updateMany({
-            where: exclusivityWhere(key),
-            data: { isActive: false },
-          });
-        }
+        const warnings = isActive
+          ? await this.applyTimeAwareExclusivity(tx, key, effectiveFrom, effectiveTo)
+          : [];
 
+        const newId = randomUUID();
         const row = await tx.pricingRule.create({
           data: {
+            id: newId,
+            ruleFamilyId: newId,
+            supersedesId: null,
             vehicleTypeId: vehicleType.id,
             cityCode,
             serviceType,
@@ -285,14 +389,14 @@ export class AdminFareService {
               : {}),
             version: 1,
             isActive,
-            effectiveFrom: new Date(body.effectiveFrom),
-            ...(body.effectiveTo ? { effectiveTo: new Date(body.effectiveTo) } : {}),
+            effectiveFrom,
+            effectiveTo,
             ...(actorId ? { createdBy: actorId } : {}),
           },
           include: { vehicleType: true, serviceZone: true },
         });
 
-        const dto = this.toDto(row);
+        const dto = this.toDto(row, warnings);
         await recordAdminAction(tx, {
           actorId,
           action: 'CREATE',
@@ -315,6 +419,10 @@ export class AdminFareService {
     });
     if (!existing) throw new FareRuleNotFoundError();
 
+    if (body.expectedVersion !== undefined && body.expectedVersion !== existing.version) {
+      throw new FareRuleStaleError(body.expectedVersion, existing.version);
+    }
+
     // The rule's own type stays editable even once retired; moving a rule onto
     // another type must name that type exactly.
     const vehicleType =
@@ -330,6 +438,17 @@ export class AdminFareService {
     const serviceZoneId =
       body.serviceZoneId !== undefined ? body.serviceZoneId : existing.serviceZoneId;
     const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
+    const effectiveFrom = body.effectiveFrom ? new Date(body.effectiveFrom) : existing.effectiveFrom;
+    const effectiveTo =
+      body.effectiveTo !== undefined
+        ? body.effectiveTo
+          ? new Date(body.effectiveTo)
+          : null
+        : existing.effectiveTo;
+
+    if (effectiveTo && effectiveTo.getTime() <= effectiveFrom.getTime()) {
+      throw new PricingAdminError('effectiveTo must be strictly after effectiveFrom', 'VALIDATION', 400);
+    }
 
     if (serviceZoneId) {
       await this.adminServiceZoneService.assertZoneBelongsToCity(serviceZoneId, cityCode);
@@ -341,26 +460,64 @@ export class AdminFareService {
       serviceType,
       serviceZoneId,
     };
+    const sameKey =
+      existing.vehicleTypeId === key.vehicleTypeId &&
+      existing.cityCode === key.cityCode &&
+      existing.serviceType === key.serviceType &&
+      existing.serviceZoneId === key.serviceZoneId;
+    const familyId = existing.ruleFamilyId ?? existing.id;
     const before = this.toDto(existing);
 
-    /// FR-034 (G2). This was three separate writes: retire the edited rule,
-    /// retire anything else on the key, insert the new version. A failure after
-    /// the first left the operator's rule deactivated and no replacement — the
-    /// edit looked like a deletion, and the city fell back to GLOBAL pricing
-    /// until someone noticed.
     return this.databaseService.transactionManager
       .execute(async (tx) => {
-        await tx.pricingRule.update({ where: { id }, data: { isActive: false } });
-
-        if (isActive) {
-          await tx.pricingRule.updateMany({
-            where: { ...exclusivityWhere(key), NOT: { id } },
-            data: { isActive: false },
+        // Lock the target row to serialize concurrent edits on the same version.
+        const lockedRows = await tx.$queryRaw<Array<{ id: string; version: number; is_active: boolean }>>`
+          SELECT "id", "version", "is_active"
+          FROM "pricing_rules"
+          WHERE "id" = ${id}::uuid
+          FOR UPDATE
+        `;
+        const locked = lockedRows[0];
+        if (!locked) throw new FareRuleNotFoundError();
+        if (body.expectedVersion !== undefined) {
+          // Also ensure no successor version was already created from this rule.
+          const latestInFamily = await tx.pricingRule.findFirst({
+            where: { OR: [{ ruleFamilyId: familyId }, { id: familyId }] },
+            orderBy: { version: 'desc' },
+            select: { version: true },
           });
+          const actualVersion = latestInFamily?.version ?? locked.version;
+          if (body.expectedVersion !== actualVersion) {
+            throw new FareRuleStaleError(body.expectedVersion, actualVersion);
+          }
         }
+
+        // If scheduling a future replacement of an active rule on the same key,
+        // keep the existing rule live up to the new rule's effectiveFrom!
+        const keepExistingUntilHandoff =
+          isActive &&
+          sameKey &&
+          locked.is_active &&
+          effectiveFrom.getTime() > existing.effectiveFrom.getTime() &&
+          effectiveFrom.getTime() > Date.now();
+
+        if (keepExistingUntilHandoff) {
+          await tx.pricingRule.update({
+            where: { id },
+            data: { effectiveTo: effectiveFrom },
+          });
+        } else {
+          await tx.pricingRule.update({ where: { id }, data: { isActive: false } });
+        }
+
+        const warnings = isActive
+          ? await this.applyTimeAwareExclusivity(tx, key, effectiveFrom, effectiveTo, id)
+          : [];
 
         const row = await tx.pricingRule.create({
           data: {
+            ruleFamilyId: familyId,
+            supersedesId: existing.id,
             vehicleTypeId: vehicleType.id,
             cityCode,
             serviceType,
@@ -373,25 +530,23 @@ export class AdminFareService {
             waitingPerMin: body.waitingChargePerMinute ?? toNum(existing.waitingPerMin),
             bookingFee: body.bookingFee ?? toNum(existing.bookingFee),
             platformFeePct: body.platformFeePct ?? toNum(existing.platformFeePct),
-            platformFeeFlat: body.platformFeeFlat ?? existing.platformFeeFlat,
-            taxRatePct: body.taxRatePct ?? existing.taxRatePct,
-            commissionRatePct: body.commissionRatePct ?? existing.commissionRatePct,
+            platformFeeFlat:
+              body.platformFeeFlat !== undefined ? body.platformFeeFlat : existing.platformFeeFlat,
+            taxRatePct: body.taxRatePct !== undefined ? body.taxRatePct : existing.taxRatePct,
+            commissionRatePct:
+              body.commissionRatePct !== undefined
+                ? body.commissionRatePct
+                : existing.commissionRatePct,
             version: existing.version + 1,
             isActive,
-            effectiveFrom: body.effectiveFrom
-              ? new Date(body.effectiveFrom)
-              : existing.effectiveFrom,
-            ...(body.effectiveTo
-              ? { effectiveTo: new Date(body.effectiveTo) }
-              : existing.effectiveTo
-                ? { effectiveTo: existing.effectiveTo }
-                : {}),
+            effectiveFrom,
+            effectiveTo,
             ...(actorId ? { createdBy: actorId } : {}),
           },
           include: { vehicleType: true, serviceZone: true },
         });
 
-        const after = this.toDto(row);
+        const after = this.toDto(row, warnings);
         await recordAdminAction(tx, {
           actorId,
           action: 'UPDATE',
@@ -420,14 +575,15 @@ export class AdminFareService {
       serviceZoneId: existing.serviceZoneId,
     };
 
-    /// FR-034. Retiring the incumbent and promoting this rule is one change:
-    /// between the two statements the key had no active rule at all.
     return this.databaseService.transactionManager
       .execute(async (tx) => {
-        await tx.pricingRule.updateMany({
-          where: exclusivityWhere(key),
-          data: { isActive: false },
-        });
+        const warnings = await this.applyTimeAwareExclusivity(
+          tx,
+          key,
+          existing.effectiveFrom,
+          existing.effectiveTo,
+          id,
+        );
 
         const updated = await tx.pricingRule.update({
           where: { id },
@@ -435,7 +591,7 @@ export class AdminFareService {
           include: { vehicleType: true, serviceZone: true },
         });
 
-        const after = this.toDto(updated);
+        const after = this.toDto(updated, warnings);
         await recordAdminAction(tx, {
           actorId,
           action: 'UPDATE',
@@ -479,31 +635,37 @@ export class AdminFareService {
     await this.deactivate(id, actorId);
   }
 
-  private toDto(row: {
-    id: string;
-    cityCode: string;
-    serviceType: RideServiceType | null;
-    serviceZoneId: string | null;
-    baseFare: { toString(): string };
-    minimumFare: { toString(): string };
-    perKmRate: { toString(): string };
-    perMinuteRate: { toString(): string };
-    freeWaitingMin: number;
-    waitingPerMin: { toString(): string };
-    bookingFee: { toString(): string };
-    platformFeePct: { toString(): string };
-    platformFeeFlat: { toString(): string } | null;
-    taxRatePct: { toString(): string } | null;
-    commissionRatePct: { toString(): string } | null;
-    version: number;
-    isActive: boolean;
-    effectiveFrom: Date;
-    effectiveTo: Date | null;
-    createdAt: Date;
-    vehicleTypeId: string;
-    vehicleType: { code: string; name: string; hasAc: boolean; category: string };
-    serviceZone?: { name: string } | null;
-  }): FareRuleDto {
+  private toDto(
+    row: {
+      id: string;
+      ruleFamilyId?: string | null;
+      supersedesId?: string | null;
+      cityCode: string;
+      serviceType: RideServiceType | null;
+      serviceZoneId: string | null;
+      baseFare: { toString(): string };
+      minimumFare: { toString(): string };
+      perKmRate: { toString(): string };
+      perMinuteRate: { toString(): string };
+      freeWaitingMin: number;
+      waitingPerMin: { toString(): string };
+      bookingFee: { toString(): string };
+      platformFeePct: { toString(): string };
+      platformFeeFlat: { toString(): string } | null;
+      taxRatePct: { toString(): string } | null;
+      commissionRatePct: { toString(): string } | null;
+      version: number;
+      isActive: boolean;
+      effectiveFrom: Date;
+      effectiveTo: Date | null;
+      createdAt: Date;
+      updatedAt?: Date;
+      vehicleTypeId: string;
+      vehicleType: { code: string; name: string; hasAc: boolean; category: string };
+      serviceZone?: { name: string } | null;
+    },
+    warnings?: FareRuleWarning[],
+  ): FareRuleDto {
     const zoneLabel = row.serviceZone?.name ?? null;
     const svcLabel = serviceTypeUi(row.serviceType);
     const nameParts = [row.vehicleType.code, row.cityCode];
@@ -514,6 +676,8 @@ export class AdminFareService {
       id: row.id,
       ruleName: nameParts.join(' · '),
       version: row.version,
+      ruleFamilyId: row.ruleFamilyId ?? row.id,
+      supersedesId: row.supersedesId ?? null,
       vehicleType: row.vehicleType.code,
       vehicleTypeId: row.vehicleTypeId,
       vehicleTypeCode: row.vehicleType.code,
@@ -536,9 +700,16 @@ export class AdminFareService {
       commissionRatePct: row.commissionRatePct != null ? toNum(row.commissionRatePct) : null,
       status: row.isActive ? 'active' : 'inactive',
       effectiveFrom: row.effectiveFrom.toISOString().slice(0, 10),
-      ...(row.effectiveTo ? { effectiveTo: row.effectiveTo.toISOString().slice(0, 10) } : {}),
+      effectiveFromIso: row.effectiveFrom.toISOString(),
+      ...(row.effectiveTo
+        ? {
+            effectiveTo: row.effectiveTo.toISOString().slice(0, 10),
+            effectiveToIso: row.effectiveTo.toISOString(),
+          }
+        : { effectiveToIso: null }),
+      ...(warnings && warnings.length > 0 ? { warnings } : {}),
       createdAt: row.createdAt.toISOString(),
-      updatedAt: row.createdAt.toISOString(),
+      updatedAt: (row.updatedAt ?? row.createdAt).toISOString(),
     };
   }
 }

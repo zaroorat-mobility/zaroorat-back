@@ -2,6 +2,7 @@ import { asClass, asFunction, aliasTo, AwilixContainer } from 'awilix';
 import { RideMetrics } from './metrics/ride.metrics.js';
 import {
   RideRequestRepository,
+  RideQuoteRepository,
   RideDispatchRepository,
   RideRepository,
   RideFareRepository,
@@ -63,6 +64,7 @@ export function registerRidesModule(container: AwilixContainer): void {
   container.register({
     rideMetrics: asClass(RideMetrics).singleton(),
     rideRequestRepository: asClass(RideRequestRepository).singleton(),
+    rideQuoteRepository: asClass(RideQuoteRepository).singleton(),
     rideDispatchRepository: asClass(RideDispatchRepository).singleton(),
     rideRepository: asClass(RideRepository).singleton(),
     rideFareRepository: asClass(RideFareRepository).singleton(),

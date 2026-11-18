@@ -25,6 +25,7 @@ model VehicleType {
   surgeWindows     SurgeWindow[]
   promotions       Promotion[]
   serviceZoneLinks ServiceZoneVehicleType[]
+  rideQuoteOptions RideQuoteOption[]
 
   @@index([isActive, displayOrder])
   @@map("vehicle_types")

@@ -59,6 +59,11 @@ import { CommissionWalletService } from '@modules/payments/services/commission-w
 import { paymentEvent, PAYMENT_EVENT_CATALOG } from '@modules/payments/events/catalog.js';
 import { DriverSubscriptionRepository } from '@modules/subscriptions/repositories/driver-subscription.repository.js';
 import { RideChatService } from '../chat/ride-chat.service.js';
+import { ReceiptService } from '../receipt/receipt.service.js';
+import { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
+import { PRICING_FEATURE_FLAG_KEYS } from '@modules/admin/system-settings/platform/constants/pricing-feature-flags.constants.js';
+import type { PricingSnapshot } from '@modules/pricing';
+import type { Prisma } from '../../../../generated/prisma/index.js';
 import type { Ride, RideRequest, RideStatus } from '../../types';
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   ACCEPTED: [
@@ -120,6 +125,8 @@ export class LifecycleService {
     private readonly commissionWalletService: CommissionWalletService,
     private readonly driverSubscriptionRepository: DriverSubscriptionRepository,
     private readonly rideChatService: RideChatService,
+    private readonly receiptService?: ReceiptService,
+    private readonly featureFlagService?: FeatureFlagService,
   ) {}
   validateTransition(fromState: string, toState: string): void {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
@@ -907,10 +914,16 @@ export class LifecycleService {
       }
       const waitingMinutes = ride.waitTimeMin ?? 0;
 
-      // FR-001/FR-002. The rule the customer was quoted and booked on. Null only
-      // for requests written before the column existed, where `calculateFinalFare`
-      // falls back to live resolution.
+      // FR-001/FR-002 + Phase 1 (M-02): Read write-once pricing snapshot when
+      // `pricing.snapshot_read` is enabled, otherwise fall back to pinned pricingRuleId.
       const pricingRuleId = request?.pricingRuleId ?? null;
+      const rawPricingSnapshot = (request as { pricingSnapshot?: unknown } | null)
+        ?.pricingSnapshot as PricingSnapshot | null | undefined;
+      const snapshotReadEnabled = this.featureFlagService
+        ? await this.featureFlagService.isEnabledReadOnly(PRICING_FEATURE_FLAG_KEYS.SNAPSHOT_READ)
+        : false;
+      const activePricingSnapshot =
+        snapshotReadEnabled && rawPricingSnapshot ? rawPricingSnapshot : null;
 
       let discountAmount = 0;
       let resolvedPromo: Awaited<ReturnType<PromotionService['validateAndResolve']>> | null = null;
@@ -925,6 +938,7 @@ export class LifecycleService {
           actualDurationMin,
           vehicleTypeId: ride.vehicleTypeId,
           pricingRuleId,
+          ...(activePricingSnapshot ? { pricingSnapshot: activePricingSnapshot } : {}),
           waitingMinutes,
         });
         try {
@@ -968,6 +982,7 @@ export class LifecycleService {
         actualDurationMin: billedDurationMin,
         vehicleTypeId: ride.vehicleTypeId,
         pricingRuleId,
+        ...(activePricingSnapshot ? { pricingSnapshot: activePricingSnapshot } : {}),
         surgeMultiplier,
         waitingMinutes,
         ...(discountAmount > 0 ? { discountAmount } : {}),
@@ -1032,6 +1047,9 @@ export class LifecycleService {
           totalFare: new Decimal(totalWithBoost),
           driverEarning: new Decimal(driverEarningWithBoost),
           platformCommission: new Decimal(itemizedFare.platformCommission),
+          ...(rawPricingSnapshot?.rateCard
+            ? { ratesSnapshot: rawPricingSnapshot.rateCard as unknown as Prisma.InputJsonValue }
+            : {}),
         },
         tx,
       );
@@ -1149,6 +1167,11 @@ export class LifecycleService {
           },
           tx,
         );
+        // Phase 1.7: Issue immutable customer receipt right inside the completion
+        // transaction once driver-collected payment has settled.
+        if (this.receiptService) {
+          await this.receiptService.generateReceipt(rideId, tx);
+        }
       }
       // Behind the conditional claim above, so only the completion that
       // actually won counts. `totalEarnings` is left alone on purpose: the

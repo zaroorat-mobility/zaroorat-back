@@ -1,5 +1,6 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
+import type { Prisma } from '../../../generated/prisma/index.js';
 import { Decimal, type RideFare } from '../types';
 export interface CreateRideFareInput {
   rideId: string;
@@ -18,6 +19,7 @@ export interface CreateRideFareInput {
   totalFare: Decimal;
   driverEarning: Decimal;
   platformCommission: Decimal;
+  ratesSnapshot?: Prisma.InputJsonValue | null;
 }
 export class RideFareRepository {
   constructor(private readonly db: DatabaseService) {}
@@ -41,6 +43,9 @@ export class RideFareRepository {
       totalFare: input.totalFare,
       driverEarning: input.driverEarning,
       platformCommission: input.platformCommission,
+      ...(input.ratesSnapshot !== undefined && input.ratesSnapshot !== null
+        ? { ratesSnapshot: input.ratesSnapshot }
+        : {}),
     };
     return client.rideFare.create({ data });
   }

@@ -7,6 +7,7 @@ import { AdminFareController } from './fare/fare.controller.js';
 import { AdminCancellationController } from './cancellation/cancellation.controller.js';
 import { AdminServiceZoneController } from './service-zone/service-zone.controller.js';
 import { AdminInvoiceController } from './invoice/invoice.controller.js';
+import { AdminPricingSimulateController } from './simulate/simulate.controller.js';
 
 const uuidParams = {
   type: 'object',
@@ -51,8 +52,16 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   );
   const adminInvoiceController =
     container.resolve<AdminInvoiceController>('adminInvoiceController');
+  const adminPricingSimulateController = container.resolve<AdminPricingSimulateController>(
+    'adminPricingSimulateController',
+  );
   const canRead = { preHandler: fastify.authorize({ permissions: ['pricing:read'] }) };
   const canWrite = { preHandler: fastify.authorize({ permissions: ['pricing:write'] }) };
+
+  // Pricing live simulator (Phase 1.8)
+  fastify.post('/pricing/simulate', canRead, (req, reply) =>
+    adminPricingSimulateController.simulate(req, reply),
+  );
 
   // Service zones (for fare rule scoping)
   fastify.get('/service-zones', canRead, (req, reply) =>
@@ -67,6 +76,9 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   );
   fastify.post('/fare-rules/preview', canRead, (req, reply) =>
     adminFareController.preview(req, reply),
+  );
+  fastify.get('/fare-rules/:id/versions', canRead, (req, reply) =>
+    adminFareController.listVersions(req, reply),
   );
   fastify.get('/fare-rules/:id', canRead, (req, reply) => adminFareController.getById(req, reply));
   fastify.post('/fare-rules', canWrite, (req, reply) => adminFareController.create(req, reply));

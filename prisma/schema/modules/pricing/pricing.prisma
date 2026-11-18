@@ -24,17 +24,24 @@ model PricingRule {
   taxRatePct        Decimal?         @map("tax_rate_pct") @db.Decimal(5, 2)
   commissionRatePct Decimal?         @map("commission_rate_pct") @db.Decimal(5, 2)
   version           Int              @default(1)
+  ruleFamilyId      String?          @map("rule_family_id") @db.Uuid
+  supersedesId      String?          @map("supersedes_id") @db.Uuid
   isActive          Boolean          @default(true) @map("is_active")
   effectiveFrom     DateTime         @default(now()) @map("effective_from")
   effectiveTo       DateTime?        @map("effective_to")
   createdBy         String?          @map("created_by") @db.Uuid
   createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @default(now()) @updatedAt @map("updated_at")
 
-  vehicleType  VehicleType   @relation(fields: [vehicleTypeId], references: [id])
-  serviceZone  ServiceZone?  @relation(fields: [serviceZoneId], references: [id])
-  rideRequests RideRequest[]
+  vehicleType      VehicleType       @relation(fields: [vehicleTypeId], references: [id])
+  serviceZone      ServiceZone?      @relation(fields: [serviceZoneId], references: [id])
+  supersedes       PricingRule?      @relation("PricingRuleLineage", fields: [supersedesId], references: [id])
+  supersededBy     PricingRule[]     @relation("PricingRuleLineage")
+  rideRequests     RideRequest[]
+  rideQuoteOptions RideQuoteOption[]
 
   @@index([cityCode, vehicleTypeId, serviceType, serviceZoneId])
+  @@index([ruleFamilyId, version])
   @@map("pricing_rules")
 }
 

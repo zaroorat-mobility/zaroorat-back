@@ -33,6 +33,12 @@ export class AdminFareController {
     reply.send({ data });
   }
 
+  async listVersions(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = fareRuleIdParamSchema.parse(req.params);
+    const data = await this.adminFareService.listVersions(id);
+    reply.send({ data });
+  }
+
   async create(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = createFareRuleBodySchema.parse(req.body);
     const actorId = callerId(req);

@@ -13,4 +13,7 @@ export * from './service-zone/service-zone.service.js';
 export * from './invoice/invoice.controller.js';
 export * from './invoice/invoice.service.js';
 export * from './invoice/invoice.schemas.js';
+export * from './simulate/simulate.controller.js';
+export * from './simulate/simulate.service.js';
+export * from './simulate/simulate.schemas.js';
 export { adminSurgeRoutes as pricingManagementRoutes } from './pricing-management.routes.js';

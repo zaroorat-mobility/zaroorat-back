@@ -86,6 +86,10 @@ export const createRideRequestSchema = z
     /// against the server clock, not the one that parsed the body.
     scheduledFor: z.coerce.date().optional(),
     boostAmount: rideBoostAmountSchema.optional(),
+    /// Phase 1 (M-01). Optional persisted quote ID to lock the displayed fare.
+    quoteId: z.string().uuid().optional(),
+    /// Optional customer-displayed fare; refuses booking with 409 FARE_CHANGED if drifted.
+    expectedFare: z.number().finite().nonnegative().optional(),
   })
   .superRefine((body, ctx) => {
     if ((body.passengerName === undefined) !== (body.passengerPhone === undefined)) {

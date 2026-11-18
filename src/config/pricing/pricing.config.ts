@@ -32,6 +32,9 @@ export interface PricingConfig {
   /// percentage. 0 makes the quote binding; the cap never applies downward,
   /// because billing a shorter trip for less is not a promise being broken.
   maxFareIncreaseOverQuotePct: number;
+  /// Phase 1 (D-10). How long a persisted customer fare quote stays valid
+  /// before expiring (default 300s = 5 minutes).
+  quoteTtlSeconds: number;
 }
 
 const defaultRateCard: PricingRateCard = Object.freeze({
@@ -61,4 +64,5 @@ export const pricingConfig: PricingConfig = Object.freeze({
     min: 0,
     max: 100,
   }),
+  quoteTtlSeconds: numericEnv('RIDE_QUOTE_TTL_SECONDS', 300, { min: 30, max: 3600 }),
 });

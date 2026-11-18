@@ -35,6 +35,20 @@ export interface TripEstimate {
   encodedPolyline?: string;
 }
 
+export interface PricingSnapshot {
+  schemaVersion: 1;
+  capturedAt: string;
+  cityCode: string;
+  pricingRuleId: string | null;
+  ruleVersion: number | null;
+  surgeMultiplier: number;
+  surgeWindowId: string | null;
+  promoCode: string | null;
+  promoDiscountAmount: number;
+  quotedFare: number;
+  rateCard: PricingRateCard;
+}
+
 export interface FinalFareParams {
   actualDistanceKm: number;
   actualDurationMin: number;
@@ -43,6 +57,10 @@ export interface FinalFareParams {
   /// the card outright; the city/coordinate fields below are only the fallback
   /// for requests written before the column existed.
   pricingRuleId?: string | null;
+  /// Phase 1 (M-02). Write-once snapshot captured at quote/booking time.
+  /// When provided, `calculateFinalFare` prefers `pricingSnapshot.rateCard`
+  /// so env or rule changes after booking can never alter the fare.
+  pricingSnapshot?: PricingSnapshot | null;
   cityCode?: string;
   serviceType?: RideServiceType;
   pickupLat?: number;

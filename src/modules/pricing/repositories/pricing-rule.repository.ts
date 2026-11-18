@@ -27,8 +27,10 @@ export interface FindBestActiveRuleParams {
   vehicleTypeId: string;
   cityCode?: string | undefined;
   serviceType?: RideServiceType | undefined;
+  serviceZoneId?: string | undefined;
   pickupLat?: number | undefined;
   pickupLng?: number | undefined;
+  at?: Date | undefined;
 }
 
 export class PricingRuleRepository {
@@ -51,9 +53,11 @@ export class PricingRuleRepository {
 
   async findBestActiveRule(params: FindBestActiveRuleParams): Promise<PricingRule | null> {
     const serviceType = params.serviceType ?? 'INSTANT';
-    const now = new Date();
+    const now = params.at ?? new Date();
     let resolvedZoneIds: string[] = [];
-    if (
+    if (params.serviceZoneId) {
+      resolvedZoneIds = [params.serviceZoneId];
+    } else if (
       params.cityCode &&
       params.cityCode !== 'GLOBAL' &&
       params.pickupLat != null &&

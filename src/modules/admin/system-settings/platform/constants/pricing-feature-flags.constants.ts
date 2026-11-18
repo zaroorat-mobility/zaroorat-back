@@ -1,0 +1,30 @@
+import type { FeatureFlagStatus } from '../../../../../generated/prisma/index.js';
+
+/// Phase 1–4 pricing governance feature flags.
+/// Every pricing enforcement and financial deduction flag starts OFF by default.
+export const PRICING_FEATURE_FLAG_KEYS = Object.freeze({
+  QUOTE_LOCK: 'pricing.quote_lock',
+  SNAPSHOT_READ: 'pricing.snapshot_read',
+} as const);
+
+export const PRICING_FEATURE_FLAG_SEED: ReadonlyArray<{
+  key: string;
+  name: string;
+  description: string;
+  defaultStatus: FeatureFlagStatus;
+}> = Object.freeze([
+  {
+    key: PRICING_FEATURE_FLAG_KEYS.QUOTE_LOCK,
+    name: 'Enforce persisted quote lock on booking',
+    description:
+      'Requires a valid unexpired quoteId on ride booking and rejects stale or mismatched fares with 409',
+    defaultStatus: 'OFF',
+  },
+  {
+    key: PRICING_FEATURE_FLAG_KEYS.SNAPSHOT_READ,
+    name: 'Prefer immutable request pricing snapshot at completion',
+    description:
+      'Makes final fare calculation prefer ride_requests.pricing_snapshot over re-reading pricing rules or env defaults',
+    defaultStatus: 'OFF',
+  },
+]);

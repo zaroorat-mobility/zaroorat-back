@@ -236,6 +236,80 @@ export class SelfRideNotAllowedError extends RideError {
     this.name = 'SelfRideNotAllowedError';
   }
 }
+export class QuoteNotFoundError extends RideError {
+  constructor(quoteId: string) {
+    super(`Fare quote '${quoteId}' was not found`, 'QUOTE_NOT_FOUND', 404);
+    this.name = 'QuoteNotFoundError';
+  }
+}
+export class QuoteCustomerMismatchError extends RideError {
+  constructor() {
+    super('This fare quote belongs to a different customer', 'QUOTE_CUSTOMER_MISMATCH', 403);
+    this.name = 'QuoteCustomerMismatchError';
+  }
+}
+export class QuoteExpiredError extends RideError {
+  constructor(expiresAt?: Date) {
+    super(
+      'This fare quote has expired. Please refresh your fare estimate and try again.',
+      'QUOTE_EXPIRED',
+      409,
+      expiresAt ? { expiresAt: expiresAt.toISOString() } : undefined,
+    );
+    this.name = 'QuoteExpiredError';
+  }
+}
+export class QuoteAlreadyUsedError extends RideError {
+  constructor() {
+    super(
+      'This fare quote has already been used for a booking. Please request a fresh quote.',
+      'QUOTE_ALREADY_USED',
+      409,
+    );
+    this.name = 'QuoteAlreadyUsedError';
+  }
+}
+export class QuoteVehicleMismatchError extends RideError {
+  constructor(vehicleTypeId: string) {
+    super(
+      `Vehicle type '${vehicleTypeId}' is not included in the supplied fare quote`,
+      'QUOTE_VEHICLE_MISMATCH',
+      400,
+    );
+    this.name = 'QuoteVehicleMismatchError';
+  }
+}
+export class QuoteRequiredError extends RideError {
+  constructor() {
+    super(
+      'A valid quoteId is required to book a ride. Please refresh your fare estimate.',
+      'QUOTE_REQUIRED',
+      409,
+    );
+    this.name = 'QuoteRequiredError';
+  }
+}
+export class FareChangedError extends RideError {
+  constructor(currentFare: number, expectedFare: number) {
+    super(
+      'The fare has changed since it was last displayed. Please review the updated fare and confirm.',
+      'FARE_CHANGED',
+      409,
+      { currentFare, expectedFare },
+    );
+    this.name = 'FareChangedError';
+  }
+}
+export class ReceiptNotReadyError extends RideError {
+  constructor(status: string) {
+    super(
+      `Receipt is only available once a ride is completed (current status: '${status}')`,
+      'RECEIPT_NOT_READY',
+      409,
+    );
+    this.name = 'ReceiptNotReadyError';
+  }
+}
 /// A promo code the platform cannot honour.
 ///
 /// `Promotion` and `PromotionRedemption` are fully modelled — discount type,

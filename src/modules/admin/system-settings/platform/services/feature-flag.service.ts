@@ -3,13 +3,14 @@ import type { TransactionClient } from '@core/database/TransactionManager';
 import type { FeatureFlagStatus } from '../../../../../generated/prisma/index.js';
 import { FEATURE_FLAG_SEED } from '../constants/platform-settings.constants.js';
 import { PAYMENT_FEATURE_FLAG_SEED } from '../constants/payment-feature-flags.constants.js';
+import { PRICING_FEATURE_FLAG_SEED } from '../constants/pricing-feature-flags.constants.js';
 
 const SEED: ReadonlyArray<{
   key: string;
   name: string;
   description: string;
   defaultStatus?: FeatureFlagStatus;
-}> = [...FEATURE_FLAG_SEED, ...PAYMENT_FEATURE_FLAG_SEED];
+}> = [...FEATURE_FLAG_SEED, ...PAYMENT_FEATURE_FLAG_SEED, ...PRICING_FEATURE_FLAG_SEED];
 
 export class FeatureFlagService {
   constructor(private readonly db: DatabaseService) {}
@@ -52,6 +53,14 @@ export class FeatureFlagService {
     const flag = await this.client.featureFlag.findUnique({ where: { key } });
     if (!flag) return true;
     if (!flag.isActive || flag.status === 'OFF') return false;
+    return flag.status === 'ON' || flag.rolloutPercentage > 0;
+  }
+
+  /// Read-only check for default-OFF flags (never writes/seeds on hot request paths).
+  /// A missing row counts as OFF.
+  async isEnabledReadOnly(key: string): Promise<boolean> {
+    const flag = await this.client.featureFlag.findUnique({ where: { key } });
+    if (!flag || !flag.isActive || flag.status === 'OFF') return false;
     return flag.status === 'ON' || flag.rolloutPercentage > 0;
   }
 

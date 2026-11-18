@@ -14,6 +14,7 @@ import type {
   FareCalculationParams,
   FinalFareParams,
   ItemizedFareResult,
+  PricingSnapshot,
   RateCardLookupOptions,
   TripEstimate,
 } from '../domain/pricing.types.js';
@@ -129,7 +130,7 @@ export class PricingService {
     vehicleTypeId: string,
     cityCode?: string,
     options?: RateCardLookupOptions,
-  ): Promise<{ card: PricingRateCard; ruleId: string | null }> {
+  ): Promise<{ card: PricingRateCard; ruleId: string | null; ruleVersion: number | null }> {
     const rule = await this.pricingRuleRepository.findBestActiveRule({
       vehicleTypeId,
       ...(cityCode !== undefined ? { cityCode } : {}),
@@ -137,7 +138,73 @@ export class PricingService {
       ...(options?.pickupLat !== undefined ? { pickupLat: options.pickupLat } : {}),
       ...(options?.pickupLng !== undefined ? { pickupLng: options.pickupLng } : {}),
     });
-    return { card: this.rateCardFor(rule), ruleId: rule?.id ?? null };
+    return {
+      card: this.rateCardFor(rule),
+      ruleId: rule?.id ?? null,
+      ruleVersion: rule?.version ?? null,
+    };
+  }
+
+  /// Phase 1 (M-01/M-02). Same batched resolution as `rateCardsForPoint`,
+  /// also returning the matched rule ID and version for quote & request snapshots.
+  async rateCardsWithRuleMetaForPoint(params: {
+    vehicleTypeIds: readonly string[];
+    cityCode?: string | undefined;
+    serviceType?: RideServiceType | undefined;
+    pickupLat: number;
+    pickupLng: number;
+  }): Promise<
+    Map<string, { card: PricingRateCard; ruleId: string | null; ruleVersion: number | null }>
+  > {
+    const rules = await this.pricingRuleRepository.findBestActiveRulesForPoint(params);
+    return new Map(
+      params.vehicleTypeIds.map((id) => {
+        const rule = rules.get(id) ?? null;
+        return [
+          id,
+          {
+            card: this.rateCardFor(rule),
+            ruleId: rule?.id ?? null,
+            ruleVersion: rule?.version ?? null,
+          },
+        ] as const;
+      }),
+    );
+  }
+
+  /// Safely extracts a `PricingRateCard` from a persisted JSON `pricing_snapshot`.
+  parseSnapshotRateCard(raw: unknown): PricingRateCard | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const snap = raw as Partial<PricingSnapshot>;
+    const rc = snap.rateCard;
+    if (!rc || typeof rc !== 'object') return null;
+    const nums = [
+      rc.baseFare,
+      rc.perKm,
+      rc.perMinute,
+      rc.perWaitingMinute,
+      rc.freeWaitingMin,
+      rc.bookingFee,
+      rc.platformFeePct,
+      rc.platformFeeFlat,
+      rc.taxRatePct,
+      rc.commissionRatePct,
+      rc.minimumFare,
+    ];
+    if (nums.some((n) => typeof n !== 'number' || !Number.isFinite(n))) return null;
+    return Object.freeze({
+      baseFare: rc.baseFare,
+      perKm: rc.perKm,
+      perMinute: rc.perMinute,
+      perWaitingMinute: rc.perWaitingMinute,
+      freeWaitingMin: rc.freeWaitingMin,
+      bookingFee: rc.bookingFee,
+      platformFeePct: rc.platformFeePct,
+      platformFeeFlat: rc.platformFeeFlat,
+      taxRatePct: rc.taxRatePct,
+      commissionRatePct: rc.commissionRatePct,
+      minimumFare: rc.minimumFare,
+    });
   }
 
   /// FR-001. The card a booked ride must be billed on.
@@ -504,8 +571,12 @@ export class PricingService {
         `actualDurationMin must be a non-negative number, got ${params.actualDurationMin}`,
       );
     }
+    const snapshotCard = params.pricingSnapshot
+      ? this.parseSnapshotRateCard(params.pricingSnapshot)
+      : null;
     const card =
       params.rateCard ??
+      snapshotCard ??
       (await this.rateCardForRuleId(params.pricingRuleId, {
         vehicleTypeId: params.vehicleTypeId,
         ...(params.cityCode !== undefined ? { cityCode: params.cityCode } : {}),
