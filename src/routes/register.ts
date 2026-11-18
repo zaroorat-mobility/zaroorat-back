@@ -19,6 +19,7 @@ import { appConfigRoutes } from '@modules/app-config';
 import { supportRoutes } from '@modules/support';
 import { notificationInboxRoutes } from '@modules/notifications';
 import { promotionRoutes } from '@modules/promotions/routes/promotion.routes.js';
+import { fiscalDocumentDownloadRoutes, rideFiscalDocumentRoutes } from '@modules/pricing';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(healthRoute, { prefix: '/api/v1' });
@@ -32,6 +33,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(rideRoutes, { prefix: '/api/v1/rides' });
   await app.register(ratingRoutes, { prefix: '/api/v1/rides' });
   await app.register(ridePaymentRoutes, { prefix: '/api/v1/rides' });
+  await app.register(rideFiscalDocumentRoutes, { prefix: '/api/v1/rides' });
+  await app.register(fiscalDocumentDownloadRoutes, { prefix: '/api/v1/fiscal-documents' });
   await app.register(driverRoutes, { prefix: '/api/v1/drivers' });
   await app.register(vehicleRoutes, { prefix: '/api/v1/vehicles' });
   await app.register(vehicleTypeRoutes, { prefix: '/api/v1/vehicle-types' });

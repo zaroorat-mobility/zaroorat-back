@@ -111,6 +111,7 @@ export async function resetState(): Promise<void> {
           // that can only be green once is not a test.
           '"surge_zones", "service_zones", "cities", "states", "countries", ' +
           '"commission_configurations", "tax_configurations", "gst_recovery_configurations", ' +
+          '"fiscal_documents", "document_series", "compliance_templates", ' +
           '"legal_entities", "company_gst_registrations", "city_supply_registrations", ' +
           '"notification_templates", "notification_deliveries", "admin_broadcasts", "notifications" ' +
           'RESTART IDENTITY CASCADE',

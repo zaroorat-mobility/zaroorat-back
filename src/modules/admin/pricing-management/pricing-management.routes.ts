@@ -9,6 +9,7 @@ import { AdminServiceZoneController } from './service-zone/service-zone.controll
 import { AdminInvoiceController } from './invoice/invoice.controller.js';
 import { AdminPricingSimulateController } from './simulate/simulate.controller.js';
 import { AdminPricingGovernanceController } from './governance/governance.controller.js';
+import { AdminFiscalDocumentController } from './fiscal/fiscal.controller.js';
 
 const uuidParams = {
   type: 'object',
@@ -58,6 +59,9 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   );
   const adminPricingGovernanceController = container.resolve<AdminPricingGovernanceController>(
     'adminPricingGovernanceController',
+  );
+  const adminFiscalDocumentController = container.resolve<AdminFiscalDocumentController>(
+    'adminFiscalDocumentController',
   );
   const canRead = { preHandler: fastify.authorize({ permissions: ['pricing:read'] }) };
   const canWrite = { preHandler: fastify.authorize({ permissions: ['pricing:write'] }) };
@@ -348,5 +352,45 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   );
   fastify.post('/settlement-failures/:id/waive', canFinanceExecute, (req, reply) =>
     adminPricingGovernanceController.waiveSettlementFailure(req, reply),
+  );
+
+  // Phase 6 (M-09): Immutable Fiscal Documents, Gapless Series, Persisted CR-03 Templates & Audited CSV Export
+  fastify.get('/fiscal-documents/export.csv', canRead, (req, reply) =>
+    adminFiscalDocumentController.exportCsv(req, reply),
+  );
+  fastify.get('/fiscal-documents', canRead, (req, reply) =>
+    adminFiscalDocumentController.listDocuments(req, reply),
+  );
+  fastify.get('/fiscal-documents/:id', canRead, (req, reply) =>
+    adminFiscalDocumentController.getDocumentById(req, reply),
+  );
+  fastify.post('/fiscal-documents/:id/download-url', canRead, (req, reply) =>
+    adminFiscalDocumentController.createSignedDownloadUrl(req, reply),
+  );
+  fastify.get('/fiscal-documents/:id/pdf', canRead, (req, reply) =>
+    adminFiscalDocumentController.streamPdf(req, reply),
+  );
+  fastify.post('/fiscal-documents/:id/void', canFinanceExecute, (req, reply) =>
+    adminFiscalDocumentController.voidDocument(req, reply),
+  );
+
+  fastify.get('/document-series', canRead, (req, reply) =>
+    adminFiscalDocumentController.listDocumentSeries(req, reply),
+  );
+  fastify.post('/document-series', canWrite, (req, reply) =>
+    adminFiscalDocumentController.createDocumentSeries(req, reply),
+  );
+
+  fastify.get('/compliance-templates', canRead, (req, reply) =>
+    adminFiscalDocumentController.listComplianceTemplates(req, reply),
+  );
+  fastify.post('/compliance-templates', canWrite, (req, reply) =>
+    adminFiscalDocumentController.createComplianceTemplate(req, reply),
+  );
+  fastify.post('/compliance-templates/:id/approve-preview', canWrite, (req, reply) =>
+    adminFiscalDocumentController.approveComplianceTemplatePreview(req, reply),
+  );
+  fastify.post('/compliance-templates/:id/activate', canWrite, (req, reply) =>
+    adminFiscalDocumentController.activateComplianceTemplate(req, reply),
   );
 }

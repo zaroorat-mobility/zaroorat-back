@@ -366,6 +366,7 @@ model LegalEntity {
 
   gstRegistrations        CompanyGstRegistration[]
   citySupplyRegistrations CitySupplyRegistration[]
+  fiscalDocuments         FiscalDocument[]
 
   @@map("legal_entities")
 }
@@ -385,6 +386,8 @@ model CompanyGstRegistration {
 
   legalEntity             LegalEntity              @relation(fields: [legalEntityId], references: [id])
   citySupplyRegistrations CitySupplyRegistration[]
+  documentSeries          DocumentSeries[]
+  fiscalDocuments         FiscalDocument[]
 
   @@index([legalEntityId, stateCode, isActive])
   @@map("company_gst_registrations")
@@ -407,4 +410,106 @@ model CitySupplyRegistration {
 
   @@index([cityCode, supplyKind, isActive])
   @@map("city_supply_registrations")
+}
+
+// ─── Phase 6 (M-09): Fiscal Documents, Gapless Series & Compliance Templates ─
+
+model DocumentSeries {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  gstRegistrationId String   @map("gst_registration_id") @db.Uuid
+  documentType      String   @map("document_type")
+  financialYear     String   @map("financial_year")
+  prefix            String
+  lastSequence      BigInt   @default(0) @map("last_sequence")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdBy         String   @map("created_by") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
+
+  gstRegistration CompanyGstRegistration @relation(fields: [gstRegistrationId], references: [id])
+  documents       FiscalDocument[]
+
+  @@unique([gstRegistrationId, documentType, financialYear])
+  @@unique([prefix, financialYear])
+  @@index([gstRegistrationId, documentType, isActive])
+  @@map("document_series")
+}
+
+model ComplianceTemplate {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  familyId          String    @map("family_id") @db.Uuid
+  version           Int
+  documentType      String    @map("document_type")
+  name              String
+  fileName          String    @map("file_name")
+  mimeType          String    @default("text/html") @map("mime_type")
+  content           String
+  versionNote       String?   @map("version_note")
+  effectiveFrom     DateTime  @default(now()) @map("effective_from")
+  previewApproved   Boolean   @default(false) @map("preview_approved")
+  previewApprovedBy String?   @map("preview_approved_by") @db.Uuid
+  previewApprovedAt DateTime? @map("preview_approved_at")
+  isActive          Boolean   @default(false) @map("is_active")
+  createdBy         String    @map("created_by") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  documents FiscalDocument[]
+
+  @@unique([familyId, version])
+  @@index([documentType, createdAt])
+  @@map("compliance_templates")
+}
+
+model FiscalDocument {
+  id                     String    @id @default(uuid(7)) @db.Uuid
+  documentNumber         String    @unique @map("document_number")
+  seriesId               String    @map("series_id") @db.Uuid
+  sequenceNumber         BigInt    @map("sequence_number")
+  documentType           String    @map("document_type")
+  status                 String    @default("ISSUED")
+  rideId                 String?   @map("ride_id") @db.Uuid
+  recipientUserId        String?   @map("recipient_user_id") @db.Uuid
+  recipientType          String    @map("recipient_type")
+  recipientName          String    @map("recipient_name")
+  legalEntityId          String    @map("legal_entity_id") @db.Uuid
+  gstRegistrationId      String    @map("gst_registration_id") @db.Uuid
+  supplierLegalName      String    @map("supplier_legal_name")
+  supplierGstin          String    @map("supplier_gstin") @db.VarChar(15)
+  supplierStateCode      String    @map("supplier_state_code") @db.VarChar(2)
+  placeOfSupplyStateCode String    @map("place_of_supply_state_code") @db.VarChar(2)
+  isInterState           Boolean   @default(false) @map("is_inter_state")
+  sacCode                String?   @map("sac_code")
+  currency               String    @default("INR") @db.VarChar(3)
+  taxableValue           Decimal   @default(0) @map("taxable_value") @db.Decimal(12, 2)
+  nonTaxableValue        Decimal   @default(0) @map("non_taxable_value") @db.Decimal(12, 2)
+  cgstRatePct            Decimal   @default(0) @map("cgst_rate_pct") @db.Decimal(5, 2)
+  sgstRatePct            Decimal   @default(0) @map("sgst_rate_pct") @db.Decimal(5, 2)
+  igstRatePct            Decimal   @default(0) @map("igst_rate_pct") @db.Decimal(5, 2)
+  cgstAmount             Decimal   @default(0) @map("cgst_amount") @db.Decimal(12, 2)
+  sgstAmount             Decimal   @default(0) @map("sgst_amount") @db.Decimal(12, 2)
+  igstAmount             Decimal   @default(0) @map("igst_amount") @db.Decimal(12, 2)
+  totalTaxAmount         Decimal   @default(0) @map("total_tax_amount") @db.Decimal(12, 2)
+  totalAmount            Decimal   @map("total_amount") @db.Decimal(12, 2)
+  lineItemsJson          Json      @map("line_items_json")
+  snapshotRefsJson       Json      @map("snapshot_refs_json")
+  templateId             String?   @map("template_id") @db.Uuid
+  contentSha256          String    @map("content_sha256") @db.VarChar(64)
+  voidReason             String?   @map("void_reason")
+  voidedBy               String?   @map("voided_by") @db.Uuid
+  voidedAt               DateTime? @map("voided_at")
+  issuedAt               DateTime  @default(now()) @map("issued_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  series          DocumentSeries         @relation(fields: [seriesId], references: [id])
+  ride            Ride?                  @relation(fields: [rideId], references: [id])
+  legalEntity     LegalEntity            @relation(fields: [legalEntityId], references: [id])
+  gstRegistration CompanyGstRegistration @relation(fields: [gstRegistrationId], references: [id])
+  template        ComplianceTemplate?    @relation(fields: [templateId], references: [id])
+
+  @@unique([seriesId, sequenceNumber])
+  @@index([issuedAt])
+  @@index([recipientType, recipientUserId])
+  @@index([rideId])
+  @@map("fiscal_documents")
 }

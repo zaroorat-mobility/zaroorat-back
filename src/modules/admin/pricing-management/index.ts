@@ -19,4 +19,7 @@ export * from './simulate/simulate.schemas.js';
 export * from './governance/governance.controller.js';
 export * from './governance/governance.service.js';
 export * from './governance/governance.schemas.js';
+export * from './fiscal/fiscal.controller.js';
+export * from './fiscal/fiscal.service.js';
+export * from './fiscal/fiscal.schemas.js';
 export { adminSurgeRoutes as pricingManagementRoutes } from './pricing-management.routes.js';

@@ -17,6 +17,7 @@ import type {
   ReferralRideCompletedConsumer,
   ReferralDriverVerifiedConsumer,
 } from '@modules/referrals/consumers/index.js';
+import type { FiscalDocumentRideCompletedConsumer } from '@modules/pricing';
 import { logger } from '@shared/logger/index.js';
 
 const CONSUMER_KEYS = [
@@ -33,6 +34,7 @@ const CONSUMER_KEYS = [
   'referralDriverVerifiedConsumer',
   'subscriptionPaymentConsumer',
   'driverDecisionSmsConsumer',
+  'fiscalDocumentRideCompletedConsumer',
 ] as const;
 
 type Consumer =
@@ -48,7 +50,8 @@ type Consumer =
   | ReferralRideCompletedConsumer
   | ReferralDriverVerifiedConsumer
   | SubscriptionPaymentConsumer
-  | DriverDecisionSmsConsumer;
+  | DriverDecisionSmsConsumer
+  | FiscalDocumentRideCompletedConsumer;
 
 /// Subscribing consumers to the in-process bus, and nothing else.
 ///

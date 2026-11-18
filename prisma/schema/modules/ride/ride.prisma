@@ -258,6 +258,7 @@ model Ride {
   walletReservation            DriverWalletReservation?
   settlementSteps              RideSettlementStep[]
   collectionFailures           CommissionCollectionFailure[]
+  fiscalDocuments              FiscalDocument[]
   chatConversations            ChatConversation[]
   supportTickets               SupportTicket[]
   redeemedCoupons              Coupon[]

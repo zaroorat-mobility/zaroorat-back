@@ -8,6 +8,9 @@ import { CommissionService } from './services/commission.service.js';
 import { TaxService } from './services/tax.service.js';
 import { GstRecoveryService } from './services/gst-recovery.service.js';
 import { FeatureFlagDependencyValidator } from './services/feature-flag-dependency.validator.js';
+import { BuiltinPdf14Renderer } from './services/fiscal-pdf.renderer.js';
+import { FiscalDocumentService } from './services/fiscal-document.service.js';
+import { FiscalDocumentRideCompletedConsumer } from './consumers/fiscal-document-ride-completed.consumer.js';
 import { PricingMetrics } from './metrics/pricing.metrics.js';
 
 export * from './constants.js';
@@ -19,6 +22,10 @@ export * from './services/commission.service.js';
 export * from './services/tax.service.js';
 export * from './services/gst-recovery.service.js';
 export * from './services/feature-flag-dependency.validator.js';
+export * from './services/fiscal-pdf.renderer.js';
+export * from './services/fiscal-document.service.js';
+export * from './consumers/fiscal-document-ride-completed.consumer.js';
+export * from './routes/fiscal-document.routes.js';
 export * from './metrics/pricing.metrics.js';
 export * from './utils/peak-window.js';
 export * from './utils/scope-precedence.js';
@@ -35,5 +42,8 @@ export function registerPricingModule(container: AwilixContainer): void {
     taxService: asClass(TaxService).singleton(),
     gstRecoveryService: asClass(GstRecoveryService).singleton(),
     featureFlagDependencyValidator: asClass(FeatureFlagDependencyValidator).singleton(),
+    fiscalPdfRenderer: asClass(BuiltinPdf14Renderer).singleton(),
+    fiscalDocumentService: asClass(FiscalDocumentService).singleton(),
+    fiscalDocumentRideCompletedConsumer: asClass(FiscalDocumentRideCompletedConsumer).singleton(),
   });
 }

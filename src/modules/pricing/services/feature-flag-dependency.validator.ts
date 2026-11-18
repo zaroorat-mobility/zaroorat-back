@@ -232,5 +232,29 @@ export class FeatureFlagDependencyValidator {
         );
       }
     }
+
+    // 6. Phase 6 (M-09): Fiscal document issuance requires >=1 active GST registration and >=1 active document series
+    if (isOn(REV5_PRICING_FLAGS.DOCUMENTS_ISSUE)) {
+      const [activeGstReg, activeSeries] = await Promise.all([
+        client.companyGstRegistration.findFirst({
+          where: {
+            isActive: true,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            legalEntity: { isActive: true },
+          },
+          select: { id: true },
+        }),
+        client.documentSeries.findFirst({
+          where: { isActive: true },
+          select: { id: true },
+        }),
+      ]);
+      if (!activeGstReg || !activeSeries) {
+        throw new FlagDependencyUnsatisfiedError(
+          'documents.issue requires at least one active company_gst_registrations row and at least one active document_series.',
+        );
+      }
+    }
   }
 }
