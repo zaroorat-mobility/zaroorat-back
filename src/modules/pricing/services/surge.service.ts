@@ -1,8 +1,7 @@
 import { SurgeRepository } from '../repositories/surge.repository.js';
 import { PricingMetrics } from '../metrics/pricing.metrics.js';
 import { isWithinPeakWindow, surgeWindowVehicleIds } from '../utils/peak-window.js';
-import { FEATURE_FLAG_KEYS } from '@modules/admin/system-settings/platform/constants/platform-settings.constants.js';
-import type { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
+import { SURGE_FEATURE_FLAG_KEY, type FeatureFlagReader } from '../constants.js';
 import { logger } from '@shared/logger/index.js';
 
 /// Where peak hours are read when the caller does not know the pickup city's
@@ -22,35 +21,44 @@ export interface SurgeOptions {
   maxMultiplier?: number | undefined;
 }
 
+export interface ResolvedSurge {
+  multiplier: number;
+  windowId: string | null;
+  reason: string | null;
+}
+
+const NO_SURGE: ResolvedSurge = Object.freeze({
+  multiplier: DEFAULT_SURGE_MULTIPLIER,
+  windowId: null,
+  reason: null,
+});
+
 export class SurgeService {
   constructor(
     private readonly surgeRepository: SurgeRepository,
     private readonly pricingMetrics: PricingMetrics,
-    private readonly featureFlagService: FeatureFlagService,
+    private readonly featureFlagService: FeatureFlagReader,
   ) {}
 
-  /// The multiplier for each vehicle type at this point: the highest rule in force,
-  /// within the city cap and the platform limit.
-  ///
-  /// FR-039. One resolution for a whole catalog at one point. The zone containment
-  /// query and the window lookup do not depend on the vehicle type, so running them
-  /// per category repeated the same PostGIS query once per row in the picker.
+  /// Phase 2.3 (M-08): Resolves the winning surge window (multiplier + windowId + reason)
+  /// for each vehicle type at one pickup point using deterministic highest-wins precedence
+  /// (ties broken by latest `startsAt`, then deterministic `id`) clamped to city & platform caps.
   ///
   /// FR-016. Failing open to 1.0 is right for availability: a booking must not fail
   /// because surge lookup did. The metric is what keeps that from being silent.
-  async resolveSurgeMultipliersForTypes(
+  async resolveSurgeDetailsForTypes(
     pickupLat: number,
     pickupLng: number,
     vehicleTypeIds: readonly string[],
     options: SurgeOptions = {},
-  ): Promise<Map<string, number>> {
-    const fallback = new Map(vehicleTypeIds.map((id) => [id, DEFAULT_SURGE_MULTIPLIER] as const));
+  ): Promise<Map<string, ResolvedSurge>> {
+    const fallback = new Map(vehicleTypeIds.map((id) => [id, NO_SURGE] as const));
     try {
       if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
         logger.warn({ pickupLat, pickupLng }, '[SurgeService] Invalid coordinates provided');
         return fallback;
       }
-      if (!(await this.featureFlagService.isOn(FEATURE_FLAG_KEYS.SURGE))) return fallback;
+      if (!(await this.featureFlagService.isOn(SURGE_FEATURE_FLAG_KEY))) return fallback;
 
       const at = options.at ?? new Date();
       const zones = await this.surgeRepository.findZonesForLocation(
@@ -73,18 +81,44 @@ export class SurgeService {
 
       const timeZone = options.timeZone ?? FALLBACK_TIME_ZONE;
       const cap = Math.min(options.maxMultiplier ?? MAX_SURGE_MULTIPLIER, MAX_SURGE_MULTIPLIER);
-      const resolved = new Map<string, number>();
+      const resolved = new Map<string, ResolvedSurge>();
 
       for (const vehicleTypeId of vehicleTypeIds) {
-        let max = DEFAULT_SURGE_MULTIPLIER;
+        let bestMultiplier = DEFAULT_SURGE_MULTIPLIER;
+        let winningWindow: (typeof windows)[number] | null = null;
+
         for (const window of windows) {
           const ids = surgeWindowVehicleIds(window);
           if (ids.length > 0 && !ids.includes(vehicleTypeId)) continue;
           if (!isWithinPeakWindow(window, at, timeZone)) continue;
           const value = Number(window.multiplier);
-          if (Number.isFinite(value) && value > max) max = value;
+          if (!Number.isFinite(value) || value <= MIN_SURGE_MULTIPLIER) continue;
+
+          const isHigher = value > bestMultiplier;
+          const isTieBreakWin =
+            value === bestMultiplier &&
+            winningWindow !== null &&
+            ((window.startsAt?.getTime() ?? 0) > (winningWindow.startsAt?.getTime() ?? 0) ||
+              ((window.startsAt?.getTime() ?? 0) === (winningWindow.startsAt?.getTime() ?? 0) &&
+                String(window.id ?? '') > String(winningWindow.id ?? '')));
+
+          if (isHigher || isTieBreakWin) {
+            bestMultiplier = value;
+            winningWindow = window;
+          }
         }
-        resolved.set(vehicleTypeId, Math.max(MIN_SURGE_MULTIPLIER, Math.min(cap, max)));
+
+        const clamped = Math.max(MIN_SURGE_MULTIPLIER, Math.min(cap, bestMultiplier));
+        resolved.set(
+          vehicleTypeId,
+          clamped > MIN_SURGE_MULTIPLIER && winningWindow
+            ? {
+                multiplier: clamped,
+                windowId: winningWindow.id ?? null,
+                reason: winningWindow.reason ?? null,
+              }
+            : NO_SURGE,
+        );
       }
       return resolved;
     } catch (err) {
@@ -97,18 +131,45 @@ export class SurgeService {
     }
   }
 
+  async resolveSurgeDetail(
+    pickupLat: number,
+    pickupLng: number,
+    vehicleTypeId: string,
+    options: SurgeOptions = {},
+  ): Promise<ResolvedSurge> {
+    const resolved = await this.resolveSurgeDetailsForTypes(
+      pickupLat,
+      pickupLng,
+      [vehicleTypeId],
+      options,
+    );
+    return resolved.get(vehicleTypeId) ?? NO_SURGE;
+  }
+
+  async resolveSurgeMultipliersForTypes(
+    pickupLat: number,
+    pickupLng: number,
+    vehicleTypeIds: readonly string[],
+    options: SurgeOptions = {},
+  ): Promise<Map<string, number>> {
+    const details = await this.resolveSurgeDetailsForTypes(
+      pickupLat,
+      pickupLng,
+      vehicleTypeIds,
+      options,
+    );
+    return new Map(
+      vehicleTypeIds.map((id) => [id, details.get(id)?.multiplier ?? DEFAULT_SURGE_MULTIPLIER]),
+    );
+  }
+
   async resolveSurgeMultiplier(
     pickupLat: number,
     pickupLng: number,
     vehicleTypeId: string,
     options: SurgeOptions = {},
   ): Promise<number> {
-    const resolved = await this.resolveSurgeMultipliersForTypes(
-      pickupLat,
-      pickupLng,
-      [vehicleTypeId],
-      options,
-    );
-    return resolved.get(vehicleTypeId) ?? DEFAULT_SURGE_MULTIPLIER;
+    const detail = await this.resolveSurgeDetail(pickupLat, pickupLng, vehicleTypeId, options);
+    return detail.multiplier;
   }
 }

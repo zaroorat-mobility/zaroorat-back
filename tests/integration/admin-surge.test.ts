@@ -74,7 +74,7 @@ describe('admin surge windows (integration)', () => {
       },
     });
     assert.equal(zone.statusCode, 201, zone.payload);
-    const zoneId = zone.json().id as string;
+    const zoneId = zone.json().data.id as string;
 
     const startsAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const endsAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
@@ -99,14 +99,15 @@ describe('admin surge windows (integration)', () => {
       headers: authHeader,
     });
     assert.equal(listed.statusCode, 200, listed.payload);
-    const windows = listed.json() as Array<{
+    const windows = listed.json().data as Array<{
       id: string;
       zoneName?: string;
       vehicleTypeCode?: string | null;
       vehicleTypeName?: string | null;
       reason?: string | null;
     }>;
-    const row = windows.find((w) => w.id === created.json().id);
+    assert.ok(listed.json().meta, 'list endpoint returns pagination meta');
+    const row = windows.find((w) => w.id === created.json().data.id);
     assert.ok(row);
     assert.equal(row!.zoneName, 'Test Citywide');
     assert.equal(row!.vehicleTypeCode, CAR.code);
@@ -140,7 +141,7 @@ describe('admin surge windows (integration)', () => {
         payload: { maxSurgeMultiplier: 1.5 },
       });
       assert.equal(saved.statusCode, 200, saved.payload);
-      assert.equal(saved.json().maxSurgeMultiplier, 1.5);
+      assert.equal(saved.json().data.maxSurgeMultiplier, 1.5);
 
       const city = await db().client.city.findUniqueOrThrow({ where: { id: cityId } });
       assert.equal(Number(city.maxSurgeMultiplier), 1.5);
@@ -181,7 +182,7 @@ describe('admin surge windows (integration)', () => {
         payload: zonePayload,
       });
       const base = {
-        zoneId: zone.json().id as string,
+        zoneId: zone.json().data.id as string,
         multiplier: 1.5,
         startsAt: new Date(Date.now() + 3_600_000).toISOString(),
       };
@@ -193,16 +194,17 @@ describe('admin surge windows (integration)', () => {
         payload: { ...base, daysOfWeek: [6, 0] },
       });
       assert.equal(saved.statusCode, 201, saved.payload);
-      assert.deepEqual(saved.json().daysOfWeek, [6, 0]);
+      assert.deepEqual(saved.json().data.daysOfWeek, [6, 0]);
 
       const updated = await app.inject({
         method: 'PATCH',
-        url: `/api/v1/admin/surge-windows/${saved.json().id}`,
+        url: `/api/v1/admin/surge-windows/${saved.json().data.id}`,
         headers: authHeader,
         payload: { daysOfWeek: [1] },
       });
       assert.equal(updated.statusCode, 200, updated.payload);
-      assert.deepEqual(updated.json().daysOfWeek, [1]);
+      assert.deepEqual(updated.json().data.daysOfWeek, [1]);
+      assert.equal(updated.json().data.supersedesId, saved.json().data.id);
 
       const bad = await app.inject({
         method: 'POST',
@@ -229,18 +231,18 @@ describe('admin surge windows (integration)', () => {
         url: '/api/v1/admin/surge-windows',
         headers: authHeader,
         payload: {
-          zoneId: zone.json().id as string,
+          zoneId: zone.json().data.id as string,
           vehicleTypeId: cab.id,
           multiplier: 1.5,
           startsAt: new Date(Date.now() + 3_600_000).toISOString(),
         },
       });
       assert.equal(saved.statusCode, 201, saved.payload);
-      assert.equal(saved.json().vehicleTypeName, cab.name);
-      assert.equal(saved.json().source, 'MANUAL');
+      assert.equal(saved.json().data.vehicleTypeName, cab.name);
+      assert.equal(saved.json().data.source, 'MANUAL');
 
       const row = await db().client.surgeWindow.findUniqueOrThrow({
-        where: { id: saved.json().id as string },
+        where: { id: saved.json().data.id as string },
       });
       assert.equal(row.vehicleTypeId, cab.id);
       assert.deepEqual(row.vehicleTypeIds, [cab.id]);
@@ -262,14 +264,14 @@ describe('admin surge windows (integration)', () => {
         url: '/api/v1/admin/surge-windows',
         headers: authHeader,
         payload: {
-          zoneId: zone.json().id as string,
+          zoneId: zone.json().data.id as string,
           vehicleTypeId: ac.id,
           multiplier: 1.5,
           startsAt: new Date(Date.now() + 3_600_000).toISOString(),
         },
       });
       assert.equal(saved.statusCode, 201, saved.payload);
-      assert.equal(saved.json().vehicleTypeName, `${ac.name} (AC)`);
+      assert.equal(saved.json().data.vehicleTypeName, `${ac.name} (AC)`);
     });
   });
 
@@ -302,7 +304,7 @@ describe('admin surge windows (integration)', () => {
       },
     });
     assert.equal(zone.statusCode, 201, zone.payload);
-    const zoneId = zone.json().id as string;
+    const zoneId = zone.json().data.id as string;
 
     const startsAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const created = await app.inject({
@@ -321,7 +323,7 @@ describe('admin surge windows (integration)', () => {
       },
     });
     assert.equal(created.statusCode, 201, created.payload);
-    const body = created.json() as Record<string, unknown>;
+    const body = created.json().data as Record<string, unknown>;
     assert.equal(body.peakHourStart, '08:00');
     assert.equal(body.peakHourEnd, '10:00');
     assert.equal(body.isPeakHourOnly, true);
@@ -359,7 +361,7 @@ describe('admin surge windows (integration)', () => {
         url: '/api/v1/admin/surge-windows',
         headers: authHeader,
         payload: {
-          zoneId: zone.json().id as string,
+          zoneId: zone.json().data.id as string,
           vehicleTypeId,
           multiplier: 1.4,
           startsAt: new Date(Date.now() + 60_000).toISOString(),

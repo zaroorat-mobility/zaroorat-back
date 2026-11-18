@@ -83,7 +83,7 @@ export interface QuoteOption {
   minimumFare: number;
   fareBreakdown: CustomerFareBreakdown;
   waitingPolicy: { freeMinutes: number; perMinute: number };
-  surge: { multiplier: number; label: string | null };
+  surge: { multiplier: number; windowId: string | null; label: string | null };
   promoApplied: boolean;
   promoDiscountAmount: number;
   promoErrorCode?: string;
@@ -276,7 +276,7 @@ export class RideRequestService {
       pickupLat: params.pickupLat,
       pickupLng: params.pickupLng,
     });
-    const surgeByType = await this.surgeService.resolveSurgeMultipliersForTypes(
+    const surgeByType = await this.surgeService.resolveSurgeDetailsForTypes(
       params.pickupLat,
       params.pickupLng,
       vehicleTypes.map((type) => type.id),
@@ -293,6 +293,7 @@ export class RideRequestService {
       pricingRuleId: string | null;
       ruleVersion: number | null;
       surgeMultiplier: number;
+      surgeWindowId: string | null;
       rateCardSnapshot: Prisma.InputJsonValue;
       fareSnapshot: Prisma.InputJsonValue;
       totalFare: number;
@@ -310,7 +311,10 @@ export class RideRequestService {
         ruleVersion: null,
       };
       const rateCard = resolvedMeta.card;
-      const surgeMultiplier = surgeByType.get(vehicleType.id) ?? 1;
+      const surgeDetail = surgeByType.get(vehicleType.id);
+      const surgeMultiplier = surgeDetail?.multiplier ?? 1;
+      const surgeWindowId = surgeDetail?.windowId ?? null;
+      const surgeReason = surgeDetail?.reason ?? null;
       const baseFare = await this.pricingService.calculateFareQuote({
         pickupLat: params.pickupLat,
         pickupLng: params.pickupLng,
@@ -373,9 +377,10 @@ export class RideRequestService {
         },
         surge: {
           multiplier: fare.surgeMultiplier,
+          windowId: fare.surgeMultiplier > 1 ? surgeWindowId : null,
           label:
             fare.surgeMultiplier > 1
-              ? `${Number(fare.surgeMultiplier).toFixed(1)}x peak demand`
+              ? (surgeReason?.trim() || `${Number(fare.surgeMultiplier).toFixed(1)}x peak demand`)
               : null,
         },
         promoApplied: promoResult.applied,
@@ -391,6 +396,7 @@ export class RideRequestService {
         pricingRuleId: resolvedMeta.ruleId,
         ruleVersion: resolvedMeta.ruleVersion,
         surgeMultiplier: fare.surgeMultiplier,
+        surgeWindowId: fare.surgeMultiplier > 1 ? surgeWindowId : null,
         rateCardSnapshot: rateCard as unknown as Prisma.InputJsonValue,
         fareSnapshot: {
           ...fare,
@@ -749,7 +755,7 @@ export class RideRequestService {
         throw new QuoteRequiredError();
       }
 
-      surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
+      const surgeDetail = await this.surgeService.resolveSurgeDetail(
         input.pickupLat,
         input.pickupLng,
         input.vehicleTypeId,
@@ -757,6 +763,8 @@ export class RideRequestService {
         // FR-015. The city scopes which service zones can carry a surge window.
         { timeZone: city.timezone, cityCode: city.code, maxMultiplier: city.maxSurgeMultiplier },
       );
+      surgeMultiplier = surgeDetail.multiplier;
+      surgeWindowId = surgeDetail.windowId;
 
       // FR-002. Resolved once, here, and both remembered and reused: the id goes
       // onto the request so completion bills on this exact rule, and the card
@@ -867,6 +875,7 @@ export class RideRequestService {
               : 0,
           ),
           surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
+          surgeWindowId,
           pricingRuleId,
           quoteId: lockedQuoteId,
           pricingSnapshot: pricingSnapshot as unknown as Prisma.InputJsonValue,

@@ -186,6 +186,16 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
     handler: adminSurgeController.listSurgeWindows.bind(adminSurgeController),
   });
 
+  fastify.get('/surge-windows/:id/versions', {
+    ...canRead,
+    schema: {
+      tags: ['Admin', 'Surge'],
+      summary: 'List revision history for a Surge Window',
+      params: uuidParams,
+    },
+    handler: adminSurgeController.listSurgeWindowVersions.bind(adminSurgeController),
+  });
+
   fastify.get('/surge-windows/:id', {
     ...canRead,
     schema: {

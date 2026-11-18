@@ -87,15 +87,22 @@ model SurgeWindow {
   startsAt           DateTime  @map("starts_at")
   endsAt             DateTime? @map("ends_at")
   isActive           Boolean   @default(true) @map("is_active")
+  supersedesId       String?   @map("supersedes_id") @db.Uuid
+  createdBy          String?   @map("created_by") @db.Uuid
   createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
 
-  zone        SurgeZone?   @relation(fields: [zoneId], references: [id])
-  serviceZone ServiceZone? @relation(fields: [serviceZoneId], references: [id])
-  vehicleType VehicleType? @relation(fields: [vehicleTypeId], references: [id])
+  zone         SurgeZone?    @relation(fields: [zoneId], references: [id])
+  serviceZone  ServiceZone?  @relation(fields: [serviceZoneId], references: [id])
+  vehicleType  VehicleType?  @relation(fields: [vehicleTypeId], references: [id])
+  supersedes   SurgeWindow?  @relation("SurgeWindowLineage", fields: [supersedesId], references: [id])
+  supersededBy SurgeWindow[] @relation("SurgeWindowLineage")
+  rideRequests RideRequest[]
 
   @@index([zoneId, startsAt])
   @@index([serviceZoneId, startsAt])
   @@index([cityCode, startsAt])
+  @@index([supersedesId])
   @@map("surge_windows")
 }
 

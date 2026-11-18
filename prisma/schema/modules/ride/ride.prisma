@@ -17,6 +17,7 @@ model RideRequest {
   /// Extra ₹ the customer adds while searching. Drivers are shown quoted + boost.
   boostAmount          Decimal                               @default(0) @map("boost_amount") @db.Decimal(10, 2)
   surgeMultiplier      Decimal                               @default(1.0) @map("surge_multiplier") @db.Decimal(4, 2)
+  surgeWindowId        String?                               @map("surge_window_id") @db.Uuid
   pricingRuleId        String?                               @map("pricing_rule_id") @db.Uuid
   quoteId              String?                               @map("quote_id") @db.Uuid
   /// Write-once immutable snapshot of the resolved rate card, rule metadata,
@@ -41,6 +42,7 @@ model RideRequest {
 
   vehicleType    VehicleType       @relation(fields: [vehicleTypeId], references: [id])
   pricingRule    PricingRule?      @relation(fields: [pricingRuleId], references: [id])
+  surgeWindow    SurgeWindow?      @relation(fields: [surgeWindowId], references: [id])
   quote          RideQuote?        @relation(fields: [quoteId], references: [id])
   dispatches     RideDispatch[]
   rides          Ride[]
@@ -50,6 +52,7 @@ model RideRequest {
   @@index([customerId])
   @@index([status])
   @@index([pricingRuleId])
+  @@index([surgeWindowId])
   @@index([quoteId])
   /// Driver map demand reads the last few minutes of requests (map-zones.repository.ts).
   @@index([createdAt])

@@ -28,6 +28,8 @@ export interface CreateRideRequestInput {
   quotedFare?: Decimal | null;
   boostAmount?: Decimal;
   surgeMultiplier?: Decimal;
+  /// Phase 2.3 (M-08). The winning surge window that applied to this request.
+  surgeWindowId?: string | null;
   /// FR-002. The pricing rule the quote resolved, so completion can bill on it.
   pricingRuleId?: string | null;
   /// Phase 1 (M-01). Persisted quote lock ID when booked from a quote.
@@ -71,7 +73,7 @@ export class RideRequestRepository {
         "drop_lat", "drop_lng", "drop_location", "drop_address",
         "estimated_distance_km", "estimated_duration_min", "quoted_fare",
         "boost_amount",
-        "surge_multiplier", "pricing_rule_id", "quote_id", "pricing_snapshot",
+        "surge_multiplier", "surge_window_id", "pricing_rule_id", "quote_id", "pricing_snapshot",
         "payment_method", "promo_code",
         "scheduled_for", "status", "created_at", "expires_at",
         "map_provider", "map_config_version",
@@ -92,6 +94,7 @@ export class RideRequestRepository {
         ${input.quotedFare ?? null},
         ${boost},
         ${input.surgeMultiplier ?? new Decimal(1)},
+        ${input.surgeWindowId ?? null}::uuid,
         ${input.pricingRuleId ?? null}::uuid,
         ${input.quoteId ?? null}::uuid,
         ${

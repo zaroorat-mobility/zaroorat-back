@@ -36,6 +36,8 @@ export class AdminPricingSimulateService {
     const card = this.pricingService.rateCardFor(matchedRule);
 
     let surgeMultiplier = 1;
+    let surgeWindowId: string | null = null;
+    let surgeReason: string | null = null;
     let surgeSource: 'override' | 'live' | 'default' = 'default';
     if (body.surgeMultiplier !== undefined) {
       surgeMultiplier = body.surgeMultiplier;
@@ -48,11 +50,12 @@ export class AdminPricingSimulateService {
               select: { timezone: true, maxSurgeMultiplier: true },
             })
           : null;
-      surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
+      const surgeDetail = await this.surgeService.resolveSurgeDetail(
         body.pickupLat,
         body.pickupLng,
         vehicleType.id,
         {
+          at,
           ...(city?.timezone ? { timeZone: city.timezone } : {}),
           ...(cityCode !== 'GLOBAL' ? { cityCode } : {}),
           ...(city?.maxSurgeMultiplier != null
@@ -60,6 +63,9 @@ export class AdminPricingSimulateService {
             : {}),
         },
       );
+      surgeMultiplier = surgeDetail.multiplier;
+      surgeWindowId = surgeDetail.windowId;
+      surgeReason = surgeDetail.reason;
       surgeSource = 'live';
     }
 
@@ -111,6 +117,8 @@ export class AdminPricingSimulateService {
           },
       surge: {
         multiplier: fare.surgeMultiplier,
+        windowId: surgeWindowId,
+        reason: surgeReason,
         source: surgeSource,
       },
       rates: {

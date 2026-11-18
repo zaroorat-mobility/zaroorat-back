@@ -291,16 +291,9 @@ export class PricingService {
     const waitingCharge = toPaise(D(billableWaitingMin).times(card.perWaitingMinute));
     const bookingFee = toPaise(D(card.bookingFee));
 
-    /// FR-047. A night multiplier used to be applied here, gated on an
-    /// `isNightTrip` flag that no caller in the codebase ever set. The admin form
-    /// collected a night percentage, the service converted it to a multiplier,
-    /// the column stored it, the rate card carried it — and the branch that would
-    /// have charged it was unreachable. Every part of that chain is removed
-    /// rather than left in place looking configured; the column itself goes in
-    /// the deferred drop, one release after this one.
-    const subtotalBeforeSurge = toPaise(
-      D(card.baseFare).plus(distanceFare).plus(timeFare).plus(waitingCharge).plus(bookingFee),
-    );
+    /// Phase 2.2 (D-08): Surge applies strictly to ride movement charges
+    /// (Base + Distance + Time). Waiting charges and booking fees are never surged.
+    const surgeableSubtotal = toPaise(D(card.baseFare).plus(distanceFare).plus(timeFare));
 
     // FR-011. `SurgeService` already clamps, so today every caller arrives inside
     // the band. The bound belongs here too: this is a public method taking a
@@ -310,8 +303,10 @@ export class PricingService {
       MAX_SURGE_MULTIPLIER,
       Math.max(MIN_SURGE_MULTIPLIER, params.surgeMultiplier ?? 1),
     );
-    const surgeAmount = toPaise(subtotalBeforeSurge.times(D(surgeMultiplier).minus(1)));
-    const subtotal = toPaise(subtotalBeforeSurge.plus(surgeAmount));
+    const surgeAmount = toPaise(surgeableSubtotal.times(D(surgeMultiplier).minus(1)));
+    const subtotal = toPaise(
+      surgeableSubtotal.plus(surgeAmount).plus(waitingCharge).plus(bookingFee),
+    );
 
     /// FR-008. The floor binds here, on the fare, **before** the discount.
     ///
