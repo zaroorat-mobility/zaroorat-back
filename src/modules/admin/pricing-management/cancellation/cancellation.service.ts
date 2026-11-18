@@ -435,29 +435,15 @@ export class AdminCancellationService {
             effectiveFrom.getTime() > Date.now();
 
           if (isFutureScheduledHandoff) {
-            const closed = await tx.cancellationPolicy.update({
+            await tx.cancellationPolicy.update({
               where: { id: existing.id },
               data: { effectiveTo: effectiveFrom },
             });
-            await this.audit(
-              tx,
-              actor,
-              existing,
-              closed,
-              `Cancellation policy v${existing.version} window closed for scheduled successor`,
-            );
           } else {
-            const retired = await tx.cancellationPolicy.update({
+            await tx.cancellationPolicy.update({
               where: { id: existing.id },
               data: { isActive: false },
             });
-            await this.audit(
-              tx,
-              actor,
-              existing,
-              retired,
-              `Cancellation policy v${existing.version} retired by successor revision`,
-            );
           }
         }
 
@@ -508,10 +494,10 @@ export class AdminCancellationService {
 
         await recordAdminAction(tx, {
           ...actor,
-          action: 'CREATE',
+          action: 'UPDATE',
           entityType: 'cancellation_policy',
-          entityId: successor.id,
-          summary: `Cancellation policy v${nextVersion} created (supersedes v${existing.version})`,
+          entityId: existing.id,
+          summary: `Cancellation policy updated to v${nextVersion} (new row ${successor.id}, supersedes v${existing.version})`,
           before: existing,
           after: successor,
           result: 'SUCCESS',

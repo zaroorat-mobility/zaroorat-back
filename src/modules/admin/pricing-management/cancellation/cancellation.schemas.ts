@@ -107,7 +107,6 @@ function refinePolicyRules(
 
 export const createCancellationPolicyBodySchema = z
   .object(baseCancellationPolicyFields)
-  .strict()
   .superRefine(refinePolicyRules);
 
 export const updateCancellationPolicyBodySchema = z
@@ -131,7 +130,6 @@ export const updateCancellationPolicyBodySchema = z
     status: z.enum(['active', 'inactive']).optional(),
     expectedVersion: z.number().int().min(1).optional(),
   })
-  .strict()
   .superRefine(refinePolicyRules);
 
 export const evaluateCancellationPolicyBodySchema = z
