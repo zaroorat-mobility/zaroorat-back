@@ -87,3 +87,56 @@ WHERE balance < 0;
 SELECT '10_billing_invoices_and_templates' AS check_name,
        (SELECT COUNT(*) FROM billing_invoices) AS billing_invoice_rows,
        (SELECT COUNT(*) FROM invoice_templates) AS invoice_template_rows;
+
+-- Rev 5 Phase 4–6 Production Readiness Checks
+SELECT '11_stale_wallet_reservations_on_terminal_rides' AS check_name,
+       COUNT(*) AS stale_active_reservation_count
+FROM driver_wallet_reservations r
+JOIN rides rd ON rd.id = r.ride_id
+WHERE r.status = 'ACTIVE'
+  AND (
+    rd.status IN ('COMPLETED', 'CANCELLED_BY_CUSTOMER', 'CANCELLED_BY_DRIVER', 'CANCELLED_BY_SYSTEM')
+    OR rd.driver_payment_model IS DISTINCT FROM 'COMMISSION'
+  );
+
+SELECT '12_open_collection_failures_summary' AS check_name,
+       kind,
+       status,
+       COUNT(*) AS row_count,
+       COALESCE(SUM(amount), 0) AS total_amount
+FROM commission_collection_failures
+GROUP BY kind, status
+ORDER BY kind, status;
+
+SELECT '13_fiscal_document_series_gap_check' AS check_name,
+       ds.id AS series_id,
+       ds.prefix,
+       ds.financial_year,
+       ds.last_sequence,
+       COUNT(fd.id) AS issued_count,
+       COALESCE(MIN(fd.sequence_number), 0) AS min_seq,
+       COALESCE(MAX(fd.sequence_number), 0) AS max_seq,
+       CASE
+         WHEN ds.last_sequence = 0 AND COUNT(fd.id) = 0 THEN 0
+         WHEN COUNT(fd.id) = ds.last_sequence AND MIN(fd.sequence_number) = 1 AND MAX(fd.sequence_number) = ds.last_sequence THEN 0
+         ELSE 1
+       END AS has_gap_violation
+FROM document_series ds
+LEFT JOIN fiscal_documents fd ON fd.series_id = ds.id
+GROUP BY ds.id, ds.prefix, ds.financial_year, ds.last_sequence;
+
+SELECT '14_rev5_financial_feature_flags_status' AS check_name,
+       key,
+       status,
+       is_active
+FROM feature_flags
+WHERE key IN (
+  'pricing.commission_config_source',
+  'pricing.wallet_reservation_enabled',
+  'pricing.commission_wallet_deduction',
+  'pricing.passenger_gst_enabled',
+  'pricing.gst_recovery_enabled',
+  'cancellation.policy_enforcement',
+  'documents.issue'
+)
+ORDER BY key;
