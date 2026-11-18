@@ -1,13 +1,16 @@
 import { rideConfig } from '@config';
 import type { TransactionClient } from '@core/database/TransactionManager';
+// Direct file imports, not the '@modules/pricing' barrel: the barrel also loads
+// the fiscal-document ride-completed consumer, which imports the rides event
+// catalog and so leads back here before CancellationService is defined.
 import {
   CancellationPolicyService,
   deriveCancellationScenario,
   type CancellationFeeStatus,
   type CancellationPolicySnapshot,
   type CancellationScenarioDb,
-  type PricingSnapshot,
-} from '@modules/pricing';
+} from '@modules/pricing/services/cancellation-policy.service.js';
+import type { PricingSnapshot } from '@modules/pricing/domain/pricing.types.js';
 import type { Prisma } from '../../../../generated/prisma/index.js';
 import { Decimal } from '../../types/index.js';
 import { RideCancellationRepository } from '../../repositories/ride-cancellation.repository.js';
