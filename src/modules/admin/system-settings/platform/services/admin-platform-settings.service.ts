@@ -16,6 +16,7 @@ import { SystemSettingService } from '../../services/system-setting.service.js';
 import { SystemSettingsCache } from '../../cache/system-settings.cache.js';
 import { PlatformConfigResolver } from './platform-config-resolver.service.js';
 import { FeatureFlagService } from './feature-flag.service.js';
+import { FeatureFlagDependencyValidator } from '@modules/pricing';
 import {
   GENERAL_SETTING_KEYS,
   RIDE_SETTING_KEYS,
@@ -76,6 +77,7 @@ export class AdminPlatformSettingsService {
     private readonly featureFlagService: FeatureFlagService,
     private readonly databaseService: DatabaseService,
     private readonly txManager: TransactionManager,
+    private readonly featureFlagDependencyValidator?: FeatureFlagDependencyValidator,
   ) {}
 
   private get client() {
@@ -399,6 +401,26 @@ export class AdminPlatformSettingsService {
     await this.featureFlagService.ensureSeeded();
     const flags = [...body.flags].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     await this.txManager.execute(async (tx) => {
+      // Snapshot current flag state for dependency validation (Rev 5 §1.4)
+      const allFlags = await tx.featureFlag.findMany();
+      const prevState: Record<string, boolean> = {};
+      const nextState: Record<string, boolean> = {};
+      for (const f of allFlags) {
+        const enabled = f.isActive && (f.status === 'ON' || (f.status !== 'OFF' && f.rolloutPercentage > 0));
+        prevState[f.key] = enabled;
+        nextState[f.key] = enabled;
+      }
+
+      const pendingUpdates: Array<{
+        targetId: string;
+        before: typeof allFlags[number];
+        changes: {
+          status?: 'ON' | 'OFF' | 'PARTIAL';
+          rolloutPercentage?: number;
+          isActive?: boolean;
+        };
+      }> = [];
+
       for (const flag of flags) {
         const target = await tx.featureFlag.findUnique({ where: { key: flag.key } });
         if (!target) throw new Error(`Unknown feature flag '${flag.key}'`);
@@ -417,14 +439,32 @@ export class AdminPlatformSettingsService {
             : {}),
         };
         if (Object.keys(changes).length === 0) continue;
-        const after = await this.featureFlagService.updateFlag(target.id, changes, tx);
+
+        const mergedActive = changes.isActive ?? before.isActive;
+        const mergedStatus = changes.status ?? before.status;
+        const mergedRollout = changes.rolloutPercentage ?? before.rolloutPercentage;
+        nextState[flag.key] =
+          mergedActive && (mergedStatus === 'ON' || (mergedStatus !== 'OFF' && mergedRollout > 0));
+        pendingUpdates.push({ targetId: target.id, before, changes });
+      }
+
+      if (this.featureFlagDependencyValidator && pendingUpdates.length > 0) {
+        await this.featureFlagDependencyValidator.validateProspectiveState(
+          nextState,
+          prevState,
+          tx,
+        );
+      }
+
+      for (const item of pendingUpdates) {
+        const after = await this.featureFlagService.updateFlag(item.targetId, item.changes, tx);
         await recordAdminAction(tx, {
           ...actor,
           action: 'UPDATE',
           entityType: 'feature_flag',
           entityId: after.id,
           summary: `Feature flag ${after.key} updated`,
-          before: flagState(before),
+          before: flagState(item.before),
           after: flagState(after),
           result: 'SUCCESS',
         });
@@ -432,6 +472,15 @@ export class AdminPlatformSettingsService {
     });
     await this.invalidatePublicAppConfig(actor.actorId);
     return this.getFeatureFlags();
+  }
+
+  async patchSingleFeatureFlag(
+    key: string,
+    patch: { status?: 'ON' | 'OFF' | 'PARTIAL'; rolloutPercentage?: number; isActive?: boolean },
+    actor: AuditActor,
+  ) {
+    const all = await this.updateFeatureFlags({ flags: [{ key, ...patch }] }, actor);
+    return all.find((f) => f.key === key) ?? null;
   }
 
   async getMaintenanceSettings() {

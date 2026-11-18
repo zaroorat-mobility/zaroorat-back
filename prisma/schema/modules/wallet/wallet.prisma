@@ -194,9 +194,78 @@ model DriverCommissionWalletTransaction {
   wallet DriverCommissionWallet @relation(fields: [walletId], references: [id])
   ride   Ride?                  @relation(fields: [rideId], references: [id])
 
+  settlementSteps    RideSettlementStep[]
+  recoveredFailures  CommissionCollectionFailure[]
+
   @@index([walletId, createdAt])
   @@index([driverId, createdAt])
   @@map("driver_commission_wallet_transactions")
+}
+
+/// Phase 4 (M-05): Atomic driver wallet reservation covering commission + GST recovery.
+model DriverWalletReservation {
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  rideId              String    @unique @map("ride_id") @db.Uuid
+  driverId            String    @map("driver_id") @db.Uuid
+  commissionAmount    Decimal   @default(0) @map("commission_amount") @db.Decimal(12, 2)
+  gstRecoveryAmount   Decimal   @default(0) @map("gst_recovery_amount") @db.Decimal(12, 2)
+  totalReservedAmount Decimal   @map("total_reserved_amount") @db.Decimal(12, 2)
+  revision            Int       @default(1)
+  status              String    @default("ACTIVE") // ACTIVE | CONSUMED | RELEASED
+  createdAt           DateTime  @default(now()) @map("created_at")
+  resolvedAt          DateTime? @map("resolved_at")
+
+  ride   Ride   @relation(fields: [rideId], references: [id])
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([driverId, status])
+  @@map("driver_wallet_reservations")
+}
+
+/// Phase 4 (M-05): Per-ride financial settlement step tracker (G1, G2, G3).
+/// Protected by DB trigger so POSTED steps are strictly immutable.
+model RideSettlementStep {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  rideId        String   @map("ride_id") @db.Uuid
+  stepType      String   @map("step_type") // COMMISSION_DEBIT | PASSENGER_GST_LIABILITY | GST_RECOVERY_DEBIT
+  status        String // POSTED | FAILED_INSUFFICIENT_BALANCE | WAIVED | SKIPPED_DISABLED | SKIPPED_GRANDFATHERED_SUBSCRIPTION | SKIPPED_DRIVER_LIABLE
+  ledgerGroupId String?  @map("ledger_group_id") @db.Uuid
+  walletTxnId   String?  @map("wallet_txn_id") @db.Uuid
+  amount        Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  ride      Ride                               @relation(fields: [rideId], references: [id])
+  walletTxn DriverCommissionWalletTransaction? @relation(fields: [walletTxnId], references: [id])
+
+  @@unique([rideId, stepType])
+  @@index([status, stepType])
+  @@map("ride_settlement_steps")
+}
+
+/// Phase 4 (M-05, Rev 5 R5-6): Open & recovered settlement collection failures.
+model CommissionCollectionFailure {
+  id                    String    @id @default(uuid(7)) @db.Uuid
+  rideId                String    @map("ride_id") @db.Uuid
+  driverId              String    @map("driver_id") @db.Uuid
+  kind                  String // COMMISSION | GST_RECOVERY
+  amount                Decimal   @db.Decimal(12, 2)
+  balanceAtAttempt      Decimal   @map("balance_at_attempt") @db.Decimal(12, 2)
+  status                String    @default("OPEN") // OPEN | RECOVERED | WAIVED
+  recoveryWalletTxnId   String?   @map("recovery_wallet_txn_id") @db.Uuid
+  recoveryLedgerGroupId String?   @map("recovery_ledger_group_id") @db.Uuid
+  waiverReason          String?   @map("waiver_reason")
+  resolvedBy            String?   @map("resolved_by") @db.Uuid
+  resolvedAt            DateTime? @map("resolved_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  ride              Ride                               @relation(fields: [rideId], references: [id])
+  driver            Driver                             @relation(fields: [driverId], references: [id])
+  recoveryWalletTxn DriverCommissionWalletTransaction? @relation(fields: [recoveryWalletTxnId], references: [id])
+
+  @@unique([rideId, kind])
+  @@index([driverId, status])
+  @@map("commission_collection_failures")
 }
 
 /// Company-configurable predefined recharge amounts ("boxes"). Deactivating one

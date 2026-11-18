@@ -19,4 +19,13 @@ export class DriverPaymentModelController {
     const status = await this.paymentModelService.getStatus(driverId);
     reply.send({ data: status });
   }
+  async getCommissionTerms(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const driverId = await actingDriverId(req, this.driverRepository);
+    const query = (req.query ?? {}) as { cityCode?: string; vehicleTypeId?: string };
+    const terms = await this.paymentModelService.getCommissionTerms(driverId, {
+      cityCode: query.cityCode ?? null,
+      vehicleTypeId: query.vehicleTypeId ?? null,
+    });
+    reply.send({ data: terms });
+  }
 }

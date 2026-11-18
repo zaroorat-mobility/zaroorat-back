@@ -98,6 +98,9 @@ export async function systemSettingsRoutes(fastify: FastifyInstance): Promise<vo
   fastify.put('/settings/feature-flags', canWrite, (req, reply) =>
     platformController.updateFeatureFlags(req, reply),
   );
+  fastify.patch('/feature-flags/:key', canWrite, (req, reply) =>
+    platformController.patchFeatureFlag(req, reply),
+  );
   fastify.get('/settings/maintenance', canRead, (req, reply) =>
     platformController.getMaintenance(req, reply),
   );

@@ -205,11 +205,16 @@ model Ride {
   /// NULL means "created before this column existed," and completion treats
   /// that as a legacy ride with no dual-model handling, never as an error.
   /// DB CHECK `rides_driver_payment_model_check` enforces the allowed values.
-  driverPaymentModel String?                               @map("driver_payment_model")
+  driverPaymentModel   String?  @map("driver_payment_model")
+  /// Phase 4 (M-02): Locked at accept time for Path A grandfathered subscribers.
+  driverSubscriptionId String?  @map("driver_subscription_id") @db.Uuid
   /// COMMISSION-model rides only; determined ONCE at acceptance from the
-  /// ride's pinned PricingRule and never recalculated (spec.md FR-013b/FR-020).
-  /// Null for SUBSCRIPTION-model rides.
-  commissionAmount   Decimal?                              @map("commission_amount") @db.Decimal(12, 2)
+  /// ride's pinned PricingRule / CommissionConfiguration.
+  commissionAmount     Decimal? @map("commission_amount") @db.Decimal(12, 2)
+  /// Phase 4 (M-02): Write-once immutable accept-time snapshots (enforced by DB trigger).
+  commissionSnapshot   Json?    @map("commission_snapshot")
+  passengerGstSnapshot Json?    @map("passenger_gst_snapshot")
+  gstRecoverySnapshot  Json?    @map("gst_recovery_snapshot")
   /// Optional early-end reason when the trip finished short of destination.
   earlyEndReasonCode RideEndReason?                        @map("early_end_reason_code")
   earlyEndReasonText String?                               @map("early_end_reason_text")
@@ -249,6 +254,10 @@ model Ride {
   payoutItems                  PayoutItem[]
   cashbackGrants               CashbackGrant[]
   commissionWalletTransactions DriverCommissionWalletTransaction[]
+  pricingRevisions             RidePricingRevision[]
+  walletReservation            DriverWalletReservation?
+  settlementSteps              RideSettlementStep[]
+  collectionFailures           CommissionCollectionFailure[]
   chatConversations            ChatConversation[]
   supportTickets               SupportTicket[]
   redeemedCoupons              Coupon[]
@@ -324,6 +333,34 @@ model RideFare {
   ride Ride @relation(fields: [rideId], references: [id])
 
   @@map("ride_fares")
+}
+
+/// Phase 4 (M-02, Rev 5 R5-5): Append-only post-accept pricing revision log.
+/// Protected by DB BEFORE UPDATE/DELETE trigger so accept-time snapshots stay untouched.
+model RidePricingRevision {
+  id                      String    @id @default(uuid(7)) @db.Uuid
+  rideId                  String    @map("ride_id") @db.Uuid
+  revisionNumber          Int       @map("revision_number")
+  reason                  String // DESTINATION_CHANGE | STOP_ADDED | ROUTE_CHANGE | COMPLETION_FINALIZATION
+  originalPricingRuleId   String?   @map("original_pricing_rule_id") @db.Uuid
+  originalCommissionCfgId String?   @map("original_commission_cfg_id") @db.Uuid
+  originalTaxCfgId        String?   @map("original_tax_cfg_id") @db.Uuid
+  originalRecoveryCfgId   String?   @map("original_recovery_cfg_id") @db.Uuid
+  calculationDetailsJson  Json      @map("calculation_details_json")
+  previousReservedAmount  Decimal   @default(0) @map("previous_reserved_amount") @db.Decimal(12, 2)
+  newReservedAmount       Decimal   @default(0) @map("new_reserved_amount") @db.Decimal(12, 2)
+  deltaReservedAmount     Decimal   @default(0) @map("delta_reserved_amount") @db.Decimal(12, 2)
+  walletReservationId     String?   @map("wallet_reservation_id") @db.Uuid
+  customerConfirmedAt     DateTime? @map("customer_confirmed_at")
+  driverConfirmedAt       DateTime? @map("driver_confirmed_at")
+  confirmedByActorId      String?   @map("confirmed_by_actor_id") @db.Uuid
+  createdAt               DateTime  @default(now()) @map("created_at")
+
+  ride Ride @relation(fields: [rideId], references: [id])
+
+  @@unique([rideId, revisionNumber])
+  @@index([rideId, createdAt])
+  @@map("ride_pricing_revisions")
 }
 
 model RideFareLine {

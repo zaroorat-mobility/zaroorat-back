@@ -322,3 +322,66 @@ export class RiderDebtLimitExceededError extends PaymentError {
     this.name = 'RiderDebtLimitExceededError';
   }
 }
+
+/// Phase 4 (Rev 5 §1.6, §1.7, §4.5): Wallet reservation & atomic failure recovery errors.
+export class InsufficientAvailableBalanceDueToReservationsError extends PaymentError {
+  constructor(requested: string, available: string, reserved: string) {
+    super(
+      `Cannot debit ${requested}: available balance is ${available} (${reserved} is reserved for active rides).`,
+      'INSUFFICIENT_AVAILABLE_BALANCE_DUE_TO_RESERVATIONS',
+      409,
+    );
+    this.name = 'InsufficientAvailableBalanceDueToReservationsError';
+  }
+}
+
+export class DestinationChangeInsufficientWalletCoverageError extends PaymentError {
+  constructor(delta: string, available: string) {
+    super(
+      `Destination/fare change requires an additional ${delta} wallet coverage, but only ${available} is available.`,
+      'DESTINATION_CHANGE_INSUFFICIENT_WALLET_COVERAGE',
+      409,
+    );
+    this.name = 'DestinationChangeInsufficientWalletCoverageError';
+  }
+}
+
+export class SettlementFailureNotFoundError extends PaymentError {
+  constructor(id: string) {
+    super(`Settlement collection failure '${id}' was not found`, 'SETTLEMENT_FAILURE_NOT_FOUND', 404);
+    this.name = 'SettlementFailureNotFoundError';
+  }
+}
+
+export class FailureAlreadyResolvedError extends PaymentError {
+  constructor(id: string, status: string) {
+    super(
+      `Settlement collection failure '${id}' is already resolved with status '${status}'.`,
+      'FAILURE_ALREADY_RESOLVED',
+      409,
+    );
+    this.name = 'FailureAlreadyResolvedError';
+  }
+}
+
+export class StepAlreadyPostedError extends PaymentError {
+  constructor(rideId: string, stepType: string) {
+    super(
+      `Settlement step '${stepType}' for ride '${rideId}' is already POSTED.`,
+      'STEP_ALREADY_POSTED',
+      409,
+    );
+    this.name = 'StepAlreadyPostedError';
+  }
+}
+
+export class InsufficientAvailableBalanceForRecoveryError extends PaymentError {
+  constructor(required: string, available: string) {
+    super(
+      `Cannot recover ${required}: driver available balance is ${available} (after active reservations).`,
+      'INSUFFICIENT_AVAILABLE_BALANCE',
+      409,
+    );
+    this.name = 'InsufficientAvailableBalanceForRecoveryError';
+  }
+}

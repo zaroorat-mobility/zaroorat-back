@@ -30,6 +30,8 @@ import {
   DebtService,
   WriteOffService,
   CommissionWalletService,
+  SettlementFailureRecoveryService,
+  PricingReconciliationService,
 } from './services/index.js';
 import {
   PaymentMethodController,
@@ -94,6 +96,8 @@ export function registerPaymentsModule(container: AwilixContainer): void {
     writeOffService: asClass(WriteOffService).singleton(),
     walletService: asClass(WalletService).singleton(),
     commissionWalletService: asClass(CommissionWalletService).singleton(),
+    settlementFailureRecoveryService: asClass(SettlementFailureRecoveryService).singleton(),
+    pricingReconciliationService: asClass(PricingReconciliationService).singleton(),
     intentService: asClass(IntentService).singleton(),
     refundService: asClass(RefundService).singleton(),
     settlementService: asClass(SettlementService).singleton(),

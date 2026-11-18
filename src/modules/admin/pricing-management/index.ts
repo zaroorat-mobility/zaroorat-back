@@ -16,4 +16,7 @@ export * from './invoice/invoice.schemas.js';
 export * from './simulate/simulate.controller.js';
 export * from './simulate/simulate.service.js';
 export * from './simulate/simulate.schemas.js';
+export * from './governance/governance.controller.js';
+export * from './governance/governance.service.js';
+export * from './governance/governance.schemas.js';
 export { adminSurgeRoutes as pricingManagementRoutes } from './pricing-management.routes.js';

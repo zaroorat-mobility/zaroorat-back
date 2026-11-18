@@ -31,6 +31,10 @@ export async function driverRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/me/withdrawals', (req, reply) => controller.withdrawals.create(req, reply));
   fastify.get('/me/bank-account', (req, reply) => controller.bank.getBankAccount(req, reply));
   fastify.post('/me/bank-account', (req, reply) => controller.bank.saveBankAccount(req, reply));
+  fastify.get('/me/commission-terms', (req, reply) =>
+    controller.paymentModel.getCommissionTerms(req, reply),
+  );
+  fastify.post('/me/payment-model', (req, reply) => controller.paymentModel.select(req, reply));
 
   fastify.patch('/:driverId/profile', (req, reply) =>
     controller.onboarding.updateProfile(req, reply),

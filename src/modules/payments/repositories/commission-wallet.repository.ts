@@ -61,6 +61,96 @@ export class CommissionWalletRepository {
     });
   }
 
+  /// Phase 4 (M-05): Independent idempotency check for RIDE_GST_RECOVERY — backed by
+  /// the `commission_wallet_one_gst_recovery_per_ride` partial unique index.
+  async findRideGstRecoveryTransaction(
+    rideId: string,
+    tx?: TransactionClient,
+  ): Promise<DriverCommissionWalletTransaction | null> {
+    const client = tx ?? this.db.client;
+    return client.driverCommissionWalletTransaction.findFirst({
+      where: { rideId, txnType: 'RIDE_GST_RECOVERY' },
+    });
+  }
+
+  /// Sums all ACTIVE wallet reservations for a driver (called under wallet FOR UPDATE lock).
+  async sumActiveReservations(driverId: string, tx?: TransactionClient): Promise<Decimal> {
+    const client = tx ?? this.db.client;
+    const agg = await client.driverWalletReservation.aggregate({
+      where: { driverId, status: 'ACTIVE' },
+      _sum: { totalReservedAmount: true },
+    });
+    return agg._sum.totalReservedAmount ?? new Decimal(0);
+  }
+
+  async findReservationByRide(rideId: string, tx?: TransactionClient) {
+    const client = tx ?? this.db.client;
+    return client.driverWalletReservation.findUnique({ where: { rideId } });
+  }
+
+  async lockReservationForUpdate(rideId: string, tx: TransactionClient) {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "driver_wallet_reservations" WHERE "ride_id" = ${rideId}::uuid FOR UPDATE
+    `;
+    if (rows.length === 0) return null;
+    return tx.driverWalletReservation.findUnique({ where: { rideId } });
+  }
+
+  async createReservation(
+    data: {
+      rideId: string;
+      driverId: string;
+      commissionAmount: Decimal;
+      gstRecoveryAmount: Decimal;
+      totalReservedAmount: Decimal;
+    },
+    tx: TransactionClient,
+  ) {
+    return tx.driverWalletReservation.create({
+      data: {
+        rideId: data.rideId,
+        driverId: data.driverId,
+        commissionAmount: data.commissionAmount,
+        gstRecoveryAmount: data.gstRecoveryAmount,
+        totalReservedAmount: data.totalReservedAmount,
+        revision: 1,
+        status: 'ACTIVE',
+      },
+    });
+  }
+
+  async updateReservationAmounts(
+    rideId: string,
+    data: {
+      commissionAmount: Decimal;
+      gstRecoveryAmount: Decimal;
+      totalReservedAmount: Decimal;
+    },
+    tx: TransactionClient,
+  ) {
+    return tx.driverWalletReservation.update({
+      where: { rideId },
+      data: {
+        commissionAmount: data.commissionAmount,
+        gstRecoveryAmount: data.gstRecoveryAmount,
+        totalReservedAmount: data.totalReservedAmount,
+        revision: { increment: 1 },
+      },
+    });
+  }
+
+  async resolveReservation(
+    rideId: string,
+    status: 'CONSUMED' | 'RELEASED',
+    tx: TransactionClient,
+  ): Promise<number> {
+    const result = await tx.driverWalletReservation.updateMany({
+      where: { rideId, status: 'ACTIVE' },
+      data: { status, resolvedAt: new Date() },
+    });
+    return result.count;
+  }
+
   async recordTransaction(
     data: {
       walletId: string;

@@ -8,6 +8,7 @@ import { AdminCancellationController } from './cancellation/cancellation.control
 import { AdminServiceZoneController } from './service-zone/service-zone.controller.js';
 import { AdminInvoiceController } from './invoice/invoice.controller.js';
 import { AdminPricingSimulateController } from './simulate/simulate.controller.js';
+import { AdminPricingGovernanceController } from './governance/governance.controller.js';
 
 const uuidParams = {
   type: 'object',
@@ -29,7 +30,7 @@ function handlePricingError(err: unknown, request: FastifyRequest, reply: Fastif
     );
     return;
   }
-  if (isCodedError(err) && err.statusCode < 500) {
+  if (isCodedError(err) && (err.statusCode < 500 || err.statusCode === 503)) {
     reply.status(err.statusCode).send(errorEnvelope(err.code, err.message, request.id));
     return;
   }
@@ -55,8 +56,25 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   const adminPricingSimulateController = container.resolve<AdminPricingSimulateController>(
     'adminPricingSimulateController',
   );
+  const adminPricingGovernanceController = container.resolve<AdminPricingGovernanceController>(
+    'adminPricingGovernanceController',
+  );
   const canRead = { preHandler: fastify.authorize({ permissions: ['pricing:read'] }) };
   const canWrite = { preHandler: fastify.authorize({ permissions: ['pricing:write'] }) };
+  const canFinanceExecute = {
+    preHandler: fastify.authorize({ permissions: ['finance:execute'] }),
+  };
+
+  // Pricing Control Center live summary (Phase 4 / Rev 5 §3.3 — zero mocks)
+  fastify.get('/pricing/summary', canRead, (req, reply) =>
+    adminPricingGovernanceController.getPricingSummary(req, reply),
+  );
+  fastify.get('/pricing/reconciliation', canRead, (req, reply) =>
+    adminPricingGovernanceController.runDailyReconciliation(req, reply),
+  );
+  fastify.post('/pricing/reconciliation/sweep-reservations', canFinanceExecute, (req, reply) =>
+    adminPricingGovernanceController.sweepStaleReservations(req, reply),
+  );
 
   // Pricing live simulator (Phase 1.8)
   fastify.post('/pricing/simulate', canRead, (req, reply) =>
@@ -265,5 +283,70 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   );
   fastify.post('/invoice-templates/:id/set-default', canWrite, (req, reply) =>
     adminInvoiceController.setDefaultTemplate(req, reply),
+  );
+
+  // Phase 4 (Rev 5 §3.1): Three Independent Operational Configurations (NEW_RIDES_ONLY · Per-Scope)
+  fastify.get('/commission-configurations', canRead, (req, reply) =>
+    adminPricingGovernanceController.listCommissionConfigs(req, reply),
+  );
+  fastify.post('/commission-configurations', canWrite, (req, reply) =>
+    adminPricingGovernanceController.createCommissionConfig(req, reply),
+  );
+  fastify.post('/commission-configurations/:id/approve', canWrite, (req, reply) =>
+    adminPricingGovernanceController.approveCommissionConfig(req, reply),
+  );
+  fastify.post('/commission-configurations/:id/scopes/:scopeId/deactivate', canWrite, (req, reply) =>
+    adminPricingGovernanceController.deactivateCommissionScope(req, reply),
+  );
+
+  fastify.get('/tax-configurations', canRead, (req, reply) =>
+    adminPricingGovernanceController.listTaxConfigs(req, reply),
+  );
+  fastify.post('/tax-configurations', canWrite, (req, reply) =>
+    adminPricingGovernanceController.createTaxConfig(req, reply),
+  );
+  fastify.post('/tax-configurations/:id/approve', canWrite, (req, reply) =>
+    adminPricingGovernanceController.approveTaxConfig(req, reply),
+  );
+
+  fastify.get('/gst-recovery-configurations', canRead, (req, reply) =>
+    adminPricingGovernanceController.listGstRecoveryConfigs(req, reply),
+  );
+  fastify.post('/gst-recovery-configurations', canWrite, (req, reply) =>
+    adminPricingGovernanceController.createGstRecoveryConfig(req, reply),
+  );
+  fastify.post('/gst-recovery-configurations/:id/approve', canWrite, (req, reply) =>
+    adminPricingGovernanceController.approveGstRecoveryConfig(req, reply),
+  );
+
+  // Phase 4 (Rev 5 §3.2): Multi-Entity & Multi-State Legal Jurisdiction
+  fastify.get('/legal-entities', canRead, (req, reply) =>
+    adminPricingGovernanceController.listLegalEntities(req, reply),
+  );
+  fastify.post('/legal-entities', canWrite, (req, reply) =>
+    adminPricingGovernanceController.createLegalEntity(req, reply),
+  );
+  fastify.patch('/legal-entities/:id', canWrite, (req, reply) =>
+    adminPricingGovernanceController.updateLegalEntity(req, reply),
+  );
+  fastify.post('/legal-entities/:id/gst-registrations', canWrite, (req, reply) =>
+    adminPricingGovernanceController.createGstRegistration(req, reply),
+  );
+  fastify.get('/city-supply-registrations', canRead, (req, reply) =>
+    adminPricingGovernanceController.listCitySupplyRegistrations(req, reply),
+  );
+  fastify.post('/city-supply-registrations', canWrite, (req, reply) =>
+    adminPricingGovernanceController.createCitySupplyRegistration(req, reply),
+  );
+
+  // Phase 4 (Rev 5 §3.4 / R5-6): Settlement Failures Worklist & Atomic Recovery
+  fastify.get('/settlement-failures', canRead, (req, reply) =>
+    adminPricingGovernanceController.listSettlementFailures(req, reply),
+  );
+  fastify.post('/settlement-failures/:id/recover', canFinanceExecute, (req, reply) =>
+    adminPricingGovernanceController.recoverSettlementFailure(req, reply),
+  );
+  fastify.post('/settlement-failures/:id/waive', canFinanceExecute, (req, reply) =>
+    adminPricingGovernanceController.waiveSettlementFailure(req, reply),
   );
 }

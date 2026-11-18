@@ -75,3 +75,12 @@ export class SelfReviewForbiddenError extends DriverError {
     this.name = 'SelfReviewForbiddenError';
   }
 }
+
+export class SubscriptionModelDisabledError extends DriverError {
+  constructor(
+    message = 'New driver subscriptions and renewals are currently disabled. Only the Commission Model is available.',
+  ) {
+    super(message, 'SUBSCRIPTION_MODEL_DISABLED', 403);
+    this.name = 'SubscriptionModelDisabledError';
+  }
+}

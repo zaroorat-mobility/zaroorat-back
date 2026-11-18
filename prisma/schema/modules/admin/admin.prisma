@@ -229,6 +229,9 @@ model City {
   name       String
   stateId    String?                                 @map("state_id") @db.Uuid
   state      String?
+  /// Phase 4 (M-04c): 2-digit GST state code & name for place-of-supply resolution.
+  stateCode  String?                                 @map("state_code") @db.VarChar(2)
+  stateName  String?                                 @map("state_name")
   country    String                                  @default("India")
   timezone   String                                  @default("Asia/Kolkata")
   currency   String                                  @default("INR") @db.Char(3)

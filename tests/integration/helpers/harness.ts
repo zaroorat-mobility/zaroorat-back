@@ -110,6 +110,8 @@ export async function resetState(): Promise<void> {
           // database and failed with a unique violation on every run after — a test
           // that can only be green once is not a test.
           '"surge_zones", "service_zones", "cities", "states", "countries", ' +
+          '"commission_configurations", "tax_configurations", "gst_recovery_configurations", ' +
+          '"legal_entities", "company_gst_registrations", "city_supply_registrations", ' +
           '"notification_templates", "notification_deliveries", "admin_broadcasts", "notifications" ' +
           'RESTART IDENTITY CASCADE',
       );

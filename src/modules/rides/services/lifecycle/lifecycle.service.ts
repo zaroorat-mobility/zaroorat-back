@@ -60,6 +60,7 @@ import { paymentEvent, PAYMENT_EVENT_CATALOG } from '@modules/payments/events/ca
 import { DriverSubscriptionRepository } from '@modules/subscriptions/repositories/driver-subscription.repository.js';
 import { RideChatService } from '../chat/ride-chat.service.js';
 import { ReceiptService } from '../receipt/receipt.service.js';
+import { RideFinancialSettlementService } from '../settlement/ride-financial-settlement.service.js';
 import { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
 import { PRICING_FEATURE_FLAG_KEYS } from '@modules/admin/system-settings/platform/constants/pricing-feature-flags.constants.js';
 import type { PricingSnapshot } from '@modules/pricing';
@@ -127,6 +128,7 @@ export class LifecycleService {
     private readonly rideChatService: RideChatService,
     private readonly receiptService?: ReceiptService,
     private readonly featureFlagService?: FeatureFlagService,
+    private readonly rideFinancialSettlementService?: RideFinancialSettlementService,
   ) {}
   validateTransition(fromState: string, toState: string): void {
     const allowed = ALLOWED_TRANSITIONS[fromState] ?? [];
@@ -455,39 +457,72 @@ export class LifecycleService {
       // it is never recalculated (BD-7) and nothing is deducted or reserved
       // yet (FR-017a). SUBSCRIPTION: only an active, unexpired subscription is
       // checked — the wallet is never consulted for a subscription driver.
-      if (!acceptingDriver.paymentModel) {
-        throw new PaymentModelNotSelectedError();
-      }
-      const driverPaymentModel = acceptingDriver.paymentModel as 'SUBSCRIPTION' | 'COMMISSION';
+      let driverPaymentModel: 'SUBSCRIPTION' | 'COMMISSION';
+      let driverSubscriptionId: string | null = null;
       let commissionAmount: Decimal | null = null;
-      if (driverPaymentModel === 'SUBSCRIPTION') {
-        const activeSubscription = await this.driverSubscriptionRepository.findActive(
-          data.driverId,
+      let commissionSnapshot: unknown | null = null;
+      let passengerGstSnapshot: unknown | null = null;
+      let gstRecoverySnapshot: unknown | null = null;
+      let acceptPlan: Awaited<ReturnType<RideFinancialSettlementService['prepareAcceptFinancials']>> | null =
+        null;
+
+      if (this.rideFinancialSettlementService) {
+        acceptPlan = await this.rideFinancialSettlementService.prepareAcceptFinancials(
+          {
+            driverId: data.driverId,
+            driverPaymentModel: acceptingDriver.paymentModel,
+            request,
+            legacyCommissionEstimator: () =>
+              this.pricingService.estimatedCommission({
+                estimatedDistanceKm: request.estimatedDistanceKm,
+                estimatedDurationMin: request.estimatedDurationMin,
+                vehicleTypeId: request.vehicleTypeId,
+                pricingRuleId: request.pricingRuleId ?? null,
+              }),
+          },
           tx,
         );
-        if (
-          !activeSubscription ||
-          !activeSubscription.expiryDate ||
-          activeSubscription.expiryDate <= new Date()
-        ) {
-          throw new DriverSubscriptionRequiredError();
-        }
+        driverPaymentModel = acceptPlan.driverPaymentModel;
+        driverSubscriptionId = acceptPlan.driverSubscriptionId;
+        commissionAmount = acceptPlan.commissionAmount;
+        commissionSnapshot = acceptPlan.commissionSnapshot;
+        passengerGstSnapshot = acceptPlan.passengerGstSnapshot;
+        gstRecoverySnapshot = acceptPlan.gstRecoverySnapshot;
       } else {
-        commissionAmount = new Decimal(
-          await this.pricingService.estimatedCommission({
-            estimatedDistanceKm: request.estimatedDistanceKm,
-            estimatedDurationMin: request.estimatedDurationMin,
-            vehicleTypeId: request.vehicleTypeId,
-            pricingRuleId: request.pricingRuleId ?? null,
-          }),
-        );
-        if (
-          !(await this.commissionWalletService.hasSufficientBalance(
+        if (!acceptingDriver.paymentModel) {
+          throw new PaymentModelNotSelectedError();
+        }
+        driverPaymentModel = acceptingDriver.paymentModel as 'SUBSCRIPTION' | 'COMMISSION';
+        if (driverPaymentModel === 'SUBSCRIPTION') {
+          const activeSubscription = await this.driverSubscriptionRepository.findActive(
             data.driverId,
-            commissionAmount,
-          ))
-        ) {
-          throw new InsufficientCommissionBalanceError();
+            tx,
+          );
+          if (
+            !activeSubscription ||
+            !activeSubscription.expiryDate ||
+            activeSubscription.expiryDate <= new Date()
+          ) {
+            throw new DriverSubscriptionRequiredError();
+          }
+          driverSubscriptionId = activeSubscription.id;
+        } else {
+          commissionAmount = new Decimal(
+            await this.pricingService.estimatedCommission({
+              estimatedDistanceKm: request.estimatedDistanceKm,
+              estimatedDurationMin: request.estimatedDurationMin,
+              vehicleTypeId: request.vehicleTypeId,
+              pricingRuleId: request.pricingRuleId ?? null,
+            }),
+          );
+          if (
+            !(await this.commissionWalletService.hasSufficientBalance(
+              data.driverId,
+              commissionAmount,
+            ))
+          ) {
+            throw new InsufficientCommissionBalanceError();
+          }
         }
       }
       if (!(await this.requestRepo.claimForMatch(data.requestId, tx))) {
@@ -510,13 +545,25 @@ export class LifecycleService {
           mapProvider: request.mapProvider,
           mapConfigVersion: request.mapConfigVersion,
           driverPaymentModel,
+          driverSubscriptionId,
           commissionAmount,
+          commissionSnapshot,
+          passengerGstSnapshot,
+          gstRecoverySnapshot,
           passengerName: request.passengerName,
           passengerPhone: request.passengerPhone,
           pickupNotes: request.pickupNotes,
         },
         tx,
       );
+      if (this.rideFinancialSettlementService && acceptPlan) {
+        await this.rideFinancialSettlementService.lockAcceptReservation(
+          ride.id,
+          data.driverId,
+          acceptPlan,
+          tx,
+        );
+      }
       const requestStops = await this.requestRepo.findStops(request.id, tx);
       if (requestStops.length > 0) {
         await this.rideRepo.createIntermediateStops(
@@ -1030,6 +1077,15 @@ export class LifecycleService {
       ) {
         throw new InvalidRideStateTransitionError(ride.status, 'COMPLETED');
       }
+      // Phase 4 (Rev 5 §4.3): Execute Rev 5 Path A / Path B atomic completion settlement
+      // when Rev 5 flags or snapshots are active; otherwise preserve 100% legacy behavior.
+      const rev5Outcome = this.rideFinancialSettlementService
+        ? await this.rideFinancialSettlementService.settleCompletedRide(
+            { ride, itemizedFare },
+            tx,
+          )
+        : { handledByRev5: false, skipLegacyTripLedger: false, adjustedTaxAmount: null };
+
       await this.fareRepo.create(
         {
           rideId,
@@ -1041,7 +1097,7 @@ export class LifecycleService {
           surgeAmount: new Decimal(itemizedFare.surgeAmount),
           subtotal: new Decimal(itemizedFare.subtotal),
           discountAmount: new Decimal(itemizedFare.discountAmount),
-          taxAmount: new Decimal(itemizedFare.taxAmount),
+          taxAmount: rev5Outcome.adjustedTaxAmount ?? new Decimal(itemizedFare.taxAmount),
           platformFee: new Decimal(itemizedFare.platformFee),
           tipAmount: new Decimal(boostAmount),
           totalFare: new Decimal(totalWithBoost),
@@ -1054,14 +1110,12 @@ export class LifecycleService {
         tx,
       );
 
-      // 004-driver-subscription-wallet. spec.md FR-020–FR-024e, decisions.md
-      // BD-1 (reversed)/BD-7 — the ONLY commission-wallet deduction path.
-      // `ride.commissionAmount` is the value determined once at acceptance
-      // above; it is read here, never recalculated, and `itemizedFare` (the
-      // customer's final fare, computed above from measured distance/duration)
-      // has no bearing on it whatsoever. `deductInTx` is itself idempotent
-      // (FR-021), so a retried completion is a safe no-op.
-      if (ride.driverPaymentModel === 'COMMISSION' && ride.commissionAmount != null) {
+      // Legacy 004 commission-wallet deduction path (runs ONLY when Rev 5 settlement is OFF).
+      if (
+        !rev5Outcome.handledByRev5 &&
+        ride.driverPaymentModel === 'COMMISSION' &&
+        ride.commissionAmount != null
+      ) {
         const deduction = await this.commissionWalletService.deductInTx(
           driverId,
           rideId,
@@ -1150,23 +1204,25 @@ export class LifecycleService {
       // (FR-038). `RideCollectionService` posts that group when the money
       // actually moves.
       if (driverCollectedSettlesHere) {
-        await this.ledgerService.recordTripPayment(
-          {
-            totalFare: new Decimal(itemizedFare.totalFare),
-            driverEarning: new Decimal(itemizedFare.driverEarning),
-            platformCommission: new Decimal(itemizedFare.platformCommission),
-            // FR-006. Tax and the platform fee are now distinct destinations
-            // rather than amounts swallowed by the commission line.
-            taxAmount: new Decimal(itemizedFare.taxAmount),
-            platformFee: new Decimal(itemizedFare.platformFee),
-            customerUserId: ride.customerId,
-            driverId: ride.driverId,
-            rideId,
-            paymentMethod: ride.paymentMethod,
-            driverPaymentModel: ride.driverPaymentModel,
-          },
-          tx,
-        );
+        if (!rev5Outcome.skipLegacyTripLedger) {
+          await this.ledgerService.recordTripPayment(
+            {
+              totalFare: new Decimal(itemizedFare.totalFare),
+              driverEarning: new Decimal(itemizedFare.driverEarning),
+              platformCommission: new Decimal(itemizedFare.platformCommission),
+              // FR-006. Tax and the platform fee are now distinct destinations
+              // rather than amounts swallowed by the commission line.
+              taxAmount: new Decimal(itemizedFare.taxAmount),
+              platformFee: new Decimal(itemizedFare.platformFee),
+              customerUserId: ride.customerId,
+              driverId: ride.driverId,
+              rideId,
+              paymentMethod: ride.paymentMethod,
+              driverPaymentModel: ride.driverPaymentModel,
+            },
+            tx,
+          );
+        }
         // Phase 1.7: Issue immutable customer receipt right inside the completion
         // transaction once driver-collected payment has settled.
         if (this.receiptService) {
@@ -1263,6 +1319,10 @@ export class LifecycleService {
         },
         tx,
       );
+      // Phase 4 (Rev 5 §4.4): Release any ACTIVE driver wallet reservation atomically on cancel.
+      if (this.rideFinancialSettlementService) {
+        await this.rideFinancialSettlementService.releaseOnCancellation(rideId, tx);
+      }
       // Cancellation is only reachable from ACCEPTED-and-later states (see
       // ALLOWED_TRANSITIONS above), so a driver is always assigned here and
       // was flipped to ON_TRIP at accept time — free them back up regardless

@@ -20,6 +20,8 @@ import {
   AdminInvoiceService,
   AdminPricingSimulateController,
   AdminPricingSimulateService,
+  AdminPricingGovernanceController,
+  AdminPricingGovernanceService,
 } from './pricing-management/index.js';
 import {
   promotionsManagementRoutes,
@@ -176,6 +178,8 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminInvoiceController: asClass(AdminInvoiceController).singleton(),
     adminPricingSimulateService: asClass(AdminPricingSimulateService).singleton(),
     adminPricingSimulateController: asClass(AdminPricingSimulateController).singleton(),
+    adminPricingGovernanceService: asClass(AdminPricingGovernanceService).singleton(),
+    adminPricingGovernanceController: asClass(AdminPricingGovernanceController).singleton(),
     adminPromotionService: asClass(AdminPromotionService).singleton(),
     adminCampaignService: asClass(AdminCampaignService).singleton(),
     adminSegmentService: asClass(AdminSegmentService).singleton(),
