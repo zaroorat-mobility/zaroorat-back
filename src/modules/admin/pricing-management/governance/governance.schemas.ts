@@ -132,7 +132,19 @@ export const createGstRegistrationSchema = z
     effectiveTo: z.string().datetime({ offset: true }).optional().nullable(),
     isActive: z.boolean().optional().default(true),
   })
-  .strict();
+  .strict()
+  .refine((d) => d.gstin.startsWith(d.stateCode), {
+    path: ['gstin'],
+    message: 'First 2 digits of GSTIN must match stateCode',
+  });
+
+export const listTaxConfigsQuerySchema = z.object({
+  kind: z.enum(['PASSENGER_RIDE_GST', 'COMMISSION_GST']).optional(),
+});
+
+export const listCitySupplyRegistrationsQuerySchema = z.object({
+  cityCode: z.string().trim().min(1).max(20).optional(),
+});
 
 export const createCitySupplyRegistrationSchema = z
   .object({

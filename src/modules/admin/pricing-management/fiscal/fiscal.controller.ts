@@ -6,7 +6,7 @@ import {
   createDocumentSeriesBodySchema,
   exportFiscalDocumentsQuerySchema,
   fiscalDocIdParamSchema,
-  fiscalDocumentTypeSchema,
+  listComplianceTemplatesQuerySchema,
   listFiscalDocumentsQuerySchema,
   voidFiscalDocumentBodySchema,
 } from './fiscal.schemas.js';
@@ -76,9 +76,8 @@ export class AdminFiscalDocumentController {
   }
 
   async listComplianceTemplates(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const rawType = (req.query as Record<string, unknown> | undefined)?.documentType;
-    const docType = rawType ? fiscalDocumentTypeSchema.parse(rawType) : undefined;
-    const data = await this.adminFiscalDocumentService.listComplianceTemplates(docType);
+    const query = listComplianceTemplatesQuerySchema.parse(req.query ?? {});
+    const data = await this.adminFiscalDocumentService.listComplianceTemplates(query.documentType);
     reply.send({ data });
   }
 

@@ -119,4 +119,12 @@ export const updateSurgeWindowSchema = z
     { message: 'endsAt must be after startsAt', path: ['endsAt'] },
   );
 
+export const surgeIdParamSchema = z.object({
+  id: z.string().uuid(),
+});
+
+export const surgeCityCodeParamSchema = z.object({
+  cityCode: z.string().trim().min(1).max(20),
+});
+
 export type ListSurgeWindowsQuery = z.infer<typeof listSurgeWindowsQuerySchema>;

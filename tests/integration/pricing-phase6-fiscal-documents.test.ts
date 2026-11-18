@@ -486,4 +486,67 @@ describe('Phase 6 — Fiscal Documents, Gapless Series, Signed PDFs & CR-03 Temp
     assert.equal(activateRes.statusCode, 200, activateRes.payload);
     assert.equal(activateRes.json().data.isActive, true);
   });
+
+  it('6.7 pricing controller input hardening rejects malformed queries, mismatched GSTIN state prefixes, and inverted date ranges with 400', async () => {
+    const admin = await loginAdmin('+919900060004', 'phase6-admin4@zaroorat.test');
+    const auth = { authorization: `Bearer ${admin.accessToken}` };
+
+    const badTaxKind = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/tax-configurations?kind=INVALID_KIND',
+      headers: auth,
+    });
+    assert.equal(badTaxKind.statusCode, 400, badTaxKind.payload);
+
+    const badDateRange = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/fiscal-documents?from=2026-12-01T00:00:00Z&to=2026-11-01T00:00:00Z',
+      headers: auth,
+    });
+    assert.equal(badDateRange.statusCode, 400, badDateRange.payload);
+
+    const badTplType = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/compliance-templates?documentType=BOGUS',
+      headers: auth,
+    });
+    assert.equal(badTplType.statusCode, 400, badTplType.payload);
+
+    const leRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/legal-entities',
+      headers: auth,
+      payload: {
+        legalEntityName: 'Zaroorat Validation Check Pvt Ltd',
+        pan: 'AAACZ5555A',
+        headOfficeAddress: 'Residency Road, Srinagar',
+      },
+    });
+    assert.equal(leRes.statusCode, 201, leRes.payload);
+    const legalEntityId = leRes.json().data.id as string;
+
+    const mismatchedGstin = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/legal-entities/${legalEntityId}/gst-registrations`,
+      headers: auth,
+      payload: {
+        gstin: '27AAACZ5555A1Z5',
+        stateCode: '01',
+        stateName: 'Jammu and Kashmir',
+        registrationAddress: 'Srinagar',
+      },
+    });
+    assert.equal(mismatchedGstin.statusCode, 400, mismatchedGstin.payload);
+
+    const world = await rideWorld(app, {
+      customer: '+919900068001',
+      driver: '+919900069001',
+    });
+    const badDriverQuery = await app.inject({
+      method: 'GET',
+      url: '/api/v1/drivers/me/commission-terms?vehicleTypeId=not-a-uuid',
+      headers: { authorization: `Bearer ${world.driver.accessToken}` },
+    });
+    assert.equal(badDriverQuery.statusCode, 400, badDriverQuery.payload);
+  });
 });

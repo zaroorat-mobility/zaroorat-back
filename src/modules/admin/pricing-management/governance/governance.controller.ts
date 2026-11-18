@@ -12,7 +12,9 @@ import {
   createTaxConfigSchema,
   governanceScopeParamSchema,
   governanceIdParamSchema,
+  listCitySupplyRegistrationsQuerySchema,
   listSettlementFailuresQuerySchema,
+  listTaxConfigsQuerySchema,
   updateLegalEntitySchema,
   waiveSettlementFailureBodySchema,
 } from './governance.schemas.js';
@@ -62,7 +64,7 @@ export class AdminPricingGovernanceController {
 
   // Tax configs
   async listTaxConfigs(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const q = (req.query ?? {}) as { kind?: 'PASSENGER_RIDE_GST' | 'COMMISSION_GST' };
+    const q = listTaxConfigsQuerySchema.parse(req.query ?? {});
     const data = await this.adminPricingGovernanceService.listTaxConfigs(q.kind);
     reply.send({ data });
   }
@@ -130,7 +132,7 @@ export class AdminPricingGovernanceController {
     reply.status(201).send({ data });
   }
   async listCitySupplyRegistrations(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const q = (req.query ?? {}) as { cityCode?: string };
+    const q = listCitySupplyRegistrationsQuerySchema.parse(req.query ?? {});
     const data = await this.adminPricingGovernanceService.listCitySupplyRegistrations(q.cityCode);
     reply.send({ data });
   }

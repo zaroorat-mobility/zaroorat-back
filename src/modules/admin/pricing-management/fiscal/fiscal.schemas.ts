@@ -7,24 +7,38 @@ export const fiscalDocIdParamSchema = z.object({
 
 export const fiscalDocumentTypeSchema = z.enum(FISCAL_DOCUMENT_TYPES);
 
-export const listFiscalDocumentsQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  documentType: fiscalDocumentTypeSchema.optional(),
-  recipientType: z.enum(['all', 'RIDER', 'DRIVER', 'rider', 'driver']).optional().default('all'),
-  status: z.enum(['all', 'ISSUED', 'VOIDED']).optional().default('all'),
-  from: z.string().datetime({ offset: true }).optional(),
-  to: z.string().datetime({ offset: true }).optional(),
-  search: z.string().trim().max(120).optional(),
-});
+export const listFiscalDocumentsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    documentType: fiscalDocumentTypeSchema.optional(),
+    recipientType: z.enum(['all', 'RIDER', 'DRIVER', 'rider', 'driver']).optional().default('all'),
+    status: z.enum(['all', 'ISSUED', 'VOIDED']).optional().default('all'),
+    from: z.string().datetime({ offset: true }).optional(),
+    to: z.string().datetime({ offset: true }).optional(),
+    search: z.string().trim().max(120).optional(),
+  })
+  .refine((d) => !d.from || !d.to || new Date(d.from) <= new Date(d.to), {
+    path: ['to'],
+    message: 'to must be greater than or equal to from',
+  });
 
-export const exportFiscalDocumentsQuerySchema = z.object({
+export const exportFiscalDocumentsQuerySchema = z
+  .object({
+    documentType: fiscalDocumentTypeSchema.optional(),
+    recipientType: z.enum(['all', 'RIDER', 'DRIVER', 'rider', 'driver']).optional().default('all'),
+    status: z.enum(['all', 'ISSUED', 'VOIDED']).optional().default('all'),
+    from: z.string().datetime({ offset: true }).optional(),
+    to: z.string().datetime({ offset: true }).optional(),
+    search: z.string().trim().max(120).optional(),
+  })
+  .refine((d) => !d.from || !d.to || new Date(d.from) <= new Date(d.to), {
+    path: ['to'],
+    message: 'to must be greater than or equal to from',
+  });
+
+export const listComplianceTemplatesQuerySchema = z.object({
   documentType: fiscalDocumentTypeSchema.optional(),
-  recipientType: z.enum(['all', 'RIDER', 'DRIVER', 'rider', 'driver']).optional().default('all'),
-  status: z.enum(['all', 'ISSUED', 'VOIDED']).optional().default('all'),
-  from: z.string().datetime({ offset: true }).optional(),
-  to: z.string().datetime({ offset: true }).optional(),
-  search: z.string().trim().max(120).optional(),
 });
 
 export const voidFiscalDocumentBodySchema = z

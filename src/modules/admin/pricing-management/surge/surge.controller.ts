@@ -7,6 +7,8 @@ import {
   updateSurgeWindowSchema,
   updateCitySurgeSettingsSchema,
   listSurgeWindowsQuerySchema,
+  surgeIdParamSchema,
+  surgeCityCodeParamSchema,
 } from './surge.schema.js';
 import { AdminSurgeService } from './surge.service.js';
 
@@ -25,20 +27,20 @@ export class AdminSurgeController {
   }
 
   async getSurgeZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const zone = await this.adminSurgeService.getSurgeZone(id);
     return reply.send({ data: zone });
   }
 
   async updateSurgeZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const data = updateSurgeZoneSchema.parse(req.body);
     await this.adminSurgeService.updateSurgeZone(id, data, callerId(req));
     return reply.send({ data: { success: true } });
   }
 
   async deleteSurgeZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     await this.adminSurgeService.deleteSurgeZone(id, callerId(req));
     return reply.send({ data: { success: true } });
   }
@@ -63,19 +65,19 @@ export class AdminSurgeController {
   }
 
   async getSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const window = await this.adminSurgeService.getSurgeWindow(id);
     return reply.send({ data: window });
   }
 
   async listSurgeWindowVersions(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const versions = await this.adminSurgeService.listSurgeWindowVersions(id);
     return reply.send({ data: versions });
   }
 
   async updateSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const data = updateSurgeWindowSchema.parse(req.body);
     const window = await this.adminSurgeService.updateSurgeWindow(
       id,
@@ -90,7 +92,7 @@ export class AdminSurgeController {
   }
 
   async updateCitySurgeSettings(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { cityCode } = req.params as { cityCode: string };
+    const { cityCode } = surgeCityCodeParamSchema.parse(req.params);
     const { maxSurgeMultiplier } = updateCitySurgeSettingsSchema.parse(req.body);
     const saved = await this.adminSurgeService.updateCitySurgeSettings(
       cityCode,
@@ -101,7 +103,7 @@ export class AdminSurgeController {
   }
 
   async deleteSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     await this.adminSurgeService.deleteSurgeWindow(id, callerId(req));
     return reply.send({ data: { success: true } });
   }
