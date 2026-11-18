@@ -89,6 +89,11 @@ export async function rideRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/:id/complete', driverOnlyById, (req, reply) =>
     controller.state.complete(req, reply),
   );
+  fastify.get(
+    '/:id/cancellation-quote',
+    byId,
+    (req, reply) => controller.state.cancellationQuote(req, reply),
+  );
   fastify.post(
     '/:id/cancel',
     { ...byId, preHandler: fastify.rateLimit(rateLimits.rideWrite) },

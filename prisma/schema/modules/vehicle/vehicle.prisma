@@ -21,9 +21,10 @@ model VehicleType {
   vehicles         Vehicle[]
   rideRequests     RideRequest[]
   rides            Ride[]
-  pricingRules     PricingRule[]
-  surgeWindows     SurgeWindow[]
-  promotions       Promotion[]
+  pricingRules         PricingRule[]
+  surgeWindows         SurgeWindow[]
+  cancellationPolicies CancellationPolicy[]
+  promotions           Promotion[]
   serviceZoneLinks ServiceZoneVehicleType[]
   rideQuoteOptions RideQuoteOption[]
 

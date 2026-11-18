@@ -1,22 +1,33 @@
+import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
 import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
-import { CancellationPolicyNotFoundError } from '../pricing.errors.js';
+import {
+  CancellationPolicyService,
+  type CancellationEvaluationResult,
+  type CancellationScenarioDb,
+} from '@modules/pricing';
+import {
+  CancellationPolicyConflictError,
+  CancellationPolicyNotFoundError,
+  CancellationPolicyStaleError,
+} from '../pricing.errors.js';
 import type {
   CreateCancellationPolicyBody,
+  EvaluateCancellationPolicyBody,
   ListCancellationPoliciesQuery,
   UpdateCancellationPolicyBody,
 } from './cancellation.schemas.js';
 
-const ACTOR_MAP: Record<string, string> = {
+const ACTOR_MAP: Record<string, 'RIDER' | 'DRIVER'> = {
   rider: 'RIDER',
   driver: 'DRIVER',
   RIDER: 'RIDER',
   DRIVER: 'DRIVER',
 };
 
-const SCENARIO_MAP: Record<string, string> = {
+const SCENARIO_MAP: Record<string, CancellationScenarioDb> = {
   before_assignment: 'BEFORE_ASSIGNMENT',
   after_assignment: 'AFTER_ASSIGNMENT',
   after_arrival: 'AFTER_ARRIVAL',
@@ -27,7 +38,7 @@ const SCENARIO_MAP: Record<string, string> = {
   NO_SHOW: 'NO_SHOW',
 };
 
-const FEE_MAP: Record<string, string> = {
+const FEE_MAP: Record<string, 'FLAT' | 'PERCENT'> = {
   fixed: 'FLAT',
   percentage: 'PERCENT',
   FLAT: 'FLAT',
@@ -36,16 +47,27 @@ const FEE_MAP: Record<string, string> = {
 
 export interface CancellationPolicyDto {
   id: string;
+  familyId: string;
+  version: number;
+  supersedesId: string | null;
   ruleName: string;
   actor: 'rider' | 'driver';
   scenario: 'before_assignment' | 'after_assignment' | 'after_arrival' | 'no_show';
   chargeType: 'fixed' | 'percentage';
   chargeAmount: number;
+  feeBase: 'QUOTED_FARE' | 'BASE_FARE' | 'MINIMUM_FARE';
+  maxFee: number | null;
   freeCancelWindowSec: number;
+  driverCompensationType: 'NONE' | 'FLAT' | 'PERCENT_OF_FEE';
+  driverCompensationAmount: number;
+  driverPenaltyAmount: number | null;
   status: 'active' | 'inactive';
+  effectiveFrom: string;
+  effectiveTo: string | null;
   cityCode?: string;
   /// The exact vehicle type this policy is scoped to; absent means every type.
   vehicleTypeId?: string;
+  createdBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,39 +94,71 @@ function feeUi(value: string): 'fixed' | 'percentage' {
   return value.toUpperCase() === 'PERCENT' ? 'percentage' : 'fixed';
 }
 
+function isPgExclusionViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; cause?: { code?: string }; meta?: { code?: string } };
+  return (
+    e.code === '23P01' ||
+    e.cause?.code === '23P01' ||
+    e.meta?.code === '23P01' ||
+    (err instanceof Error && err.message.includes('cancellation_policies_no_overlap_active'))
+  );
+}
+
+function windowsOverlap(
+  aFrom: Date,
+  aTo: Date | null,
+  bFrom: Date,
+  bTo: Date | null,
+): boolean {
+  const aEndsAfterBStarts = aTo === null || aTo.getTime() > bFrom.getTime();
+  const bEndsAfterAStarts = bTo === null || bTo.getTime() > aFrom.getTime();
+  return aEndsAfterBStarts && bEndsAfterAStarts;
+}
+
 export class AdminCancellationService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly vehicleTypeService: VehicleTypeService,
+    private readonly cancellationPolicyService: CancellationPolicyService,
   ) {}
 
   async list(query: ListCancellationPoliciesQuery): Promise<{
     data: CancellationPolicyDto[];
     meta: { currentPage: number; totalPages: number; pageSize: number; totalCount: number };
   }> {
-    const rows = await this.databaseService.client.cancellationPolicy.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
+    const where: Record<string, unknown> = {};
+    if (query.status === 'active') where.isActive = true;
+    else if (query.status === 'inactive') where.isActive = false;
+    if (query.actor) where.cancelledBy = ACTOR_MAP[query.actor];
+    if (query.scenario) where.minStatus = SCENARIO_MAP[query.scenario];
+    if (query.cityCode) where.cityCode = query.cityCode;
+    if (query.vehicleTypeId) where.vehicleTypeId = query.vehicleTypeId;
 
-    let data = rows
-      .filter((row) => {
-        if (query.status === 'active') return row.isActive;
-        if (query.status === 'inactive') return !row.isActive;
-        return true;
-      })
-      .map((row) => this.toDto(row));
-
-    if (query.search) {
-      const q = query.search.toLowerCase();
-      data = data.filter((row) => row.ruleName.toLowerCase().includes(q));
+    const search = query.search?.trim();
+    if (search) {
+      const normalized = search.toUpperCase().replace(/\s+/g, '_');
+      where.OR = [
+        { ruleName: { contains: search, mode: 'insensitive' } },
+        { cancelledBy: { contains: normalized, mode: 'insensitive' } },
+        { minStatus: { contains: normalized, mode: 'insensitive' } },
+        { cityCode: { contains: search, mode: 'insensitive' } },
+      ];
     }
 
-    const totalCount = data.length;
     const skip = (query.page - 1) * query.limit;
-    const pageRows = data.slice(skip, skip + query.limit);
+    const [totalCount, rows] = await Promise.all([
+      this.databaseService.client.cancellationPolicy.count({ where }),
+      this.databaseService.client.cancellationPolicy.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { version: 'desc' }],
+        skip,
+        take: query.limit,
+      }),
+    ]);
 
     return {
-      data: pageRows,
+      data: rows.map((row) => this.toDto(row)),
       meta: {
         currentPage: query.page,
         totalPages: Math.max(1, Math.ceil(totalCount / query.limit)),
@@ -120,6 +174,61 @@ export class AdminCancellationService {
     });
     if (!row) throw new CancellationPolicyNotFoundError();
     return this.toDto(row);
+  }
+
+  async listVersions(id: string): Promise<CancellationPolicyDto[]> {
+    const existing = await this.databaseService.client.cancellationPolicy.findUnique({
+      where: { id },
+    });
+    if (!existing) throw new CancellationPolicyNotFoundError();
+
+    const rows = await this.databaseService.client.cancellationPolicy.findMany({
+      where: { familyId: existing.familyId },
+      orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+    });
+    return rows.map((row) => this.toDto(row));
+  }
+
+  async evaluate(
+    body: EvaluateCancellationPolicyBody,
+  ): Promise<CancellationEvaluationResult & { enforcementEnabled: boolean }> {
+    const scenario = SCENARIO_MAP[body.scenario] ?? 'AFTER_ASSIGNMENT';
+    const vehicleTypeId =
+      body.vehicleTypeId || body.vehicleType
+        ? (
+            await this.vehicleTypeService.resolveForConfig({
+              id: body.vehicleTypeId,
+              code: body.vehicleType,
+            })
+          ).id
+        : null;
+
+    const actorInput =
+      body.actor.toUpperCase() === 'SYSTEM'
+        ? 'SYSTEM'
+        : body.actor.toUpperCase() === 'DRIVER'
+          ? 'DRIVER'
+          : 'RIDER';
+
+    const [enforcementEnabled, result] = await Promise.all([
+      this.cancellationPolicyService.isEnforcementEnabled(),
+      this.cancellationPolicyService.resolve({
+        actor: actorInput,
+        scenario,
+        cityCode: body.cityCode ?? null,
+        vehicleTypeId,
+        elapsedSec: body.elapsedSec,
+        quotedFare: body.quotedFare,
+        baseFare: body.baseFare ?? null,
+        minimumFare: body.minimumFare ?? null,
+        at: body.at ? new Date(body.at) : new Date(),
+      }),
+    ]);
+
+    return {
+      ...result,
+      enforcementEnabled,
+    };
   }
 
   async create(
@@ -140,108 +249,318 @@ export class AdminCancellationService {
           ).id
         : null;
     const cityCode = body.cityCode ?? null;
+    const effectiveFrom = body.effectiveFrom ? new Date(body.effectiveFrom) : new Date();
+    const effectiveTo = body.effectiveTo ? new Date(body.effectiveTo) : null;
+    const ruleName =
+      body.ruleName?.trim() || `${actorUi(cancelledBy)} · ${scenarioUi(minStatus).replace(/_/g, ' ')}`;
 
-    return this.databaseService.transactionManager.execute(async (tx) => {
-      if (isActive) {
-        await this.retireOverlapping(
-          tx,
-          { cancelledBy, minStatus, cityCode, vehicleTypeId },
-          actor,
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        if (isActive) {
+          await this.applyTimeAwareExclusivity(
+            tx,
+            { cancelledBy, minStatus, cityCode, vehicleTypeId },
+            effectiveFrom,
+            effectiveTo,
+            actor,
+          );
+        }
+        const created = await tx.cancellationPolicy.create({
+          data: {
+            ruleName,
+            familyId: randomUUID(),
+            version: 1,
+            supersedesId: null,
+            cancelledBy,
+            minStatus,
+            feeType,
+            feeAmount: body.chargeAmount,
+            feeBase: body.feeBase ?? 'QUOTED_FARE',
+            maxFee: body.maxFee ?? null,
+            freeCancelWindowSec: body.freeCancelWindowSec ?? 120,
+            driverCompensationType: body.driverCompensationType ?? 'NONE',
+            driverCompensationAmount: body.driverCompensationAmount ?? 0,
+            driverPenaltyAmount: body.driverPenaltyAmount ?? null,
+            cityCode,
+            vehicleTypeId,
+            effectiveFrom,
+            effectiveTo,
+            isActive,
+            createdBy: actor.actorId,
+          },
+        });
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'CREATE',
+          entityType: 'cancellation_policy',
+          entityId: created.id,
+          summary: `Cancellation policy v1 created (${ruleName})`,
+          after: created,
+          result: 'SUCCESS',
+        });
+        return this.toDto(created);
+      });
+    } catch (err) {
+      if (isPgExclusionViolation(err)) {
+        throw new CancellationPolicyConflictError(
+          'An active cancellation policy already covers this scope and effective window.',
         );
       }
-      const created = await tx.cancellationPolicy.create({
-        data: {
-          cancelledBy,
-          minStatus,
-          feeType,
-          feeAmount: body.chargeAmount,
-          freeCancelWindowSec: body.freeCancelWindowSec ?? 120,
-          cityCode,
-          vehicleTypeId,
-          isActive,
-        },
-      });
-      await recordAdminAction(tx, {
-        ...actor,
-        action: 'CREATE',
-        entityType: 'cancellation_policy',
-        entityId: created.id,
-        summary: 'Cancellation policy created',
-        after: created,
-        result: 'SUCCESS',
-      });
-      return this.toDto(created);
-    });
+      throw err;
+    }
   }
 
+  /// Phase 3: Versioned end-and-replace editing.
+  /// Pure `{ status }` toggles update in-place; any substantive edit retires/closes
+  /// the incumbent and creates a new version (`version = max + 1`, `supersedesId = id`)
+  /// in the same `familyId` so historical ride_cancellations keep immutable lineage.
   async update(
     id: string,
     body: UpdateCancellationPolicyBody,
     actor: AuditActor,
   ): Promise<CancellationPolicyDto> {
-    return this.databaseService.transactionManager.execute(async (tx) => {
-      const existing = await this.lockExisting(tx, id);
-      const cancelledBy = body.actor
-        ? (ACTOR_MAP[body.actor] ?? existing.cancelledBy)
-        : existing.cancelledBy;
-      const minStatus = body.scenario
-        ? (SCENARIO_MAP[body.scenario] ?? existing.minStatus)
-        : existing.minStatus;
-      const feeType = body.chargeType
-        ? (FEE_MAP[body.chargeType] ?? existing.feeType)
-        : existing.feeType;
-      const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
-      const nextVehicleTypeId =
-        body.vehicleTypeId === null
-          ? null
-          : body.vehicleTypeId || body.vehicleType
-            ? (
-                await this.vehicleTypeService.resolveForConfig(
-                  { id: body.vehicleTypeId, code: body.vehicleType },
-                  existing.vehicleTypeId,
-                )
-              ).id
-            : existing.vehicleTypeId;
-      const cityCode = body.cityCode !== undefined ? body.cityCode : existing.cityCode;
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        const existing = await this.lockExisting(tx, id);
+        if (body.expectedVersion !== undefined && existing.version !== body.expectedVersion) {
+          throw new CancellationPolicyStaleError(body.expectedVersion, existing.version);
+        }
 
-      if (isActive) {
-        await this.retireOverlapping(
-          tx,
-          { cancelledBy, minStatus, cityCode, vehicleTypeId: nextVehicleTypeId },
-          actor,
-          id,
+        const substantiveKeys = (Object.keys(body) as Array<keyof UpdateCancellationPolicyBody>).filter(
+          (key) =>
+            key !== 'status' && key !== 'expectedVersion' && body[key] !== undefined,
+        );
+
+        // Pure active/inactive status toggle stays in-place cleanly.
+        if (substantiveKeys.length === 0 && body.status !== undefined) {
+          const nextActive = body.status === 'active';
+          if (nextActive && !existing.isActive) {
+            await this.applyTimeAwareExclusivity(
+              tx,
+              {
+                cancelledBy: existing.cancelledBy,
+                minStatus: existing.minStatus,
+                cityCode: existing.cityCode,
+                vehicleTypeId: existing.vehicleTypeId,
+              },
+              existing.effectiveFrom,
+              existing.effectiveTo,
+              actor,
+              existing.id,
+            );
+          }
+          const toggled = await tx.cancellationPolicy.update({
+            where: { id },
+            data: { isActive: nextActive },
+          });
+          await this.audit(
+            tx,
+            actor,
+            existing,
+            toggled,
+            nextActive ? 'Cancellation policy activated' : 'Cancellation policy deactivated',
+          );
+          return this.toDto(toggled);
+        }
+
+        const cancelledBy = body.actor
+          ? (ACTOR_MAP[body.actor] ?? existing.cancelledBy)
+          : existing.cancelledBy;
+        const minStatus = body.scenario
+          ? (SCENARIO_MAP[body.scenario] ?? existing.minStatus)
+          : existing.minStatus;
+        const feeType = body.chargeType
+          ? (FEE_MAP[body.chargeType] ?? existing.feeType)
+          : existing.feeType;
+        const feeAmount = body.chargeAmount !== undefined ? body.chargeAmount : toNum(existing.feeAmount);
+        if (feeType === 'PERCENT' && feeAmount > 100) {
+          throw new CancellationPolicyConflictError(
+            'Percentage chargeAmount must be between 0 and 100',
+          );
+        }
+
+        const driverCompensationType =
+          body.driverCompensationType ?? existing.driverCompensationType;
+        const driverCompensationAmount =
+          body.driverCompensationAmount !== undefined
+            ? body.driverCompensationAmount
+            : toNum(existing.driverCompensationAmount);
+        if (driverCompensationType === 'PERCENT_OF_FEE' && driverCompensationAmount > 100) {
+          throw new CancellationPolicyConflictError(
+            'PERCENT_OF_FEE driverCompensationAmount must be between 0 and 100',
+          );
+        }
+
+        const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
+        const nextVehicleTypeId =
+          body.vehicleTypeId === null
+            ? null
+            : body.vehicleTypeId || body.vehicleType
+              ? (
+                  await this.vehicleTypeService.resolveForConfig(
+                    { id: body.vehicleTypeId, code: body.vehicleType },
+                    existing.vehicleTypeId,
+                  )
+                ).id
+              : existing.vehicleTypeId;
+        const cityCode = body.cityCode !== undefined ? body.cityCode : existing.cityCode;
+        const effectiveFrom = body.effectiveFrom ? new Date(body.effectiveFrom) : new Date();
+        const effectiveTo =
+          body.effectiveTo !== undefined
+            ? body.effectiveTo
+              ? new Date(body.effectiveTo)
+              : null
+            : existing.effectiveTo;
+        if (effectiveTo && effectiveTo <= effectiveFrom) {
+          throw new CancellationPolicyConflictError(
+            'effectiveTo must be strictly after effectiveFrom',
+          );
+        }
+
+        const ruleName =
+          body.ruleName?.trim() ||
+          existing.ruleName ||
+          `${actorUi(cancelledBy)} · ${scenarioUi(minStatus).replace(/_/g, ' ')}`;
+
+        // Retire or close the incumbent version atomically before inserting the successor
+        // so the GiST exclusion constraint allows the handoff without conflict.
+        if (existing.isActive) {
+          const sameScope =
+            existing.cancelledBy === cancelledBy &&
+            existing.minStatus === minStatus &&
+            existing.cityCode === cityCode &&
+            existing.vehicleTypeId === nextVehicleTypeId;
+          const isFutureScheduledHandoff =
+            isActive && sameScope && effectiveFrom.getTime() > existing.effectiveFrom.getTime() &&
+            effectiveFrom.getTime() > Date.now();
+
+          if (isFutureScheduledHandoff) {
+            const closed = await tx.cancellationPolicy.update({
+              where: { id: existing.id },
+              data: { effectiveTo: effectiveFrom },
+            });
+            await this.audit(
+              tx,
+              actor,
+              existing,
+              closed,
+              `Cancellation policy v${existing.version} window closed for scheduled successor`,
+            );
+          } else {
+            const retired = await tx.cancellationPolicy.update({
+              where: { id: existing.id },
+              data: { isActive: false },
+            });
+            await this.audit(
+              tx,
+              actor,
+              existing,
+              retired,
+              `Cancellation policy v${existing.version} retired by successor revision`,
+            );
+          }
+        }
+
+        if (isActive) {
+          await this.applyTimeAwareExclusivity(
+            tx,
+            { cancelledBy, minStatus, cityCode, vehicleTypeId: nextVehicleTypeId },
+            effectiveFrom,
+            effectiveTo,
+            actor,
+            existing.id,
+          );
+        }
+
+        const latestInFamily = await tx.cancellationPolicy.aggregate({
+          where: { familyId: existing.familyId },
+          _max: { version: true },
+        });
+        const nextVersion = (latestInFamily._max.version ?? existing.version) + 1;
+
+        const successor = await tx.cancellationPolicy.create({
+          data: {
+            ruleName,
+            familyId: existing.familyId,
+            version: nextVersion,
+            supersedesId: existing.id,
+            cancelledBy,
+            minStatus,
+            feeType,
+            feeAmount,
+            feeBase: body.feeBase ?? existing.feeBase,
+            maxFee: body.maxFee !== undefined ? body.maxFee : existing.maxFee,
+            freeCancelWindowSec: body.freeCancelWindowSec ?? existing.freeCancelWindowSec,
+            driverCompensationType,
+            driverCompensationAmount,
+            driverPenaltyAmount:
+              body.driverPenaltyAmount !== undefined
+                ? body.driverPenaltyAmount
+                : existing.driverPenaltyAmount,
+            cityCode,
+            vehicleTypeId: nextVehicleTypeId,
+            effectiveFrom,
+            effectiveTo,
+            isActive,
+            createdBy: actor.actorId,
+          },
+        });
+
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'CREATE',
+          entityType: 'cancellation_policy',
+          entityId: successor.id,
+          summary: `Cancellation policy v${nextVersion} created (supersedes v${existing.version})`,
+          before: existing,
+          after: successor,
+          result: 'SUCCESS',
+        });
+
+        return this.toDto(successor);
+      });
+    } catch (err) {
+      if (isPgExclusionViolation(err)) {
+        throw new CancellationPolicyConflictError(
+          'An active cancellation policy already covers this scope and effective window.',
         );
       }
-
-      const updated = await tx.cancellationPolicy.update({
-        where: { id },
-        data: {
-          cancelledBy,
-          minStatus,
-          feeType,
-          feeAmount: body.chargeAmount ?? existing.feeAmount,
-          freeCancelWindowSec: body.freeCancelWindowSec ?? existing.freeCancelWindowSec,
-          cityCode,
-          vehicleTypeId: nextVehicleTypeId,
-          isActive,
-        },
-      });
-      await this.audit(tx, actor, existing, updated, 'Cancellation policy updated');
-      return this.toDto(updated);
-    });
+      throw err;
+    }
   }
 
   async activate(id: string, actor: AuditActor): Promise<CancellationPolicyDto> {
-    return this.databaseService.transactionManager.execute(async (tx) => {
-      const existing = await this.lockExisting(tx, id);
-      await this.retireOverlapping(tx, existing, actor, id);
-      const updated = await tx.cancellationPolicy.update({
-        where: { id },
-        data: { isActive: true },
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        const existing = await this.lockExisting(tx, id);
+        await this.applyTimeAwareExclusivity(
+          tx,
+          {
+            cancelledBy: existing.cancelledBy,
+            minStatus: existing.minStatus,
+            cityCode: existing.cityCode,
+            vehicleTypeId: existing.vehicleTypeId,
+          },
+          existing.effectiveFrom,
+          existing.effectiveTo,
+          actor,
+          id,
+        );
+        const updated = await tx.cancellationPolicy.update({
+          where: { id },
+          data: { isActive: true },
+        });
+        await this.audit(tx, actor, existing, updated, 'Cancellation policy activated');
+        return this.toDto(updated);
       });
-      await this.audit(tx, actor, existing, updated, 'Cancellation policy activated');
-      return this.toDto(updated);
-    });
+    } catch (err) {
+      if (isPgExclusionViolation(err)) {
+        throw new CancellationPolicyConflictError(
+          'An active cancellation policy already covers this scope and effective window.',
+        );
+      }
+      throw err;
+    }
   }
 
   async deactivate(id: string, actor: AuditActor): Promise<CancellationPolicyDto> {
@@ -286,9 +605,15 @@ export class AdminCancellationService {
     });
   }
 
-  /// One active policy per (actor, scenario, city, vehicle type). The policies this
-  /// retires are changed too, so each gets its own audit row in the same transaction.
-  private async retireOverlapping(
+  /// Enforces one active policy per (actor, scenario, city, vehicle type) at any instant:
+  /// - If an overlapping incumbent started strictly earlier AND the incoming window starts
+  ///   in the future, closes `incumbent.effectiveTo = incomingFrom` so the live policy
+  ///   continues until handoff.
+  /// - If an overlapping incumbent started at or earlier than an immediate activation,
+  ///   deactivates the incumbent cleanly.
+  /// - If an overlapping incumbent starts strictly in the future inside the incoming window,
+  ///   aborts with `409 CANCELLATION_POLICY_CONFLICT` so scheduled rules are never silently clobbered.
+  private async applyTimeAwareExclusivity(
     tx: TransactionClient,
     scope: {
       cancelledBy: string;
@@ -296,10 +621,12 @@ export class AdminCancellationService {
       cityCode: string | null;
       vehicleTypeId: string | null;
     },
+    incomingFrom: Date,
+    incomingTo: Date | null,
     actor: AuditActor,
     exceptId?: string,
   ): Promise<void> {
-    const retired = await tx.cancellationPolicy.findMany({
+    const activePeers = await tx.cancellationPolicy.findMany({
       where: {
         cancelledBy: scope.cancelledBy,
         minStatus: scope.minStatus,
@@ -309,49 +636,109 @@ export class AdminCancellationService {
         ...(exceptId !== undefined ? { NOT: { id: exceptId } } : {}),
       },
     });
-    for (const policy of retired) {
-      const updated = await tx.cancellationPolicy.update({
-        where: { id: policy.id },
-        data: { isActive: false },
-      });
-      await this.audit(
-        tx,
-        actor,
-        policy,
-        updated,
-        'Cancellation policy deactivated: superseded by another active policy',
-      );
+
+    const overlapping = activePeers.filter((peer) =>
+      windowsOverlap(peer.effectiveFrom, peer.effectiveTo, incomingFrom, incomingTo),
+    );
+
+    const nowMs = Date.now();
+    for (const peer of overlapping) {
+      if (peer.effectiveFrom.getTime() > incomingFrom.getTime()) {
+        throw new CancellationPolicyConflictError(
+          `Overlaps with scheduled policy ${peer.id} (v${peer.version}) starting at ${peer.effectiveFrom.toISOString()}.`,
+        );
+      }
+
+      if (
+        peer.effectiveFrom.getTime() < incomingFrom.getTime() &&
+        incomingFrom.getTime() > nowMs
+      ) {
+        const closed = await tx.cancellationPolicy.update({
+          where: { id: peer.id },
+          data: { effectiveTo: incomingFrom },
+        });
+        await this.audit(
+          tx,
+          actor,
+          peer,
+          closed,
+          `Cancellation policy window closed at ${incomingFrom.toISOString()} for scheduled successor`,
+        );
+      } else {
+        const retired = await tx.cancellationPolicy.update({
+          where: { id: peer.id },
+          data: { isActive: false },
+        });
+        await this.audit(
+          tx,
+          actor,
+          peer,
+          retired,
+          'Cancellation policy deactivated: superseded by another active policy',
+        );
+      }
     }
   }
 
   private toDto(row: {
     id: string;
+    familyId: string;
+    version: number;
+    supersedesId: string | null;
+    ruleName: string | null;
     cancelledBy: string;
     minStatus: string | null;
     feeAmount: { toString(): string };
     feeType: string;
+    feeBase: string;
+    maxFee: { toString(): string } | null;
     freeCancelWindowSec: number;
+    driverCompensationType: string;
+    driverCompensationAmount: { toString(): string };
+    driverPenaltyAmount: { toString(): string } | null;
     isActive: boolean;
+    effectiveFrom: Date;
+    effectiveTo: Date | null;
     cityCode: string | null;
     vehicleTypeId: string | null;
+    createdBy: string | null;
     createdAt: Date;
+    updatedAt: Date;
   }): CancellationPolicyDto {
     const actor = actorUi(row.cancelledBy);
     const scenario = scenarioUi(row.minStatus);
     const chargeType = feeUi(row.feeType);
+    const feeBase =
+      row.feeBase === 'BASE_FARE' || row.feeBase === 'MINIMUM_FARE' ? row.feeBase : 'QUOTED_FARE';
+    const driverCompensationType =
+      row.driverCompensationType === 'FLAT' || row.driverCompensationType === 'PERCENT_OF_FEE'
+        ? row.driverCompensationType
+        : 'NONE';
+
     return {
       id: row.id,
-      ruleName: `${actor} · ${scenario.replace(/_/g, ' ')}`,
+      familyId: row.familyId,
+      version: row.version,
+      supersedesId: row.supersedesId,
+      ruleName: row.ruleName ?? `${actor} · ${scenario.replace(/_/g, ' ')}`,
       actor,
       scenario,
       chargeType,
       chargeAmount: toNum(row.feeAmount),
+      feeBase,
+      maxFee: row.maxFee !== null ? toNum(row.maxFee) : null,
       freeCancelWindowSec: row.freeCancelWindowSec,
+      driverCompensationType,
+      driverCompensationAmount: toNum(row.driverCompensationAmount),
+      driverPenaltyAmount: row.driverPenaltyAmount !== null ? toNum(row.driverPenaltyAmount) : null,
       status: row.isActive ? 'active' : 'inactive',
+      effectiveFrom: row.effectiveFrom.toISOString(),
+      effectiveTo: row.effectiveTo ? row.effectiveTo.toISOString() : null,
       ...(row.cityCode ? { cityCode: row.cityCode } : {}),
       ...(row.vehicleTypeId ? { vehicleTypeId: row.vehicleTypeId } : {}),
+      createdBy: row.createdBy,
       createdAt: row.createdAt.toISOString(),
-      updatedAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
     };
   }
 }

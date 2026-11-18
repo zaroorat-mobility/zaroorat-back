@@ -136,8 +136,13 @@ type CancellationInput = {
   cancelledBy?: string | null;
   reasonCode?: string | null;
   reasonText?: string | null;
+  cancelledAtStatus?: string | null;
   cancellationFee?: unknown;
+  driverCompensation?: unknown;
   feeCharged?: boolean | null;
+  feeStatus?: string | null;
+  policyId?: string | null;
+  policyVersion?: number | null;
   createdAt?: Date | string | null;
 };
 
@@ -706,8 +711,17 @@ export function toClientRideView(
           cancelledBy: ride.cancellation.cancelledBy,
           reasonCode: ride.cancellation.reasonCode,
           reasonText: ride.cancellation.reasonText ?? null,
+          cancelledAtStatus: ride.cancellation.cancelledAtStatus ?? null,
           cancellationFee: dec(ride.cancellation.cancellationFee),
           feeCharged: Boolean(ride.cancellation.feeCharged),
+          feeStatus: ride.cancellation.feeStatus ?? 'WAIVED',
+          policyId: ride.cancellation.policyId ?? null,
+          policyVersion: ride.cancellation.policyVersion ?? null,
+          ...(!isCustomer
+            ? {
+                driverCompensation: dec(ride.cancellation.driverCompensation),
+              }
+            : {}),
           createdAt: ride.cancellation.createdAt,
         }
       : null,

@@ -49,6 +49,17 @@ export class CancellationPolicyConflictError extends PricingAdminError {
   }
 }
 
+export class CancellationPolicyStaleError extends PricingAdminError {
+  constructor(expectedVersion: number, actualVersion: number) {
+    super(
+      `Cancellation policy version mismatch: expected v${expectedVersion}, current is v${actualVersion}. Reload and retry.`,
+      'CANCELLATION_POLICY_STALE',
+      409,
+    );
+    this.name = 'CancellationPolicyStaleError';
+  }
+}
+
 export class InvoiceNotFoundError extends PricingAdminError {
   constructor(id?: string) {
     super(id ? `Invoice ${id} was not found` : 'Invoice was not found', 'INVOICE_NOT_FOUND', 404);

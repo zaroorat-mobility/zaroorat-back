@@ -4,6 +4,7 @@ import { AdminCancellationService } from './cancellation.service.js';
 import {
   cancellationPolicyIdParamSchema,
   createCancellationPolicyBodySchema,
+  evaluateCancellationPolicyBodySchema,
   listCancellationPoliciesQuerySchema,
   updateCancellationPolicyBodySchema,
 } from './cancellation.schemas.js';
@@ -20,6 +21,18 @@ export class AdminCancellationController {
   async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = cancellationPolicyIdParamSchema.parse(req.params);
     const data = await this.adminCancellationService.getById(id);
+    reply.send({ data });
+  }
+
+  async listVersions(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = cancellationPolicyIdParamSchema.parse(req.params);
+    const data = await this.adminCancellationService.listVersions(id);
+    reply.send({ data });
+  }
+
+  async evaluate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = evaluateCancellationPolicyBodySchema.parse(req.body);
+    const data = await this.adminCancellationService.evaluate(body);
     reply.send({ data });
   }
 

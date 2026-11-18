@@ -341,19 +341,28 @@ model RideFareLine {
 }
 
 model RideCancellation {
-  id                String   @id @default(uuid(7)) @db.Uuid
-  rideId            String   @unique @map("ride_id") @db.Uuid
-  cancelledBy       String   @map("cancelled_by")
-  actorId           String?  @map("actor_id") @db.Uuid
-  reasonCode        String   @map("reason_code")
-  reasonText        String?  @map("reason_text")
-  cancelledAtStatus String?  @map("cancelled_at_status")
-  cancellationFee   Decimal  @default(0) @map("cancellation_fee") @db.Decimal(10, 2)
-  feeCharged        Boolean  @default(false) @map("fee_charged")
-  createdAt         DateTime @default(now()) @map("created_at")
+  id                 String   @id @default(uuid(7)) @db.Uuid
+  rideId             String   @unique @map("ride_id") @db.Uuid
+  cancelledBy        String   @map("cancelled_by")
+  actorId            String?  @map("actor_id") @db.Uuid
+  reasonCode         String   @map("reason_code")
+  reasonText         String?  @map("reason_text")
+  cancelledAtStatus  String?  @map("cancelled_at_status")
+  cancellationFee    Decimal  @default(0) @map("cancellation_fee") @db.Decimal(10, 2)
+  driverCompensation Decimal  @default(0) @map("driver_compensation") @db.Decimal(10, 2)
+  feeCharged         Boolean  @default(false) @map("fee_charged")
+  feeStatus          String   @default("WAIVED") @map("fee_status")
+  policyId           String?  @map("policy_id") @db.Uuid
+  policyVersion      Int?     @map("policy_version")
+  /// Write-once immutable snapshot of the policy and fee evaluation at cancellation time (M-06).
+  policySnapshot     Json?    @map("policy_snapshot")
+  createdAt          DateTime @default(now()) @map("created_at")
 
-  ride Ride @relation(fields: [rideId], references: [id])
+  ride   Ride                @relation(fields: [rideId], references: [id])
+  policy CancellationPolicy? @relation(fields: [policyId], references: [id])
 
+  @@index([policyId])
+  @@index([feeStatus])
   @@map("ride_cancellations")
 }
 

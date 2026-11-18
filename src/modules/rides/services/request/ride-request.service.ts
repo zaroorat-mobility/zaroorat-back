@@ -54,6 +54,7 @@ import {
 import { logger } from '@shared/logger/index.js';
 import type { Ride, RideRequest } from '../../types';
 import type { ItemizedFareResult, PricingSnapshot } from '@modules/pricing';
+import { CancellationPolicyService } from '@modules/pricing';
 import { DispatchService } from '../dispatch/dispatch.service.js';
 import { FARE_BOOST_AMOUNTS } from '../../schemas/ride.schemas.js';
 
@@ -192,6 +193,7 @@ export class RideRequestService {
     private readonly mapProviderService?: MapProviderService,
     private readonly rideQuoteRepository?: RideQuoteRepository,
     private readonly featureFlagService?: FeatureFlagService,
+    private readonly cancellationPolicyService?: CancellationPolicyService,
   ) {}
 
   /// Whether a ride can start at this pin. Riders get a yes or no and the admin's
@@ -974,8 +976,58 @@ export class RideRequestService {
       }
       const cancelled = await this.requestRepo.updateStatus(requestId, 'ABANDONED', tx);
       await this.dispatchRepo.cancelAllPendingForRequest(requestId, tx);
+
+      let cancellationAssessment: {
+        policyId: string | null;
+        policyVersion: number | null;
+        cancellationFee: number;
+        feeStatus: string;
+        withinGraceWindow: boolean;
+      } | null = null;
+      if (
+        this.cancellationPolicyService &&
+        (await this.cancellationPolicyService.isEnforcementEnabled())
+      ) {
+        const snap =
+          request.pricingSnapshot && typeof request.pricingSnapshot === 'object'
+            ? (request.pricingSnapshot as Partial<PricingSnapshot>)
+            : null;
+        const elapsedSec = Math.max(
+          0,
+          Math.floor((Date.now() - request.createdAt.getTime()) / 1000),
+        );
+        const evaluation = await this.cancellationPolicyService.resolve(
+          {
+            actor: 'CUSTOMER',
+            scenario: 'BEFORE_ASSIGNMENT',
+            cityCode:
+              typeof snap?.cityCode === 'string' && snap.cityCode !== 'GLOBAL'
+                ? snap.cityCode
+                : null,
+            vehicleTypeId: request.vehicleTypeId,
+            elapsedSec,
+            quotedFare: request.quotedFare != null ? Number(request.quotedFare) : 0,
+            baseFare:
+              typeof snap?.rateCard?.baseFare === 'number' ? snap.rateCard.baseFare : null,
+            minimumFare:
+              typeof snap?.rateCard?.minimumFare === 'number' ? snap.rateCard.minimumFare : null,
+          },
+          tx,
+        );
+        cancellationAssessment = {
+          policyId: evaluation.matchedPolicy?.id ?? null,
+          policyVersion: evaluation.matchedPolicy?.version ?? null,
+          cancellationFee: evaluation.cancellationFee,
+          feeStatus: evaluation.feeStatus,
+          withinGraceWindow: evaluation.withinGraceWindow,
+        };
+      }
+
       await this.eventPublisher.publish(
-        rideEvent(RIDE_EVENT_CATALOG.REQUEST_ABANDONED, customerId, { requestId }),
+        rideEvent(RIDE_EVENT_CATALOG.REQUEST_ABANDONED, customerId, {
+          requestId,
+          ...(cancellationAssessment ? { cancellationAssessment } : {}),
+        }),
         tx,
       );
       return cancelled;

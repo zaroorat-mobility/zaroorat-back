@@ -4,10 +4,12 @@
 /// seed scripts.
 export const GLOBAL_PRICING_CITY_CODE = 'GLOBAL';
 
-/// Shared feature flag key for surge pricing (Phase 2.5 layering boundary:
+/// Shared feature flag keys (Phase 2.5 & 3 layering boundary:
 /// domain pricing never imports from `modules/admin`).
 export const SURGE_FEATURE_FLAG_KEY = 'surge' as const;
+export const CANCELLATION_POLICY_ENFORCEMENT_FLAG = 'cancellation.policy_enforcement' as const;
 
 export interface FeatureFlagReader {
   isOn(key: string): Promise<boolean>;
+  isEnabledReadOnly(key: string): Promise<boolean>;
 }

@@ -99,6 +99,13 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   fastify.get('/cancellation-policies', canRead, (req, reply) =>
     adminCancellationController.list(req, reply),
   );
+  // Static path before `/cancellation-policies/:id`. Read-only simulator (pricing:read).
+  fastify.post('/cancellation-policies/evaluate', canRead, (req, reply) =>
+    adminCancellationController.evaluate(req, reply),
+  );
+  fastify.get('/cancellation-policies/:id/versions', canRead, (req, reply) =>
+    adminCancellationController.listVersions(req, reply),
+  );
   fastify.get('/cancellation-policies/:id', canRead, (req, reply) =>
     adminCancellationController.getById(req, reply),
   );

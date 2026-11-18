@@ -112,17 +112,38 @@ model SurgeWindow {
 /// until the deferred drop — see `specs/003-zone-pricing-integrity/deferred/`.
 
 model CancellationPolicy {
-  id                  String   @id @default(uuid(7)) @db.Uuid
-  vehicleTypeId       String?  @map("vehicle_type_id") @db.Uuid
-  cityCode            String?  @map("city_code")
-  cancelledBy         String   @map("cancelled_by")
-  freeCancelWindowSec Int      @default(120) @map("free_cancel_window_sec")
-  minStatus           String?  @map("min_status")
-  feeAmount           Decimal  @default(0) @map("fee_amount") @db.Decimal(10, 2)
-  feeType             String   @default("FLAT") @map("fee_type")
-  isActive            Boolean  @default(true) @map("is_active")
-  createdAt           DateTime @default(now()) @map("created_at")
+  id                       String    @id @default(uuid(7)) @db.Uuid
+  ruleName                 String?   @map("rule_name")
+  familyId                 String    @default(uuid(7)) @map("family_id") @db.Uuid
+  version                  Int       @default(1)
+  supersedesId             String?   @map("supersedes_id") @db.Uuid
+  vehicleTypeId            String?   @map("vehicle_type_id") @db.Uuid
+  cityCode                 String?   @map("city_code")
+  cancelledBy              String    @map("cancelled_by")
+  freeCancelWindowSec      Int       @default(120) @map("free_cancel_window_sec")
+  minStatus                String?   @map("min_status")
+  feeAmount                Decimal   @default(0) @map("fee_amount") @db.Decimal(10, 2)
+  feeType                  String    @default("FLAT") @map("fee_type")
+  maxFee                   Decimal?  @map("max_fee") @db.Decimal(10, 2)
+  feeBase                  String    @default("QUOTED_FARE") @map("fee_base")
+  driverCompensationType   String    @default("NONE") @map("driver_compensation_type")
+  driverCompensationAmount Decimal   @default(0) @map("driver_compensation_amount") @db.Decimal(10, 2)
+  driverPenaltyAmount      Decimal?  @map("driver_penalty_amount") @db.Decimal(10, 2)
+  effectiveFrom            DateTime  @default(now()) @map("effective_from")
+  effectiveTo              DateTime? @map("effective_to")
+  isActive                 Boolean   @default(true) @map("is_active")
+  createdBy                String?   @map("created_by") @db.Uuid
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @default(now()) @updatedAt @map("updated_at")
 
+  vehicleType       VehicleType?         @relation(fields: [vehicleTypeId], references: [id])
+  supersedes        CancellationPolicy?  @relation("CancellationPolicyLineage", fields: [supersedesId], references: [id])
+  supersededBy      CancellationPolicy[] @relation("CancellationPolicyLineage")
+  rideCancellations RideCancellation[]
+
+  @@index([familyId, version])
+  @@index([cancelledBy, minStatus, isActive])
+  @@index([supersedesId])
   @@map("cancellation_policies")
 }
 
