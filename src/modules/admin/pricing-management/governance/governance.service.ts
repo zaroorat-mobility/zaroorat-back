@@ -910,6 +910,8 @@ export class AdminPricingGovernanceService {
       activeSurgeWindowsCount,
       activeCancellationPoliciesCount,
       openSettlementFailuresCount,
+      activeDocumentSeriesCount,
+      activeComplianceTemplatesCount,
       globalCommScope,
       globalTaxScope,
       globalRecoveryScope,
@@ -917,6 +919,8 @@ export class AdminPricingGovernanceService {
       passengerGstFlagOn,
       gstRecoveryFlagOn,
       reservationFlagOn,
+      cancellationEnforcementFlagOn,
+      fiscalDocumentsIssueFlagOn,
     ] = await Promise.all([
       client.pricingRule.count({ where: { isActive: true } }),
       client.surgeWindow.count({
@@ -928,6 +932,8 @@ export class AdminPricingGovernanceService {
       }),
       client.cancellationPolicy.count({ where: { isActive: true } }),
       client.commissionCollectionFailure.count({ where: { status: 'OPEN' } }),
+      client.documentSeries.count({ where: { isActive: true } }),
+      client.complianceTemplate.count({ where: { isActive: true } }),
       client.commissionConfigurationScope.findFirst({
         where: {
           scopeLevel: 'GLOBAL',
@@ -969,6 +975,8 @@ export class AdminPricingGovernanceService {
       this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.PASSENGER_GST_ENABLED),
       this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.GST_RECOVERY_ENABLED),
       this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.WALLET_RESERVATION_ENABLED),
+      this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.CANCELLATION_POLICY_ENFORCEMENT),
+      this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.DOCUMENTS_ISSUE),
     ]);
 
     const commissionPct = globalCommScope ? Number(globalCommScope.config.commissionRatePct) : null;
@@ -989,6 +997,8 @@ export class AdminPricingGovernanceService {
         activeSurgeWindows: activeSurgeWindowsCount,
         activeCancellationPolicies: activeCancellationPoliciesCount,
         openSettlementFailures: openSettlementFailuresCount,
+        activeDocumentSeries: activeDocumentSeriesCount,
+        activeComplianceTemplates: activeComplianceTemplatesCount,
       },
       activeGlobalBaseline: {
         commission: globalCommScope
@@ -1024,6 +1034,8 @@ export class AdminPricingGovernanceService {
         passengerGstEnabled: passengerGstFlagOn,
         gstRecoveryEnabled: gstRecoveryFlagOn,
         walletReservationEnabled: reservationFlagOn,
+        cancellationPolicyEnforcement: cancellationEnforcementFlagOn,
+        fiscalDocumentsIssue: fiscalDocumentsIssueFlagOn,
       },
     };
   }
