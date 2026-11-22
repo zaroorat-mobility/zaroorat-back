@@ -89,10 +89,19 @@ jobs:
           chmod 644 ~/.ssh/known_hosts
 
       - name: Trigger Remote Deployment
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST || secrets.DEPLOY_HOST }}
         run: |
-          ssh -i ~/.ssh/id_ed25519 deploy@${{ vars.DEPLOY_HOST }} "deploy ${{ github.sha }} ${{ needs.build.outputs.digest }}"
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::error::DEPLOY_HOST is not set! Please add DEPLOY_HOST (Droplet IP or dev-api.zaroorat.com) in GitHub Settings -> Environments -> dev -> Variables or Secrets."
+            exit 1
+          fi
+          echo "Connecting to deploy@${DEPLOY_HOST}..."
+          ssh -i ~/.ssh/id_ed25519 "deploy@${DEPLOY_HOST}" "deploy ${{ github.sha }} ${{ needs.build.outputs.digest }}"
 
       - name: Smoke Test Deployed Endpoint
+        env:
+          API_URL: ${{ vars.API_URL || secrets.API_URL || 'https://dev-api.zaroorat.com' }}
         run: |
           sleep 5
-          curl -fsS --retry 5 --retry-delay 3 "${{ vars.API_URL }}/health"
+          curl -fsS --retry 5 --retry-delay 3 "${API_URL}/health"
