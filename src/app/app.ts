@@ -7,7 +7,10 @@ import { errorHandler, notFoundHandler } from '../core/errors/index.js';
 import { resolveTrustProxy } from './trust-proxy.js';
 export async function createApp(): Promise<FastifyInstance> {
   const trustProxy = resolveTrustProxy(process.env);
-  if (trustProxy === false && process.env.APP_ENV === 'production') {
+  if (
+    trustProxy === false &&
+    (process.env.APP_ENV === 'production' || process.env.APP_ENV === 'prod')
+  ) {
     logger.warn(
       'No TRUSTED_PROXIES / TRUSTED_PROXY_HOPS set: client IPs (audit rows, rate limits) are the socket peer. Declare the proxy topology if the API sits behind one.',
     );

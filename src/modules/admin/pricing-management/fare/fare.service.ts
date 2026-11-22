@@ -17,6 +17,10 @@ import type {
 } from './fare.schemas.js';
 import { PricingService } from '@modules/pricing';
 import {
+  buildScopeLookupCandidates,
+  pickWinningScope,
+} from '@modules/pricing/utils/scope-precedence.js';
+import {
   AdminServiceZoneService,
   parseServiceType,
   serviceTypeUi,
@@ -133,9 +137,92 @@ export class AdminFareService {
   ) {}
 
   /// The fare an unsaved rule would charge, priced by PricingService itself (rate card defaults,
-  /// minimum fare, surge, discount, ceiling, tax, platform fee, driver earning). The admin
-  /// preview used to price it in React with a different commission formula. Read-only.
+  /// minimum fare, surge, discount, ceiling, live DB tax/commission configs, platform fee, driver
+  /// earning). Read-only.
   async preview(body: PreviewFareRuleBody) {
+    const now = new Date();
+    let resolvedTaxRatePct: number | null = body.taxRatePct ?? null;
+    let resolvedCommissionRatePct: number | null = body.commissionRatePct ?? null;
+
+    if (resolvedTaxRatePct === null || resolvedCommissionRatePct === null) {
+      let vehicleTypeId: string | null = null;
+      if (body.vehicleType) {
+        const isUuid =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.vehicleType);
+        const vt = await this.databaseService.client.vehicleType.findFirst({
+          where: isUuid ? { id: body.vehicleType } : { code: body.vehicleType },
+          select: { id: true },
+        });
+        vehicleTypeId = vt?.id ?? null;
+      }
+
+      const normalizedCityCode =
+        body.cityCode && body.cityCode.trim().toUpperCase() !== 'GLOBAL'
+          ? body.cityCode.trim().toUpperCase()
+          : null;
+
+      const scopeCandidates = buildScopeLookupCandidates({
+        cityCode: normalizedCityCode,
+        serviceZoneId: body.serviceZoneId ?? null,
+        vehicleTypeId,
+      });
+
+      if (resolvedTaxRatePct === null) {
+        const taxScopes = await this.databaseService.client.taxConfigurationScope.findMany({
+          where: {
+            taxKind: 'PASSENGER_RIDE_GST',
+            isEnforced: true,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            AND: [{ OR: scopeCandidates }],
+          },
+          include: { config: true },
+        });
+        const winningTax = pickWinningScope(taxScopes);
+        if (winningTax) {
+          resolvedTaxRatePct = winningTax.config.isEnabled
+            ? Number(winningTax.config.ratePct.toString())
+            : 0;
+        } else {
+          const recScopes =
+            await this.databaseService.client.gstRecoveryConfigurationScope.findMany({
+              where: {
+                isEnforced: true,
+                effectiveFrom: { lte: now },
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+                AND: [{ OR: scopeCandidates }],
+              },
+              include: { config: true },
+            });
+          const winningRec = pickWinningScope(recScopes);
+          resolvedTaxRatePct = winningRec
+            ? winningRec.config.isEnabled
+              ? Number(winningRec.config.recoveryRatePct.toString())
+              : 0
+            : 0;
+        }
+      }
+
+      if (resolvedCommissionRatePct === null) {
+        const commScopes =
+          await this.databaseService.client.commissionConfigurationScope.findMany({
+            where: {
+              isEnforced: true,
+              effectiveFrom: { lte: now },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+              AND: [{ OR: scopeCandidates }],
+            },
+            include: { config: true },
+          });
+        const winningComm = pickWinningScope(commScopes);
+        if (winningComm) {
+          resolvedCommissionRatePct = winningComm.config.isEnabled
+            ? Number(winningComm.config.commissionRatePct.toString())
+            : 0;
+        }
+      }
+    }
+
     const card = this.pricingService.rateCardFor({
       baseFare: body.baseFare,
       perKmRate: body.perKmRate,
@@ -144,9 +231,9 @@ export class AdminFareService {
       freeWaitingMin: body.freeWaitingMinutes,
       bookingFee: body.bookingFee,
       platformFeePct: body.platformFeePct,
-      platformFeeFlat: body.platformFeeFlat ?? null,
-      taxRatePct: body.taxRatePct ?? null,
-      commissionRatePct: body.commissionRatePct ?? null,
+      platformFeeFlat: body.platformFeeFlat ?? 0,
+      taxRatePct: resolvedTaxRatePct,
+      commissionRatePct: resolvedCommissionRatePct,
       minimumFare: body.minimumFare,
     });
     const trip = {
@@ -219,7 +306,7 @@ export class AdminFareService {
       this.databaseService.client.pricingRule.findMany({
         where,
         include: { vehicleType: true, serviceZone: true },
-        orderBy: [{ createdAt: 'desc' }],
+        orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
         skip: (query.page - 1) * query.limit,
         take: query.limit,
       }),
@@ -358,16 +445,61 @@ export class AdminFareService {
 
     const created = await this.databaseService.transactionManager
       .execute(async (tx) => {
+        // Strict duplicate active guard (Option A): block creating a second active overlapping rule
+        // for the exact same (Vehicle + City + Service Type + Service Zone). Operators should edit
+        // the existing rule to create v2, or schedule a non-overlapping future effective window.
+        if (isActive) {
+          const activeSiblings = await tx.pricingRule.findMany({
+            where: exclusivityWhere(key),
+            include: { vehicleType: true, serviceZone: true },
+            orderBy: { version: 'desc' },
+          });
+          const newFromMs = effectiveFrom.getTime();
+          const newToMs = effectiveTo ? effectiveTo.getTime() : Number.POSITIVE_INFINITY;
+          const overlappingActive = activeSiblings.find((inc) => {
+            const incFromMs = inc.effectiveFrom.getTime();
+            const incToMs = inc.effectiveTo
+              ? inc.effectiveTo.getTime()
+              : Number.POSITIVE_INFINITY;
+            return incToMs > newFromMs && incFromMs < newToMs;
+          });
+          if (overlappingActive) {
+            const zonePart = overlappingActive.serviceZone?.name
+              ? ` · ${overlappingActive.serviceZone.name}`
+              : '';
+            throw new FareRuleConflictError(
+              `An active fare rule (v${overlappingActive.version}) already exists for ${overlappingActive.vehicleType.code} · ${cityCode}${zonePart}. Edit that rule to create v${overlappingActive.version + 1}, or schedule a non-overlapping Effective From date.`,
+            );
+          }
+        }
+
+        // Link to existing rule family and increment version cleanly if this key already has history
+        // (e.g. previous rule was deactivated or ends before this scheduled window) — never two v1s.
+        const latestSameKey = await tx.pricingRule.findFirst({
+          where: {
+            vehicleTypeId: key.vehicleTypeId,
+            cityCode: key.cityCode,
+            serviceType: key.serviceType,
+            serviceZoneId: key.serviceZoneId,
+          },
+          orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+          select: { id: true, ruleFamilyId: true, version: true },
+        });
+
         const warnings = isActive
           ? await this.applyTimeAwareExclusivity(tx, key, effectiveFrom, effectiveTo)
           : [];
 
         const newId = randomUUID();
+        const ruleFamilyId = latestSameKey ? (latestSameKey.ruleFamilyId ?? latestSameKey.id) : newId;
+        const supersedesId = latestSameKey ? latestSameKey.id : null;
+        const nextVersion = latestSameKey ? latestSameKey.version + 1 : 1;
+
         const row = await tx.pricingRule.create({
           data: {
             id: newId,
-            ruleFamilyId: newId,
-            supersedesId: null,
+            ruleFamilyId,
+            supersedesId,
             vehicleTypeId: vehicleType.id,
             cityCode,
             serviceType,
@@ -387,7 +519,7 @@ export class AdminFareService {
             ...(body.commissionRatePct !== undefined
               ? { commissionRatePct: body.commissionRatePct }
               : {}),
-            version: 1,
+            version: nextVersion,
             isActive,
             effectiveFrom,
             effectiveTo,
@@ -577,17 +709,29 @@ export class AdminFareService {
 
     return this.databaseService.transactionManager
       .execute(async (tx) => {
+        const now = new Date();
+        // If reactivating an older rule whose effective window was closed in the past,
+        // reopen it starting now so live quotes immediately evaluate it.
+        const wasClosedInPast =
+          existing.effectiveTo !== null && existing.effectiveTo.getTime() <= now.getTime();
+        const nextEffectiveFrom = wasClosedInPast ? now : existing.effectiveFrom;
+        const nextEffectiveTo = wasClosedInPast ? null : existing.effectiveTo;
+
         const warnings = await this.applyTimeAwareExclusivity(
           tx,
           key,
-          existing.effectiveFrom,
-          existing.effectiveTo,
+          nextEffectiveFrom,
+          nextEffectiveTo,
           id,
         );
 
         const updated = await tx.pricingRule.update({
           where: { id },
-          data: { isActive: true },
+          data: {
+            isActive: true,
+            effectiveFrom: nextEffectiveFrom,
+            effectiveTo: nextEffectiveTo,
+          },
           include: { vehicleType: true, serviceZone: true },
         });
 
@@ -632,7 +776,49 @@ export class AdminFareService {
   }
 
   async remove(id: string, actorId?: string): Promise<void> {
-    await this.deactivate(id, actorId);
+    const existing = await this.databaseService.client.pricingRule.findUnique({
+      where: { id },
+      include: { vehicleType: true, serviceZone: true },
+    });
+    if (!existing) throw new FareRuleNotFoundError();
+
+    if (existing.isActive) {
+      throw new PricingAdminError(
+        'Deactivate this fare rule before deleting it.',
+        'RULE_IS_ACTIVE',
+        409,
+      );
+    }
+
+    const [rideReqCount, quoteOptCount] = await Promise.all([
+      this.databaseService.client.rideRequest.count({ where: { pricingRuleId: id } }),
+      this.databaseService.client.rideQuoteOption.count({ where: { pricingRuleId: id } }),
+    ]);
+
+    if (rideReqCount > 0 || quoteOptCount > 0) {
+      throw new PricingAdminError(
+        'This fare rule is referenced by past ride quotes or requests and cannot be permanently deleted. Keep it Inactive for billing audit.',
+        'RULE_REFERENCED_BY_RIDES',
+        409,
+      );
+    }
+
+    const before = this.toDto(existing);
+    await this.databaseService.transactionManager.execute(async (tx) => {
+      await tx.pricingRule.updateMany({
+        where: { supersedesId: id },
+        data: { supersedesId: existing.supersedesId ?? null },
+      });
+      await tx.pricingRule.delete({ where: { id } });
+      await recordAdminAction(tx, {
+        actorId,
+        action: 'DELETE',
+        entityType: 'pricing_rule',
+        entityId: id,
+        summary: `Deleted inactive fare rule ${before.ruleName} (v${before.version})`,
+        before,
+      });
+    });
   }
 
   private toDto(

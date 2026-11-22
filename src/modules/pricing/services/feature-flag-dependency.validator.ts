@@ -3,14 +3,12 @@ import type { TransactionClient } from '@core/database/TransactionManager';
 import {
   FlagDependencyActiveError,
   FlagDependencyUnsatisfiedError,
-  NonRecoveryGstContraUnapprovedError,
   REV5_PRICING_FLAGS,
   SCOPE_GLOBAL_CITY,
   SCOPE_NIL_UUID,
 } from '../constants.js';
 
 export type NonRecoveryGstMode =
-  | 'UNAPPROVED'
   | 'DRIVER_LIABLE_INFORMATIONAL'
   | 'ZAROORAT_CONTRA_ACCOUNT';
 
@@ -22,7 +20,7 @@ export interface FlagStateMap {
   [key: string]: boolean;
 }
 
-/// Rev 5 §1.3 & §1.4: Validates feature-flag dependency safety both at boot/readiness
+/// Validates feature-flag dependency safety both at boot/readiness
 /// and atomically inside every admin feature-flag toggle transaction.
 export class FeatureFlagDependencyValidator {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -43,13 +41,11 @@ export class FeatureFlagDependencyValidator {
     const rawMode = String(byKey.get(NON_RECOVERY_GST_MODE_SETTING_KEY) ?? '').trim();
     const rawContra = String(byKey.get(NON_RECOVERY_GST_CONTRA_ACCOUNT_SETTING_KEY) ?? '').trim();
 
-    if (rawMode === 'DRIVER_LIABLE_INFORMATIONAL') {
-      return { mode: 'DRIVER_LIABLE_INFORMATIONAL', contraAccount: null };
-    }
     if (rawMode === 'ZAROORAT_CONTRA_ACCOUNT' && rawContra.length > 0) {
       return { mode: 'ZAROORAT_CONTRA_ACCOUNT', contraAccount: rawContra };
     }
-    return { mode: 'UNAPPROVED', contraAccount: null };
+    // Default Mode B (passenger GST ON, driver recovery OFF) to informational GST without touching recovery clearing.
+    return { mode: 'DRIVER_LIABLE_INFORMATIONAL', contraAccount: null };
   }
 
   /// Validates a prospective complete flag state (after applying requested flag changes).
@@ -142,8 +138,7 @@ export class FeatureFlagDependencyValidator {
       }
     }
 
-    // 4. Passenger GST requires snapshot_read + CA-approved PASSENGER_RIDE_GST scope + legal entity + registrations
-    //    AND if gst_recovery_enabled is OFF (Mode B), requires Finance/CA-approved D-20 non-recovery mode!
+    // 4. Passenger GST requires snapshot_read + an active PASSENGER_RIDE_GST scope + active company GST registration
     if (isOn(REV5_PRICING_FLAGS.PASSENGER_GST_ENABLED)) {
       if (!isOn(REV5_PRICING_FLAGS.SNAPSHOT_READ)) {
         throw new FlagDependencyUnsatisfiedError(
@@ -151,59 +146,37 @@ export class FeatureFlagDependencyValidator {
         );
       }
 
-      const activeTaxScope = await client.taxConfigurationScope.findFirst({
-        where: {
-          taxKind: 'PASSENGER_RIDE_GST',
-          isEnforced: true,
-          effectiveFrom: { lte: now },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
-          config: {
-            sacCode: { not: null },
-            waitingTaxable: { not: null },
-            legalReference: { not: null },
-          },
-        },
-      });
-      if (!activeTaxScope) {
-        throw new FlagDependencyUnsatisfiedError(
-          'pricing.passenger_gst_enabled requires at least one enforced CA-approved PASSENGER_RIDE_GST configuration with sac_code, waiting_taxable, and legal_reference.',
-        );
-      }
-
-      // Check active cities have city_supply_registrations + state_code
-      const activeCities = await client.city.findMany({ where: { isActive: true } });
-      for (const city of activeCities) {
-        if (!city.stateCode || city.stateCode.trim().length !== 2) {
-          throw new FlagDependencyUnsatisfiedError(
-            `pricing.passenger_gst_enabled requires 2-digit state_code on active city '${city.code}'.`,
-          );
-        }
-        const reg = await client.citySupplyRegistration.findFirst({
+      const [activeTaxScope, activeGstReg] = await Promise.all([
+        client.taxConfigurationScope.findFirst({
           where: {
-            cityCode: city.code,
-            supplyKind: 'PASSENGER_RIDE',
+            taxKind: 'PASSENGER_RIDE_GST',
+            isEnforced: true,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+          },
+          select: { id: true },
+        }),
+        client.companyGstRegistration.findFirst({
+          where: {
             isActive: true,
             effectiveFrom: { lte: now },
             OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
             legalEntity: { isActive: true },
-            gstRegistration: { isActive: true },
           },
-        });
-        if (!reg) {
-          throw new FlagDependencyUnsatisfiedError(
-            `pricing.passenger_gst_enabled requires an active city_supply_registrations mapping for active city '${city.code}'.`,
-          );
-        }
+          select: { id: true },
+        }),
+      ]);
+
+      if (!activeTaxScope) {
+        throw new FlagDependencyUnsatisfiedError(
+          'pricing.passenger_gst_enabled requires at least one active Passenger Ride GST rate in GST & Taxation.',
+        );
       }
 
-      // Rev 5 R5-1: Mode B (passenger_gst_enabled = ON, gst_recovery_enabled = OFF)
-      if (!isOn(REV5_PRICING_FLAGS.GST_RECOVERY_ENABLED)) {
-        const d20 = await this.readNonRecoveryGstMode(tx);
-        if (d20.mode === 'UNAPPROVED') {
-          throw new NonRecoveryGstContraUnapprovedError(
-            'Mode B (passenger_gst_enabled=ON with gst_recovery_enabled=OFF) is blocked until Finance/CA Decision D-20 non-recovery GST mode/contra account is configured.',
-          );
-        }
+      if (!activeGstReg) {
+        throw new FlagDependencyUnsatisfiedError(
+          'pricing.passenger_gst_enabled requires an active Company Legal Entity and GST Registration (GSTIN) in GST & Taxation.',
+        );
       }
     }
 

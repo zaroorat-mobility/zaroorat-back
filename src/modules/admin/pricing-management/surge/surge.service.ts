@@ -57,6 +57,42 @@ export interface SurgeZoneDetail extends Pick<
   'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'
 > {
   boundary: number[][][];
+  center?: { lat: number; lng: number } | null;
+}
+
+function parseHhMmMinutes(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h > 23 || m > 59) return null;
+  return h * 60 + m;
+}
+
+function dailyIntervalsOverlap(
+  aPeakOnly: boolean,
+  aStart: string | null | undefined,
+  aEnd: string | null | undefined,
+  bPeakOnly: boolean,
+  bStart: string | null | undefined,
+  bEnd: string | null | undefined,
+): boolean {
+  if (!aPeakOnly || !bPeakOnly) return true;
+  const toSegments = (
+    s: string | null | undefined,
+    e: string | null | undefined,
+  ): Array<[number, number]> => {
+    const start = parseHhMmMinutes(s);
+    const end = parseHhMmMinutes(e);
+    if (start === null || end === null) return [[0, 1440]];
+    if (start < end) return [[start, end]];
+    if (start > end) return [[start, 1440], [0, end]];
+    return [[0, 1440]];
+  };
+  const segA = toSegments(aStart, aEnd);
+  const segB = toSegments(bStart, bEnd);
+  return segA.some(([a1, a2]) => segB.some(([b1, b2]) => a1 < b2 && b1 < a2));
 }
 
 interface SurgeWindowRow {
@@ -223,16 +259,53 @@ export class AdminSurgeService {
     });
   }
 
-  async listSurgeZones(): Promise<
-    Pick<SurgeZone, 'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'>[]
-  > {
-    return this.db.client.$queryRaw<
-      Pick<SurgeZone, 'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'>[]
+  async listSurgeZones(): Promise<SurgeZoneDetail[]> {
+    const rows = await this.db.client.$queryRaw<
+      Array<
+        Pick<SurgeZone, 'id' | 'cityCode' | 'name' | 'isActive' | 'createdAt'> & {
+          boundary: string | null;
+          centerLat: number | null;
+          centerLng: number | null;
+        }
+      >
     >`
-      SELECT id, city_code AS "cityCode", name, is_active AS "isActive", created_at AS "createdAt"
+      SELECT
+        id,
+        city_code AS "cityCode",
+        name,
+        is_active AS "isActive",
+        created_at AS "createdAt",
+        ST_AsGeoJSON(boundary::geometry) AS boundary,
+        ST_Y(ST_Centroid(boundary::geometry)) AS "centerLat",
+        ST_X(ST_Centroid(boundary::geometry)) AS "centerLng"
       FROM surge_zones
+      WHERE is_active = true
       ORDER BY created_at DESC
     `;
+
+    return rows.map((row) => {
+      let coords: number[][][] = [];
+      if (row.boundary) {
+        try {
+          const parsed = JSON.parse(row.boundary) as { coordinates?: number[][][] };
+          if (Array.isArray(parsed.coordinates)) coords = parsed.coordinates;
+        } catch {
+          coords = [];
+        }
+      }
+      return {
+        id: row.id,
+        cityCode: row.cityCode,
+        name: row.name,
+        isActive: row.isActive,
+        createdAt: row.createdAt,
+        boundary: coords,
+        center:
+          row.centerLat != null && row.centerLng != null
+            ? { lat: Number(row.centerLat), lng: Number(row.centerLng) }
+            : null,
+      };
+    });
   }
 
   async getSurgeZone(id: string): Promise<SurgeZoneDetail> {
@@ -364,6 +437,68 @@ export class AdminSurgeService {
     );
     const singleVehicleId = validatedVehicleIds.length === 1 ? validatedVehicleIds[0]! : null;
 
+    // Strict duplicate/overlap guard: prevent creating an overlapping active surge window
+    // on the exact same scope + vehicles + days + daily peak hours.
+    const sameScopeActive = await this.db.client.surgeWindow.findMany({
+      where: {
+        isActive: true,
+        serviceZoneId: data.serviceZoneId ?? null,
+        zoneId: data.zoneId ?? null,
+        cityCode: normalizedCity ?? null,
+      },
+      include: WINDOW_INCLUDE,
+    });
+    const newStartMs = data.startsAt.getTime();
+    const newEndMs = data.endsAt ? data.endsAt.getTime() : Number.POSITIVE_INFINITY;
+    const newDays = data.daysOfWeek ?? [];
+
+    const conflict = sameScopeActive.find((inc) => {
+      const incStartMs = inc.startsAt.getTime();
+      const incEndMs = inc.endsAt ? inc.endsAt.getTime() : Number.POSITIVE_INFINITY;
+      if (!(incEndMs > newStartMs && incStartMs < newEndMs)) return false;
+
+      const incVehicles =
+        inc.vehicleTypeIds.length > 0
+          ? inc.vehicleTypeIds
+          : inc.vehicleTypeId
+            ? [inc.vehicleTypeId]
+            : [];
+      const vehiclesOverlap =
+        validatedVehicleIds.length === 0 ||
+        incVehicles.length === 0 ||
+        validatedVehicleIds.some((id) => incVehicles.includes(id));
+      if (!vehiclesOverlap) return false;
+
+      const incDays = inc.daysOfWeek ?? [];
+      const daysOverlap =
+        newDays.length === 0 ||
+        incDays.length === 0 ||
+        newDays.some((d) => incDays.includes(d));
+      if (!daysOverlap) return false;
+
+      return dailyIntervalsOverlap(
+        Boolean(data.isPeakHourOnly),
+        data.peakHourStart,
+        data.peakHourEnd,
+        inc.isPeakHourOnly,
+        inc.peakHourStart,
+        inc.peakHourEnd,
+      );
+    });
+
+    if (conflict) {
+      const conflictName =
+        conflict.reason ||
+        conflict.serviceZone?.name ||
+        conflict.zone?.name ||
+        (conflict.cityCode ? `${conflict.cityCode} (Citywide)` : 'existing rule');
+      throw new PricingAdminError(
+        `An active surge rule ("${conflictName}" at ${Number(conflict.multiplier).toFixed(2)}x) already covers an overlapping scope, vehicle, and schedule. Edit the existing rule or choose a non-overlapping schedule.`,
+        'SURGE_WINDOW_CONFLICT',
+        409,
+      );
+    }
+
     const created = await this.db.transactionManager.execute(async (tx) => {
       const row = await tx.surgeWindow.create({
         data: {
@@ -442,7 +577,7 @@ export class AdminSurgeService {
       this.db.client.surgeWindow.findMany({
         where,
         include: WINDOW_INCLUDE,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
         skip: (query.page - 1) * query.limit,
         take: query.limit,
       }),
@@ -726,6 +861,52 @@ export class AdminSurgeService {
   }
 
   async deleteSurgeWindow(id: string, actorId?: string): Promise<void> {
-    await this.updateSurgeWindow(id, { isActive: false }, actorId);
+    const existing = await this.db.client.surgeWindow.findUnique({
+      where: { id },
+      include: WINDOW_INCLUDE,
+    });
+    if (!existing) throw new SurgeWindowNotFoundError();
+
+    if (existing.isActive) {
+      throw new PricingAdminError(
+        'Deactivate this surge rule before deleting it.',
+        'SURGE_WINDOW_IS_ACTIVE',
+        409,
+      );
+    }
+
+    const rideReqCount = await this.db.client.rideRequest.count({
+      where: { surgeWindowId: id },
+    });
+    if (rideReqCount > 0) {
+      throw new PricingAdminError(
+        'This surge rule is referenced by past ride requests and cannot be permanently deleted. Keep it Inactive for billing audit.',
+        'SURGE_WINDOW_REFERENCED',
+        409,
+      );
+    }
+
+    await this.db.transactionManager.execute(async (tx) => {
+      await tx.surgeWindow.updateMany({
+        where: { supersedesId: id },
+        data: { supersedesId: existing.supersedesId ?? null },
+      });
+      await tx.surgeWindow.delete({ where: { id } });
+      await recordAdminAction(tx, {
+        actorId,
+        action: 'DELETE',
+        entityType: 'surge_window',
+        entityId: id,
+        summary: `Deleted inactive surge window ${existing.reason || id} (${String(existing.multiplier)}x)`,
+        before: {
+          id: existing.id,
+          reason: existing.reason,
+          multiplier: existing.multiplier,
+          cityCode: existing.cityCode,
+          zoneId: existing.zoneId,
+          serviceZoneId: existing.serviceZoneId,
+        },
+      });
+    });
   }
 }

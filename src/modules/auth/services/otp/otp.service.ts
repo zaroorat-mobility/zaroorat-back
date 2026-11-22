@@ -2,7 +2,9 @@ import { RedisService } from '@core/cache';
 import { EventPublisher } from '@core/events';
 import type { OtpPurpose } from '@core/database/types';
 import type { OtpConfig } from '@config/otp/otp.config';
+import { config } from '@config';
 import { logger } from '@shared/logger/index.js';
+import { shouldLogDevOtp } from './dev-otp-log.js';
 import { uuidV7 } from '@shared/crypto';
 import { isUuid } from '@shared/validation/index.js';
 import { NotificationService } from '@modules/notifications';
@@ -101,7 +103,16 @@ export class OtpService {
     }
     try {
       const code = this.otpGenerator.generate();
-      logger.debug({ otp: code, phoneNumber, purpose }, '[OTP] generated');
+      logger.debug(
+        {
+          ...(shouldLogDevOtp(config.app.environment, process.env.SMS_PROVIDER)
+            ? { otp: code }
+            : {}),
+          phoneNumber,
+          purpose,
+        },
+        '[OTP] generated',
+      );
       await this.redisService.otp.store(
         purpose,
         phoneNumber,

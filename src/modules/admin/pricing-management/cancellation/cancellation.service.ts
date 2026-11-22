@@ -151,7 +151,7 @@ export class AdminCancellationService {
       this.databaseService.client.cancellationPolicy.count({ where }),
       this.databaseService.client.cancellationPolicy.findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { version: 'desc' }],
+        orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
         skip,
         take: query.limit,
       }),
@@ -256,21 +256,52 @@ export class AdminCancellationService {
 
     try {
       return await this.databaseService.transactionManager.execute(async (tx) => {
+        // Strict duplicate active guard: never silently clobber an active policy on Create.
         if (isActive) {
-          await this.applyTimeAwareExclusivity(
-            tx,
-            { cancelledBy, minStatus, cityCode, vehicleTypeId },
-            effectiveFrom,
-            effectiveTo,
-            actor,
+          const activePeers = await tx.cancellationPolicy.findMany({
+            where: {
+              cancelledBy,
+              minStatus,
+              cityCode,
+              vehicleTypeId,
+              isActive: true,
+            },
+            orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+          });
+          const overlappingActive = activePeers.find((peer) =>
+            windowsOverlap(peer.effectiveFrom, peer.effectiveTo, effectiveFrom, effectiveTo),
           );
+          if (overlappingActive) {
+            const label =
+              overlappingActive.ruleName ||
+              `${actorUi(cancelledBy)} · ${scenarioUi(minStatus).replace(/_/g, ' ')}`;
+            throw new CancellationPolicyConflictError(
+              `An active cancellation policy "${label}" (v${overlappingActive.version}) already exists for this scope. Edit that policy to create v${overlappingActive.version + 1}, or deactivate it first.`,
+            );
+          }
         }
+
+        // Preserve monotonic version lineage when prior inactive/retired versions exist on the same scope.
+        const latestSameScope = await tx.cancellationPolicy.findFirst({
+          where: {
+            cancelledBy,
+            minStatus,
+            cityCode,
+            vehicleTypeId,
+          },
+          orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+        });
+
+        const familyId = latestSameScope ? latestSameScope.familyId : randomUUID();
+        const version = latestSameScope ? latestSameScope.version + 1 : 1;
+        const supersedesId = latestSameScope ? latestSameScope.id : null;
+
         const created = await tx.cancellationPolicy.create({
           data: {
             ruleName,
-            familyId: randomUUID(),
-            version: 1,
-            supersedesId: null,
+            familyId,
+            version,
+            supersedesId,
             cancelledBy,
             minStatus,
             feeType,
@@ -294,7 +325,7 @@ export class AdminCancellationService {
           action: 'CREATE',
           entityType: 'cancellation_policy',
           entityId: created.id,
-          summary: `Cancellation policy v1 created (${ruleName})`,
+          summary: `Cancellation policy v${version} created (${ruleName})`,
           after: created,
           result: 'SUCCESS',
         });
@@ -334,6 +365,11 @@ export class AdminCancellationService {
         // Pure active/inactive status toggle stays in-place cleanly.
         if (substantiveKeys.length === 0 && body.status !== undefined) {
           const nextActive = body.status === 'active';
+          const isExpired =
+            nextActive && existing.effectiveTo !== null && existing.effectiveTo.getTime() <= Date.now();
+          const nextEffectiveFrom = isExpired ? new Date() : existing.effectiveFrom;
+          const nextEffectiveTo = isExpired ? null : existing.effectiveTo;
+
           if (nextActive && !existing.isActive) {
             await this.applyTimeAwareExclusivity(
               tx,
@@ -343,15 +379,18 @@ export class AdminCancellationService {
                 cityCode: existing.cityCode,
                 vehicleTypeId: existing.vehicleTypeId,
               },
-              existing.effectiveFrom,
-              existing.effectiveTo,
+              nextEffectiveFrom,
+              nextEffectiveTo,
               actor,
               existing.id,
             );
           }
           const toggled = await tx.cancellationPolicy.update({
             where: { id },
-            data: { isActive: nextActive },
+            data: {
+              isActive: nextActive,
+              ...(isExpired ? { effectiveFrom: nextEffectiveFrom, effectiveTo: nextEffectiveTo } : {}),
+            },
           });
           await this.audit(
             tx,
@@ -519,6 +558,11 @@ export class AdminCancellationService {
     try {
       return await this.databaseService.transactionManager.execute(async (tx) => {
         const existing = await this.lockExisting(tx, id);
+        const isExpired =
+          existing.effectiveTo !== null && existing.effectiveTo.getTime() <= Date.now();
+        const nextEffectiveFrom = isExpired ? new Date() : existing.effectiveFrom;
+        const nextEffectiveTo = isExpired ? null : existing.effectiveTo;
+
         await this.applyTimeAwareExclusivity(
           tx,
           {
@@ -527,14 +571,17 @@ export class AdminCancellationService {
             cityCode: existing.cityCode,
             vehicleTypeId: existing.vehicleTypeId,
           },
-          existing.effectiveFrom,
-          existing.effectiveTo,
+          nextEffectiveFrom,
+          nextEffectiveTo,
           actor,
           id,
         );
         const updated = await tx.cancellationPolicy.update({
           where: { id },
-          data: { isActive: true },
+          data: {
+            isActive: true,
+            ...(isExpired ? { effectiveFrom: nextEffectiveFrom, effectiveTo: nextEffectiveTo } : {}),
+          },
         });
         await this.audit(tx, actor, existing, updated, 'Cancellation policy activated');
         return this.toDto(updated);
@@ -562,7 +609,43 @@ export class AdminCancellationService {
   }
 
   async remove(id: string, actor: AuditActor): Promise<void> {
-    await this.deactivate(id, actor);
+    await this.databaseService.transactionManager.execute(async (tx) => {
+      const existing = await this.lockExisting(tx, id);
+
+      if (existing.isActive) {
+        throw new CancellationPolicyConflictError(
+          'Deactivate this cancellation policy before deleting it.',
+        );
+      }
+
+      const usedCount = await tx.rideCancellation.count({
+        where: { policyId: id },
+      });
+      if (usedCount > 0) {
+        throw new CancellationPolicyConflictError(
+          `Cannot delete this cancellation policy because ${usedCount} historical ride cancellation record${usedCount === 1 ? '' : 's'} reference it for audit and settlement. Keep it inactive instead.`,
+        );
+      }
+
+      await tx.cancellationPolicy.updateMany({
+        where: { supersedesId: id },
+        data: { supersedesId: existing.supersedesId ?? null },
+      });
+
+      await tx.cancellationPolicy.delete({
+        where: { id },
+      });
+
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'DELETE',
+        entityType: 'cancellation_policy',
+        entityId: existing.id,
+        summary: `Inactive cancellation policy v${existing.version} deleted (${existing.ruleName ?? existing.id})`,
+        before: existing,
+        result: 'SUCCESS',
+      });
+    });
   }
 
   private async lockExisting(tx: TransactionClient, id: string) {

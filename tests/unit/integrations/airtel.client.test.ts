@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, mock } from 'node:test';
 import { AirtelProvider } from '../../../src/integrations/airtel/airtel.client.js';
+import { logger } from '../../../src/shared/logger/index.js';
 
 describe('AirtelProvider Exhaustive Failure & API Contract Matrix', () => {
   const originalFetch = globalThis.fetch;
@@ -202,5 +203,29 @@ describe('AirtelProvider Exhaustive Failure & API Contract Matrix', () => {
     assert.equal(result.accepted, false);
     assert.ok(!result.error?.includes('9876543210'));
     assert.ok(result.error?.includes('[number]'));
+  });
+
+  // The SMS text IS the OTP. `message` is not a redacted log key, so it must
+  // never be handed to the logger in any environment.
+  it('never passes the SMS text (it carries the OTP) to any log call', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ statusCode: 200, requestId: 'req-log', status: 'SUCCESS' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const calls: unknown[] = [];
+    for (const level of ['debug', 'info', 'warn', 'error'] as const) {
+      mock.method(logger, level, (...args: unknown[]) => calls.push(args));
+    }
+    try {
+      await new AirtelProvider(config).sendSms({
+        to: '+919876543210',
+        body: '482913 is your OTP to verify your mobile number on Zaroorat App.',
+      });
+    } finally {
+      mock.restoreAll();
+    }
+    assert.ok(calls.length > 0, 'expected the provider to log something');
+    assert.ok(!JSON.stringify(calls).includes('482913'), 'the OTP reached a log call');
   });
 });

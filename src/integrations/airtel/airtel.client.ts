@@ -88,7 +88,8 @@ export class AirtelProvider implements SmsProvider {
         dltTemplateId: payload.dltTemplateId,
         sourceAddress: payload.sourceAddress,
         entityId: payload.entityId,
-        message: payload.message,
+        // Never the text itself: an OTP SMS body IS the code, and `message` is not a redacted key.
+        messageLength: message.body.length,
       },
       '[Airtel] sending SMS payload',
     );

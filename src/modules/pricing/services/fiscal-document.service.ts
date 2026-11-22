@@ -18,6 +18,7 @@ import {
 export const FISCAL_DOCUMENT_TYPES = [
   'PASSENGER_TAX_INVOICE',
   'COMMISSION_TAX_INVOICE',
+  'WALLET_RECHARGE_RECEIPT',
   'DRIVER_SETTLEMENT_STATEMENT',
   'CREDIT_NOTE',
   'SUBSCRIPTION_INVOICE',
@@ -441,7 +442,245 @@ export class FiscalDocumentService {
       if (driverDoc) issuedDocs.push(driverDoc);
     }
 
+    // 3. Commission Tax Invoice (if an active COMMISSION_TAX_INVOICE series is configured & commission > 0)
+    const commSeriesExists = await this.databaseService.client.documentSeries.findFirst({
+      where: {
+        gstRegistrationId: supplyReg.gstRegistrationId,
+        documentType: 'COMMISSION_TAX_INVOICE',
+        financialYear: fy,
+        isActive: true,
+      },
+    });
+    const commAmountForInv =
+      commSnap?.commissionAmount != null
+        ? round2(Number(commSnap.commissionAmount))
+        : round2(toNum(ride.commissionAmount));
+    if (commSeriesExists && commAmountForInv > 0) {
+      const activeCommGst = await this.databaseService.client.taxConfiguration.findFirst({
+        where: { kind: 'COMMISSION_GST', status: 'ACTIVE', isEnabled: true },
+        orderBy: [{ approvedAt: 'desc' }, { createdAt: 'desc' }],
+      });
+      const commGstPct = activeCommGst ? Number(activeCommGst.ratePct) : 0;
+      const commTaxAmt = round2(commAmountForInv * (commGstPct / 100));
+      const commIsInterState = Boolean(gstSnap?.isInterState ?? false);
+      const commCgst = commIsInterState ? 0 : round2(commTaxAmt / 2);
+      const commSgst = commIsInterState ? 0 : round2(commTaxAmt - commCgst);
+      const commIgst = commIsInterState ? commTaxAmt : 0;
+
+      const commDoc = await this.issueSingleDocumentInTx({
+        rideId: ride.id,
+        rideCode: ride.rideCode,
+        documentType: 'COMMISSION_TAX_INVOICE',
+        financialYear: fy,
+        issuedAt,
+        recipientType: 'DRIVER',
+        recipientUserId: ride.driver.userId,
+        recipientName: driverName,
+        legalEntityId: supplyReg.legalEntityId,
+        gstRegistrationId: supplyReg.gstRegistrationId,
+        supplierLegalName: supplyReg.legalEntityName,
+        supplierGstin: supplyReg.gstin,
+        supplierStateCode: supplyReg.stateCode,
+        placeOfSupplyStateCode:
+          (typeof gstSnap?.placeOfSupplyStateCode === 'string' && gstSnap.placeOfSupplyStateCode) ||
+          supplyReg.stateCode,
+        isInterState: commIsInterState,
+        sacCode: activeCommGst?.sacCode ?? null,
+        currency: ride.fare.currency || 'INR',
+        taxableValue: commAmountForInv,
+        nonTaxableValue: 0,
+        cgstRatePct: commIsInterState ? 0 : round2(commGstPct / 2),
+        sgstRatePct: commIsInterState ? 0 : round2(commGstPct / 2),
+        igstRatePct: commIsInterState ? commGstPct : 0,
+        cgstAmount: commCgst,
+        sgstAmount: commSgst,
+        igstAmount: commIgst,
+        totalTaxAmount: commTaxAmt,
+        totalAmount: round2(commAmountForInv + commTaxAmt),
+        lineItems: [
+          {
+            label: 'Platform Commission Fee',
+            amount: commAmountForInv,
+            ...(commSnap?.commissionRatePct != null
+              ? { note: `${Number(commSnap.commissionRatePct)}% on ride ${ride.rideCode}` }
+              : { note: `Ride ${ride.rideCode}` }),
+          },
+        ],
+        snapshotRefs: {
+          rideCode: ride.rideCode,
+          commissionConfigId: commSnap?.configId ?? null,
+          commissionTaxConfigId: activeCommGst?.id ?? null,
+        },
+      });
+      if (commDoc) issuedDocs.push(commDoc);
+    }
+
     return { documents: issuedDocs };
+  }
+
+  /// Issues an immutable Commission Wallet Recharge Receipt (INR 0.00 GST — prepaid deposit)
+  /// whenever a driver tops up their Commission Wallet, gated behind `documents.issue`.
+  async issueForWalletRecharge(params: {
+    driverId: string;
+    walletId: string;
+    amount: number;
+    newBalance: number;
+    eventId?: string | null;
+    issuedAt?: Date;
+  }): Promise<FiscalDocumentDto | null> {
+    const enabled = await this.isIssuanceEnabled();
+    if (!enabled) return null;
+
+    const driver = await this.databaseService.client.driver.findUnique({
+      where: { id: params.driverId },
+      include: { user: { include: { profile: true } } },
+    });
+    if (!driver) return null;
+
+    const issuedAt = params.issuedAt ?? new Date();
+    const fy = getIndianFinancialYear(issuedAt);
+
+    const activeSeries = await this.databaseService.client.documentSeries.findFirst({
+      where: {
+        documentType: 'WALLET_RECHARGE_RECEIPT',
+        financialYear: fy,
+        isActive: true,
+      },
+      include: {
+        gstRegistration: { include: { legalEntity: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!activeSeries) return null;
+
+    const profile = driver.user.profile;
+    const driverName =
+      [profile?.firstName, profile?.lastName].filter(Boolean).join(' ').trim() ||
+      driver.user.phoneNumber ||
+      'Driver Partner';
+    const rechargeAmt = round2(params.amount);
+    const updatedBalance = round2(params.newBalance);
+    const paymentRef = params.eventId ? `WRC-${params.eventId.slice(0, 8).toUpperCase()}` : `WRC-${Date.now()}`;
+
+    return this.databaseService.transactionManager.execute(async (tx: TransactionClient) => {
+      // Idempotency check BEFORE acquiring/incrementing series sequence so outbox retries never burn a number!
+      if (params.eventId) {
+        const existingReceipt = await tx.fiscalDocument.findFirst({
+          where: {
+            recipientUserId: driver.userId,
+            documentType: 'WALLET_RECHARGE_RECEIPT',
+            snapshotRefsJson: { path: ['eventId'], equals: params.eventId },
+          },
+        });
+        if (existingReceipt) {
+          return this.toDto(existingReceipt);
+        }
+      }
+
+      const seriesRows = await tx.$queryRaw<
+        Array<{ id: string; prefix: string; last_sequence: bigint | number | string }>
+      >`
+        SELECT "id", "prefix", "last_sequence"
+        FROM "document_series"
+        WHERE "id" = ${activeSeries.id}::uuid
+        FOR UPDATE
+      `;
+      const series = seriesRows[0];
+      if (!series) return null;
+
+      if (params.eventId) {
+        const racedReceipt = await tx.fiscalDocument.findFirst({
+          where: {
+            recipientUserId: driver.userId,
+            documentType: 'WALLET_RECHARGE_RECEIPT',
+            snapshotRefsJson: { path: ['eventId'], equals: params.eventId },
+          },
+        });
+        if (racedReceipt) {
+          return this.toDto(racedReceipt);
+        }
+      }
+
+      const nextSeq = BigInt(series.last_sequence) + 1n;
+      await tx.$executeRaw`
+        UPDATE "document_series"
+        SET "last_sequence" = ${nextSeq}, "updated_at" = now()
+        WHERE "id" = ${series.id}::uuid
+      `;
+
+      const documentNumber = `${series.prefix}${String(nextSeq).padStart(6, '0')}`;
+      const activeTemplate = await tx.complianceTemplate.findFirst({
+        where: { documentType: 'WALLET_RECHARGE_RECEIPT', isActive: true },
+        select: { id: true },
+      });
+
+      const contentSha256 = computeDocumentSha256({
+        documentNumber,
+        documentType: 'WALLET_RECHARGE_RECEIPT',
+        driverId: params.driverId,
+        walletId: params.walletId,
+        paymentRef,
+        supplierGstin: activeSeries.gstRegistration.gstin,
+        nonTaxableValue: rechargeAmt,
+        totalAmount: rechargeAmt,
+      });
+
+      const created = await tx.fiscalDocument.create({
+        data: {
+          documentNumber,
+          seriesId: series.id,
+          sequenceNumber: nextSeq,
+          documentType: 'WALLET_RECHARGE_RECEIPT',
+          status: 'ISSUED',
+          rideId: null,
+          recipientUserId: driver.userId,
+          recipientType: 'DRIVER',
+          recipientName: driverName,
+          legalEntityId: activeSeries.gstRegistration.legalEntityId,
+          gstRegistrationId: activeSeries.gstRegistrationId,
+          supplierLegalName: activeSeries.gstRegistration.legalEntity.legalEntityName,
+          supplierGstin: activeSeries.gstRegistration.gstin,
+          supplierStateCode: activeSeries.gstRegistration.stateCode,
+          placeOfSupplyStateCode: activeSeries.gstRegistration.stateCode,
+          isInterState: false,
+          sacCode: null,
+          currency: 'INR',
+          taxableValue: 0,
+          nonTaxableValue: rechargeAmt,
+          cgstRatePct: 0,
+          sgstRatePct: 0,
+          igstRatePct: 0,
+          cgstAmount: 0,
+          sgstAmount: 0,
+          igstAmount: 0,
+          totalTaxAmount: 0,
+          totalAmount: rechargeAmt,
+          lineItemsJson: [
+            {
+              label: 'Commission Wallet Prepaid Recharge',
+              amount: rechargeAmt,
+              note: `Updated Wallet Balance: INR ${updatedBalance.toFixed(2)}`,
+            },
+          ] as unknown as object,
+          snapshotRefsJson: {
+            rideCode: paymentRef,
+            driverId: params.driverId,
+            walletId: params.walletId,
+            newBalance: updatedBalance,
+            eventId: params.eventId ?? null,
+          } as unknown as object,
+          templateId: activeTemplate?.id ?? null,
+          contentSha256,
+          issuedAt,
+        },
+      });
+
+      logger.info(
+        { documentId: created.id, documentNumber, driverId: params.driverId, amount: rechargeAmt },
+        '[fiscal-document] issued commission wallet recharge receipt',
+      );
+      return this.toDto(created);
+    });
   }
 
   private async resolveSupplyRegistration(
@@ -679,7 +918,12 @@ export class FiscalDocumentService {
     fileName: string;
     document: FiscalDocumentDto;
   }> {
-    const doc = await this.getById(id);
+    const row = await this.databaseService.client.fiscalDocument.findUnique({
+      where: { id },
+      include: { legalEntity: { select: { headOfficeAddress: true } } },
+    });
+    if (!row) throw new FiscalDocumentNotFoundError(id);
+    const doc = this.toDto(row);
     const pdfInput: FiscalDocumentPdfInput = {
       documentNumber: doc.documentNumber,
       documentType: doc.documentType,
@@ -689,6 +933,7 @@ export class FiscalDocumentService {
       recipientType: doc.recipientType,
       recipientName: doc.recipientName,
       supplierLegalName: doc.supplierLegalName,
+      supplierAddress: row.legalEntity?.headOfficeAddress ?? null,
       supplierGstin: doc.supplierGstin,
       supplierStateCode: doc.supplierStateCode,
       placeOfSupplyStateCode: doc.placeOfSupplyStateCode,
@@ -747,6 +992,33 @@ export class FiscalDocumentService {
         recipientType: { in: allowedRecipientTypes },
       },
       orderBy: { issuedAt: 'desc' },
+    });
+
+    return rows.map((row) => {
+      const dto = this.toDto(row);
+      const { token, expiresAt } = this.createSignedDownloadToken(dto.id, userId, 300);
+      return {
+        ...dto,
+        downloadPath: `/api/v1/fiscal-documents/${dto.id}/download?token=${encodeURIComponent(token)}`,
+        expiresAt,
+      };
+    });
+  }
+
+  /// Lists all fiscal documents issued directly to the authenticated user (rider or driver),
+  /// including non-ride documents such as Commission Wallet Recharge Receipts.
+  async listForUser(
+    userId: string,
+    opts?: { documentType?: FiscalDocumentType; limit?: number },
+  ): Promise<Array<FiscalDocumentDto & { downloadPath: string; expiresAt: string }>> {
+    const limit = Math.min(100, Math.max(1, opts?.limit ?? 50));
+    const rows = await this.databaseService.client.fiscalDocument.findMany({
+      where: {
+        recipientUserId: userId,
+        ...(opts?.documentType ? { documentType: opts.documentType } : {}),
+      },
+      orderBy: { issuedAt: 'desc' },
+      take: limit,
     });
 
     return rows.map((row) => {

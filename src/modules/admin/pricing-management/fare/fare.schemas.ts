@@ -149,6 +149,9 @@ export const previewFareRuleBodySchema = z.object({
   surgeMultiplier: z.coerce.number().min(1).max(10).default(1),
   discountAmount: z.coerce.number().min(0).default(0),
   fareCeiling: z.coerce.number().min(0).optional(),
+  cityCode: z.string().trim().max(40).nullish(),
+  serviceZoneId: z.string().uuid().nullish(),
+  vehicleType: z.string().trim().max(64).nullish(),
 });
 
 export type PreviewFareRuleBody = z.infer<typeof previewFareRuleBodySchema>;

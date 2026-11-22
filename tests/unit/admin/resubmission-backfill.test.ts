@@ -367,6 +367,22 @@ describe('resubmission backfill: command-line guards', () => {
     assert.doesNotThrow(() => assertSafeTarget(args(`${stagingArgs} --allow-production`), staging));
   });
 
+  it('applies the same rules to the canonical names local and prod', () => {
+    const prodTunnel: ConnectedTarget = { ...local, environment: 'prod', port: 15432 };
+    const prodArgs = '--env prod --database zaroorat --host 127.0.0.1:15432';
+    assert.throws(() => assertSafeTarget(args(prodArgs), prodTunnel), /--allow-production/);
+    assert.doesNotThrow(() => assertSafeTarget(args(`${prodArgs} --allow-production`), prodTunnel));
+
+    const remoteLocal: ConnectedTarget = { ...local, environment: 'local', host: '10.0.0.5' };
+    const line = '--env local --database zaroorat --host 10.0.0.5:5432 --allow-production';
+    assert.throws(() => assertSafeTarget(args(line), remoteLocal), /not on this machine/);
+  });
+
+  it('accepts the legacy spelling on the command line for the loaded canonical name', () => {
+    const loaded: ConnectedTarget = { ...local, environment: 'local' };
+    assert.doesNotThrow(() => assertSafeTarget(args(devArgs), loaded));
+  });
+
   it('refuses malformed, unknown, repeated or valueless arguments', () => {
     for (const line of [
       `${devArgs} --aply`,

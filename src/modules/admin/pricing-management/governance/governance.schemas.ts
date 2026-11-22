@@ -43,6 +43,7 @@ export const createCommissionConfigSchema = z
     declaredEffectiveFrom: z.string().datetime({ offset: true }).optional(),
     declaredEffectiveTo: z.string().datetime({ offset: true }).optional().nullable(),
     reason: z.string().trim().max(500).optional().nullable(),
+    activateImmediately: z.boolean().optional().default(false),
     scopes: z.array(scopeInputSchema).min(1).max(100),
   })
   .strict()
@@ -68,6 +69,7 @@ export const createTaxConfigSchema = z
     applyTo: applyToNewRidesOnly,
     declaredEffectiveFrom: z.string().datetime({ offset: true }).optional(),
     declaredEffectiveTo: z.string().datetime({ offset: true }).optional().nullable(),
+    activateImmediately: z.boolean().optional().default(false),
     scopes: z.array(scopeInputSchema).min(1).max(100),
   })
   .strict()
@@ -94,6 +96,7 @@ export const createGstRecoveryConfigSchema = z
     applyTo: applyToNewRidesOnly,
     declaredEffectiveFrom: z.string().datetime({ offset: true }).optional(),
     declaredEffectiveTo: z.string().datetime({ offset: true }).optional().nullable(),
+    activateImmediately: z.boolean().optional().default(false),
     scopes: z.array(scopeInputSchema).min(1).max(100),
   })
   .strict()

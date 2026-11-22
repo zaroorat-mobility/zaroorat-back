@@ -47,7 +47,7 @@ const defaultRateCard: PricingRateCard = Object.freeze({
   freeWaitingMin: numericEnv('RIDE_FREE_WAITING_MIN', 3, { min: 0 }),
   bookingFee: numericEnv('RIDE_BOOKING_FEE', 0, { min: 0 }),
   platformFeePct: numericEnv('RIDE_PLATFORM_FEE_PCT', 0, { min: 0, max: 100 }),
-  platformFeeFlat: numericEnv('RIDE_PLATFORM_FEE', 15, { min: 0 }),
+  platformFeeFlat: numericEnv('RIDE_PLATFORM_FEE', 0, { min: 0 }),
   taxRatePct: numericEnv('RIDE_TAX_RATE', 0.05, { min: 0, max: 1 }) * 100,
   commissionRatePct: numericEnv('RIDE_COMMISSION_RATE', 0.2, { min: 0, max: 1 }) * 100,
   minimumFare: numericEnv('RIDE_MINIMUM_FARE', 50, { min: 0 }),

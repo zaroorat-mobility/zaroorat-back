@@ -1,4 +1,5 @@
 import { config } from '@config';
+import { isDeployed, servesRealUsers } from '@config/env/environment.js';
 import { MockStorageProvider } from '../utils/storage/mock.provider.js';
 import { S3StorageProvider } from '../../../integrations/aws-s3/s3.client.js';
 import type { StorageProvider } from '../utils/storage/storage.provider.js';
@@ -34,20 +35,22 @@ export interface StorageConfig {
   requestTimeoutMs: number;
   maxRetries: number;
 }
-function readScanner(environment: string): MalwareScannerName {
+/// Scanning is mandatory where real users' files live (staging, prod). DEV is deployed but
+/// runs on DigitalOcean Spaces, which GuardDuty cannot scan, so it may opt out.
+export function readScanner(environment: string): MalwareScannerName {
   const raw = process.env.STORAGE_MALWARE_SCANNER;
-  const servesRealUsers = environment === 'production' || environment === 'staging';
+  const mandatory = servesRealUsers(environment);
   const scanner: MalwareScannerName =
     raw === 'disabled' || raw === 'guardduty'
       ? raw
       : raw == null || raw === ''
-        ? servesRealUsers
+        ? mandatory
           ? 'guardduty'
           : 'disabled'
         : (() => {
             throw new Error("STORAGE_MALWARE_SCANNER must be 'guardduty' or 'disabled'");
           })();
-  if (scanner === 'disabled' && servesRealUsers) {
+  if (scanner === 'disabled' && mandatory) {
     throw new Error(
       `STORAGE_MALWARE_SCANNER=disabled is not permitted in ${environment}. ` +
         'Enrol the quarantine bucket in GuardDuty Malware Protection for S3.',
@@ -62,8 +65,7 @@ function optionalEnv(name: string): string | null {
 export function getStorageConfig(): StorageConfig {
   const explicit = process.env.STORAGE_PROVIDER as StorageProviderName | undefined;
   const environment = config.app.environment;
-  const provider: StorageProviderName =
-    explicit ?? (environment === 'production' || environment === 'staging' ? 's3' : 'mock');
+  const provider: StorageProviderName = explicit ?? (isDeployed(environment) ? 's3' : 'mock');
   const accessKeyId = process.env.STORAGE_ACCESS_KEY_ID;
   const secretAccessKey = process.env.STORAGE_SECRET_ACCESS_KEY;
   return {

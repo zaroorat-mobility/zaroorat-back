@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { isDeployed } from '../env/environment.js';
 import { numericEnv } from '../env/numeric.js';
 // Cashfree is deliberately absent: only Razorpay and Stripe are supported for
 // now — not exposed, not configurable, not routable.
@@ -15,7 +16,7 @@ const LIVE_GATEWAYS: readonly PaymentGatewayName[] = ['razorpay', 'stripe'];
 const UNIMPLEMENTED_GATEWAYS: readonly PaymentGatewayName[] = ['mock'];
 
 export function assertGatewayImplemented(gateway: PaymentGatewayName, environment: string): void {
-  if (environment !== 'production' && environment !== 'staging') return;
+  if (!isDeployed(environment)) return;
   if (!UNIMPLEMENTED_GATEWAYS.includes(gateway)) return;
   throw new Error(
     `PAYMENT_DEFAULT_GATEWAY=${gateway} cannot be used in ${environment}: its provider is a ` +
@@ -74,8 +75,7 @@ function readGateway(): PaymentGatewayName {
   const raw = process.env.PAYMENT_DEFAULT_GATEWAY;
   const environment = config.app.environment;
   if (raw == null || raw === '') {
-    const implied: PaymentGatewayName =
-      environment === 'production' || environment === 'staging' ? 'razorpay' : 'mock';
+    const implied: PaymentGatewayName = isDeployed(environment) ? 'razorpay' : 'mock';
     assertGatewayImplemented(implied, environment);
     return implied;
   }

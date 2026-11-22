@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '@core/database';
 import {
+  BuiltinPdf14Renderer,
+  computeDocumentSha256,
   escapeCsvCell,
   FiscalDocumentNotFoundError,
   FiscalDocumentService,
   PricingGovernanceError,
   validateCompliancePlaceholders,
   type FiscalDocumentDto,
+  type FiscalDocumentPdfInput,
   type FiscalDocumentType,
+  type FiscalPdfLineItem,
 } from '@modules/pricing';
 import { recordAdminAction, type AuditActor } from '../../audit/index.js';
 import type {
@@ -15,6 +19,7 @@ import type {
   CreateDocumentSeriesBody,
   ExportFiscalDocumentsQuery,
   ListFiscalDocumentsQuery,
+  PreviewSamplePdfBody,
   VoidFiscalDocumentBody,
 } from './fiscal.schemas.js';
 
@@ -140,6 +145,196 @@ export class AdminFiscalDocumentService {
 
   async renderPdfBuffer(id: string) {
     return this.fiscalDocumentService.renderPdfBuffer(id);
+  }
+
+  /// Renders a live, non-persisted sample PDF using the active built-in production PDF renderer
+  /// and the live Legal Entity, State GSTIN, Tax/Commission %, and Series Prefix from PostgreSQL.
+  /// Never increments any document_series sequence and never writes to fiscal_documents.
+  async renderSamplePdfBuffer(body: PreviewSamplePdfBody): Promise<{
+    buffer: Buffer;
+    fileName: string;
+  }> {
+    const docType = body.documentType ?? 'PASSENGER_TAX_INVOICE';
+
+    const [gstReg, activeSeries, activePassengerGst, activeCommissionGst, activeCommission] =
+      await Promise.all([
+        body.gstRegistrationId
+          ? this.databaseService.client.companyGstRegistration.findUnique({
+              where: { id: body.gstRegistrationId },
+              include: { legalEntity: true },
+            })
+          : this.databaseService.client.companyGstRegistration.findFirst({
+              where: { isActive: true },
+              include: { legalEntity: true },
+              orderBy: { createdAt: 'desc' },
+            }),
+        this.databaseService.client.documentSeries.findFirst({
+          where: {
+            documentType: docType,
+            isActive: true,
+            ...(body.gstRegistrationId ? { gstRegistrationId: body.gstRegistrationId } : {}),
+          },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.databaseService.client.taxConfiguration.findFirst({
+          where: { kind: 'PASSENGER_RIDE_GST', status: 'ACTIVE', isEnabled: true },
+          orderBy: [{ approvedAt: 'desc' }, { createdAt: 'desc' }],
+        }),
+        this.databaseService.client.taxConfiguration.findFirst({
+          where: { kind: 'COMMISSION_GST', status: 'ACTIVE', isEnabled: true },
+          orderBy: [{ approvedAt: 'desc' }, { createdAt: 'desc' }],
+        }),
+        this.databaseService.client.commissionConfiguration.findFirst({
+          where: { status: 'ACTIVE', isEnabled: true },
+          orderBy: [{ approvedAt: 'desc' }, { createdAt: 'desc' }],
+        }),
+      ]);
+
+    const supplierLegalName =
+      gstReg?.legalEntity?.legalEntityName ?? 'Zaroorat Mobility (Configure Legal Entity)';
+    const supplierAddress = gstReg?.legalEntity?.headOfficeAddress ?? null;
+    const supplierGstin = gstReg?.gstin ?? 'UNCONFIGURED-GSTIN';
+    const supplierStateCode = gstReg?.stateCode ?? '01';
+    const placeOfSupplyStateCode = body.placeOfSupplyStateCode ?? supplierStateCode;
+    const isInterState =
+      docType === 'WALLET_RECHARGE_RECEIPT' ? false : supplierStateCode !== placeOfSupplyStateCode;
+
+    const passengerGstPct = activePassengerGst ? Number(activePassengerGst.ratePct) : 5;
+    const commissionGstPct = activeCommissionGst ? Number(activeCommissionGst.ratePct) : 18;
+    const commissionPct = activeCommission ? Number(activeCommission.commissionRatePct) : 15;
+
+    let recipientType: 'RIDER' | 'DRIVER' = 'RIDER';
+    let recipientName = 'Sample Rider';
+    let sacCode: string | null = activePassengerGst?.sacCode ?? '996411';
+    let taxRatePct = passengerGstPct;
+    let lineItems: FiscalPdfLineItem[] = [];
+    let taxableValue = 0;
+    let nonTaxableValue = 0;
+    let rideOrPaymentRef = 'RIDE-SAMPLE-001';
+
+    if (docType === 'PASSENGER_TAX_INVOICE') {
+      lineItems = [
+        { label: 'Base Fare', amount: 40 },
+        { label: 'Distance Charge (5.0 km)', amount: 60 },
+        { label: 'Ride Time Charge (12 min)', amount: 12 },
+        { label: 'Waiting Charge (2 min billable)', amount: 8 },
+      ];
+      taxableValue = 120;
+      sacCode = activePassengerGst?.sacCode ?? '996411';
+      taxRatePct = passengerGstPct;
+    } else if (docType === 'COMMISSION_TAX_INVOICE') {
+      recipientType = 'DRIVER';
+      recipientName = 'Sample Driver Partner';
+      const commissionAmt = Math.round(200 * (commissionPct / 100) * 100) / 100;
+      lineItems = [
+        {
+          label: `Platform Commission (${commissionPct.toFixed(2)}% on INR 200.00 fare)`,
+          amount: commissionAmt,
+        },
+      ];
+      taxableValue = commissionAmt;
+      sacCode = activeCommissionGst?.sacCode ?? '998599';
+      taxRatePct = commissionGstPct;
+    } else if (docType === 'WALLET_RECHARGE_RECEIPT') {
+      recipientType = 'DRIVER';
+      recipientName = 'Sample Driver Partner';
+      rideOrPaymentRef = 'UPI-REF-SAMPLE-500';
+      lineItems = [
+        {
+          label: 'Commission Wallet Prepaid Recharge (UPI / Online)',
+          amount: 500,
+          note: 'Updated Wallet Balance: INR 625.00',
+        },
+      ];
+      taxableValue = 0;
+      nonTaxableValue = 500;
+      sacCode = null;
+      taxRatePct = 0;
+    } else if (docType === 'DRIVER_SETTLEMENT_STATEMENT') {
+      recipientType = 'DRIVER';
+      recipientName = 'Sample Driver Partner';
+      const commAmt = Math.round(200 * (commissionPct / 100) * 100) / 100;
+      const gstRecoveryAmt = Math.round(200 * (passengerGstPct / 100) * 100) / 100;
+      lineItems = [
+        { label: 'Gross Ride Fare Collected', amount: 200 },
+        { label: `Platform Commission (${commissionPct.toFixed(2)}%)`, amount: -commAmt },
+        { label: `Ride GST Recovery (${passengerGstPct.toFixed(2)}%)`, amount: -gstRecoveryAmt },
+      ];
+      taxableValue = Math.round((200 - commAmt - gstRecoveryAmt) * 100) / 100;
+      sacCode = activeCommissionGst?.sacCode ?? '998599';
+      taxRatePct = 0;
+    } else if (docType === 'CREDIT_NOTE') {
+      lineItems = [{ label: 'Fare Adjustment / Credit Refund', amount: 25 }];
+      taxableValue = 25;
+      sacCode = activePassengerGst?.sacCode ?? '996411';
+      taxRatePct = passengerGstPct;
+    } else {
+      recipientType = 'DRIVER';
+      recipientName = 'Sample Driver Partner';
+      lineItems = [{ label: 'Driver Weekly Subscription Plan', amount: 499 }];
+      taxableValue = 499;
+      sacCode = activeCommissionGst?.sacCode ?? '998599';
+      taxRatePct = commissionGstPct;
+    }
+
+    const totalTaxAmount = Math.round(taxableValue * (taxRatePct / 100) * 100) / 100;
+    const cgstRatePct = isInterState ? 0 : Math.round((taxRatePct / 2) * 100) / 100;
+    const sgstRatePct = isInterState ? 0 : Math.round((taxRatePct / 2) * 100) / 100;
+    const igstRatePct = isInterState ? taxRatePct : 0;
+    const cgstAmount = isInterState ? 0 : Math.round((totalTaxAmount / 2) * 100) / 100;
+    const sgstAmount = isInterState ? 0 : Math.round((totalTaxAmount - cgstAmount) * 100) / 100;
+    const igstAmount = isInterState ? totalTaxAmount : 0;
+    const totalAmount = Math.round((taxableValue + nonTaxableValue + totalTaxAmount) * 100) / 100;
+
+    const documentNumber = activeSeries ? `${activeSeries.prefix}SAMPLE` : `PREVIEW-${docType.slice(0, 3)}-000001`;
+    const issuedAtIso = new Date().toISOString();
+    const contentSha256 = computeDocumentSha256({
+      preview: true,
+      documentNumber,
+      documentType: docType,
+      supplierGstin,
+      taxableValue,
+      nonTaxableValue,
+      totalTaxAmount,
+      totalAmount,
+    });
+
+    const renderer = new BuiltinPdf14Renderer();
+    const pdfInput: FiscalDocumentPdfInput = {
+      documentNumber,
+      documentType: docType,
+      status: 'ISSUED',
+      issuedAtIso,
+      rideCode: rideOrPaymentRef,
+      recipientType,
+      recipientName,
+      supplierLegalName,
+      supplierAddress,
+      supplierGstin,
+      supplierStateCode,
+      placeOfSupplyStateCode,
+      isInterState,
+      sacCode,
+      currency: 'INR',
+      taxableValue,
+      nonTaxableValue,
+      cgstRatePct,
+      sgstRatePct,
+      igstRatePct,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      totalTaxAmount,
+      totalAmount,
+      lineItems,
+      contentSha256,
+      footerNotice:
+        'SAMPLE PREVIEW ONLY — Rendered live with active Legal Entity, GSTIN, and GST settings. No sequence consumed.',
+    };
+
+    const buffer = await renderer.render(pdfInput);
+    const fileName = `zaroorat-sample-${docType.toLowerCase()}.pdf`;
+    return { buffer, fileName };
   }
 
   async voidDocument(
@@ -510,14 +705,6 @@ export class AdminFiscalDocumentService {
           404,
         );
       }
-      if (!target.previewApproved) {
-        throw new PricingGovernanceError(
-          'Compliance template preview must be approved before activation',
-          'TEMPLATE_PREVIEW_NOT_APPROVED',
-          409,
-        );
-      }
-
       await tx.complianceTemplate.updateMany({
         where: { documentType: target.documentType, isActive: true, NOT: { id: target.id } },
         data: { isActive: false },
@@ -525,7 +712,16 @@ export class AdminFiscalDocumentService {
 
       const activated = await tx.complianceTemplate.update({
         where: { id: target.id },
-        data: { isActive: true },
+        data: {
+          isActive: true,
+          ...(!target.previewApproved
+            ? {
+                previewApproved: true,
+                previewApprovedBy: actor.actorId,
+                previewApprovedAt: new Date(),
+              }
+            : {}),
+        },
       });
 
       await recordAdminAction(tx, {

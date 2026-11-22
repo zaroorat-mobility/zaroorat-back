@@ -1,7 +1,7 @@
 import { DatabaseService } from '@core/database';
 import { vehicleTypeGroup } from '@modules/vehicles/services/vehicle-type.service.js';
 import { CommissionWalletRepository } from '@modules/payments/repositories/commission-wallet.repository.js';
-import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
+import { maskAccountNumber, protectAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type { UserStatus } from '@core/database/types';
 import { Prisma } from '../../../../generated/prisma/index.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
@@ -1084,42 +1084,91 @@ export class AdminDriverService {
         }
       }
 
-      // 6. Update Bank Account
+      // 6. Update Bank Account (encrypts account number with AES-256-GCM; never writes dummy IFSC/account placeholders)
       const bName = (data.bankAccount?.bankName || data.bankName)?.trim();
       const bHolder = (data.bankAccount?.accountHolderName || data.accountHolderName)?.trim();
       const bNum = (data.bankAccount?.accountNumber || data.accountNumber)?.trim();
       const bIfsc = (data.bankAccount?.ifscCode || data.ifscCode)?.trim()?.toUpperCase();
       const bUpi = (data.bankAccount?.upiId || data.upiId)?.trim();
+      const hasUnmaskedAccountNumber = Boolean(bNum && !/[*•]/.test(bNum));
 
-      if (bName || bHolder || bIfsc || bUpi || (bNum && !bNum.includes('•'))) {
+      if (bName || bHolder || bIfsc || bUpi || hasUnmaskedAccountNumber) {
         const existingAcc = row.bankAccounts?.[0];
+        if (bIfsc && (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bIfsc) || bIfsc === 'IFSC0000000')) {
+          throw new AdminDriverConflictError(
+            'Invalid IFSC code. Provide a valid 11-character Indian IFSC code (e.g. HDFC0001234).',
+          );
+        }
+
+        const protectedNum = hasUnmaskedAccountNumber
+          ? (() => {
+              const clean = bNum!.replace(/[\s-]/g, '');
+              if (clean.length < 6) {
+                throw new AdminDriverConflictError(
+                  'Bank account number must be at least 6 characters.',
+                );
+              }
+              return protectAccountNumber(clean);
+            })()
+          : null;
+
         if (existingAcc) {
           const bankUpdates: Prisma.DriverBankAccountUpdateInput = {};
-          if (bName) bankUpdates.bankName = bName;
-          if (bHolder) bankUpdates.accountHolderName = bHolder;
-          if (bIfsc) bankUpdates.ifscCode = bIfsc;
-          if (bUpi) bankUpdates.upiId = bUpi;
-          if (bNum && !bNum.includes('•')) {
-            const clean = bNum.replace(/\D/g, '');
-            bankUpdates.accountNumberLast4 =
-              clean.length >= 4 ? clean.slice(-4) : clean.padStart(4, '0');
+          let coreDetailsChanged = false;
+
+          if (bName && bName !== existingAcc.bankName) {
+            bankUpdates.bankName = bName;
+            coreDetailsChanged = true;
           }
-          await tx.driverBankAccount.update({
-            where: { id: existingAcc.id },
-            data: bankUpdates,
-          });
-        } else {
-          const clean = bNum ? bNum.replace(/\D/g, '') : '';
-          const last4 =
-            clean.length >= 4 ? clean.slice(-4) : clean ? clean.padStart(4, '0') : '0000';
+          if (bHolder && bHolder !== existingAcc.accountHolderName) {
+            bankUpdates.accountHolderName = bHolder;
+            coreDetailsChanged = true;
+          }
+          if (bIfsc && bIfsc !== existingAcc.ifscCode) {
+            bankUpdates.ifscCode = bIfsc;
+            coreDetailsChanged = true;
+          }
+          if (bUpi !== undefined && bUpi !== (existingAcc.upiId ?? '')) {
+            bankUpdates.upiId = bUpi || null;
+          }
+          if (protectedNum) {
+            bankUpdates.accountNumberEnc = null;
+            bankUpdates.accountNumberCiphertext = protectedNum.ciphertext;
+            bankUpdates.accountNumberLast4 = protectedNum.last4;
+            bankUpdates.accountNumberHash = protectedNum.hash;
+            bankUpdates.encryptionKeyVersion = protectedNum.keyVersion;
+            coreDetailsChanged = true;
+          }
+
+          if (coreDetailsChanged && existingAcc.status !== 'ENTERED') {
+            bankUpdates.status = 'ENTERED';
+            bankUpdates.verificationStatus = 'PENDING';
+            bankUpdates.payoutEnabled = false;
+            bankUpdates.statusReason = null;
+          }
+
+          if (Object.keys(bankUpdates).length > 0) {
+            await tx.driverBankAccount.update({
+              where: { id: existingAcc.id },
+              data: bankUpdates,
+            });
+          }
+        } else if (bName && bIfsc && protectedNum) {
           await tx.driverBankAccount.create({
             data: {
               driverId: id,
-              bankName: bName || 'Bank',
+              bankName: bName,
               accountHolderName: bHolder || name || 'Account Holder',
-              ifscCode: bIfsc || 'IFSC0000000',
-              accountNumberLast4: last4,
+              ifscCode: bIfsc,
+              accountNumberEnc: null,
+              accountNumberCiphertext: protectedNum.ciphertext,
+              accountNumberLast4: protectedNum.last4,
+              accountNumberHash: protectedNum.hash,
+              encryptionKeyVersion: protectedNum.keyVersion,
               ...(bUpi ? { upiId: bUpi } : {}),
+              status: 'ENTERED',
+              verificationStatus: 'PENDING',
+              payoutEnabled: false,
               isDefault: true,
               enteredBy: actor.actorId,
             },

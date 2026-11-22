@@ -5,9 +5,11 @@
 SHELL := /bin/bash
 
 IMAGE     := zaroorat-backend
-DEV       := docker compose -f compose.dev.yml
-TEST      := docker compose -f compose.test.yml
-PROD      := docker compose -f compose.prod.yml
+LOCAL     := docker compose --env-file .env.local -f compose.local.yml
+DEV       := docker compose --env-file .env.dev -f compose.dev.yml
+STAGING   := docker compose --env-file .env.staging -f compose.staging.yml
+PROD      := docker compose --env-file .env.prod -f compose.prod.yml
+TEST      := docker compose --env-file .env.test -f compose.test.yml
 
 .PHONY: help
 help: ## Show this help
@@ -53,57 +55,121 @@ test: ## Run the test suite
 .PHONY: verify
 verify: lint typecheck test build ## Run everything CI runs
 
-# ── Docker: development ──────────────────────────
+# ── Docker: local development ──────────────────────
+
+.PHONY: build-local
+build-local: ## Build the local development images
+	$(LOCAL) build
+
+.PHONY: env-local
+env-local:
+	@test -f .env.local || { cp .env.local.example .env.local; echo "Created .env.local from .env.local.example - review it before use."; }
+
+.PHONY: up-local
+up-local: env-local ## Start local stack (API + Worker + Postgres + Valkey)
+	$(LOCAL) up -d --build
+
+.PHONY: watch-local
+watch-local: env-local ## Start the local stack with Compose file watch (foreground)
+	$(LOCAL) watch
+
+.PHONY: stop-local
+stop-local: ## Stop the local stack and KEEP database volumes
+	$(LOCAL) stop
+
+.PHONY: down-local
+down-local: ## Tear down containers and networks but KEEP database volumes
+	$(LOCAL) down
+
+.PHONY: reset-local
+reset-local: ## Tear down containers and DELETE local database volumes
+	$(LOCAL) down -v
+
+.PHONY: logs-local
+logs-local: ## Tail local API logs
+	$(LOCAL) logs -f api
+
+.PHONY: worker-logs-local
+worker-logs-local: ## Tail local worker logs
+	$(LOCAL) logs -f worker
+
+.PHONY: ps-local
+ps-local: ## Show local container status
+	$(LOCAL) ps
+
+.PHONY: shell-local
+shell-local: ## Open shell in the running local API container
+	$(LOCAL) exec api sh
+
+.PHONY: migrate-local
+migrate-local: env-local ## Apply database migrations locally
+	$(LOCAL) run --rm migrate
+
+.PHONY: seed-local
+seed-local: env-local ## Seed local database fixtures
+	$(LOCAL) run --rm -e APP_ENV=local migrate npx prisma db seed
+
+# ── Docker: dev ──────────────────────────────────
 
 .PHONY: build-dev
-build-dev: ## Build the development images
+build-dev: ## Build the dev image
 	$(DEV) build
 
-# compose.dev.yml mounts .env.development into the containers because
-# loader.ts requires it to exist. If the host file is missing, Docker would
-# silently create a DIRECTORY at that path, so create it first.
-.PHONY: env-dev
-env-dev:
-	@test -f .env.development || { cp .env.example .env.development; echo "Created .env.development from .env.example - review it before use."; }
-
 .PHONY: up-dev
-up-dev: env-dev ## Start API + Worker + Postgres + Redis with hot reload
-	$(DEV) up -d --build
-
-# Hot reload lives here, not in `up-dev`. Runs in the foreground: Compose polls
-# the host for changes and syncs them into the containers, which is what makes
-# tsx watch fire on Windows and macOS. Ctrl-C stops watching, not the stack.
-.PHONY: watch-dev
-watch-dev: env-dev ## Start the dev stack and hot-reload on source changes (foreground)
-	$(DEV) watch
+up-dev: ## Start the dev stack
+	$(DEV) up -d
 
 .PHONY: down-dev
-down-dev: ## Stop the dev stack and delete its volumes
-	$(DEV) down -v
-
-.PHONY: stop-dev
-stop-dev: ## Stop the dev stack but keep the database
+down-dev: ## Stop the dev stack (volumes PRESERVED)
 	$(DEV) down
 
 .PHONY: logs-dev
-logs-dev: ## Tail the dev API logs
-	$(DEV) logs -f api
-
-.PHONY: worker-logs-dev
-worker-logs-dev: ## Tail the dev worker logs (queues, incl. OTP SMS delivery)
-	$(DEV) logs -f worker
-
-.PHONY: ps-dev
-ps-dev: ## Show dev container status
-	$(DEV) ps
-
-.PHONY: shell-dev
-shell-dev: ## Open a shell in the running dev API container
-	$(DEV) exec api sh
+logs-dev: ## Tail the dev API and worker logs
+	$(DEV) logs -f api worker
 
 .PHONY: migrate-dev
-migrate-dev: env-dev ## Apply migrations to the dev database
+migrate-dev: ## Run migrations and assert runtime DB roles on dev
 	$(DEV) run --rm migrate
+	$(DEV) run --rm db-roles
+
+.PHONY: seed-dev
+seed-dev: ## Seed reference data on dev
+	$(DEV) run --rm ops npx prisma db seed
+
+.PHONY: admin-dev
+admin-dev: ## Provision admin user on dev
+	$(DEV) run --rm -e ADMIN_EMAIL -e ADMIN_PHONE -e ADMIN_PASSWORD -e ADMIN_FIRST_NAME -e ADMIN_LAST_NAME ops npx tsx scripts/create-admin.ts
+
+# ── Docker: staging ──────────────────────────────
+
+.PHONY: build-staging
+build-staging: ## Build the staging image
+	$(STAGING) build
+
+.PHONY: up-staging
+up-staging: ## Start the staging stack
+	$(STAGING) up -d
+
+.PHONY: down-staging
+down-staging: ## Stop the staging stack (volumes PRESERVED)
+	$(STAGING) down
+
+.PHONY: logs-staging
+logs-staging: ## Tail the staging API and worker logs
+	$(STAGING) logs -f api worker
+
+.PHONY: migrate-staging
+migrate-staging: ## Run migrations and assert runtime DB roles on staging
+	$(STAGING) run --rm migrate
+	$(STAGING) run --rm db-roles
+
+.PHONY: seed-staging
+seed-staging: ## Seed reference data on staging
+	$(STAGING) run --rm ops npx prisma db seed
+
+.PHONY: admin-staging
+admin-staging: ## Provision admin user on staging
+	$(STAGING) run --rm -e ADMIN_EMAIL -e ADMIN_PHONE -e ADMIN_PASSWORD -e ADMIN_FIRST_NAME -e ADMIN_LAST_NAME ops npx tsx scripts/create-admin.ts
 
 # ── Docker: test ─────────────────────────────────
 
@@ -151,6 +217,14 @@ down-prod: ## Stop the production stack (volumes are PRESERVED)
 .PHONY: restart-prod
 restart-prod: ## Restart the production API and worker
 	$(PROD) restart api worker
+
+.PHONY: seed-prod
+seed-prod: ## Seed reference data on prod
+	$(PROD) run --rm ops npx prisma db seed
+
+.PHONY: admin-prod
+admin-prod: ## Provision admin user on prod
+	$(PROD) run --rm -e ADMIN_EMAIL -e ADMIN_PHONE -e ADMIN_PASSWORD -e ADMIN_FIRST_NAME -e ADMIN_LAST_NAME ops npx tsx scripts/create-admin.ts
 
 .PHONY: logs-prod
 logs-prod: ## Tail the production API logs

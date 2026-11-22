@@ -3,10 +3,18 @@ import { z, ZodError } from 'zod';
 import { container } from '@core/di';
 import { callerId } from '@core/auth';
 import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
-import { FiscalDocumentService } from '../services/fiscal-document.service.js';
+import {
+  FISCAL_DOCUMENT_TYPES,
+  FiscalDocumentService,
+  type FiscalDocumentType,
+} from '../services/fiscal-document.service.js';
 
 const idParamSchema = z.object({ id: z.string().uuid() });
 const downloadQuerySchema = z.object({ token: z.string().min(16).max(1024) });
+const listMyQuerySchema = z.object({
+  documentType: z.enum(FISCAL_DOCUMENT_TYPES).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+});
 
 function handleFiscalError(err: unknown, req: FastifyRequest, reply: FastifyReply): void {
   if (err instanceof ZodError) {
@@ -28,6 +36,17 @@ function handleFiscalError(err: unknown, req: FastifyRequest, reply: FastifyRepl
 export async function fiscalDocumentDownloadRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.setErrorHandler(handleFiscalError);
   const service = container.resolve<FiscalDocumentService>('fiscalDocumentService');
+
+  /// Authenticated list of the caller's own issued fiscal documents & wallet recharge receipts.
+  fastify.get('/my', async (req, reply) => {
+    const query = listMyQuerySchema.parse(req.query ?? {});
+    const userId = callerId(req);
+    const data = await service.listForUser(userId, {
+      ...(query.documentType ? { documentType: query.documentType as FiscalDocumentType } : {}),
+      limit: query.limit,
+    });
+    reply.send({ data });
+  });
 
   fastify.get('/:id/download', { config: { public: true } }, async (req, reply) => {
     const { id } = idParamSchema.parse(req.params);

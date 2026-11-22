@@ -61,6 +61,22 @@ export class AdminPricingGovernanceController {
     );
     reply.send({ data });
   }
+  async deleteCommissionConfig(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = governanceIdParamSchema.parse(req.params);
+    const data = await this.adminPricingGovernanceService.deleteCommissionConfig(
+      id,
+      auditActor(req),
+    );
+    reply.send({ data });
+  }
+  async activateCommissionConfig(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = governanceIdParamSchema.parse(req.params);
+    const data = await this.adminPricingGovernanceService.activateCommissionConfig(
+      id,
+      auditActor(req),
+    );
+    reply.send({ data });
+  }
 
   // Tax configs
   async listTaxConfigs(req: FastifyRequest, reply: FastifyReply): Promise<void> {

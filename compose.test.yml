@@ -1,4 +1,4 @@
-# Test stack: test runner + Postgres/PostGIS + Redis.
+﻿# Test stack: test runner + Postgres/PostGIS + Redis.
 #
 # There is deliberately NO api service and NO worker service:
 #   - tests/integration/helpers/harness.ts boots Fastify in-process with

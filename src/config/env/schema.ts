@@ -1,7 +1,12 @@
 import { z } from 'zod';
+import { APP_ENVIRONMENTS, isDeployed, normalizeEnvironment } from './environment.js';
 export const EnvironmentSchema = z
   .object({
-    APP_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
+    // Required: a container that forgets APP_ENV must not boot with development behaviour.
+    // Legacy spellings are accepted and reported as their canonical name.
+    APP_ENV: z
+      .enum([...APP_ENVIRONMENTS, 'development', 'testing', 'production'])
+      .transform((name) => normalizeEnvironment(name)!),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     APP_NAME: z.string().default('zaroorat-backend'),
     HOST: z.string().default('0.0.0.0'),
@@ -51,8 +56,9 @@ export const EnvironmentSchema = z
     ENABLE_OFFLINE_ROUTING: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    const deployed = isDeployed(env.APP_ENV);
     for (const name of ['BANK_DATA_ENCRYPTION_KEY', 'BANK_ACCOUNT_HASH_KEY'] as const) {
-      if ((env.APP_ENV === 'production' || env.APP_ENV === 'staging') && !env[name]) {
+      if (deployed && !env[name]) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: [name],
@@ -62,13 +68,7 @@ export const EnvironmentSchema = z
         });
       }
     }
-    // Deployed environments must key credential encryption to a secret of its
-    // own. Falling through to JWT_ACCESS_SECRET ties the lifetime of every
-    // stored credential to a token secret that is rotated on a different
-    // schedule: rotating it would leave every credential undecryptable, and
-    // `decryptSecret` reports that as an empty string, so providers would read
-    // as "not configured" rather than raising anything.
-    if ((env.APP_ENV === 'production' || env.APP_ENV === 'staging') && !env.ENCRYPTION_KEY) {
+    if (deployed && !env.ENCRYPTION_KEY) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['ENCRYPTION_KEY'],
@@ -78,17 +78,7 @@ export const EnvironmentSchema = z
           'any other value requires re-entering every credential in the admin panel.',
       });
     }
-    // A Ride PIN is four digits — 10,000 possibilities — and stands for the life
-    // of the account, so the pepper is the control that keeps a stolen database
-    // from being brute-forced offline in isolation. Deriving it from
-    // JWT_REFRESH_SECRET, the way OTP_PEPPER does, would make a leak of the
-    // token signing secret a leak of every rider's PIN as well: two secrets that
-    // look independent would not be. Deployed environments must give it its own.
-    //
-    // Rotating this value invalidates every stored verifier, so every rider
-    // would have to reset their PIN. Set it once, before the first PIN is
-    // stored, and keep it in the secret manager.
-    if ((env.APP_ENV === 'production' || env.APP_ENV === 'staging') && !env.RIDE_PIN_PEPPER) {
+    if (deployed && !env.RIDE_PIN_PEPPER) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['RIDE_PIN_PEPPER'],
@@ -98,17 +88,7 @@ export const EnvironmentSchema = z
           'Changing it later invalidates every rider Ride PIN.',
       });
     }
-    // FCM push credentials: when a deployed environment selects 'fcm' and no
-    // Application Default Credentials are available, the service-account JSON
-    // must be supplied explicitly. We cannot validate ADC here (it depends on
-    // the runtime environment), so we enforce the env-var path and document the
-    // alternative. If ADC is configured, leave FIREBASE_SERVICE_ACCOUNT_JSON
-    // unset and this rule is satisfied.
-    if (
-      (env.APP_ENV === 'production' || env.APP_ENV === 'staging') &&
-      env.PUSH_PROVIDER === 'fcm' &&
-      !env.FIREBASE_SERVICE_ACCOUNT_JSON
-    ) {
+    if (deployed && env.PUSH_PROVIDER === 'fcm' && !env.FIREBASE_SERVICE_ACCOUNT_JSON) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['FIREBASE_SERVICE_ACCOUNT_JSON'],

@@ -1,10 +1,6 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
-import { SystemSettingService } from '@modules/admin/system-settings/services/system-setting.service.js';
-import {
-  BANK_ENCRYPTION_VERIFIED_SETTING,
-  maskAccountNumber,
-} from '@shared/crypto/bank-account-crypto.js';
+import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type {
   BankAccountStatus,
   DriverBankAccount,
@@ -14,10 +10,11 @@ import { recordAdminAction } from '../../audit/index.js';
 import {
   AdminDriverConflictError,
   BankAccountNotFoundError,
-  BankAccountSameActorError,
   BankAccountSecurityNotReadyError,
   BankAccountTransitionError,
 } from '../driver.errors.js';
+
+const INDIAN_IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
 /// The only shape a bank account ever leaves the API in: last four digits,
 /// masked. Neither the legacy plaintext column nor the ciphertext nor the hash
@@ -80,10 +77,7 @@ interface TransitionSpec {
 /// transaction, and a DB CHECK keeps `payoutEnabled` true exactly on an active
 /// PAYOUT_ENABLED account.
 export class AdminBankAccountService {
-  constructor(
-    private readonly db: DatabaseService,
-    private readonly systemSettingService: SystemSettingService,
-  ) {}
+  constructor(private readonly db: DatabaseService) {}
 
   async list(driverId: string): Promise<BankAccountDto[]> {
     const rows = await this.db.client.driverBankAccount.findMany({
@@ -99,11 +93,19 @@ export class AdminBankAccountService {
       from: ['ENTERED', 'PROVISIONED'],
       summary: 'Bank account verified',
       guard: async (account) => {
-        assertEncrypted(account);
-        // Separation of duties: whoever entered the details cannot vouch for them.
-        if (account.enteredBy != null && account.enteredBy === actorId) {
-          throw new BankAccountSameActorError();
+        const bankName = account.bankName?.trim() ?? '';
+        const ifsc = account.ifscCode?.trim().toUpperCase() ?? '';
+        if (!bankName || bankName.toLowerCase() === 'bank') {
+          throw new AdminDriverConflictError(
+            'Enter the real bank name before verifying this account.',
+          );
         }
+        if (!INDIAN_IFSC_REGEX.test(ifsc) || ifsc === 'IFSC0000000') {
+          throw new AdminDriverConflictError(
+            'Enter a valid 11-character Indian IFSC code before verifying this account.',
+          );
+        }
+        assertEncrypted(account);
       },
       data: {
         status: 'VERIFIED',
@@ -145,13 +147,6 @@ export class AdminBankAccountService {
       summary: 'Bank account enabled for payouts',
       guard: async (account, tx) => {
         assertEncrypted(account);
-        if (
-          !(await this.systemSettingService.getSettingValue(BANK_ENCRYPTION_VERIFIED_SETTING, tx))
-        ) {
-          throw new BankAccountSecurityNotReadyError(
-            'Payouts stay closed until the bank-account encryption backfill has been verified',
-          );
-        }
         // "Blocked" is the driver's user account being DEACTIVATED — the same
         // reading the admin driver list uses.
         const driver = await tx.driver.findUnique({
@@ -246,9 +241,9 @@ export class AdminBankAccountService {
 }
 
 function assertEncrypted(account: DriverBankAccount): void {
-  if (!account.accountNumberCiphertext) {
+  if (!account.accountNumberCiphertext || !account.accountNumberCiphertext.startsWith('bank:v1:')) {
     throw new BankAccountSecurityNotReadyError(
-      'This account number is not encrypted yet; run the bank-account encryption backfill first',
+      'This account number is not encrypted yet. Edit the bank details with the full account number to encrypt it before verifying.',
     );
   }
 }

@@ -1,0 +1,161 @@
+name: zaroorat-local
+
+x-app-build: &app-build
+  context: .
+  target: local
+
+x-app-watch: &app-watch
+  watch:
+    - action: sync
+      path: ./src
+      target: /app/src
+      ignore:
+        - generated/
+    - action: sync
+      path: ./tests
+      target: /app/tests
+    - action: sync+restart
+      path: ./prisma
+      target: /app/prisma
+    - action: rebuild
+      path: ./package.json
+
+services:
+  postgres:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: zaroorat
+      POSTGRES_PASSWORD: zaroorat
+      POSTGRES_DB: zaroorat_local
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres_local_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U zaroorat -d zaroorat_local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    command: ['valkey-server', '--appendonly', 'yes']
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - valkey_local_data:/data
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  migrate:
+    image: ${APP_IMAGE:-zaroorat-backend:local}
+    build: *app-build
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    volumes:
+      - ./.env.local:/app/.env.local:ro
+      - ./src:/app/src
+    env_file:
+      - .env.local
+    environment:
+      APP_ENV: local
+      NODE_ENV: development
+      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_local
+      MIGRATION_DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    image: ${APP_IMAGE:-zaroorat-backend:local}
+    build: *app-build
+    command: ['npm', 'run', 'dev']
+    volumes:
+      - ./.env.local:/app/.env.local:ro
+      - ./src:/app/src
+    env_file:
+      - .env.local
+    environment:
+      APP_ENV: local
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_local
+      MIGRATION_DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_local
+      REDIS_URL: redis://valkey:6379
+    ports:
+      - '127.0.0.1:3000:3000'
+    develop: *app-watch
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    image: ${APP_IMAGE:-zaroorat-backend:local}
+    build: *app-build
+    command: ['npm', 'run', 'worker:dev']
+    volumes:
+      - ./.env.local:/app/.env.local:ro
+      - ./src:/app/src
+    env_file:
+      - .env.local
+    environment:
+      APP_ENV: local
+      NODE_ENV: development
+      WORKER_HEALTH_PORT: 3001
+      DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_local
+      MIGRATION_DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_local
+      REDIS_URL: redis://valkey:6379
+    ports:
+      - '127.0.0.1:3001:3001'
+    develop: *app-watch
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  postgres_local_data:
+  valkey_local_data:

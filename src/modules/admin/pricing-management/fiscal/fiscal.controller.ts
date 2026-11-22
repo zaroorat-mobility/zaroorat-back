@@ -8,6 +8,7 @@ import {
   fiscalDocIdParamSchema,
   listComplianceTemplatesQuerySchema,
   listFiscalDocumentsQuerySchema,
+  previewSamplePdfBodySchema,
   voidFiscalDocumentBodySchema,
 } from './fiscal.schemas.js';
 
@@ -38,6 +39,17 @@ export class AdminFiscalDocumentController {
     reply
       .header('Content-Type', 'application/pdf')
       .header('Content-Disposition', `attachment; filename="${fileName}"`)
+      .header('Cache-Control', 'private, no-store')
+      .header('X-Content-Type-Options', 'nosniff')
+      .send(buffer);
+  }
+
+  async previewSamplePdf(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = previewSamplePdfBodySchema.parse(req.body ?? {});
+    const { buffer, fileName } = await this.adminFiscalDocumentService.renderSamplePdfBuffer(body);
+    reply
+      .header('Content-Type', 'application/pdf')
+      .header('Content-Disposition', `inline; filename="${fileName}"`)
       .header('Cache-Control', 'private, no-store')
       .header('X-Content-Type-Options', 'nosniff')
       .send(buffer);

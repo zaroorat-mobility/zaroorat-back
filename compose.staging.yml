@@ -1,0 +1,276 @@
+name: zaroorat-staging
+
+# .env.<env> is also the Compose interpolation file, so it carries the Postgres superuser
+# and schema-owner credentials. The app reads none of them: blank them in every app
+# container so a leaked environment never yields more than the runtime login.
+x-no-infra-secrets: &no-infra-secrets
+  POSTGRES_PASSWORD: ''
+  APP_DB_PASSWORD: ''
+  REDIS_PASSWORD: ''
+  MIGRATION_DATABASE_URL: ''
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-staging-api.zaroorat.com}
+    volumes:
+      - caddy_staging_data:/data
+      - caddy_staging_config:/config
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+    restart: always
+
+  api:
+    image: ${APP_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:-staging}}
+    command: ['node', 'dist/server.js']
+    env_file:
+      - ${APP_ENV_FILE:-.env.staging}
+    environment:
+      <<: *no-infra-secrets
+      HOST: 0.0.0.0
+      PORT: 3000
+      TRUSTED_PROXIES: 172.29.0.0/24
+    expose:
+      - '3000'
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.50'
+          memory: 1024M
+    stop_grace_period: 30s
+    networks:
+      - zaroorat-net
+    restart: always
+
+  worker:
+    image: ${APP_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:-staging}}
+    command: ['node', 'dist/worker.js']
+    env_file:
+      - ${APP_ENV_FILE:-.env.staging}
+    environment:
+      <<: *no-infra-secrets
+      WORKER_HEALTH_PORT: 3001
+    expose:
+      - '3001'
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 768M
+    stop_grace_period: 150s
+    networks:
+      - zaroorat-net
+    restart: always
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
+    environment:
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_USER: ${APP_DB_USER:-zaroorat_app}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+      DB_NAME: ${POSTGRES_DB:-zaroorat_staging}
+      LISTEN_PORT: '6432'
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 40
+      RESERVE_POOL_SIZE: 10
+      MIN_POOL_SIZE: 5
+      SERVER_IDLE_TIMEOUT: '60'
+      QUERY_WAIT_TIMEOUT: '30'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 6432 -U ${APP_DB_USER:-zaroorat_app}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+    networks:
+      - zaroorat-net
+    restart: always
+
+  postgres:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-zaroorat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-zaroorat_staging}
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-zaroorat} -d ${POSTGRES_DB:-zaroorat_staging}',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2048M
+    networks:
+      - zaroorat-net
+    restart: always
+
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      [
+        'sh',
+        '-c',
+        'exec valkey-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 384mb --maxmemory-policy noeviction',
+      ]
+    volumes:
+      - valkey_staging_data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'valkey-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    networks:
+      - zaroorat-net
+    restart: always
+
+  migrate:
+    image: ${OPS_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:-staging}-ops}
+    profiles: ['ops']
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    environment:
+      APP_ENV: staging
+      NODE_ENV: production
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zaroorat_staging}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
+  db-roles:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    profiles: ['ops']
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - ./scripts/db:/scripts:ro
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - ${POSTGRES_USER:-zaroorat}
+      - -d
+      - ${POSTGRES_DB:-zaroorat_staging}
+      - -v
+      - app_user=${APP_DB_USER:-zaroorat_app}
+      - -f
+      - /scripts/create-app-login.sql
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
+  ops:
+    image: ${OPS_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:-staging}-ops}
+    profiles: ['ops']
+    env_file:
+      - ${APP_ENV_FILE:-.env.staging}
+    environment:
+      <<: *no-infra-secrets
+      APP_ENV: staging
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${APP_DB_USER:-zaroorat_app}:${APP_DB_PASSWORD}@pgbouncer:6432/${POSTGRES_DB:-zaroorat_staging}
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zaroorat_staging}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
+volumes:
+  postgres_staging_data:
+  valkey_staging_data:
+  caddy_staging_data:
+  caddy_staging_config:
+
+networks:
+  zaroorat-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24

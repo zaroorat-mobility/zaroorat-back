@@ -302,6 +302,12 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   fastify.post('/commission-configurations/:id/scopes/:scopeId/deactivate', canWrite, (req, reply) =>
     adminPricingGovernanceController.deactivateCommissionScope(req, reply),
   );
+  fastify.delete('/commission-configurations/:id', canWrite, (req, reply) =>
+    adminPricingGovernanceController.deleteCommissionConfig(req, reply),
+  );
+  fastify.post('/commission-configurations/:id/activate', canWrite, (req, reply) =>
+    adminPricingGovernanceController.activateCommissionConfig(req, reply),
+  );
 
   fastify.get('/tax-configurations', canRead, (req, reply) =>
     adminPricingGovernanceController.listTaxConfigs(req, reply),
@@ -354,7 +360,10 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
     adminPricingGovernanceController.waiveSettlementFailure(req, reply),
   );
 
-  // Phase 6 (M-09): Immutable Fiscal Documents, Gapless Series, Persisted CR-03 Templates & Audited CSV Export
+  // Phase 6 (M-09): Immutable Fiscal Documents, Gapless Series, Persisted Templates & Audited CSV Export
+  fastify.post('/fiscal-documents/preview-sample-pdf', canRead, (req, reply) =>
+    adminFiscalDocumentController.previewSamplePdf(req, reply),
+  );
   fastify.get('/fiscal-documents/export.csv', canRead, (req, reply) =>
     adminFiscalDocumentController.exportCsv(req, reply),
   );

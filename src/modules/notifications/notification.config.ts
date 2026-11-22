@@ -1,4 +1,5 @@
 import { config } from '@config';
+import { isDeployed } from '@config/env/environment.js';
 import { MockProvider } from './providers/mock.provider';
 import { AirtelProvider } from '../../integrations/airtel/airtel.client.js';
 import { MockPushProvider } from './providers/mock-push.provider';
@@ -10,7 +11,6 @@ import type { DeviceRepository } from '../auth/repositories/device.repository.js
 export type SmsProviderName = 'mock' | 'airtel';
 export type PushProviderName = 'mock' | 'fcm';
 const NON_DELIVERING_PROVIDERS: readonly SmsProviderName[] = Object.freeze(['mock']);
-const DELIVERY_REQUIRED_ENVIRONMENTS: readonly string[] = Object.freeze(['production', 'staging']);
 export class PushProviderNotDeliverableError extends Error {
   constructor(environment: string, provider: PushProviderName) {
     super(
@@ -66,13 +66,10 @@ export function resolveSmsProviderName(
   const selected = (explicit ?? '') as SmsProviderName;
   const smsProvider: SmsProviderName = selected
     ? selected
-    : DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment)
+    : isDeployed(environment)
       ? 'airtel'
       : 'mock';
-  if (
-    DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment) &&
-    NON_DELIVERING_PROVIDERS.includes(smsProvider)
-  ) {
+  if (isDeployed(environment) && NON_DELIVERING_PROVIDERS.includes(smsProvider)) {
     throw new SmsProviderNotDeliverableError(environment, smsProvider);
   }
   return smsProvider;
@@ -116,7 +113,7 @@ export function resolvePushProviderName(
     );
   }
   const provider: PushProviderName = explicit === 'fcm' ? 'fcm' : 'mock';
-  if (DELIVERY_REQUIRED_ENVIRONMENTS.includes(environment) && provider === 'mock') {
+  if (isDeployed(environment) && provider === 'mock') {
     throw new PushProviderNotDeliverableError(environment, 'mock');
   }
   return provider;

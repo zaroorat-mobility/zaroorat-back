@@ -77,8 +77,17 @@ export const createComplianceTemplateBodySchema = z
   })
   .strict();
 
+export const previewSamplePdfBodySchema = z
+  .object({
+    documentType: fiscalDocumentTypeSchema.optional().default('PASSENGER_TAX_INVOICE'),
+    gstRegistrationId: z.string().uuid().optional(),
+    placeOfSupplyStateCode: z.string().trim().regex(/^\d{2}$/, 'State code must be 2 digits').optional(),
+  })
+  .strict();
+
 export type ListFiscalDocumentsQuery = z.infer<typeof listFiscalDocumentsQuerySchema>;
 export type ExportFiscalDocumentsQuery = z.infer<typeof exportFiscalDocumentsQuerySchema>;
 export type VoidFiscalDocumentBody = z.infer<typeof voidFiscalDocumentBodySchema>;
 export type CreateDocumentSeriesBody = z.infer<typeof createDocumentSeriesBodySchema>;
 export type CreateComplianceTemplateBody = z.infer<typeof createComplianceTemplateBodySchema>;
+export type PreviewSamplePdfBody = z.infer<typeof previewSamplePdfBodySchema>;

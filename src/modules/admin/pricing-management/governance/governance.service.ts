@@ -38,6 +38,17 @@ function isPgExclusionViolation(err: unknown): boolean {
   );
 }
 
+function isPgCheckViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; cause?: { code?: string }; meta?: { code?: string } };
+  return (
+    e.code === '23514' ||
+    e.cause?.code === '23514' ||
+    e.meta?.code === '23514' ||
+    (err instanceof Error && err.message.includes('23514'))
+  );
+}
+
 function dedupeScopes(
   scopes: ReadonlyArray<{
     cityCode?: string | null | undefined;
@@ -90,57 +101,116 @@ export class AdminPricingGovernanceService {
 
   async createCommissionConfig(body: CreateCommissionConfigBody, actor: AuditActor) {
     const scopes = dedupeScopes(body.scopes);
+    const now = new Date();
     const effectiveFrom = body.declaredEffectiveFrom
       ? new Date(body.declaredEffectiveFrom)
-      : new Date();
+      : now;
     const effectiveTo = body.declaredEffectiveTo ? new Date(body.declaredEffectiveTo) : null;
+    const activateNow = Boolean(body.activateImmediately);
 
-    return this.databaseService.transactionManager.execute(async (tx) => {
-      const created = await tx.commissionConfiguration.create({
-        data: {
-          familyId: randomUUID(),
-          version: 1,
-          status: 'PENDING_APPROVAL',
-          commissionRatePct: body.commissionRatePct,
-          isEnabled: body.isEnabled,
-          baseRule: body.baseRule,
-          includeSurge: body.includeSurge,
-          includeWaiting: body.includeWaiting,
-          includeBookingFee: body.includeBookingFee,
-          applyMinimumFloor: body.applyMinimumFloor,
-          roundOffRupee: body.roundOffRupee,
-          applyTo: 'NEW_RIDES_ONLY',
-          declaredEffectiveFrom: effectiveFrom,
-          declaredEffectiveTo: effectiveTo,
-          reason: body.reason ?? null,
-          createdBy: actor.actorId,
-          scopes: {
-            create: scopes.map((s) => ({
-              scopeLevel: s.scopeLevel,
-              cityCode: s.cityCode,
-              serviceZoneId: s.serviceZoneId,
-              vehicleTypeId: s.vehicleTypeId,
-              effectiveFrom,
-              effectiveTo,
-              isEnforced: false,
-            })),
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        let nextVersion = 1;
+        if (activateNow) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('commission_configurations'))`;
+          const maxRow = await tx.commissionConfiguration.aggregate({ _max: { version: true } });
+          nextVersion = (maxRow._max.version ?? 0) + 1;
+
+          const touchedParentIds = new Set<string>();
+          for (const incomingScope of scopes) {
+            const incumbents = await tx.commissionConfigurationScope.findMany({
+              where: {
+                isEnforced: true,
+                cityCode: incomingScope.cityCode,
+                serviceZoneId: incomingScope.serviceZoneId,
+                vehicleTypeId: incomingScope.vehicleTypeId,
+              },
+            });
+            const overlapping = incumbents.filter((old) =>
+              windowsOverlap(old.effectiveFrom, old.effectiveTo, effectiveFrom, effectiveTo),
+            );
+            for (const oldScope of overlapping) {
+              if (oldScope.effectiveFrom.getTime() < effectiveFrom.getTime()) {
+                await tx.commissionConfigurationScope.update({
+                  where: { id: oldScope.id },
+                  data: { effectiveTo: effectiveFrom, closedAt: now, closedBy: actor.actorId },
+                });
+              } else {
+                await tx.commissionConfigurationScope.update({
+                  where: { id: oldScope.id },
+                  data: { isEnforced: false, closedAt: now, closedBy: actor.actorId },
+                });
+              }
+              touchedParentIds.add(oldScope.configId);
+            }
+          }
+          for (const parentId of touchedParentIds) {
+            await this.recomputeCommissionParentStatus(parentId, now, tx);
+          }
+        }
+
+        const nextStatus = activateNow
+          ? effectiveFrom.getTime() <= now.getTime()
+            ? 'ACTIVE'
+            : 'SCHEDULED'
+          : 'PENDING_APPROVAL';
+
+        const created = await tx.commissionConfiguration.create({
+          data: {
+            familyId: randomUUID(),
+            version: nextVersion,
+            status: nextStatus,
+            commissionRatePct: body.commissionRatePct,
+            isEnabled: body.isEnabled,
+            baseRule: body.baseRule,
+            includeSurge: body.includeSurge,
+            includeWaiting: body.includeWaiting,
+            includeBookingFee: body.includeBookingFee,
+            applyMinimumFloor: body.applyMinimumFloor,
+            roundOffRupee: body.roundOffRupee,
+            applyTo: 'NEW_RIDES_ONLY',
+            declaredEffectiveFrom: effectiveFrom,
+            declaredEffectiveTo: effectiveTo,
+            reason: body.reason ?? null,
+            createdBy: actor.actorId,
+            ...(activateNow ? { approvedBy: actor.actorId, approvedAt: now } : {}),
+            scopes: {
+              create: scopes.map((s) => ({
+                scopeLevel: s.scopeLevel,
+                cityCode: s.cityCode,
+                serviceZoneId: s.serviceZoneId,
+                vehicleTypeId: s.vehicleTypeId,
+                effectiveFrom,
+                effectiveTo,
+                isEnforced: activateNow,
+              })),
+            },
           },
-        },
-        include: { scopes: true },
-      });
+          include: { scopes: true },
+        });
 
-      await recordAdminAction(tx, {
-        ...actor,
-        action: 'CREATE',
-        entityType: 'commission_configuration',
-        entityId: created.id,
-        summary: `Commission config (${body.commissionRatePct}%) created in PENDING_APPROVAL`,
-        after: created,
-        result: 'SUCCESS',
-      });
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'CREATE',
+          entityType: 'commission_configuration',
+          entityId: created.id,
+          summary: `Commission config (${body.commissionRatePct}%) created in ${nextStatus}`,
+          after: created,
+          result: 'SUCCESS',
+        });
 
-      return { ...created, commissionRatePct: Number(created.commissionRatePct.toString()) };
-    });
+        return { ...created, commissionRatePct: Number(created.commissionRatePct.toString()) };
+      });
+    } catch (err) {
+      if (isPgExclusionViolation(err)) {
+        throw new PricingAdminError(
+          'Commission configuration scope overlaps with an existing active window.',
+          'CONFIG_SCOPE_OVERLAP',
+          409,
+        );
+      }
+      throw err;
+    }
   }
 
   /// Rev 5 R5-3: Concurrency-safe per-scope activation preserving sibling scopes!
@@ -320,6 +390,289 @@ export class AdminPricingGovernanceService {
     });
   }
 
+  async deleteCommissionConfig(configId: string, actor: AuditActor) {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('commission_configurations'))`;
+      const existing = await tx.commissionConfiguration.findUnique({
+        where: { id: configId },
+        include: { scopes: true },
+      });
+      if (!existing) {
+        throw new PricingAdminError('Commission configuration not found', 'CONFIG_NOT_FOUND', 404);
+      }
+
+      const scopeIds = existing.scopes.map((s) => s.id);
+      if (scopeIds.length > 0) {
+        await tx.commissionConfigurationScope.updateMany({
+          where: { supersededByScopeId: { in: scopeIds } },
+          data: { supersededByScopeId: null },
+        });
+        await tx.commissionConfigurationScope.deleteMany({
+          where: { configId },
+        });
+      }
+
+      await tx.commissionConfiguration.delete({ where: { id: configId } });
+
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'DELETE',
+        entityType: 'commission_configuration',
+        entityId: configId,
+        summary: `Commission config v${existing.version} (${Number(existing.commissionRatePct)}%) deleted`,
+        before: existing,
+        result: 'SUCCESS',
+      });
+
+      return { id: configId, deleted: true };
+    });
+  }
+
+  async activateCommissionConfig(configId: string, actor: AuditActor) {
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('commission_configurations'))`;
+
+        const target = await tx.commissionConfiguration.findUnique({
+          where: { id: configId },
+          include: { scopes: true },
+        });
+        if (!target) {
+          throw new PricingAdminError('Commission configuration not found', 'CONFIG_NOT_FOUND', 404);
+        }
+
+        const now = new Date();
+        const targetEffectiveTo =
+          target.declaredEffectiveTo && target.declaredEffectiveTo.getTime() > now.getTime()
+            ? target.declaredEffectiveTo
+            : null;
+
+        const touchedParentIds = new Set<string>();
+        for (const scope of target.scopes) {
+          const incumbents = await tx.commissionConfigurationScope.findMany({
+            where: {
+              isEnforced: true,
+              cityCode: scope.cityCode,
+              serviceZoneId: scope.serviceZoneId,
+              vehicleTypeId: scope.vehicleTypeId,
+              configId: { not: target.id },
+            },
+          });
+          const overlapping = incumbents.filter((old) =>
+            windowsOverlap(old.effectiveFrom, old.effectiveTo, now, targetEffectiveTo),
+          );
+          for (const oldScope of overlapping) {
+            if (oldScope.effectiveFrom.getTime() < now.getTime()) {
+              await tx.commissionConfigurationScope.update({
+                where: { id: oldScope.id },
+                data: { effectiveTo: now, closedAt: now, closedBy: actor.actorId },
+              });
+            } else {
+              await tx.commissionConfigurationScope.update({
+                where: { id: oldScope.id },
+                data: { isEnforced: false, closedAt: now, closedBy: actor.actorId },
+              });
+            }
+            touchedParentIds.add(oldScope.configId);
+          }
+        }
+
+        for (const parentId of touchedParentIds) {
+          await this.recomputeCommissionParentStatus(parentId, now, tx);
+        }
+
+        await tx.commissionConfigurationScope.updateMany({
+          where: { configId: target.id },
+          data: {
+            isEnforced: true,
+            effectiveFrom: now,
+            effectiveTo: targetEffectiveTo,
+            closedAt: null,
+            closedBy: null,
+            supersededByScopeId: null,
+          },
+        });
+
+        const activated = await tx.commissionConfiguration.update({
+          where: { id: target.id },
+          data: {
+            status: 'ACTIVE',
+            isEnabled: true,
+            declaredEffectiveFrom: now,
+            declaredEffectiveTo: targetEffectiveTo,
+            approvedBy: actor.actorId,
+            approvedAt: now,
+          },
+          include: { scopes: true },
+        });
+
+        // Sync matching-version GST recovery config in place if present
+        const matchingRecovery = await tx.gstRecoveryConfiguration.findFirst({
+          where: { version: target.version },
+          include: { scopes: true },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (matchingRecovery && matchingRecovery.scopes.length > 0) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('gst_recovery_configurations'))`;
+          const touchedRecParents = new Set<string>();
+          for (const scope of matchingRecovery.scopes) {
+            const incumbents = await tx.gstRecoveryConfigurationScope.findMany({
+              where: {
+                isEnforced: true,
+                cityCode: scope.cityCode,
+                serviceZoneId: scope.serviceZoneId,
+                vehicleTypeId: scope.vehicleTypeId,
+                configId: { not: matchingRecovery.id },
+              },
+            });
+            for (const oldScope of incumbents.filter((old) =>
+              windowsOverlap(old.effectiveFrom, old.effectiveTo, now, targetEffectiveTo),
+            )) {
+              await tx.gstRecoveryConfigurationScope.update({
+                where: { id: oldScope.id },
+                data:
+                  oldScope.effectiveFrom.getTime() < now.getTime()
+                    ? { effectiveTo: now, closedAt: now, closedBy: actor.actorId }
+                    : { isEnforced: false, closedAt: now, closedBy: actor.actorId },
+              });
+              touchedRecParents.add(oldScope.configId);
+            }
+          }
+          for (const parentId of touchedRecParents) {
+            const open = await tx.gstRecoveryConfigurationScope.count({
+              where: {
+                configId: parentId,
+                isEnforced: true,
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+              },
+            });
+            await tx.gstRecoveryConfiguration.update({
+              where: { id: parentId },
+              data: { status: open > 0 ? 'PARTIALLY_SUPERSEDED' : 'RETIRED' },
+            });
+          }
+          await tx.gstRecoveryConfigurationScope.updateMany({
+            where: { configId: matchingRecovery.id },
+            data: {
+              isEnforced: true,
+              effectiveFrom: now,
+              effectiveTo: targetEffectiveTo,
+              closedAt: null,
+              closedBy: null,
+              supersededByScopeId: null,
+            },
+          });
+          await tx.gstRecoveryConfiguration.update({
+            where: { id: matchingRecovery.id },
+            data: {
+              status: 'ACTIVE',
+              isEnabled: true,
+              declaredEffectiveFrom: now,
+              declaredEffectiveTo: targetEffectiveTo,
+              approvedBy: actor.actorId,
+              approvedAt: now,
+            },
+          });
+        }
+
+        // Sync matching-version Passenger GST config in place if present
+        const matchingTax = await tx.taxConfiguration.findFirst({
+          where: { kind: 'PASSENGER_RIDE_GST', version: target.version },
+          include: { scopes: true },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (matchingTax && matchingTax.scopes.length > 0) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('tax_configurations'))`;
+          const touchedTaxParents = new Set<string>();
+          for (const scope of matchingTax.scopes) {
+            const incumbents = await tx.taxConfigurationScope.findMany({
+              where: {
+                taxKind: 'PASSENGER_RIDE_GST',
+                isEnforced: true,
+                cityCode: scope.cityCode,
+                serviceZoneId: scope.serviceZoneId,
+                vehicleTypeId: scope.vehicleTypeId,
+                configId: { not: matchingTax.id },
+              },
+            });
+            for (const oldScope of incumbents.filter((old) =>
+              windowsOverlap(old.effectiveFrom, old.effectiveTo, now, targetEffectiveTo),
+            )) {
+              await tx.taxConfigurationScope.update({
+                where: { id: oldScope.id },
+                data:
+                  oldScope.effectiveFrom.getTime() < now.getTime()
+                    ? { effectiveTo: now, closedAt: now, closedBy: actor.actorId }
+                    : { isEnforced: false, closedAt: now, closedBy: actor.actorId },
+              });
+              touchedTaxParents.add(oldScope.configId);
+            }
+          }
+          for (const parentId of touchedTaxParents) {
+            const open = await tx.taxConfigurationScope.count({
+              where: {
+                configId: parentId,
+                isEnforced: true,
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+              },
+            });
+            await tx.taxConfiguration.update({
+              where: { id: parentId },
+              data: { status: open > 0 ? 'PARTIALLY_SUPERSEDED' : 'RETIRED' },
+            });
+          }
+          await tx.taxConfigurationScope.updateMany({
+            where: { configId: matchingTax.id },
+            data: {
+              isEnforced: true,
+              effectiveFrom: now,
+              effectiveTo: targetEffectiveTo,
+              closedAt: null,
+              closedBy: null,
+              supersededByScopeId: null,
+            },
+          });
+          await tx.taxConfiguration.update({
+            where: { id: matchingTax.id },
+            data: {
+              status: 'ACTIVE',
+              isEnabled: true,
+              declaredEffectiveFrom: now,
+              declaredEffectiveTo: targetEffectiveTo,
+              approvedBy: actor.actorId,
+              approvedAt: now,
+            },
+          });
+        }
+
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'UPDATE',
+          entityType: 'commission_configuration',
+          entityId: activated.id,
+          summary: `Commission config v${activated.version} (${Number(activated.commissionRatePct)}%) activated in place`,
+          before: { status: target.status },
+          after: activated,
+          result: 'SUCCESS',
+        });
+
+        return {
+          ...activated,
+          commissionRatePct: Number(activated.commissionRatePct.toString()),
+        };
+      });
+    } catch (err) {
+      if (isPgExclusionViolation(err)) {
+        throw new PricingAdminError(
+          'Commission configuration scope overlaps with an existing active window.',
+          'CONFIG_SCOPE_OVERLAP',
+          409,
+        );
+      }
+      throw err;
+    }
+  }
+
   private async recomputeCommissionParentStatus(
     parentId: string,
     now: Date,
@@ -353,55 +706,135 @@ export class AdminPricingGovernanceService {
 
   async createTaxConfig(body: CreateTaxConfigBody, actor: AuditActor) {
     const scopes = dedupeScopes(body.scopes);
+    const now = new Date();
     const effectiveFrom = body.declaredEffectiveFrom
       ? new Date(body.declaredEffectiveFrom)
-      : new Date();
+      : now;
     const effectiveTo = body.declaredEffectiveTo ? new Date(body.declaredEffectiveTo) : null;
+    const activateNow = Boolean(body.activateImmediately);
 
-    return this.databaseService.transactionManager.execute(async (tx) => {
-      const created = await tx.taxConfiguration.create({
-        data: {
-          familyId: randomUUID(),
-          version: 1,
-          kind: body.kind,
-          status: 'PENDING_APPROVAL',
-          ratePct: body.ratePct,
-          isEnabled: body.isEnabled,
-          inclusive: body.inclusive,
-          waitingTaxable: body.waitingTaxable ?? null,
-          sacCode: body.sacCode ?? null,
-          legalReference: body.legalReference ?? null,
-          applyTo: 'NEW_RIDES_ONLY',
-          declaredEffectiveFrom: effectiveFrom,
-          declaredEffectiveTo: effectiveTo,
-          createdBy: actor.actorId,
-          scopes: {
-            create: scopes.map((s) => ({
-              taxKind: body.kind,
-              scopeLevel: s.scopeLevel,
-              cityCode: s.cityCode,
-              serviceZoneId: s.serviceZoneId,
-              vehicleTypeId: s.vehicleTypeId,
-              effectiveFrom,
-              effectiveTo,
-              isEnforced: false,
-            })),
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        let nextVersion = 1;
+        if (activateNow) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('tax_configurations'))`;
+          const maxRow = await tx.taxConfiguration.aggregate({
+            where: { kind: body.kind },
+            _max: { version: true },
+          });
+          nextVersion = (maxRow._max.version ?? 0) + 1;
+
+          const touchedParentIds = new Set<string>();
+          for (const incomingScope of scopes) {
+            const incumbents = await tx.taxConfigurationScope.findMany({
+              where: {
+                taxKind: body.kind,
+                isEnforced: true,
+                cityCode: incomingScope.cityCode,
+                serviceZoneId: incomingScope.serviceZoneId,
+                vehicleTypeId: incomingScope.vehicleTypeId,
+              },
+            });
+            const overlapping = incumbents.filter((old) =>
+              windowsOverlap(old.effectiveFrom, old.effectiveTo, effectiveFrom, effectiveTo),
+            );
+            for (const oldScope of overlapping) {
+              if (oldScope.effectiveFrom.getTime() < effectiveFrom.getTime()) {
+                await tx.taxConfigurationScope.update({
+                  where: { id: oldScope.id },
+                  data: { effectiveTo: effectiveFrom, closedAt: now, closedBy: actor.actorId },
+                });
+              } else {
+                await tx.taxConfigurationScope.update({
+                  where: { id: oldScope.id },
+                  data: { isEnforced: false, closedAt: now, closedBy: actor.actorId },
+                });
+              }
+              touchedParentIds.add(oldScope.configId);
+            }
+          }
+          for (const parentId of touchedParentIds) {
+            const remainingOpen = await tx.taxConfigurationScope.count({
+              where: {
+                configId: parentId,
+                isEnforced: true,
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+              },
+            });
+            await tx.taxConfiguration.update({
+              where: { id: parentId },
+              data: { status: remainingOpen > 0 ? 'PARTIALLY_SUPERSEDED' : 'RETIRED' },
+            });
+          }
+        }
+
+        const nextStatus = activateNow
+          ? effectiveFrom.getTime() <= now.getTime()
+            ? 'ACTIVE'
+            : 'SCHEDULED'
+          : 'PENDING_APPROVAL';
+
+        const created = await tx.taxConfiguration.create({
+          data: {
+            familyId: randomUUID(),
+            version: nextVersion,
+            kind: body.kind,
+            status: nextStatus,
+            ratePct: body.ratePct,
+            isEnabled: body.isEnabled,
+            inclusive: body.inclusive,
+            waitingTaxable: body.waitingTaxable ?? null,
+            sacCode: body.sacCode ?? null,
+            legalReference: body.legalReference ?? null,
+            applyTo: 'NEW_RIDES_ONLY',
+            declaredEffectiveFrom: effectiveFrom,
+            declaredEffectiveTo: effectiveTo,
+            createdBy: actor.actorId,
+            ...(activateNow ? { approvedBy: actor.actorId, approvedAt: now } : {}),
+            scopes: {
+              create: scopes.map((s) => ({
+                taxKind: body.kind,
+                scopeLevel: s.scopeLevel,
+                cityCode: s.cityCode,
+                serviceZoneId: s.serviceZoneId,
+                vehicleTypeId: s.vehicleTypeId,
+                effectiveFrom,
+                effectiveTo,
+                isEnforced: activateNow,
+              })),
+            },
           },
-        },
-        include: { scopes: true },
-      });
+          include: { scopes: true },
+        });
 
-      await recordAdminAction(tx, {
-        ...actor,
-        action: 'CREATE',
-        entityType: 'tax_configuration',
-        entityId: created.id,
-        summary: `Tax config (${body.kind} ${body.ratePct}%) created in PENDING_APPROVAL`,
-        after: created,
-        result: 'SUCCESS',
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'CREATE',
+          entityType: 'tax_configuration',
+          entityId: created.id,
+          summary: `Tax config (${body.kind} ${body.ratePct}%) created in ${nextStatus}`,
+          after: created,
+          result: 'SUCCESS',
+        });
+        return { ...created, ratePct: Number(created.ratePct.toString()) };
       });
-      return { ...created, ratePct: Number(created.ratePct.toString()) };
-    });
+    } catch (err) {
+      if (isPgExclusionViolation(err)) {
+        throw new PricingAdminError(
+          'Tax configuration scope overlaps with an existing active window.',
+          'CONFIG_SCOPE_OVERLAP',
+          409,
+        );
+      }
+      if (isPgCheckViolation(err)) {
+        throw new PricingAdminError(
+          'Tax configuration failed database validation constraints (check effective dates and classification fields).',
+          'TAX_CONFIG_CONSTRAINT_VIOLATION',
+          400,
+        );
+      }
+      throw err;
+    }
   }
 
   async approveTaxConfig(id: string, actor: AuditActor) {
@@ -556,52 +989,121 @@ export class AdminPricingGovernanceService {
 
   async createGstRecoveryConfig(body: CreateGstRecoveryConfigBody, actor: AuditActor) {
     const scopes = dedupeScopes(body.scopes);
+    const now = new Date();
     const effectiveFrom = body.declaredEffectiveFrom
       ? new Date(body.declaredEffectiveFrom)
-      : new Date();
+      : now;
     const effectiveTo = body.declaredEffectiveTo ? new Date(body.declaredEffectiveTo) : null;
+    const activateNow = Boolean(body.activateImmediately);
 
-    return this.databaseService.transactionManager.execute(async (tx) => {
-      const created = await tx.gstRecoveryConfiguration.create({
-        data: {
-          familyId: randomUUID(),
-          version: 1,
-          status: 'PENDING_APPROVAL',
-          recoveryRatePct: body.recoveryRatePct,
-          isEnabled: body.isEnabled,
-          baseRule: body.baseRule,
-          roundOffRupee: body.roundOffRupee,
-          legalReference: body.legalReference ?? null,
-          applyTo: 'NEW_RIDES_ONLY',
-          declaredEffectiveFrom: effectiveFrom,
-          declaredEffectiveTo: effectiveTo,
-          createdBy: actor.actorId,
-          scopes: {
-            create: scopes.map((s) => ({
-              scopeLevel: s.scopeLevel,
-              cityCode: s.cityCode,
-              serviceZoneId: s.serviceZoneId,
-              vehicleTypeId: s.vehicleTypeId,
-              effectiveFrom,
-              effectiveTo,
-              isEnforced: false,
-            })),
+    try {
+      return await this.databaseService.transactionManager.execute(async (tx) => {
+        let nextVersion = 1;
+        if (activateNow) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('gst_recovery_configurations'))`;
+          const maxRow = await tx.gstRecoveryConfiguration.aggregate({ _max: { version: true } });
+          nextVersion = (maxRow._max.version ?? 0) + 1;
+
+          const touchedParentIds = new Set<string>();
+          for (const incomingScope of scopes) {
+            const incumbents = await tx.gstRecoveryConfigurationScope.findMany({
+              where: {
+                isEnforced: true,
+                cityCode: incomingScope.cityCode,
+                serviceZoneId: incomingScope.serviceZoneId,
+                vehicleTypeId: incomingScope.vehicleTypeId,
+              },
+            });
+            const overlapping = incumbents.filter((old) =>
+              windowsOverlap(old.effectiveFrom, old.effectiveTo, effectiveFrom, effectiveTo),
+            );
+            for (const oldScope of overlapping) {
+              if (oldScope.effectiveFrom.getTime() < effectiveFrom.getTime()) {
+                await tx.gstRecoveryConfigurationScope.update({
+                  where: { id: oldScope.id },
+                  data: { effectiveTo: effectiveFrom, closedAt: now, closedBy: actor.actorId },
+                });
+              } else {
+                await tx.gstRecoveryConfigurationScope.update({
+                  where: { id: oldScope.id },
+                  data: { isEnforced: false, closedAt: now, closedBy: actor.actorId },
+                });
+              }
+              touchedParentIds.add(oldScope.configId);
+            }
+          }
+          for (const parentId of touchedParentIds) {
+            const remainingOpen = await tx.gstRecoveryConfigurationScope.count({
+              where: {
+                configId: parentId,
+                isEnforced: true,
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+              },
+            });
+            await tx.gstRecoveryConfiguration.update({
+              where: { id: parentId },
+              data: { status: remainingOpen > 0 ? 'PARTIALLY_SUPERSEDED' : 'RETIRED' },
+            });
+          }
+        }
+
+        const nextStatus = activateNow
+          ? effectiveFrom.getTime() <= now.getTime()
+            ? 'ACTIVE'
+            : 'SCHEDULED'
+          : 'PENDING_APPROVAL';
+
+        const created = await tx.gstRecoveryConfiguration.create({
+          data: {
+            familyId: randomUUID(),
+            version: nextVersion,
+            status: nextStatus,
+            recoveryRatePct: body.recoveryRatePct,
+            isEnabled: body.isEnabled,
+            baseRule: body.baseRule,
+            roundOffRupee: body.roundOffRupee,
+            legalReference: body.legalReference ?? null,
+            applyTo: 'NEW_RIDES_ONLY',
+            declaredEffectiveFrom: effectiveFrom,
+            declaredEffectiveTo: effectiveTo,
+            createdBy: actor.actorId,
+            ...(activateNow ? { approvedBy: actor.actorId, approvedAt: now } : {}),
+            scopes: {
+              create: scopes.map((s) => ({
+                scopeLevel: s.scopeLevel,
+                cityCode: s.cityCode,
+                serviceZoneId: s.serviceZoneId,
+                vehicleTypeId: s.vehicleTypeId,
+                effectiveFrom,
+                effectiveTo,
+                isEnforced: activateNow,
+              })),
+            },
           },
-        },
-        include: { scopes: true },
-      });
+          include: { scopes: true },
+        });
 
-      await recordAdminAction(tx, {
-        ...actor,
-        action: 'CREATE',
-        entityType: 'gst_recovery_configuration',
-        entityId: created.id,
-        summary: `GST recovery config (${body.recoveryRatePct}%) created in PENDING_APPROVAL`,
-        after: created,
-        result: 'SUCCESS',
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'CREATE',
+          entityType: 'gst_recovery_configuration',
+          entityId: created.id,
+          summary: `GST recovery config (${body.recoveryRatePct}%) created in ${nextStatus}`,
+          after: created,
+          result: 'SUCCESS',
+        });
+        return { ...created, recoveryRatePct: Number(created.recoveryRatePct.toString()) };
       });
-      return { ...created, recoveryRatePct: Number(created.recoveryRatePct.toString()) };
-    });
+    } catch (err) {
+      if (isPgExclusionViolation(err)) {
+        throw new PricingAdminError(
+          'GST recovery configuration scope overlaps with an existing active window.',
+          'CONFIG_SCOPE_OVERLAP',
+          409,
+        );
+      }
+      throw err;
+    }
   }
 
   async approveGstRecoveryConfig(id: string, actor: AuditActor) {
@@ -979,10 +1481,51 @@ export class AdminPricingGovernanceService {
       this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.DOCUMENTS_ISSUE),
     ]);
 
-    const commissionPct = globalCommScope ? Number(globalCommScope.config.commissionRatePct) : null;
-    const passengerGstPct = globalTaxScope ? Number(globalTaxScope.config.ratePct) : null;
-    const gstRecoveryPct = globalRecoveryScope
-      ? Number(globalRecoveryScope.config.recoveryRatePct)
+    const [fallbackCommScope, fallbackTaxScope, fallbackRecoveryScope] = await Promise.all([
+      globalCommScope
+        ? Promise.resolve(null)
+        : client.commissionConfigurationScope.findFirst({
+            where: {
+              isEnforced: true,
+              effectiveFrom: { lte: now },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            },
+            orderBy: { effectiveFrom: 'desc' },
+            include: { config: true },
+          }),
+      globalTaxScope
+        ? Promise.resolve(null)
+        : client.taxConfigurationScope.findFirst({
+            where: {
+              taxKind: 'PASSENGER_RIDE_GST',
+              isEnforced: true,
+              effectiveFrom: { lte: now },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            },
+            orderBy: { effectiveFrom: 'desc' },
+            include: { config: true },
+          }),
+      globalRecoveryScope
+        ? Promise.resolve(null)
+        : client.gstRecoveryConfigurationScope.findFirst({
+            where: {
+              isEnforced: true,
+              effectiveFrom: { lte: now },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            },
+            orderBy: { effectiveFrom: 'desc' },
+            include: { config: true },
+          }),
+    ]);
+
+    const resolvedCommScope = globalCommScope ?? fallbackCommScope;
+    const resolvedTaxScope = globalTaxScope ?? fallbackTaxScope;
+    const resolvedRecoveryScope = globalRecoveryScope ?? fallbackRecoveryScope;
+
+    const commissionPct = resolvedCommScope ? Number(resolvedCommScope.config.commissionRatePct) : null;
+    const passengerGstPct = resolvedTaxScope ? Number(resolvedTaxScope.config.ratePct) : null;
+    const gstRecoveryPct = resolvedRecoveryScope
+      ? Number(resolvedRecoveryScope.config.recoveryRatePct)
       : null;
 
     // Dynamically computed combined rate — NEVER stored in DB!
@@ -1001,30 +1544,30 @@ export class AdminPricingGovernanceService {
         activeComplianceTemplates: activeComplianceTemplatesCount,
       },
       activeGlobalBaseline: {
-        commission: globalCommScope
+        commission: resolvedCommScope
           ? {
-              configId: globalCommScope.config.id,
-              version: globalCommScope.config.version,
+              configId: resolvedCommScope.config.id,
+              version: resolvedCommScope.config.version,
               ratePct: commissionPct,
-              isEnabled: globalCommScope.config.isEnabled,
+              isEnabled: resolvedCommScope.config.isEnabled,
             }
           : null,
-        passengerGst: globalTaxScope
+        passengerGst: resolvedTaxScope
           ? {
-              configId: globalTaxScope.config.id,
-              version: globalTaxScope.config.version,
+              configId: resolvedTaxScope.config.id,
+              version: resolvedTaxScope.config.version,
               ratePct: passengerGstPct,
-              sacCode: globalTaxScope.config.sacCode,
-              waitingTaxable: globalTaxScope.config.waitingTaxable,
-              isEnabled: globalTaxScope.config.isEnabled,
+              sacCode: resolvedTaxScope.config.sacCode,
+              waitingTaxable: resolvedTaxScope.config.waitingTaxable,
+              isEnabled: resolvedTaxScope.config.isEnabled,
             }
           : null,
-        gstRecovery: globalRecoveryScope
+        gstRecovery: resolvedRecoveryScope
           ? {
-              configId: globalRecoveryScope.config.id,
-              version: globalRecoveryScope.config.version,
+              configId: resolvedRecoveryScope.config.id,
+              version: resolvedRecoveryScope.config.version,
               ratePct: gstRecoveryPct,
-              isEnabled: globalRecoveryScope.config.isEnabled,
+              isEnabled: resolvedRecoveryScope.config.isEnabled,
             }
           : null,
         combinedDriverDeductionPct: combinedRatePct,

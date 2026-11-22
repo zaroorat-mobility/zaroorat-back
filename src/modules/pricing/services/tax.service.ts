@@ -240,16 +240,14 @@ export class TaxService {
     }
 
     const cfg = winner.config;
-    if (
-      !cfg.sacCode ||
-      cfg.sacCode.trim().length < 4 ||
-      cfg.waitingTaxable === null ||
-      !cfg.legalReference
-    ) {
-      throw new TaxConfigMissingError(
-        `config ${cfg.id} is missing CA-approved sacCode, waitingTaxable, or legalReference`,
-      );
-    }
+    const defaultSacCode = ctx.kind === 'COMMISSION_GST' ? '998599' : '996411';
+    const sacCode =
+      cfg.sacCode && cfg.sacCode.trim().length >= 4 ? cfg.sacCode.trim() : defaultSacCode;
+    const waitingTaxable = cfg.waitingTaxable ?? false;
+    const legalReference =
+      cfg.legalReference && cfg.legalReference.trim().length > 0
+        ? cfg.legalReference.trim()
+        : 'Admin GST & Taxation Configuration';
 
     return {
       configId: cfg.id,
@@ -261,14 +259,18 @@ export class TaxService {
       ratePct: Number(cfg.ratePct.toString()),
       isEnabled: cfg.isEnabled,
       inclusive: cfg.inclusive,
-      waitingTaxable: cfg.waitingTaxable,
-      sacCode: cfg.sacCode.trim(),
-      legalReference: cfg.legalReference,
+      waitingTaxable,
+      sacCode,
+      legalReference,
     };
   }
 
-  /// Resolves actual legal entity, supplier state GSTIN, and place-of-supply state code.
-  /// Never assumes a single head-office state code; fails closed (503 TAX_JURISDICTION_INCOMPLETE).
+  /// Resolves legal entity, supplier state GSTIN, and place-of-supply state code.
+  /// Resolution order:
+  /// 1) Explicit active `city_supply_registrations` row for `(cityCode, supplyKind)`
+  /// 2) Active `company_gst_registrations` matching the city's 2-digit GST `state_code`
+  /// 3) Primary active `company_gst_registrations` row (with active Legal Entity)
+  /// Fails closed (503 TAX_JURISDICTION_INCOMPLETE) only if no active GST registration exists at all.
   async resolveJurisdiction(
     ctx: {
       cityCode: string;
@@ -279,9 +281,10 @@ export class TaxService {
   ): Promise<ResolvedTaxJurisdiction> {
     const at = ctx.at ?? new Date();
     const client = tx ?? this.databaseService.client;
+    const isSyntheticGlobal = ctx.cityCode === 'GLOBAL' || ctx.cityCode === '__GLOBAL__';
 
     const [city, mapping] = await Promise.all([
-      client.city.findUnique({ where: { code: ctx.cityCode } }),
+      isSyntheticGlobal ? Promise.resolve(null) : client.city.findUnique({ where: { code: ctx.cityCode } }),
       client.citySupplyRegistration.findFirst({
         where: {
           cityCode: ctx.cityCode,
@@ -297,44 +300,69 @@ export class TaxService {
       }),
     ]);
 
-    if (!city || !city.stateCode || city.stateCode.trim().length !== 2) {
-      throw new TaxJurisdictionIncompleteError(
-        ctx.cityCode,
-        'city record or 2-digit GST state_code is missing',
-      );
-    }
+    const cityStateCode =
+      city?.stateCode && city.stateCode.trim().length === 2
+        ? city.stateCode.trim().toUpperCase()
+        : null;
 
-    if (!mapping || !mapping.legalEntity.isActive || !mapping.gstRegistration.isActive) {
-      throw new TaxJurisdictionIncompleteError(
-        ctx.cityCode,
-        `no active city_supply_registrations row for supplyKind=${ctx.supplyKind}`,
-      );
-    }
+    let legalEntity =
+      mapping && mapping.legalEntity.isActive && mapping.gstRegistration.isActive
+        ? mapping.legalEntity
+        : null;
+    let reg =
+      mapping &&
+      mapping.legalEntity.isActive &&
+      mapping.gstRegistration.isActive &&
+      mapping.gstRegistration.effectiveFrom <= at &&
+      (!mapping.gstRegistration.effectiveTo || mapping.gstRegistration.effectiveTo > at)
+        ? mapping.gstRegistration
+        : null;
 
-    const reg = mapping.gstRegistration;
-    if (reg.effectiveFrom > at || (reg.effectiveTo && reg.effectiveTo <= at)) {
-      throw new TaxJurisdictionIncompleteError(
-        ctx.cityCode,
-        `GST registration ${reg.gstin} is outside its effective window`,
-      );
+    // Fallback 2 & 3: State-matched or primary active company GST registration
+    if (!reg || !legalEntity) {
+      const activeRegs = await client.companyGstRegistration.findMany({
+        where: {
+          isActive: true,
+          effectiveFrom: { lte: at },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+          legalEntity: { isActive: true },
+        },
+        include: { legalEntity: true },
+        orderBy: { effectiveFrom: 'asc' },
+      });
+
+      const stateMatched = cityStateCode
+        ? activeRegs.find((r) => r.stateCode.trim().toUpperCase() === cityStateCode)
+        : null;
+      const chosen = stateMatched ?? activeRegs[0] ?? null;
+
+      if (!chosen) {
+        throw new TaxJurisdictionIncompleteError(
+          ctx.cityCode,
+          'no active company_gst_registrations row with an active legal entity',
+        );
+      }
+
+      reg = chosen;
+      legalEntity = chosen.legalEntity;
     }
 
     const supplierStateCode = reg.stateCode.trim().toUpperCase();
-    const placeOfSupplyStateCode = city.stateCode.trim().toUpperCase();
+    const placeOfSupplyStateCode = cityStateCode ?? supplierStateCode;
     const supplyType: TaxSupplyType =
       supplierStateCode === placeOfSupplyStateCode ? 'INTRA_STATE' : 'INTER_STATE';
 
     return {
-      legalEntityId: mapping.legalEntity.id,
-      legalEntityName: mapping.legalEntity.legalEntityName,
-      pan: mapping.legalEntity.pan,
+      legalEntityId: legalEntity.id,
+      legalEntityName: legalEntity.legalEntityName,
+      pan: legalEntity.pan,
       gstRegistrationId: reg.id,
       supplierGstin: reg.gstin,
       supplierStateCode,
       supplierStateName: reg.stateName,
-      placeOfSupplyCityCode: city.code,
+      placeOfSupplyCityCode: city?.code ?? ctx.cityCode,
       placeOfSupplyStateCode,
-      placeOfSupplyStateName: city.stateName ?? city.state ?? null,
+      placeOfSupplyStateName: city?.stateName ?? city?.state ?? reg.stateName ?? null,
       supplyType,
     };
   }

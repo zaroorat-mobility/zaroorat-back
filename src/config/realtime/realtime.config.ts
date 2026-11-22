@@ -1,3 +1,4 @@
+import { isDeployed } from '../env/environment.js';
 import { numericEnv } from '../env/numeric.js';
 export interface RealtimeConfig {
   enabled: boolean;
@@ -16,14 +17,17 @@ export interface RealtimeConfig {
 
   adapter: 'memory' | 'redis';
 }
-function origins(): string[] | true {
+/// `*` means any origin. Passed through as `['*']` it would match only a literal "*"
+/// origin, i.e. refuse every browser. Deployed environments never default to open.
+export function origins(): string[] | true {
   const raw = process.env.REALTIME_CORS_ORIGINS?.trim();
+  if (raw === '*') return true;
   if (raw)
     return raw
       .split(',')
       .map((origin) => origin.trim())
       .filter(Boolean);
-  return process.env.APP_ENV === 'production'
+  return isDeployed(process.env.APP_ENV)
     ? ['https://zaroorat.com', 'https://admin.zaroorat.com']
     : true;
 }
@@ -52,10 +56,8 @@ export const realtimeConfig: RealtimeConfig = Object.freeze({
   // realtime events vanish without an error. Deployed environments therefore
   // default to the shared Redis adapter; `memory` stays an explicit opt-in.
   adapter:
-    (process.env.REALTIME_ADAPTER ??
-      (process.env.APP_ENV === 'production' || process.env.APP_ENV === 'staging'
-        ? 'redis'
-        : 'memory')) === 'redis'
+    (process.env.REALTIME_ADAPTER ?? (isDeployed(process.env.APP_ENV) ? 'redis' : 'memory')) ===
+    'redis'
       ? 'redis'
       : 'memory',
 });

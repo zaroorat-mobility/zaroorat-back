@@ -13,6 +13,31 @@ function parseSecretsJson(): Record<string, string> {
   }
   return {};
 }
+function parseDurationToSeconds(val: string | undefined, fallback: number): number {
+  if (!val) return fallback;
+  const trimmed = val.trim();
+  const num = Number(trimmed);
+  if (!Number.isNaN(num) && Number.isFinite(num) && num > 0) return num;
+  const match = /^(\d+)\s*(s|m|h|d|w)$/i.exec(trimmed);
+  if (!match) return fallback;
+  const count = Number(match[1]);
+  const unit = match[2]?.toLowerCase();
+  switch (unit) {
+    case 's':
+      return count;
+    case 'm':
+      return count * 60;
+    case 'h':
+      return count * 3600;
+    case 'd':
+      return count * 86400;
+    case 'w':
+      return count * 604800;
+    default:
+      return fallback;
+  }
+}
+
 const parsedSecrets = parseSecretsJson();
 export const jwtConfig = Object.freeze({
   primaryKid,
@@ -25,8 +50,14 @@ export const jwtConfig = Object.freeze({
       : {}),
   }),
   refreshSecret: validatedEnv.JWT_REFRESH_SECRET,
-  accessTtlSeconds: Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 900),
-  refreshTtlSeconds: Number(process.env.JWT_REFRESH_TTL_SECONDS ?? 2592000),
+  accessTtlSeconds: parseDurationToSeconds(
+    process.env.JWT_ACCESS_TTL_SECONDS ?? process.env.JWT_ACCESS_EXPIRES_IN,
+    900,
+  ),
+  refreshTtlSeconds: parseDurationToSeconds(
+    process.env.JWT_REFRESH_TTL_SECONDS ?? process.env.JWT_REFRESH_EXPIRES_IN,
+    2592000,
+  ),
   issuer: process.env.JWT_ISSUER ?? 'zaroorat',
   revokedRetentionDays: Number(process.env.JWT_REFRESH_RETENTION_DAYS ?? 30),
 });
