@@ -66,6 +66,9 @@ describe('driver bank-account security (integration, real HTTP)', () => {
   it('stores a manually entered account encrypted, and approval does not verify it', async () => {
     const admin = await loginWithRole(ADMIN_A, 'system_admin');
     const nextYear = new Date().getFullYear() + 1;
+    const car = await db().client.vehicleType.findFirstOrThrow({
+      where: { category: 'car', isActive: true },
+    });
     const created = await post(admin, '/api/v1/admin/applications', {
       fullName: 'Bank Applicant',
       mobileNumber: '+919876607088',
@@ -88,6 +91,7 @@ describe('driver bank-account security (integration, real HTTP)', () => {
       panUrl: 'https://example.invalid/pan.jpg',
       driverSelfieUrl: 'https://example.invalid/selfie.jpg',
       vehicleType: 'cab',
+      vehicleTypeId: car.id,
       vehicleCategory: 'Sedan',
       brand: 'Maruti Suzuki',
       model: 'Swift',

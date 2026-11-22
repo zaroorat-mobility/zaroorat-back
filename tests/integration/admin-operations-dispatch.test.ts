@@ -85,7 +85,7 @@ describe('admin operations dispatch console (integration)', () => {
       create: { userId: driver2User.userId, firstName: 'Driver', lastName: 'Two' },
     });
 
-    const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY');
+    const vehicleTypeId = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
     const driver1Id = await makeDriver(driver1User.userId);
     const vehicle1Id = await makeVehicle(vehicleTypeId);
     const driver2Id = await makeDriver(driver2User.userId);
@@ -170,7 +170,7 @@ describe('admin operations dispatch console (integration)', () => {
     assert.equal(item.customerName, 'Diana Customer');
     assert.equal(item.dispatchRoundsCount, 2);
     assert.equal(item.totalOffersCount, 2);
-    assert.equal(item.vehicleTypeCode, 'CAB_ECONOMY');
+    assert.equal(item.vehicleTypeCode, 'CAB_ECONOMY_NON_AC');
   });
 
   it('returns full dispatch request details with candidate list and summary', async () => {

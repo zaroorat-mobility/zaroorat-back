@@ -1,197 +1,91 @@
-# Production stack: API + Worker + Postgres/PostGIS + Redis, single host.
-#
-# Secrets are NOT stored here. Every ${VAR:?...} below must be present in the
-# shell environment (or a local, git-ignored .env file next to this compose
-# file) or `docker compose config` fails loudly before anything starts.
-#
-# Required:
-#   POSTGRES_PASSWORD  REDIS_PASSWORD  JWT_ACCESS_SECRET  JWT_REFRESH_SECRET
-#   PAYMENT_WEBHOOK_SECRET  STORAGE_BUCKET  STORAGE_QUARANTINE_BUCKET
-#   AIRTEL_API_KEY  STORAGE_KMS_KEY_ID  FIREBASE_SERVICE_ACCOUNT_JSON
-#   APP_DB_PASSWORD  (runtime DB login the API/worker use; docs/15_Security/database-roles.md)
-# Optional (defaults shown in the interpolation):
-#   POSTGRES_USER  POSTGRES_DB  API_PORT  IMAGE_TAG  APP_DB_USER
-#   TRUSTED_PROXIES  TRUSTED_PROXY_HOPS  (proxy topology; default trusts none)
-#
-# Migrations are a DEPLOYMENT step, never a container start-up step — running
-# them per replica would race N ways on every scale-up. See `make migrate-prod`.
-#
-#   make migrate-prod   run migrations once, against the built image
-#   make up-prod        start api + worker + datastores
-#   make logs-prod      tail the api
-
 name: zaroorat-prod
 
-x-app-image: &app-image
-  image: zaroorat-backend:${IMAGE_TAG:-latest}
-  build:
-    context: .
-    target: runner
-
-x-app-env: &app-env
-  APP_NAME: zaroorat-backend
-  APP_ENV: production
-  NODE_ENV: production
-  # Through PgBouncer, not straight at Postgres. See the `pgbouncer` service for
-  # the connection arithmetic; `migrate` deliberately still goes direct.
-  # The API and worker connect as the runtime login, never as the schema owner: the owner
-  # can disable or drop the audit triggers and truncate audit tables. The login is a member
-  # of zaroorat_app_runtime (migration 20261002130100) and is created by the `db-roles`
-  # one-shot below. See docs/15_Security/database-roles.md.
-  DATABASE_URL: postgresql://${APP_DB_USER:-zaroorat_app}:${APP_DB_PASSWORD:?APP_DB_PASSWORD is required (runtime DB login, see docs/15_Security/database-roles.md)}@pgbouncer:6432/${POSTGRES_DB:-zaroorat}
-  REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
-  # Socket.IO rooms shared across API replicas. Pinned here so a REALTIME_ADAPTER=memory
-  # copied from .env.example cannot silently drop events once a second replica exists.
-  REALTIME_ADAPTER: redis
-  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required (min 32 chars)}
-  JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required (min 32 chars)}
-  # postgres and the app share a private network, so TLS between them is not
-  # required here. Set DB_SSL_MODE=require when the database is external.
-  DB_SSL_MODE: ${DB_SSL_MODE:-disable}
-  # ── Boot-mandatory under APP_ENV=production ───────────────────────────
-  # These are not preferences. APP_ENV=production flips three config modules
-  # from their mock defaults to live ones, and each then throws during module
-  # load or provider construction if its credentials are absent:
-  #   payment.config.ts      -> gateway defaults to 'razorpay', demands a secret
-  #   storage.config.ts      -> provider defaults to 's3', demands both buckets
-  #   notification.config.ts -> SMS defaults to 'airtel', demands an API key
-  # Verified by running the built image: it exits before Fastify starts.
-  PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?required when APP_ENV=production (payment gateway defaults to razorpay)}
-  STORAGE_BUCKET: ${STORAGE_BUCKET:?required when APP_ENV=production (storage provider defaults to s3)}
-  # Must differ from STORAGE_BUCKET — unscanned uploads land here first.
-  STORAGE_QUARANTINE_BUCKET: ${STORAGE_QUARANTINE_BUCKET:?required when APP_ENV=production and must differ from STORAGE_BUCKET}
-  AIRTEL_API_KEY: ${AIRTEL_API_KEY:?required when APP_ENV=production (SMS provider defaults to airtel)}
-  # ── Pass-through, defaulted ───────────────────────────────────────────
-  PAYMENT_DEFAULT_GATEWAY: ${PAYMENT_DEFAULT_GATEWAY:-razorpay}
-  RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
-  RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
-  STORAGE_REGION: ${STORAGE_REGION:-ap-south-1}
-  # Leave both blank to use the instance role.
-  STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-}
-  STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
-  # In production the malware scanner defaults to 'guardduty', and
-  # storage.config.ts then REQUIRES aws:kms plus a named key — AES256 is
-  # rejected at boot. Set STORAGE_MALWARE_SCANNER=disabled if you genuinely
-  # have no GuardDuty Malware Protection, and AES256 becomes valid again.
-  STORAGE_MALWARE_SCANNER: ${STORAGE_MALWARE_SCANNER:-guardduty}
-  STORAGE_SSE: ${STORAGE_SSE:-aws:kms}
-  STORAGE_KMS_KEY_ID: ${STORAGE_KMS_KEY_ID:?required unless STORAGE_MALWARE_SCANNER=disabled and STORAGE_SSE=AES256}
-  SMS_PROVIDER: ${SMS_PROVIDER:-airtel}
-  AIRTEL_CUSTOMER_ID: ${AIRTEL_CUSTOMER_ID:-}
-  AIRTEL_SENDER_ID: ${AIRTEL_SENDER_ID:-}
-  AIRTEL_ENTITY_ID: ${AIRTEL_ENTITY_ID:-}
-  AIRTEL_OTP_TEMPLATE_ID: ${AIRTEL_OTP_TEMPLATE_ID:-}
-  AIRTEL_CUSTOMER_OTP_TEMPLATE_ID: ${AIRTEL_CUSTOMER_OTP_TEMPLATE_ID:-}
-  AIRTEL_CUSTOMER_OTP_MESSAGE: ${AIRTEL_CUSTOMER_OTP_MESSAGE:-}
-  AIRTEL_DRIVER_OTP_TEMPLATE_ID: ${AIRTEL_DRIVER_OTP_TEMPLATE_ID:-}
-  AIRTEL_DRIVER_OTP_MESSAGE: ${AIRTEL_DRIVER_OTP_MESSAGE:-}
-  AIRTEL_DRIVER_DOC_REJECTED_TEMPLATE_ID: ${AIRTEL_DRIVER_DOC_REJECTED_TEMPLATE_ID:-}
-  AIRTEL_DRIVER_DOC_REJECTED_MESSAGE: ${AIRTEL_DRIVER_DOC_REJECTED_MESSAGE:-}
-  AIRTEL_DRIVER_ACTIVATED_TEMPLATE_ID: ${AIRTEL_DRIVER_ACTIVATED_TEMPLATE_ID:-}
-  AIRTEL_DRIVER_ACTIVATED_MESSAGE: ${AIRTEL_DRIVER_ACTIVATED_MESSAGE:-}
-  # ── Push (FCM) ────────────────────────────────────────────────────────
-  # Production refuses any other push provider (resolvePushProviderName), and a
-  # single host has no Application Default Credentials, so the service-account
-  # JSON is required. Without them every ride and payment push fails.
-  PUSH_PROVIDER: fcm
-  FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:?required when APP_ENV=production (push provider is fcm)}
-  # Pepper for OTP hashing. Rotating it invalidates every in-flight challenge.
-  OTP_PEPPER: ${OTP_PEPPER:-}
-  # Which peers' X-Forwarded-For to believe (src/app/trust-proxy.ts). This file publishes
-  # the API port directly and runs no proxy, so the default trusts none: a client cannot
-  # choose the IP its audit rows record. Behind a reverse proxy or load balancer, set
-  # TRUSTED_PROXIES to its address/CIDR (preferred) or TRUSTED_PROXY_HOPS to the hop count —
-  # otherwise every client shares the proxy's IP for rate limiting.
-  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
-  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
+# .env.<env> is also the Compose interpolation file, so it carries the Postgres superuser
+# and schema-owner credentials. The app reads none of them: blank them in every app
+# container so a leaked environment never yields more than the runtime login.
+x-no-infra-secrets: &no-infra-secrets
+  POSTGRES_PASSWORD: ''
+  APP_DB_PASSWORD: ''
+  REDIS_PASSWORD: ''
+  MIGRATION_DATABASE_URL: ''
 
 services:
-  # Profile-gated, so `up` never triggers it. Run explicitly, once, before
-  # rolling the app:  docker compose -f compose.prod.yml run --rm migrate
-  # Uses the same runner image, so the schema shipped is the schema deployed.
-  migrate:
-    <<: *app-image
-    profiles: ['migrate']
-    command: ['npx', 'prisma', 'migrate', 'deploy']
-    # Deliberately NOT *app-env: the Prisma CLI reads only the database URL, and
-    # requiring the storage/SMS/payment secrets here would mean you could not
-    # run a migration without them.
-    # The owner credential is named MIGRATION_DATABASE_URL (read by prisma.config.ts) so it
-    # can never be mistaken for the app's DATABASE_URL, which only the runtime login fills.
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - '80:80'
+      - '443:443'
     environment:
-      APP_ENV: production
-      NODE_ENV: production
-      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-zaroorat}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: 'no'
-
-  # Profile-gated like `migrate`, and run right after it:
-  #   docker compose -f compose.prod.yml run --rm migrate
-  #   docker compose -f compose.prod.yml run --rm db-roles
-  # Creates (or rotates) the runtime LOGIN as the owner. Idempotent.
-  db-roles:
-    image: postgis/postgis:17-3.5
-    platform: linux/amd64
-    profiles: ['migrate']
-    # Both passwords travel as environment, never as arguments, so neither shows in a
-    # process list; the script reads APP_DB_PASSWORD itself (\getenv).
-    environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-api.zaroorat.com}
     volumes:
-      - ./scripts/db:/scripts:ro
-    command:
-      - psql
-      - -h
-      - postgres
-      - -U
-      - ${POSTGRES_USER:-zaroorat}
-      - -d
-      - ${POSTGRES_DB:-zaroorat}
-      - -v
-      - app_user=${APP_DB_USER:-zaroorat_app}
-      - -f
-      - /scripts/create-app-login.sql
+      - caddy_prod_data:/data
+      - caddy_prod_config:/config
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
-    restart: 'no'
+    networks:
+      - zaroorat-net
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 256M
+    restart: always
 
   api:
-    <<: *app-image
-    # dist/server.js, already compiled. No tsx, no TypeScript at runtime.
-    command: ['npm', 'run', 'start']
+    image: ${APP_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:?IMAGE_TAG or APP_IMAGE must be specified for production}}
+    command: ['node', 'dist/server.js']
+    env_file:
+      - ${APP_ENV_FILE:-.env.prod}
     environment:
-      <<: *app-env
+      <<: *no-infra-secrets
       HOST: 0.0.0.0
       PORT: 3000
-    ports:
-      - '${API_PORT:-3000}:3000'
+      TRUSTED_PROXIES: 172.30.0.0/24
+    expose:
+      - '3000'
     depends_on:
       pgbouncer:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
-    # Liveness comes from the image's own HEALTHCHECK (GET /health).
-    restart: always
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2048M
     stop_grace_period: 30s
+    networks:
+      - zaroorat-net
+    restart: always
 
   worker:
-    <<: *app-image
-    command: ['npm', 'run', 'worker']
+    image: ${APP_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:?IMAGE_TAG or APP_IMAGE must be specified for production}}
+    command: ['node', 'dist/worker.js']
+    env_file:
+      - ${APP_ENV_FILE:-.env.prod}
     environment:
-      <<: *app-env
+      <<: *no-infra-secrets
       WORKER_HEALTH_PORT: 3001
-    # Health and metrics server: probes and the Prometheus scrape, not callers —
-    # internal only.
     expose:
       - '3001'
     depends_on:
       pgbouncer:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
     healthcheck:
       test:
@@ -201,62 +95,37 @@ services:
           '-e',
           "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-      interval: 30s
+      interval: 15s
       timeout: 3s
       retries: 3
       start_period: 20s
-    restart: always
-    # Must exceed WORKER_SHUTDOWN_GRACE_MS (default 120000) so in-flight jobs
-    # drain instead of being SIGKILLed mid-transaction.
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 1536M
     stop_grace_period: 150s
+    networks:
+      - zaroorat-net
+    restart: always
 
-  # Connection multiplexer. Without it every app replica holds its own pool
-  # straight against Postgres, so `DB_POOL_MAX` x replicas is bounded by
-  # `max_connections` (100 by default) and the stack tops out at roughly ten
-  # replicas regardless of how much CPU is available.
-  #
-  # Sizing, all on one (user, database) pair:
-  #   MAX_CLIENT_CONN     ceiling on app-side connections *into* pgbouncer.
-  #                       Must exceed DB_POOL_MAX x replicas x (api + worker).
-  #                       These are cheap — pgbouncer holds them, Postgres does not.
-  #   DEFAULT_POOL_SIZE   server connections pgbouncer keeps *to* Postgres.
-  #                       This is the number that must fit inside max_connections,
-  #                       leaving headroom for RESERVE_POOL_SIZE, superuser slots
-  #                       and `make migrate-prod` running alongside.
-  #
-  # pool_mode=transaction is what makes the multiplexing worth anything: a server
-  # connection is returned between statements rather than being held for the life
-  # of the client. It costs session-scoped state — SET, LISTEN/NOTIFY, session
-  # advisory locks and cursors outside a transaction do not survive. Prisma's
-  # `@prisma/adapter-pg` runs unnamed statements over node-postgres, so it is safe
-  # here; `max_prepared_statements` is set as insurance for named ones.
-  #
-  # NOT yet measured under load. Raising DB_POOL_MAX above its default of 10 is
-  # the next step and belongs with a staging load test, not with a guess here.
   pgbouncer:
     image: edoburu/pgbouncer:v1.23.1-p2
     environment:
       DB_HOST: postgres
       DB_PORT: '5432'
-      # pgbouncer authenticates clients and the server connection as this one user, so it
-      # is the runtime login — the owner is reached only directly, by migrate/db-roles.
       DB_USER: ${APP_DB_USER:-zaroorat_app}
       DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
-      DB_NAME: ${POSTGRES_DB:-zaroorat}
-      # The image listens on 5432 unless told otherwise, which would have
-      # silently not matched the :6432 in DATABASE_URL above.
+      DB_NAME: ${POSTGRES_DB:-zaroorat_prod}
       LISTEN_PORT: '6432'
       POOL_MODE: transaction
       AUTH_TYPE: scram-sha-256
-      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
-      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-40}
-      RESERVE_POOL_SIZE: ${PGBOUNCER_RESERVE_POOL_SIZE:-10}
-      MIN_POOL_SIZE: ${PGBOUNCER_MIN_POOL_SIZE:-5}
-      MAX_PREPARED_STATEMENTS: ${PGBOUNCER_MAX_PREPARED_STATEMENTS:-200}
-      # Bounded so a stuck client cannot hold a server connection indefinitely.
+      MAX_CLIENT_CONN: 2000
+      DEFAULT_POOL_SIZE: 80
+      RESERVE_POOL_SIZE: 20
+      MIN_POOL_SIZE: 10
       SERVER_IDLE_TIMEOUT: '60'
       QUERY_WAIT_TIMEOUT: '30'
-    # No `ports`. Reachable only over the compose network, same as postgres.
     depends_on:
       postgres:
         condition: service_healthy
@@ -266,62 +135,142 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+    networks:
+      - zaroorat-net
     restart: always
 
   postgres:
-    # Official tags are amd64-only; Apple Silicon runs this under emulation.
     image: postgis/postgis:17-3.5
     platform: linux/amd64
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-zaroorat}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-      POSTGRES_DB: ${POSTGRES_DB:-zaroorat}
-    # No `ports`. Reachable only over the compose network.
-    # No init-script mount either: migration 20260724173304_init runs
-    # CREATE EXTENSION for both pgcrypto and postgis itself.
+      POSTGRES_DB: ${POSTGRES_DB:-zaroorat_prod}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_prod_data:/var/lib/postgresql/data
     healthcheck:
       test:
         [
           'CMD-SHELL',
-          'pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-zaroorat} -d ${POSTGRES_DB:-zaroorat}',
+          'pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-zaroorat} -d ${POSTGRES_DB:-zaroorat_prod}',
         ]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 15s
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.00'
+          memory: 4096M
+    networks:
+      - zaroorat-net
     restart: always
 
-  redis:
-    image: redis:8-trixie
+  valkey:
+    image: valkey/valkey:8.1-alpine
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-    # $$ escapes compose interpolation so the shell expands it, keeping the
-    # password out of the process argument list in `docker inspect`/`ps`.
-    # Redis holds state, not just cache: token revocation epochs, BullMQ, the
-    # Socket.IO adapter, the driver GEO index, locks. So it must never evict —
-    # an evicted epoch key revives a revoked access token, and BullMQ requires
-    # noeviction. At the cap writes fail loudly (503) instead of losing keys.
-    # Size REDIS_MAXMEMORY to about half the RAM Redis may use: an AOF rewrite
-    # forks, and copy-on-write needs the headroom.
     command:
       [
         'sh',
         '-c',
-        'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory ${REDIS_MAXMEMORY:-1gb} --maxmemory-policy noeviction',
+        'exec valkey-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 1024mb --maxmemory-policy noeviction',
       ]
-    # No `ports`.
     volumes:
-      - redis_data:/data
+      - valkey_prod_data:/data
     healthcheck:
-      test: ['CMD-SHELL', 'redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      test: ['CMD-SHELL', 'valkey-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 1024M
+    networks:
+      - zaroorat-net
     restart: always
 
+  migrate:
+    image: ${OPS_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:?IMAGE_TAG or OPS_IMAGE must be specified for production}-ops}
+    profiles: ['ops']
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    environment:
+      APP_ENV: prod
+      NODE_ENV: production
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zaroorat_prod}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
+  db-roles:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    profiles: ['ops']
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - ./scripts/db:/scripts:ro
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - ${POSTGRES_USER:-zaroorat}
+      - -d
+      - ${POSTGRES_DB:-zaroorat_prod}
+      - -v
+      - app_user=${APP_DB_USER:-zaroorat_app}
+      - -f
+      - /scripts/create-app-login.sql
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
+  ops:
+    image: ${OPS_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:${IMAGE_TAG:?IMAGE_TAG or OPS_IMAGE must be specified for production}-ops}
+    profiles: ['ops']
+    env_file:
+      - ${APP_ENV_FILE:-.env.prod}
+    environment:
+      <<: *no-infra-secrets
+      APP_ENV: prod
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${APP_DB_USER:-zaroorat_app}:${APP_DB_PASSWORD}@pgbouncer:6432/${POSTGRES_DB:-zaroorat_prod}
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zaroorat_prod}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
 volumes:
-  postgres_data:
-  redis_data:
+  postgres_prod_data:
+  valkey_prod_data:
+  caddy_prod_data:
+  caddy_prod_config:
+
+networks:
+  zaroorat-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

@@ -24,6 +24,17 @@ export class FareRuleConflictError extends PricingAdminError {
   }
 }
 
+export class FareRuleStaleError extends PricingAdminError {
+  constructor(expectedVersion: number, actualVersion: number) {
+    super(
+      `Fare rule version mismatch: expected v${expectedVersion}, current is v${actualVersion}. Reload and retry.`,
+      'FARE_RULE_STALE',
+      409,
+    );
+    this.name = 'FareRuleStaleError';
+  }
+}
+
 export class CancellationPolicyNotFoundError extends PricingAdminError {
   constructor(message = 'Cancellation policy was not found') {
     super(message, 'CANCELLATION_POLICY_NOT_FOUND', 404);
@@ -35,6 +46,17 @@ export class CancellationPolicyConflictError extends PricingAdminError {
   constructor(message: string) {
     super(message, 'CANCELLATION_POLICY_CONFLICT', 409);
     this.name = 'CancellationPolicyConflictError';
+  }
+}
+
+export class CancellationPolicyStaleError extends PricingAdminError {
+  constructor(expectedVersion: number, actualVersion: number) {
+    super(
+      `Cancellation policy version mismatch: expected v${expectedVersion}, current is v${actualVersion}. Reload and retry.`,
+      'CANCELLATION_POLICY_STALE',
+      409,
+    );
+    this.name = 'CancellationPolicyStaleError';
   }
 }
 
@@ -63,6 +85,13 @@ export class SurgeZoneNotFoundError extends PricingAdminError {
   constructor(message = 'Surge zone was not found') {
     super(message, 'SURGE_ZONE_NOT_FOUND', 404);
     this.name = 'SurgeZoneNotFoundError';
+  }
+}
+
+export class SurgeCityNotFoundError extends PricingAdminError {
+  constructor(message = 'City was not found') {
+    super(message, 'CITY_NOT_FOUND', 404);
+    this.name = 'SurgeCityNotFoundError';
   }
 }
 

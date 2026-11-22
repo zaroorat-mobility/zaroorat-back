@@ -28,9 +28,15 @@ export interface CreateRideInput {
   mapConfigVersion?: number | null;
   /// 004-driver-subscription-wallet. Pinned at acceptance — spec.md FR-031.
   driverPaymentModel?: 'SUBSCRIPTION' | 'COMMISSION' | null;
+  /// Phase 4 (M-02): Grandfathered active subscription locked at accept time (Path A).
+  driverSubscriptionId?: string | null;
   /// COMMISSION-model rides only, determined once at acceptance (spec.md
   /// FR-013b). Null for SUBSCRIPTION-model rides.
   commissionAmount?: Decimal | null;
+  /// Phase 4 (M-02): Write-once immutable financial snapshots captured at accept time.
+  commissionSnapshot?: unknown | null;
+  passengerGstSnapshot?: unknown | null;
+  gstRecoverySnapshot?: unknown | null;
   passengerName?: string | null;
   passengerPhone?: string | null;
   pickupNotes?: string | null;
@@ -60,7 +66,8 @@ export class RideRepository {
         "payment_status", "pickup_location", "pickup_address",
         "drop_location", "drop_address", "accepted_at",
         "wait_time_min", "is_scheduled", "map_provider", "map_config_version",
-        "driver_payment_model", "commission_amount",
+        "driver_payment_model", "driver_subscription_id", "commission_amount",
+        "commission_snapshot", "passenger_gst_snapshot", "gst_recovery_snapshot",
         "passenger_name", "passenger_phone", "pickup_notes",
         "created_at", "updated_at"
       ) VALUES (
@@ -78,7 +85,12 @@ export class RideRepository {
         ${input.dropAddress ?? null}, now(),
         0, ${input.isScheduled ?? false},
         ${input.mapProvider ?? null}, ${input.mapConfigVersion ?? null},
-        ${input.driverPaymentModel ?? null}, ${input.commissionAmount ?? null},
+        ${input.driverPaymentModel ?? null},
+        ${input.driverSubscriptionId ? Prisma.sql`${input.driverSubscriptionId}::uuid` : Prisma.sql`NULL`},
+        ${input.commissionAmount ?? null},
+        ${input.commissionSnapshot != null ? Prisma.sql`${JSON.stringify(input.commissionSnapshot)}::jsonb` : Prisma.sql`NULL`},
+        ${input.passengerGstSnapshot != null ? Prisma.sql`${JSON.stringify(input.passengerGstSnapshot)}::jsonb` : Prisma.sql`NULL`},
+        ${input.gstRecoverySnapshot != null ? Prisma.sql`${JSON.stringify(input.gstRecoverySnapshot)}::jsonb` : Prisma.sql`NULL`},
         ${input.passengerName ?? null}, ${input.passengerPhone ?? null}, ${input.pickupNotes ?? null},
         now(), now()
       )

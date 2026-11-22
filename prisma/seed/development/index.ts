@@ -23,16 +23,37 @@ async function ensureUser(
   profile: { firstName: string; lastName: string },
   extra?: Record<string, unknown>,
 ) {
-  const existing = await prisma.user.findFirst({ where: { phoneNumber: phone, deletedAt: null } });
+  const email = (extra?.email as string | undefined)?.toLowerCase().trim();
+  const existing = await prisma.user.findFirst({
+    where: {
+      deletedAt: null,
+      OR: [
+        { phoneNumber: phone },
+        ...(email ? [{ email }] : []),
+      ],
+    },
+    include: { profile: true },
+  });
+
   if (existing) {
+    const updateData: Record<string, unknown> = {};
     if (extra && extra.email != null) {
+      updateData.email = extra.email as string;
+    }
+    if (extra && extra.passwordHash != null) {
+      updateData.passwordHash = extra.passwordHash as string;
+    }
+    if (extra && extra.isEmailVerified != null) {
+      updateData.isEmailVerified = extra.isEmailVerified === true;
+    }
+    if (!existing.profile) {
+      updateData.profile = { create: profile };
+    }
+
+    if (Object.keys(updateData).length > 0) {
       return prisma.user.update({
         where: { id: existing.id },
-        data: {
-          email: extra.email as string,
-          passwordHash: extra.passwordHash as string,
-          isEmailVerified: extra.isEmailVerified === true,
-        },
+        data: updateData,
       });
     }
     return existing;
@@ -190,7 +211,7 @@ async function ensureAssignedVehicle(
   },
 ) {
   const vehicleType = await prisma.vehicleType.findUniqueOrThrow({
-    where: { code: 'CAB_ECONOMY' },
+    where: { code: 'CAB_ECONOMY_NON_AC' },
   });
   let vehicle = await prisma.vehicle.findUnique({
     where: { registrationNumber: input.registrationNumber },
@@ -295,6 +316,18 @@ export async function seedDevelopment(prisma: Prisma) {
   await seedNotificationTemplates(prisma);
   await seedAppConfig(prisma);
 
+  // No default password in source. Unset, the local admin is created without one (admin
+  // OTP login still works) and an existing admin keeps the password it already has.
+  const adminPassword = (process.env.ADMIN_SEED_PASSWORD ?? process.env.ADMIN_PASSWORD)?.trim();
+  if (!adminPassword) {
+    console.log(
+      '  -> ADMIN_SEED_PASSWORD is not set: the local admin gets no password. Set it in .env.local to enable password login.',
+    );
+  }
+
+  const adminEmail = (process.env.ADMIN_SEED_EMAIL ?? process.env.ADMIN_EMAIL ?? 'admin@zaroorat.com').toLowerCase().trim();
+  const adminPhone = (process.env.ADMIN_SEED_PHONE ?? process.env.ADMIN_PHONE ?? '+919999999999').trim();
+
   const fixtures: Array<{
     phone: string;
     profile: { firstName: string; lastName: string };
@@ -302,12 +335,12 @@ export async function seedDevelopment(prisma: Prisma) {
     extra?: Record<string, unknown>;
   }> = [
     {
-      phone: '+10000000000',
+      phone: adminPhone,
       profile: { firstName: 'Admin', lastName: 'User' },
       roles: ['system_admin'],
       extra: {
-        email: (process.env.ADMIN_SEED_EMAIL ?? 'admin@zaroorat.com').toLowerCase(),
-        passwordHash: hashPassword(process.env.ADMIN_SEED_PASSWORD ?? 'Admin@12345'),
+        email: adminEmail,
+        ...(adminPassword ? { passwordHash: hashPassword(adminPassword) } : {}),
         isEmailVerified: true,
       },
     },
@@ -670,7 +703,7 @@ async function seedPricingFixtures(prisma: Prisma) {
     commissionRatePct: number;
   }> = [
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'GLOBAL',
       baseFare: 60,
       minimumFare: 80,
@@ -712,7 +745,7 @@ async function seedPricingFixtures(prisma: Prisma) {
       commissionRatePct: 10,
     },
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'SGR',
       baseFare: 65,
       minimumFare: 85,
@@ -740,7 +773,7 @@ async function seedPricingFixtures(prisma: Prisma) {
       commissionRatePct: 12,
     },
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'SGR',
       serviceType: 'SCHEDULED',
       baseFare: 70,
@@ -755,7 +788,7 @@ async function seedPricingFixtures(prisma: Prisma) {
       commissionRatePct: 15,
     },
     {
-      code: 'CAB_ECONOMY',
+      code: 'CAB_ECONOMY_NON_AC',
       cityCode: 'SGR',
       serviceZoneCode: 'SGR_AIRPORT',
       baseFare: 90,
@@ -851,7 +884,7 @@ async function seedPricingFixtures(prisma: Prisma) {
   }
 
   if (zoneId) {
-    const cab = byCode['CAB_ECONOMY'];
+    const cab = byCode['CAB_ECONOMY_NON_AC'];
     const auto = byCode['AUTO'];
     // The daily hours live in peakHourStart/End, read in the city's timezone
     // (pricing/utils/peak-window.ts). startsAt/endsAt only bound validity: pinning
@@ -944,7 +977,14 @@ async function seedPromotionsFixtures(prisma: Prisma) {
   const in30Days = new Date(now.getTime() + 30 * 86400000);
 
   const admin = await prisma.user.findFirst({
-    where: { phoneNumber: '+10000000000', deletedAt: null },
+    where: {
+      deletedAt: null,
+      OR: [
+        { phoneNumber: '+10000000000' },
+        { phoneNumber: '+919999999999' },
+        { email: 'admin@zaroorat.com' },
+      ],
+    },
   });
   const demoPassenger = await prisma.user.findFirst({
     where: { phoneNumber: '+10000000002', deletedAt: null },
@@ -958,7 +998,7 @@ async function seedPromotionsFixtures(prisma: Prisma) {
     return;
   }
 
-  const cab = await prisma.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY' } });
+  const cab = await prisma.vehicleType.findUnique({ where: { code: 'CAB_ECONOMY_NON_AC' } });
 
   const welcomePromo = await prisma.promotion.upsert({
     where: { code: 'WELCOME20' },
@@ -1555,7 +1595,7 @@ async function seedBillingFixtures(prisma: Prisma) {
   if (!driver?.currentVehicleId) return;
 
   const vehicle = await prisma.vehicle.findUnique({ where: { id: driver.currentVehicleId } });
-  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY' } });
+  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY_NON_AC' } });
   if (!vehicle || !cabType) return;
 
   const driverName =
@@ -1953,7 +1993,7 @@ async function seedOperationsRideFixtures(prisma: Prisma) {
   if (!driver?.currentVehicleId) return;
 
   const vehicle = await prisma.vehicle.findUnique({ where: { id: driver.currentVehicleId } });
-  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY' } });
+  const cabType = await prisma.vehicleType.findFirst({ where: { code: 'CAB_ECONOMY_NON_AC' } });
   if (!vehicle || !cabType) return;
 
   // Active rides are unique per driver/customer — use dedicated ops drivers for demo fixtures.
@@ -2774,7 +2814,16 @@ async function seedSupportFixtures(prisma: Prisma) {
   }
 
   // 2. Ensure Support Agent for admin user
-  const adminUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000000' } });
+  const adminUser = await prisma.user.findFirst({
+    where: {
+      deletedAt: null,
+      OR: [
+        { phoneNumber: '+10000000000' },
+        { phoneNumber: '+919999999999' },
+        { email: 'admin@zaroorat.com' },
+      ],
+    },
+  });
   let agent: SupportAgent | null = null;
   if (adminUser) {
     agent = await prisma.supportAgent.upsert({
@@ -2973,7 +3022,16 @@ async function seedSupportFixtures(prisma: Prisma) {
 async function seedSafetyFixtures(prisma: Prisma) {
   const customerUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000002' } });
   const driverUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000001' } });
-  const adminUser = await prisma.user.findFirst({ where: { phoneNumber: '+10000000000' } });
+  const adminUser = await prisma.user.findFirst({
+    where: {
+      deletedAt: null,
+      OR: [
+        { phoneNumber: '+10000000000' },
+        { phoneNumber: '+919999999999' },
+        { email: 'admin@zaroorat.com' },
+      ],
+    },
+  });
 
   if (!customerUser) return;
 

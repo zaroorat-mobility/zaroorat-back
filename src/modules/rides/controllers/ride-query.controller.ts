@@ -12,7 +12,11 @@ import { ReceiptService } from '../services/receipt/receipt.service.js';
 import { RideNotFoundError } from '../errors/ride.errors.js';
 import { RIDE_CANCEL_REASONS } from '../constants/ride.constants.js';
 import { ridePartyIds } from '../types/ride-party.js';
-import { toClientRideViewWithMedia } from '../presenters/ride-client.presenter.js';
+import {
+  toClientRideViewWithMedia,
+  toCustomerFareDto,
+  type RideViewAudience,
+} from '../presenters/ride-client.presenter.js';
 
 const LIVE_TRACKING_STATUSES = new Set([
   'ACCEPTED',
@@ -35,11 +39,24 @@ export class RideQueryController {
   private presentRide(
     ride: Parameters<typeof toClientRideViewWithMedia>[0],
     eta?: RideEtaSnapshot | null,
+    audience: RideViewAudience = 'driver',
   ) {
-    return toClientRideViewWithMedia(ride, eta, {
-      fileRepository: this.fileRepository,
-      fileStorageService: this.fileStorageService,
-    });
+    return toClientRideViewWithMedia(
+      ride,
+      eta,
+      {
+        fileRepository: this.fileRepository,
+        fileStorageService: this.fileStorageService,
+      },
+      audience,
+    );
+  }
+
+  private audienceFor(req: FastifyRequest, ride: { customerId?: string | null } | null): RideViewAudience {
+    if (ride?.customerId && callerId(req) === ride.customerId) {
+      return 'customer';
+    }
+    return 'driver';
   }
 
   /// The caller's live ride, whichever side of it they are on.
@@ -53,7 +70,9 @@ export class RideQueryController {
     const activeRide = await this.rideRepo.findActiveForUser(callerId(req));
     const eta =
       activeRide && this.rideEtaService ? this.rideEtaService.getEta(activeRide.id) : null;
-    return reply.send({ data: await this.presentRide(activeRide, eta) });
+    return reply.send({
+      data: await this.presentRide(activeRide, eta, this.audienceFor(req, activeRide)),
+    });
   }
 
   /// Static list of cancel reasons. Filtered by optional `?actor=DRIVER|CUSTOMER`.
@@ -75,7 +94,7 @@ export class RideQueryController {
     if (!ride) throw new RideNotFoundError(id);
     assertRideParty(req, ridePartyIds(ride));
     const eta = this.rideEtaService ? this.rideEtaService.getEta(ride.id) : null;
-    reply.send({ data: await this.presentRide(ride, eta) });
+    reply.send({ data: await this.presentRide(ride, eta, this.audienceFor(req, ride)) });
   }
 
   async getReceipt(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -134,6 +153,16 @@ export class RideQueryController {
 
   async listHistory(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const rides = await this.rideRepo.listCustomerRides(callerId(req));
-    reply.send({ data: rides });
+    const sanitized = rides.map((r) => {
+      const row = r as Record<string, unknown>;
+      const { driverPaymentModel: _dpm, commissionAmount: _ca, fare, ...rest } = row;
+      return {
+        ...rest,
+        ...(fare !== undefined
+          ? { fare: fare ? toCustomerFareDto(fare as Record<string, unknown>) : null }
+          : {}),
+      };
+    });
+    reply.send({ data: sanitized });
   }
 }

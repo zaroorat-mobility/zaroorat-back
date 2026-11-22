@@ -28,8 +28,14 @@ export interface CreateRideRequestInput {
   quotedFare?: Decimal | null;
   boostAmount?: Decimal;
   surgeMultiplier?: Decimal;
+  /// Phase 2.3 (M-08). The winning surge window that applied to this request.
+  surgeWindowId?: string | null;
   /// FR-002. The pricing rule the quote resolved, so completion can bill on it.
   pricingRuleId?: string | null;
+  /// Phase 1 (M-01). Persisted quote lock ID when booked from a quote.
+  quoteId?: string | null;
+  /// Phase 1 (M-02). Write-once immutable snapshot of the resolved rate card & terms.
+  pricingSnapshot?: Prisma.InputJsonValue | null;
   paymentMethod?: string | null;
   promoCode?: string | null;
   scheduledFor?: Date | null;
@@ -67,7 +73,8 @@ export class RideRequestRepository {
         "drop_lat", "drop_lng", "drop_location", "drop_address",
         "estimated_distance_km", "estimated_duration_min", "quoted_fare",
         "boost_amount",
-        "surge_multiplier", "pricing_rule_id", "payment_method", "promo_code",
+        "surge_multiplier", "surge_window_id", "pricing_rule_id", "quote_id", "pricing_snapshot",
+        "payment_method", "promo_code",
         "scheduled_for", "status", "created_at", "expires_at",
         "map_provider", "map_config_version",
         "passenger_name", "passenger_phone", "pickup_notes"
@@ -87,7 +94,14 @@ export class RideRequestRepository {
         ${input.quotedFare ?? null},
         ${boost},
         ${input.surgeMultiplier ?? new Decimal(1)},
+        ${input.surgeWindowId ?? null}::uuid,
         ${input.pricingRuleId ?? null}::uuid,
+        ${input.quoteId ?? null}::uuid,
+        ${
+          input.pricingSnapshot != null
+            ? Prisma.sql`${JSON.stringify(input.pricingSnapshot)}::jsonb`
+            : Prisma.sql`NULL`
+        },
         ${input.paymentMethod ?? null}, ${input.promoCode ?? null},
         ${input.scheduledFor ?? null}, 'CREATED'::"RideRequestStatus",
         now(), ${input.expiresAt ?? null},

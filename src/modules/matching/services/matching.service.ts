@@ -32,6 +32,10 @@ export class MatchingService {
     limit: number,
     vehicleTypeId?: string,
     radiusMeters?: number,
+    /// The request's commission (`PricingService.estimatedCommission`). Omitted
+    /// when it could not be priced: COMMISSION drivers are then not filtered on
+    /// balance, and acceptance — which always prices it — decides.
+    commissionDue?: number,
   ): Promise<MatchCandidate[]> {
     if (limit <= 0) return [];
     // Dispatch owns the retry policy and hands the radius down; omitting it
@@ -49,6 +53,7 @@ export class MatchingService {
     const operable = await this.operableDriverIds(
       ranked.map((driver) => driver.driverId),
       vehicleTypeId,
+      commissionDue,
     );
     const candidates: MatchCandidate[] = [];
     for (const driver of ranked) {
@@ -66,14 +71,38 @@ export class MatchingService {
   /// Everything dispatch can ask the database in one round trip. `rides` is
   /// checked here as well as `DriverOnlineStatus` because the two can disagree:
   /// a status row is written by the application, an active ride row is the fact.
+  ///
+  /// The payment-model clause mirrors what `acceptRideRequest` refuses — no
+  /// model (PAYMENT_MODEL_NOT_SELECTED), a SUBSCRIPTION driver without an
+  /// ACTIVE subscription unexpired by server time (DRIVER_SUBSCRIPTION_REQUIRED),
+  /// a COMMISSION driver whose wallet is below this request's commission
+  /// (INSUFFICIENT_COMMISSION_BALANCE). Without it those drivers held offers
+  /// they could only fail to accept, while the rider waited out each timeout.
+  /// Accept still re-checks all three: a wallet or plan can change after the offer.
   private async operableDriverIds(
     driverIds: readonly string[],
     vehicleTypeId?: string,
+    commissionDue?: number,
   ): Promise<Set<string>> {
     if (driverIds.length === 0) return new Set();
+    const now = new Date();
     const rows = await this.db.client.driver.findMany({
       where: {
         id: { in: [...driverIds] },
+        OR: [
+          {
+            paymentModel: 'SUBSCRIPTION',
+            subscriptions: { some: { status: 'ACTIVE', expiryDate: { gt: now } } },
+          },
+          {
+            paymentModel: 'COMMISSION',
+            // A zero commission is covered by any wallet, including one not yet
+            // created — the same answer `hasSufficientBalance` gives.
+            ...(commissionDue !== undefined && commissionDue > 0
+              ? { commissionWallet: { balance: { gte: commissionDue } } }
+              : {}),
+          },
+        ],
         verificationStatus: 'VERIFIED',
         isSuspended: false,
         deletedAt: null,

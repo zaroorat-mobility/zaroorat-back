@@ -1,3 +1,5 @@
+import { SURGE_FEATURE_FLAG_KEY } from '@modules/pricing/constants.js';
+
 export const PLATFORM_SETTINGS_CATEGORY = 'platform';
 
 export const GENERAL_SETTINGS_CATEGORY = 'general';
@@ -60,7 +62,7 @@ export const FEATURE_FLAG_KEYS = Object.freeze({
   WALLET: 'wallet',
   REFERRALS: 'referrals',
   PROMO_CODES: 'promo_codes',
-  SURGE: 'surge',
+  SURGE: SURGE_FEATURE_FLAG_KEY,
   SCHEDULED_RIDES: 'scheduled_rides',
   DRIVER_INCENTIVES: 'driver_incentives',
 } as const);

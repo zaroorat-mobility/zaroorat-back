@@ -5,6 +5,10 @@ import {
   updateSurgeZoneSchema,
   createSurgeWindowSchema,
   updateSurgeWindowSchema,
+  updateCitySurgeSettingsSchema,
+  listSurgeWindowsQuerySchema,
+  surgeIdParamSchema,
+  surgeCityCodeParamSchema,
 } from './surge.schema.js';
 import { AdminSurgeService } from './surge.service.js';
 
@@ -14,32 +18,31 @@ export class AdminSurgeController {
   async createSurgeZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const data = createSurgeZoneSchema.parse(req.body);
     const zone = await this.adminSurgeService.createSurgeZone(data, callerId(req));
-    return reply.status(201).send(zone);
+    return reply.status(201).send({ data: zone });
   }
 
-  async listSurgeZones(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  async listSurgeZones(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const zones = await this.adminSurgeService.listSurgeZones();
-    return reply.send(zones);
+    return reply.send({ data: zones });
   }
 
   async getSurgeZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const zone = await this.adminSurgeService.getSurgeZone(id);
-    if (!zone) return reply.status(404).send({ error: 'Zone not found' });
-    return reply.send(zone);
+    return reply.send({ data: zone });
   }
 
   async updateSurgeZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const data = updateSurgeZoneSchema.parse(req.body);
     await this.adminSurgeService.updateSurgeZone(id, data, callerId(req));
-    return reply.send({ success: true });
+    return reply.send({ data: { success: true } });
   }
 
   async deleteSurgeZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     await this.adminSurgeService.deleteSurgeZone(id, callerId(req));
-    return reply.send({ success: true });
+    return reply.send({ data: { success: true } });
   }
 
   async createSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -52,39 +55,56 @@ export class AdminSurgeController {
       },
       callerId(req),
     );
-    return reply.status(201).send(window);
+    return reply.status(201).send({ data: window });
   }
 
   async listSurgeWindows(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const windows = await this.adminSurgeService.listSurgeWindows();
-    return reply.send(windows);
+    const query = listSurgeWindowsQuerySchema.parse(req.query ?? {});
+    const result = await this.adminSurgeService.listSurgeWindows(query);
+    return reply.send(result);
   }
 
   async getSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const window = await this.adminSurgeService.getSurgeWindow(id);
-    if (!window) return reply.status(404).send({ error: 'Window not found' });
-    return reply.send(window);
+    return reply.send({ data: window });
+  }
+
+  async listSurgeWindowVersions(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = surgeIdParamSchema.parse(req.params);
+    const versions = await this.adminSurgeService.listSurgeWindowVersions(id);
+    return reply.send({ data: versions });
   }
 
   async updateSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     const data = updateSurgeWindowSchema.parse(req.body);
     const window = await this.adminSurgeService.updateSurgeWindow(
       id,
       {
         ...data,
         startsAt: data.startsAt ? new Date(data.startsAt) : undefined,
-        endsAt: data.endsAt ? new Date(data.endsAt) : undefined,
+        endsAt: data.endsAt === null ? null : data.endsAt ? new Date(data.endsAt) : undefined,
       },
       callerId(req),
     );
-    return reply.send(window);
+    return reply.send({ data: window });
+  }
+
+  async updateCitySurgeSettings(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { cityCode } = surgeCityCodeParamSchema.parse(req.params);
+    const { maxSurgeMultiplier } = updateCitySurgeSettingsSchema.parse(req.body);
+    const saved = await this.adminSurgeService.updateCitySurgeSettings(
+      cityCode,
+      maxSurgeMultiplier,
+      callerId(req),
+    );
+    return reply.send({ data: saved });
   }
 
   async deleteSurgeWindow(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const { id } = req.params as { id: string };
+    const { id } = surgeIdParamSchema.parse(req.params);
     await this.adminSurgeService.deleteSurgeWindow(id, callerId(req));
-    return reply.send({ success: true });
+    return reply.send({ data: { success: true } });
   }
 }

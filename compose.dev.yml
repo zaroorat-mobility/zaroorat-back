@@ -1,118 +1,102 @@
-# Development stack: API + Worker + Postgres/PostGIS + Redis.
-#
-# The API and worker run the SAME image with different commands — the worker
-# owns every queue (including OTP SMS delivery) and is the only process that
-# registers the cron schedules, so an API-only stack delivers no OTPs.
-#
-#   make up-dev      build and start everything
-#   make logs-dev    tail the api
-#   make down-dev    stop and delete volumes
-
 name: zaroorat-dev
 
-x-app-env: &app-env
-  APP_NAME: zaroorat-backend
-  APP_ENV: development
-  NODE_ENV: development
-  # Set here rather than in .env.development so the container talks to the
-  # service containers, not to localhost. `environment` beats `env_file`.
-  DATABASE_URL: postgresql://zaroorat:zaroorat@postgres:5432/zaroorat_dev
-  REDIS_URL: redis://redis:6379
-  JWT_ACCESS_SECRET: local_dev_access_secret_do_not_use_in_prod
-  JWT_REFRESH_SECRET: local_dev_refresh_secret_do_not_use_in_prod
-  RATE_LIMIT_BYPASS: 'true'
+# .env.<env> is also the Compose interpolation file, so it carries the Postgres superuser
+# and schema-owner credentials. The app reads none of them: blank them in every app
+# container so a leaked environment never yields more than the runtime login.
+x-no-infra-secrets: &no-infra-secrets
+  POSTGRES_PASSWORD: ''
+  APP_DB_PASSWORD: ''
+  REDIS_PASSWORD: ''
+  MIGRATION_DATABASE_URL: ''
 
 x-app-build: &app-build
   context: .
-  target: development
+  target: prod
 
-# Hot reload uses Compose file sync, not bind mounts. tsx watch uses fs.watch,
-# which gets no inotify events through a Windows/macOS bind mount — the files
-# change but nothing ever reloads. `develop.watch` polls from the host side and
-# writes into the container, which fs.watch does see.
-#
-#   docker compose -f compose.dev.yml watch     (or: make watch-dev)
-#
-# src/generated is excluded: the host copy carries host-platform Prisma engines
-# and must never overwrite the Linux one built into the image.
-x-app-watch: &app-watch
-  watch:
-    - action: sync
-      path: ./src
-      target: /app/src
-      ignore:
-        - generated/
-    - action: sync
-      path: ./tests
-      target: /app/tests
-    - action: sync+restart
-      path: ./prisma
-      target: /app/prisma
-    # A dependency change cannot be synced in — it needs a real install.
-    - action: rebuild
-      path: ./package.json
-
-# src/config/env/loader.ts THROWS when APP_ENV=development and .env.development
-# is not present in the working directory, so the file is mounted rather than
-# baked into the image — the image stays environment-agnostic and this compose
-# file owns the environment. `make up-dev` creates it from .env.example if it
-# is missing. Values inside it are still overridden by the `environment` block
-# above, because loader.ts uses dotenv `override: false`.
-x-app-env-mount: &app-env-mount
-  - ./.env.development:/app/.env.development:ro
+x-ops-build: &ops-build
+  context: .
+  target: ops
 
 services:
-  # One-shot. Nothing else starts until this exits 0, so a fresh `up` never
-  # leaves the app pointing at an empty schema.
-  migrate:
-    build: *app-build
-    command: ['npx', 'prisma', 'migrate', 'deploy']
-    environment: *app-env
-    volumes: *app-env-mount
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-dev-api.zaroorat.com}
+    volumes:
+      - caddy_dev_data:/data
+      - caddy_dev_config:/config
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
-    restart: 'no'
+    networks:
+      - zaroorat-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+    restart: always
 
   api:
+    image: ${APP_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:dev}
     build: *app-build
-    command: ['npm', 'run', 'dev']
+    command: ['node', 'dist/server.js']
+    env_file:
+      - ${APP_ENV_FILE:-.env.dev}
     environment:
-      <<: *app-env
+      <<: *no-infra-secrets
       HOST: 0.0.0.0
       PORT: 3000
-    volumes: *app-env-mount
-    ports:
-      - '3000:3000'
-    develop: *app-watch
+      TRUSTED_PROXIES: 172.28.0.0/24
+    expose:
+      - '3000'
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.50'
+          memory: 1024M
+    stop_grace_period: 30s
+    networks:
+      - zaroorat-net
+    restart: always
 
   worker:
+    image: ${APP_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:dev}
     build: *app-build
-    command: ['npm', 'run', 'worker:dev']
+    command: ['node', 'dist/worker.js']
+    env_file:
+      - ${APP_ENV_FILE:-.env.dev}
     environment:
-      <<: *app-env
+      <<: *no-infra-secrets
       WORKER_HEALTH_PORT: 3001
-    volumes: *app-env-mount
-    # Published in development only so `curl localhost:3001/ready` works while
-    # debugging queue startup. Not published in production.
-    ports:
-      - '3001:3001'
-    develop: *app-watch
+    expose:
+      - '3001'
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -121,58 +105,184 @@ services:
           '-e',
           "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-      interval: 30s
+      interval: 15s
       timeout: 3s
       retries: 3
-      start_period: 30s
-    restart: unless-stopped
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 768M
+    stop_grace_period: 150s
+    networks:
+      - zaroorat-net
+    restart: always
 
-  postgres:
-    # PostGIS variant is mandatory, not a preference: migration
-    # 20260724173304_init runs `CREATE EXTENSION postgis` and the schema
-    # declares extensions = [postgis, pgcrypto].
-    # Official tags are amd64-only; Apple Silicon runs this under emulation.
-    image: postgis/postgis:17-3.5
-    platform: linux/amd64
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
     environment:
-      POSTGRES_USER: zaroorat
-      POSTGRES_PASSWORD: zaroorat
-      # The application databases (zaroorat_dev, zaroorat_test) are created by
-      # the init scripts below; this is only the bootstrap/maintenance database.
-      POSTGRES_DB: zaroorat
-    ports:
-      - '5432:5432'
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      # Runs once on first boot of an empty volume: creates zaroorat_dev and
-      # zaroorat_test, then installs postgis/uuid-ossp/pgcrypto into both.
-      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_USER: ${APP_DB_USER:-zaroorat_app}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+      DB_NAME: ${POSTGRES_DB:-zaroorat_dev}
+      LISTEN_PORT: '6432'
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 40
+      RESERVE_POOL_SIZE: 10
+      MIN_POOL_SIZE: 5
+      SERVER_IDLE_TIMEOUT: '60'
+      QUERY_WAIT_TIMEOUT: '30'
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      # -U/-d must be set or pg_isready checks the wrong role and passes early.
-      # -h forces TCP, so this cannot pass during the init phase, when postgres
-      # is listening on the unix socket only.
-      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U zaroorat -d zaroorat_dev']
-      interval: 5s
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 6432 -U ${APP_DB_USER:-zaroorat_app}']
+      interval: 10s
       timeout: 5s
       retries: 10
       start_period: 10s
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+    networks:
+      - zaroorat-net
+    restart: always
 
-  redis:
-    image: redis:8-trixie
-    command: ['redis-server', '--appendonly', 'yes']
-    ports:
-      - '6379:6379'
+  postgres:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-zaroorat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-zaroorat_dev}
     volumes:
-      - redis_data:/data
+      - postgres_dev_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
-      interval: 5s
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-zaroorat} -d ${POSTGRES_DB:-zaroorat_dev}',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2048M
+    networks:
+      - zaroorat-net
+    restart: always
+
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      [
+        'sh',
+        '-c',
+        'exec valkey-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 384mb --maxmemory-policy noeviction',
+      ]
+    volumes:
+      - valkey_dev_data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'valkey-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 10s
       timeout: 5s
       retries: 10
       start_period: 5s
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    networks:
+      - zaroorat-net
+    restart: always
+
+  migrate:
+    image: ${OPS_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:dev-ops}
+    build: *ops-build
+    profiles: ['ops']
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    environment:
+      APP_ENV: dev
+      NODE_ENV: production
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zaroorat_dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
+  db-roles:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    profiles: ['ops']
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - ./scripts/db:/scripts:ro
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - ${POSTGRES_USER:-zaroorat}
+      - -d
+      - ${POSTGRES_DB:-zaroorat_dev}
+      - -v
+      - app_user=${APP_DB_USER:-zaroorat_app}
+      - -f
+      - /scripts/create-app-login.sql
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
+
+  ops:
+    image: ${OPS_IMAGE:-ghcr.io/zaroorat-mobility/zaroorat-backend:dev-ops}
+    build: *ops-build
+    profiles: ['ops']
+    env_file:
+      - ${APP_ENV_FILE:-.env.dev}
+    environment:
+      <<: *no-infra-secrets
+      APP_ENV: dev
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${APP_DB_USER:-zaroorat_app}:${APP_DB_PASSWORD}@pgbouncer:6432/${POSTGRES_DB:-zaroorat_dev}
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-zaroorat}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-zaroorat_dev}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    networks:
+      - zaroorat-net
+    restart: 'no'
 
 volumes:
-  postgres_data:
-  redis_data:
+  postgres_dev_data:
+  valkey_dev_data:
+  caddy_dev_data:
+  caddy_dev_config:
+
+networks:
+  zaroorat-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

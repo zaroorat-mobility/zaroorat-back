@@ -1,17 +1,7 @@
 import { DatabaseService } from '@core/database';
+import { vehicleTypeGroup } from '@modules/vehicles/services/vehicle-type.service.js';
 import { AdminVehicleNotFoundError } from './vehicle.errors.js';
 import type { ListVehiclesQuery } from './vehicle.schemas.js';
-
-function mapVehicleTypeLabel(
-  code: string | null | undefined,
-  name: string | null | undefined,
-): string {
-  const raw = (code ?? name ?? 'cab').toLowerCase();
-  if (raw.includes('auto')) return 'auto';
-  if (raw.includes('bike') || raw.includes('scooter')) return 'bike';
-  if (raw.includes('pool') || raw.includes('share')) return 'carpool';
-  return 'cab';
-}
 
 function displayName(
   driverProfile: { fullLegalName: string | null } | null | undefined,
@@ -284,7 +274,7 @@ export class AdminVehicleService {
         ? displayName(driver.profile, driver.user.profile, driver.user.phoneNumber)
         : (row.ownerName ?? 'Unassigned'),
       registrationPlate: row.registrationNumber,
-      vehicleType: mapVehicleTypeLabel(row.vehicleType?.code, row.vehicleType?.name),
+      vehicleType: vehicleTypeGroup(row.vehicleType?.category),
       ...(row.vehicleType?.name ? { vehicleCategory: row.vehicleType.name } : {}),
       ...(row.make ? { brand: row.make } : {}),
       ...(row.model ? { model: row.model } : {}),

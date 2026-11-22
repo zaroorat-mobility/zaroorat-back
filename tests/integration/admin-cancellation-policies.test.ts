@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 import { grantRole } from './helpers/fixtures.js';
 import { hashPassword } from '../../src/modules/auth/utils/password.js';
+import { VEHICLE_TYPE_SEED } from '../../prisma/seed/shared/vehicle-types.js';
 
 const ADMIN_PHONE = '+919876545011';
 const ADMIN_EMAIL = 'cancel-admin@zaroorat.test';
@@ -83,5 +84,34 @@ describe('admin cancellation policies (integration)', () => {
     });
     assert.equal(deactivated.statusCode, 200, deactivated.payload);
     assert.equal(deactivated.json().data.status, 'inactive');
+  });
+  it('scopes a policy to an exact vehicle type and refuses the generic "cab"', async () => {
+    const authHeader = await loginAdmin();
+    const car = VEHICLE_TYPE_SEED.find((type) => type.category === 'car');
+    assert.ok(car);
+    const row = await db().client.vehicleType.findUniqueOrThrow({ where: { code: car.code } });
+    const base = {
+      actor: 'rider',
+      scenario: 'after_arrival',
+      chargeType: 'fixed',
+      chargeAmount: 30,
+    };
+
+    const generic = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/cancellation-policies',
+      headers: authHeader,
+      payload: { ...base, vehicleType: 'cab' },
+    });
+    assert.equal(generic.statusCode, 404, generic.payload);
+
+    const exact = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/cancellation-policies',
+      headers: authHeader,
+      payload: { ...base, vehicleTypeId: row.id },
+    });
+    assert.equal(exact.statusCode, 201, exact.payload);
+    assert.equal(exact.json().data.vehicleTypeId, row.id);
   });
 });

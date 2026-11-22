@@ -56,6 +56,9 @@ export const createManualApplicationBodySchema = z.object({
   panUrl: optionalUrl,
   driverSelfieUrl: optionalUrl,
   vehicleType: z.enum(['cab', 'auto', 'bike', 'carpool']),
+  /// The exact catalog type. Required whenever `vehicleType`'s category holds
+  /// more than one active type (every cab city does).
+  vehicleTypeId: z.string().uuid().optional(),
   vehicleCategory: z.string().trim().min(1).max(80).optional(),
   brand: z.string().trim().min(1).max(80),
   model: z.string().trim().min(1).max(80),

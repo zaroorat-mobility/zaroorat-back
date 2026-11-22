@@ -4,6 +4,7 @@ import { container } from '@core/di';
 import { rateLimits } from '@config';
 import { AdminPaymentManagementController } from './payment-management.controller.js';
 import { AdminFinanceController } from './finance.controller.js';
+import { AdminDriverMonetizationController } from './driver-monetization.controller.js';
 import { DocumentComplianceController } from './document-compliance.controller.js';
 import { handlePaymentError } from '@modules/payments/schemas/error-response.js';
 import { FinanceAdminError } from './finance.errors.js';
@@ -55,6 +56,9 @@ export async function adminPaymentRoutes(fastify: FastifyInstance): Promise<void
     'adminPaymentManagementController',
   );
   const finance = container.resolve<AdminFinanceController>('adminFinanceController');
+  const monetization = container.resolve<AdminDriverMonetizationController>(
+    'adminDriverMonetizationController',
+  );
   const documents = container.resolve<DocumentComplianceController>('documentComplianceController');
 
   const canFinanceRead = {
@@ -141,6 +145,19 @@ export async function adminPaymentRoutes(fastify: FastifyInstance): Promise<void
   );
 
   // ─── Driver ledger / search ───────────────────────────────────────────────
+  // Read-only views of commission wallets and driver subscriptions.
+  fastify.get('/finance/commission-wallets', canFinanceRead, (req, reply) =>
+    monetization.listCommissionWallets(req, reply),
+  );
+  fastify.get('/finance/commission-wallets/:driverId/transactions', canFinanceRead, (req, reply) =>
+    monetization.listCommissionWalletTransactions(req, reply),
+  );
+  fastify.get('/finance/subscription-plans', canFinanceRead, (req, reply) =>
+    monetization.listSubscriptionPlans(req, reply),
+  );
+  fastify.get('/finance/driver-subscriptions', canFinanceRead, (req, reply) =>
+    monetization.listDriverSubscriptions(req, reply),
+  );
   fastify.get('/finance/drivers/search', canFinanceRead, (req, reply) =>
     finance.searchDrivers(req, reply),
   );

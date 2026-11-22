@@ -1,6 +1,9 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { callerId } from '@core/auth';
+import { SYSTEM_ADMIN_ROLE_SLUG } from '@modules/auth/constants/auth.constants';
+import type { PermissionRepository } from '@modules/auth/repositories/permission.repository';
 import { AdminGeographicService } from './admin-geographic.service.js';
+import type { GeographicSimulationService } from './geographic-simulation.service.js';
 import {
   cityIdParamSchema,
   createCityBodySchema,
@@ -12,6 +15,7 @@ import {
   reconcileApplyBodySchema,
   reconcilePreviewQuerySchema,
   serviceZoneIdParamSchema,
+  simulateQuerySchema,
   stateIdParamSchema,
   updateCityBodySchema,
   updateServiceZoneBodySchema,
@@ -19,7 +23,34 @@ import {
 } from './geo.schemas.js';
 
 export class AdminGeographicController {
-  constructor(private readonly adminGeographicService: AdminGeographicService) {}
+  constructor(
+    private readonly adminGeographicService: AdminGeographicService,
+    private readonly geographicSimulationService: GeographicSimulationService,
+    private readonly permissionRepository: PermissionRepository,
+  ) {}
+
+  /// Geography staff can test a point. Only those who may see pricing get the fare.
+  async simulate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = simulateQuerySchema.parse(req.query);
+    const auth = req.auth;
+    const canSeePricing =
+      auth != null &&
+      (auth.roles.includes(SYSTEM_ADMIN_ROLE_SLUG) ||
+        (await this.permissionRepository.findAllowedCodesForUser(auth.userId)).includes(
+          'pricing:read',
+        ));
+    const data = await this.geographicSimulationService.simulate(
+      { ...query, at: query.at ? new Date(query.at) : undefined },
+      canSeePricing,
+    );
+    reply.send({ data });
+  }
+
+  async getCitySetup(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = cityIdParamSchema.parse(req.params);
+    const data = await this.adminGeographicService.getCitySetup(id);
+    reply.send({ data });
+  }
 
   async listCountries(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const result = await this.adminGeographicService.listCountries();

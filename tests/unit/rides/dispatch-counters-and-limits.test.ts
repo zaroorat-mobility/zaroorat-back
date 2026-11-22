@@ -121,6 +121,7 @@ describe('Dispatch counters and limits tests (Step 3)', () => {
         mockTxManager as never,
         mockEventPublisher as never,
         { dispatchOffered: () => {}, dispatchRejected: () => {} } as never,
+        { estimatedCommission: async () => 0 } as never,
       );
 
       return {

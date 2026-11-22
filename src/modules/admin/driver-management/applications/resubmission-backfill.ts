@@ -27,6 +27,7 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { Client as PgClient } from 'pg';
+import { normalizeEnvironment } from '@config/env/environment.js';
 import { ConnectionError, PrismaErrorMapper, type ProviderClient } from '@core/database/index.js';
 import type { TransactionClient } from '@core/database/TransactionManager';
 import { Prisma } from '../../../../generated/prisma/index.js';
@@ -717,7 +718,9 @@ export function assertSafeTarget(
   if (!options.host) {
     throw new BackfillRefusal('pass --host <host[:port]> to confirm the database server.');
   }
-  if (options.env !== connected.environment) {
+  // Legacy and canonical spellings name the same environment (production = prod, …).
+  const environment = normalizeEnvironment(connected.environment);
+  if (environment === undefined || normalizeEnvironment(options.env) !== environment) {
     throw new BackfillRefusal(
       `--env ${options.env} does not match the loaded environment ${connected.environment}.`,
     );
@@ -734,14 +737,14 @@ export function assertSafeTarget(
     );
   }
   const loopback = isLoopback(connected.host);
-  if (!loopback && (connected.environment === 'development' || connected.environment === 'test')) {
+  if (!loopback && (environment === 'local' || environment === 'test')) {
     throw new BackfillRefusal(
       `APP_ENV=${connected.environment} but the database server ${server} is not on this machine.`,
     );
   }
-  if ((connected.environment === 'production' || !loopback) && !options.allowProduction) {
+  if ((environment === 'prod' || !loopback) && !options.allowProduction) {
     throw new BackfillRefusal(
-      `${server} is treated as production (${connected.environment === 'production' ? 'APP_ENV=production' : 'a remote server'}); pass --allow-production once the dry run is reviewed.`,
+      `${server} is treated as production (${environment === 'prod' ? `APP_ENV=${connected.environment}` : 'a remote server'}); pass --allow-production once the dry run is reviewed.`,
     );
   }
   if (options.apply && !options.actor) {

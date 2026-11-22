@@ -1,5 +1,7 @@
 import { DatabaseService } from '@core/database';
-import { maskAccountNumber } from '@shared/crypto/bank-account-crypto.js';
+import { vehicleTypeGroup } from '@modules/vehicles/services/vehicle-type.service.js';
+import { CommissionWalletRepository } from '@modules/payments/repositories/commission-wallet.repository.js';
+import { maskAccountNumber, protectAccountNumber } from '@shared/crypto/bank-account-crypto.js';
 import type { UserStatus } from '@core/database/types';
 import { Prisma } from '../../../../generated/prisma/index.js';
 import { UserRepository } from '@modules/auth/repositories/user.repository.js';
@@ -15,6 +17,8 @@ export type DriverStatusDto =
 
 export interface DriverListItemDto {
   id: string;
+  /// The driver's own app account: what an admin push message is addressed to.
+  userId: string;
   driverCode: string;
   applicationId: string;
   driverName: string;
@@ -269,17 +273,6 @@ function vehicleDocFields(
   };
 }
 
-function mapVehicleTypeLabel(
-  code: string | null | undefined,
-  name: string | null | undefined,
-): string {
-  const raw = (code ?? name ?? 'cab').toLowerCase();
-  if (raw.includes('auto')) return 'auto';
-  if (raw.includes('bike') || raw.includes('scooter')) return 'bike';
-  if (raw.includes('pool') || raw.includes('share')) return 'carpool';
-  return 'cab';
-}
-
 export class AdminDriverService {
   constructor(
     private readonly databaseService: DatabaseService,
@@ -287,6 +280,7 @@ export class AdminDriverService {
     private readonly userRepository: UserRepository,
     private readonly sessionService: SessionService,
     private readonly epochService: EpochService,
+    private readonly commissionWalletRepository: CommissionWalletRepository,
   ) {}
 
   /// `narrow` filters the rows in the query itself, so paging and the total count are over
@@ -541,10 +535,7 @@ export class AdminDriverService {
             vehicle: {
               id: vehicle.id,
               driverId: row.id,
-              vehicleType: mapVehicleTypeLabel(
-                vehicle.vehicleType?.code,
-                vehicle.vehicleType?.name,
-              ),
+              vehicleType: vehicleTypeGroup(vehicle.vehicleType?.category),
               ...(vehicle.vehicleType?.name ? { vehicleCategory: vehicle.vehicleType.name } : {}),
               ...(vehicle.make ? { brand: vehicle.make } : {}),
               ...(vehicle.model ? { model: vehicle.model } : {}),
@@ -807,17 +798,18 @@ export class AdminDriverService {
     driverId: string,
     amount: number,
     actor: AuditActor,
-    notes?: string,
+    notes: string,
   ): Promise<DriverDetailsDto> {
     if (amount <= 0) throw new Error('Top-up amount must be greater than zero');
     await this.databaseService.transactionManager.execute(async (tx) => {
       await lockForAudit(tx, 'drivers', driverId);
-      let wallet = await tx.driverCommissionWallet.findUnique({ where: { driverId } });
-      if (!wallet) {
-        wallet = await tx.driverCommissionWallet.create({
-          data: { driverId, balance: new Prisma.Decimal(0), currency: 'INR' },
-        });
-      }
+      // The wallet row lock every other balance writer takes (ride commission
+      // deduction, recharge, refund). Locking only the driver row let a ride's
+      // commission deduction commit between this read and the write below, and
+      // the write then put the pre-deduction balance back — commission lost.
+      await this.commissionWalletRepository.getOrCreateWallet(driverId, tx);
+      const wallet = await this.commissionWalletRepository.lockForUpdate(driverId, tx);
+      if (!wallet) throw new Error('Commission wallet could not be locked');
       const newBalance = new Prisma.Decimal(wallet.balance).add(new Prisma.Decimal(amount));
       await tx.driverCommissionWallet.update({
         where: { id: wallet.id },
@@ -831,7 +823,7 @@ export class AdminDriverService {
           amount: new Prisma.Decimal(amount),
           balanceAfter: newBalance,
           referenceType: 'ADMIN_ADJUSTMENT',
-          description: notes || `Admin wallet credit by ${actor.actorId}`,
+          description: notes,
         },
       });
       await recordAdminAction(tx, {
@@ -840,7 +832,7 @@ export class AdminDriverService {
         entityType: 'driver_wallet',
         entityId: wallet.id,
         summary: `Admin credited ₹${amount} to driver commission wallet`,
-        after: { balance: newBalance.toNumber(), amount },
+        after: { balance: newBalance.toNumber(), amount, reason: notes },
         result: 'SUCCESS',
       });
     });
@@ -1092,42 +1084,91 @@ export class AdminDriverService {
         }
       }
 
-      // 6. Update Bank Account
+      // 6. Update Bank Account (encrypts account number with AES-256-GCM; never writes dummy IFSC/account placeholders)
       const bName = (data.bankAccount?.bankName || data.bankName)?.trim();
       const bHolder = (data.bankAccount?.accountHolderName || data.accountHolderName)?.trim();
       const bNum = (data.bankAccount?.accountNumber || data.accountNumber)?.trim();
       const bIfsc = (data.bankAccount?.ifscCode || data.ifscCode)?.trim()?.toUpperCase();
       const bUpi = (data.bankAccount?.upiId || data.upiId)?.trim();
+      const hasUnmaskedAccountNumber = Boolean(bNum && !/[*•]/.test(bNum));
 
-      if (bName || bHolder || bIfsc || bUpi || (bNum && !bNum.includes('•'))) {
+      if (bName || bHolder || bIfsc || bUpi || hasUnmaskedAccountNumber) {
         const existingAcc = row.bankAccounts?.[0];
+        if (bIfsc && (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bIfsc) || bIfsc === 'IFSC0000000')) {
+          throw new AdminDriverConflictError(
+            'Invalid IFSC code. Provide a valid 11-character Indian IFSC code (e.g. HDFC0001234).',
+          );
+        }
+
+        const protectedNum = hasUnmaskedAccountNumber
+          ? (() => {
+              const clean = bNum!.replace(/[\s-]/g, '');
+              if (clean.length < 6) {
+                throw new AdminDriverConflictError(
+                  'Bank account number must be at least 6 characters.',
+                );
+              }
+              return protectAccountNumber(clean);
+            })()
+          : null;
+
         if (existingAcc) {
           const bankUpdates: Prisma.DriverBankAccountUpdateInput = {};
-          if (bName) bankUpdates.bankName = bName;
-          if (bHolder) bankUpdates.accountHolderName = bHolder;
-          if (bIfsc) bankUpdates.ifscCode = bIfsc;
-          if (bUpi) bankUpdates.upiId = bUpi;
-          if (bNum && !bNum.includes('•')) {
-            const clean = bNum.replace(/\D/g, '');
-            bankUpdates.accountNumberLast4 =
-              clean.length >= 4 ? clean.slice(-4) : clean.padStart(4, '0');
+          let coreDetailsChanged = false;
+
+          if (bName && bName !== existingAcc.bankName) {
+            bankUpdates.bankName = bName;
+            coreDetailsChanged = true;
           }
-          await tx.driverBankAccount.update({
-            where: { id: existingAcc.id },
-            data: bankUpdates,
-          });
-        } else {
-          const clean = bNum ? bNum.replace(/\D/g, '') : '';
-          const last4 =
-            clean.length >= 4 ? clean.slice(-4) : clean ? clean.padStart(4, '0') : '0000';
+          if (bHolder && bHolder !== existingAcc.accountHolderName) {
+            bankUpdates.accountHolderName = bHolder;
+            coreDetailsChanged = true;
+          }
+          if (bIfsc && bIfsc !== existingAcc.ifscCode) {
+            bankUpdates.ifscCode = bIfsc;
+            coreDetailsChanged = true;
+          }
+          if (bUpi !== undefined && bUpi !== (existingAcc.upiId ?? '')) {
+            bankUpdates.upiId = bUpi || null;
+          }
+          if (protectedNum) {
+            bankUpdates.accountNumberEnc = null;
+            bankUpdates.accountNumberCiphertext = protectedNum.ciphertext;
+            bankUpdates.accountNumberLast4 = protectedNum.last4;
+            bankUpdates.accountNumberHash = protectedNum.hash;
+            bankUpdates.encryptionKeyVersion = protectedNum.keyVersion;
+            coreDetailsChanged = true;
+          }
+
+          if (coreDetailsChanged && existingAcc.status !== 'ENTERED') {
+            bankUpdates.status = 'ENTERED';
+            bankUpdates.verificationStatus = 'PENDING';
+            bankUpdates.payoutEnabled = false;
+            bankUpdates.statusReason = null;
+          }
+
+          if (Object.keys(bankUpdates).length > 0) {
+            await tx.driverBankAccount.update({
+              where: { id: existingAcc.id },
+              data: bankUpdates,
+            });
+          }
+        } else if (bName && bIfsc && protectedNum) {
           await tx.driverBankAccount.create({
             data: {
               driverId: id,
-              bankName: bName || 'Bank',
+              bankName: bName,
               accountHolderName: bHolder || name || 'Account Holder',
-              ifscCode: bIfsc || 'IFSC0000000',
-              accountNumberLast4: last4,
+              ifscCode: bIfsc,
+              accountNumberEnc: null,
+              accountNumberCiphertext: protectedNum.ciphertext,
+              accountNumberLast4: protectedNum.last4,
+              accountNumberHash: protectedNum.hash,
+              encryptionKeyVersion: protectedNum.keyVersion,
               ...(bUpi ? { upiId: bUpi } : {}),
+              status: 'ENTERED',
+              verificationStatus: 'PENDING',
+              payoutEnabled: false,
               isDefault: true,
               enteredBy: actor.actorId,
             },
@@ -1427,12 +1468,13 @@ export class AdminDriverService {
 
     return {
       id: row.id,
+      userId: row.userId,
       driverCode: row.driverCode,
       applicationId: row.id,
       driverName: name,
       mobileNumber: row.user.phoneNumber,
       ...(row.user.email ? { email: row.user.email } : {}),
-      vehicleType: mapVehicleTypeLabel(vehicle?.vehicleType?.code, vehicle?.vehicleType?.name),
+      vehicleType: vehicleTypeGroup(vehicle?.vehicleType?.category),
       ...(vehicle?.registrationNumber ? { registrationPlate: vehicle.registrationNumber } : {}),
       ...(vehicle?.make ? { vehicleMake: vehicle.make } : {}),
       ...(vehicle?.model ? { vehicleModel: vehicle.model } : {}),

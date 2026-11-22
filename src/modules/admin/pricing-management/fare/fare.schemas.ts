@@ -48,39 +48,113 @@ export const listServiceZonesQuerySchema = z.object({
 ///
 /// A field an admin form can submit and the server discards is worse than a
 /// missing field: the operator sets it, sees it accepted, and believes it holds.
-const fareRuleFieldsSchema = z.object({
-  vehicleType: vehicleTypeCodeSchema,
-  cityCode: z.string().trim().min(1).max(20).default('GLOBAL'),
-  serviceType: rideServiceTypeSchema.optional().nullable(),
-  serviceZoneId: z.string().uuid().optional().nullable(),
-  baseFare: z.coerce.number().min(0),
-  minimumFare: z.coerce.number().min(0),
-  perKmRate: z.coerce.number().min(0),
-  perMinuteRate: z.coerce.number().min(0),
-  freeWaitingMinutes: z.coerce.number().int().min(0).default(3),
-  waitingChargePerMinute: z.coerce.number().min(0).default(0),
-  bookingFee: z.coerce.number().min(0).default(0),
-  platformFeePct: z.coerce.number().min(0).max(100).default(0),
-  /// FR-009. The flat platform fee this rule charges when `platformFeePct` is 0.
-  /// Omit it to inherit the environment default; send 0 to mean no platform fee,
-  /// which was previously impossible to express — a zero percentage silently
-  /// fell through to the env's flat fee.
-  platformFeeFlat: z.coerce.number().min(0).optional(),
-  taxRatePct: z.coerce.number().min(0).max(100).optional(),
-  commissionRatePct: z.coerce.number().min(0).max(100).optional(),
-  status: z.enum(['active', 'inactive']).optional().default('active'),
-  effectiveFrom: z.string().min(1),
-  effectiveTo: z.string().optional(),
+///
+/// `vehicleTypeId` is the preferred way to name the type; `vehicleType` (the
+/// exact code) is still accepted for older admin builds. Both must name one row.
+const effectiveDateStringSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => !Number.isNaN(new Date(value).getTime()), {
+    message: 'Must be a valid ISO-8601 date or date-time string',
+  });
+
+const nullableRate = (min: number, max: number) =>
+  z.union([z.null(), z.number().finite().min(min).max(max)]).optional();
+
+const fareRuleFieldsSchema = z
+  .object({
+    vehicleTypeId: z.string().uuid().optional(),
+    vehicleType: vehicleTypeCodeSchema.optional(),
+    cityCode: z.string().trim().min(1).max(20).default('GLOBAL'),
+    serviceType: rideServiceTypeSchema.optional().nullable(),
+    serviceZoneId: z.string().uuid().optional().nullable(),
+    baseFare: z.number().finite().min(0).max(50_000),
+    minimumFare: z.number().finite().min(0).max(50_000),
+    perKmRate: z.number().finite().min(0).max(5_000),
+    perMinuteRate: z.number().finite().min(0).max(1_000),
+    freeWaitingMinutes: z.number().int().min(0).max(120).default(3),
+    waitingChargePerMinute: z.number().finite().min(0).max(1_000).default(0),
+    bookingFee: z.number().finite().min(0).max(5_000).default(0),
+    platformFeePct: z.number().finite().min(0).max(100).default(0),
+    /// FR-009 / Phase 1.2: `null` explicitly clears a per-rule override (inherit default);
+    /// `0` explicitly sets zero; `undefined` leaves untouched on PATCH.
+    platformFeeFlat: nullableRate(0, 5_000),
+    taxRatePct: nullableRate(0, 100),
+    commissionRatePct: nullableRate(0, 100),
+    status: z.enum(['active', 'inactive']).optional().default('active'),
+    effectiveFrom: effectiveDateStringSchema,
+    effectiveTo: effectiveDateStringSchema.nullable().optional(),
+  })
+  .strict();
+
+export const createFareRuleBodySchema = fareRuleFieldsSchema
+  .refine((body) => Boolean(body.vehicleTypeId || body.vehicleType), {
+    message: 'vehicleTypeId (or the exact vehicleType code) is required',
+    path: ['vehicleTypeId'],
+  })
+  .superRefine((body, ctx) => {
+    if (body.effectiveTo) {
+      const from = new Date(body.effectiveFrom).getTime();
+      const to = new Date(body.effectiveTo).getTime();
+      if (to <= from) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['effectiveTo'],
+          message: 'effectiveTo must be strictly after effectiveFrom',
+        });
+      }
+    }
+  });
+
+export const updateFareRuleBodySchema = fareRuleFieldsSchema
+  .partial()
+  .extend({
+    cityCode: z.string().trim().min(1).max(20).optional(),
+    effectiveFrom: effectiveDateStringSchema.optional(),
+    expectedVersion: z.coerce.number().int().min(1).optional(),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    if (body.effectiveFrom && body.effectiveTo) {
+      const from = new Date(body.effectiveFrom).getTime();
+      const to = new Date(body.effectiveTo).getTime();
+      if (to <= from) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['effectiveTo'],
+          message: 'effectiveTo must be strictly after effectiveFrom',
+        });
+      }
+    }
+  });
+
+/// An unsaved rule plus a trip, priced by PricingService exactly as a ride would be. Rates use
+/// the same fields and rules as saving: an omitted or null tax/commission rate is the platform default.
+export const previewFareRuleBodySchema = z.object({
+  baseFare: z.coerce.number().min(0).max(50_000),
+  minimumFare: z.coerce.number().min(0).max(50_000),
+  perKmRate: z.coerce.number().min(0).max(5_000),
+  perMinuteRate: z.coerce.number().min(0).max(1_000),
+  freeWaitingMinutes: z.coerce.number().int().min(0).max(120).default(3),
+  waitingChargePerMinute: z.coerce.number().min(0).max(1_000).default(0),
+  bookingFee: z.coerce.number().min(0).max(5_000).default(0),
+  platformFeePct: z.number().finite().min(0).max(100).default(0),
+  platformFeeFlat: nullableRate(0, 5_000),
+  taxRatePct: nullableRate(0, 100),
+  commissionRatePct: nullableRate(0, 100),
+  distanceKm: z.coerce.number().min(0).max(2000),
+  durationMin: z.coerce.number().min(0).max(1440),
+  waitingMinutes: z.coerce.number().min(0).max(600).default(0),
+  surgeMultiplier: z.coerce.number().min(1).max(10).default(1),
+  discountAmount: z.coerce.number().min(0).default(0),
+  fareCeiling: z.coerce.number().min(0).optional(),
+  cityCode: z.string().trim().max(40).nullish(),
+  serviceZoneId: z.string().uuid().nullish(),
+  vehicleType: z.string().trim().max(64).nullish(),
 });
 
-export const createFareRuleBodySchema = fareRuleFieldsSchema;
-
-export const updateFareRuleBodySchema = fareRuleFieldsSchema.partial().extend({
-  vehicleType: vehicleTypeCodeSchema.optional(),
-  cityCode: z.string().trim().min(1).max(20).optional(),
-  effectiveFrom: z.string().min(1).optional(),
-});
-
+export type PreviewFareRuleBody = z.infer<typeof previewFareRuleBodySchema>;
 export type ListFareRulesQuery = z.infer<typeof listFareRulesQuerySchema>;
 export type CreateFareRuleBody = z.infer<typeof createFareRuleBodySchema>;
 export type UpdateFareRuleBody = z.infer<typeof updateFareRuleBodySchema>;

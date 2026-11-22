@@ -1,4 +1,8 @@
-import { RideNotFoundError, RideCustomerMismatchError } from '../errors/ride.errors.js';
+import {
+  InvalidRideStateTransitionError,
+  RideNotFoundError,
+  RideCustomerMismatchError,
+} from '../errors/ride.errors.js';
 import { RIDE_REQUEST_IDEMPOTENCY_TTL_SECONDS } from '../constants/ride.constants.js';
 import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -260,5 +264,49 @@ export class RideStateController {
 
     const enriched = await this.rideRepo.findById(id);
     return reply.send({ data: enriched ? await this.presentRide(enriched) : null });
+  }
+
+  /// Phase 3: Previews the exact cancellation fee & grace window for an active ride
+  /// before the caller confirms cancellation. Uses the exact same assessment engine
+  /// as `POST /api/v1/rides/:id/cancel`.
+  async cancellationQuote(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as { id: string };
+    const query = (req.query ?? {}) as { reasonCode?: string };
+    const ride = await this.rideRepo.findById(id);
+    if (!ride) throw new RideNotFoundError(id);
+
+    const party = rideParty(callerId(req), ride);
+    if (party !== 'DRIVER' && party !== 'CUSTOMER') {
+      throw new RideCustomerMismatchError(id);
+    }
+
+    const terminalStatuses = new Set([
+      'COMPLETED',
+      'CANCELLED_BY_CUSTOMER',
+      'CANCELLED_BY_DRIVER',
+      'CANCELLED_BY_SYSTEM',
+    ]);
+    if (terminalStatuses.has(ride.status)) {
+      throw new InvalidRideStateTransitionError(
+        ride.status,
+        party === 'DRIVER' ? 'CANCELLED_BY_DRIVER' : 'CANCELLED_BY_CUSTOMER',
+      );
+    }
+
+    const quote = await this.rideService.cancellation.quoteCancellation({
+      ride,
+      actor: party,
+      ...(typeof query.reasonCode === 'string' && query.reasonCode.trim()
+        ? { reasonCode: query.reasonCode.trim() }
+        : {}),
+    });
+
+    const { snapshot: _internalSnapshot, driverCompensationPreview, ...publicQuote } = quote;
+    return reply.send({
+      data: {
+        ...publicQuote,
+        ...(party === 'DRIVER' ? { driverCompensationPreview } : {}),
+      },
+    });
   }
 }

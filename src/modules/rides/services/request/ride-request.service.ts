@@ -5,6 +5,7 @@ import {
   RideRequestRepository,
   CreateRideRequestInput,
 } from '../../repositories/ride-request.repository.js';
+import { RideQuoteRepository } from '../../repositories/ride-quote.repository.js';
 import { RideRepository } from '../../repositories/ride.repository.js';
 import { RideDispatchRepository } from '../../repositories/ride-dispatch.repository.js';
 import { PricingService, SurgeService } from '@modules/pricing';
@@ -25,8 +26,18 @@ import {
   ScheduledTooSoonError,
   DestinationChangeNotAllowedError,
   DestinationFareChangedError,
+  QuoteNotFoundError,
+  QuoteCustomerMismatchError,
+  QuoteExpiredError,
+  QuoteAlreadyUsedError,
+  QuoteVehicleMismatchError,
+  QuoteRequiredError,
+  FareChangedError,
 } from '../../errors/ride.errors.js';
-import { rideConfig } from '@config';
+import { pricingConfig, rideConfig, type PricingRateCard } from '@config';
+import { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
+import { PRICING_FEATURE_FLAG_KEYS } from '@modules/admin/system-settings/platform/constants/pricing-feature-flags.constants.js';
+import type { Prisma } from '../../../../generated/prisma/index.js';
 import { rideEvent, RIDE_EVENT_CATALOG } from '../../events/catalog.js';
 import { RideMetrics } from '../../metrics/ride.metrics.js';
 import {
@@ -42,9 +53,21 @@ import {
 } from '@modules/location';
 import { logger } from '@shared/logger/index.js';
 import type { Ride, RideRequest } from '../../types';
-import type { ItemizedFareResult } from '@modules/pricing';
+import type { ItemizedFareResult, PricingSnapshot } from '@modules/pricing';
+import { CancellationPolicyService } from '@modules/pricing';
 import { DispatchService } from '../dispatch/dispatch.service.js';
 import { FARE_BOOST_AMOUNTS } from '../../schemas/ride.schemas.js';
+
+export type CustomerFareBreakdown = Omit<
+  ItemizedFareResult,
+  'driverEarning' | 'platformCommission'
+>;
+
+function toCustomerFareBreakdown(fare: ItemizedFareResult): CustomerFareBreakdown {
+  const { driverEarning: _de, platformCommission: _pc, ...customerSafe } = fare;
+  return customerSafe;
+}
+
 export interface QuoteOption {
   vehicleTypeId: string;
   vehicleTypeCode: string;
@@ -59,7 +82,9 @@ export interface QuoteOption {
   luggageCapacity: number | null;
   estimatedFare: number;
   minimumFare: number;
-  fareBreakdown: ItemizedFareResult;
+  fareBreakdown: CustomerFareBreakdown;
+  waitingPolicy: { freeMinutes: number; perMinute: number };
+  surge: { multiplier: number; windowId: string | null; label: string | null };
   promoApplied: boolean;
   promoDiscountAmount: number;
   promoErrorCode?: string;
@@ -77,6 +102,9 @@ export interface NearbyDriverSpot {
 }
 
 export interface RideQuote {
+  /// Phase 1 (M-01). Persisted quote lock ID and expiry ISO timestamp.
+  quoteId?: string;
+  expiresAt?: string;
   pickup: { latitude: number; longitude: number };
   drop: { latitude: number; longitude: number };
   estimatedDistanceKm: number;
@@ -163,7 +191,21 @@ export class RideRequestService {
     private readonly dispatchService: DispatchService,
     /// Injected map provider service for driver candidate matrix ETAs
     private readonly mapProviderService?: MapProviderService,
+    private readonly rideQuoteRepository?: RideQuoteRepository,
+    private readonly featureFlagService?: FeatureFlagService,
+    private readonly cancellationPolicyService?: CancellationPolicyService,
   ) {}
+
+  /// Whether a ride can start at this pin. Riders get a yes or no and the admin's
+  /// message, never a zone's name or shape.
+  async checkServiceability(
+    lat: number,
+    lng: number,
+  ): Promise<{ serviceable: boolean; code: string | null; message: string | null }> {
+    const decision = await this.geographicCoverageService.evaluatePickup(lat, lng);
+    return { serviceable: decision.allowed, code: decision.refusal, message: decision.message };
+  }
+
   /// One request, every category. `vehicleTypeId` narrows the result to a
   /// single option; omitting it prices every active type so the customer app
   /// renders its picker from one call instead of one call per category.
@@ -230,20 +272,34 @@ export class RideRequestService {
       });
     }
 
-    const rateCards = await this.pricingService.rateCardsForPoint({
+    const rateCardsWithMeta = await this.pricingService.rateCardsWithRuleMetaForPoint({
       vehicleTypeIds: vehicleTypes.map((type) => type.id),
       cityCode: city.code,
       pickupLat: params.pickupLat,
       pickupLng: params.pickupLng,
     });
-    const surgeByType = await this.surgeService.resolveSurgeMultipliersForTypes(
+    const surgeByType = await this.surgeService.resolveSurgeDetailsForTypes(
       params.pickupLat,
       params.pickupLng,
       vehicleTypes.map((type) => type.id),
-      { timeZone: pickupContext.cityTimeZone, cityCode: city.code },
+      {
+        timeZone: pickupContext.cityTimeZone,
+        cityCode: city.code,
+        maxMultiplier: city.maxSurgeMultiplier,
+      },
     );
 
     const options: QuoteOption[] = [];
+    const persistedOptions: Array<{
+      vehicleTypeId: string;
+      pricingRuleId: string | null;
+      ruleVersion: number | null;
+      surgeMultiplier: number;
+      surgeWindowId: string | null;
+      rateCardSnapshot: Prisma.InputJsonValue;
+      fareSnapshot: Prisma.InputJsonValue;
+      totalFare: number;
+    }> = [];
     for (const vehicleType of vehicleTypes) {
       // The one genuinely per-category check: does this zone admit this type.
       await this.geographicCoverageService.assertVehicleTypeServiceable(
@@ -251,8 +307,16 @@ export class RideRequestService {
         vehicleType.id,
       );
 
-      const rateCard = rateCards.get(vehicleType.id) ?? this.pricingService.rateCardFor(null);
-      const surgeMultiplier = surgeByType.get(vehicleType.id) ?? 1;
+      const resolvedMeta = rateCardsWithMeta.get(vehicleType.id) ?? {
+        card: this.pricingService.rateCardFor(null),
+        ruleId: null,
+        ruleVersion: null,
+      };
+      const rateCard = resolvedMeta.card;
+      const surgeDetail = surgeByType.get(vehicleType.id);
+      const surgeMultiplier = surgeDetail?.multiplier ?? 1;
+      const surgeWindowId = surgeDetail?.windowId ?? null;
+      const surgeReason = surgeDetail?.reason ?? null;
       const baseFare = await this.pricingService.calculateFareQuote({
         pickupLat: params.pickupLat,
         pickupLng: params.pickupLng,
@@ -292,6 +356,7 @@ export class RideRequestService {
             })
           : baseFare;
 
+      const customerFareBreakdown = toCustomerFareBreakdown(fare);
       const view = toVehicleTypeView(vehicleType);
       options.push({
         vehicleTypeId: vehicleType.id,
@@ -307,13 +372,40 @@ export class RideRequestService {
         luggageCapacity: view.luggageCapacity,
         estimatedFare: fare.totalFare,
         minimumFare: rateCard.minimumFare,
-        fareBreakdown: fare,
+        fareBreakdown: customerFareBreakdown,
+        waitingPolicy: {
+          freeMinutes: rateCard.freeWaitingMin,
+          perMinute: rateCard.perWaitingMinute,
+        },
+        surge: {
+          multiplier: fare.surgeMultiplier,
+          windowId: fare.surgeMultiplier > 1 ? surgeWindowId : null,
+          label:
+            fare.surgeMultiplier > 1
+              ? (surgeReason?.trim() || `${Number(fare.surgeMultiplier).toFixed(1)}x peak demand`)
+              : null,
+        },
         promoApplied: promoResult.applied,
         promoDiscountAmount: promoResult.discountAmount,
         ...(promoResult.errorCode !== undefined ? { promoErrorCode: promoResult.errorCode } : {}),
         ...(promoResult.errorMessage !== undefined
           ? { promoErrorMessage: promoResult.errorMessage }
           : {}),
+      });
+
+      persistedOptions.push({
+        vehicleTypeId: vehicleType.id,
+        pricingRuleId: resolvedMeta.ruleId,
+        ruleVersion: resolvedMeta.ruleVersion,
+        surgeMultiplier: fare.surgeMultiplier,
+        surgeWindowId: fare.surgeMultiplier > 1 ? surgeWindowId : null,
+        rateCardSnapshot: rateCard as unknown as Prisma.InputJsonValue,
+        fareSnapshot: {
+          ...fare,
+          promoApplied: promoResult.applied,
+          promoDiscountAmount: promoResult.discountAmount,
+        } as unknown as Prisma.InputJsonValue,
+        totalFare: fare.totalFare,
       });
     }
 
@@ -378,7 +470,39 @@ export class RideRequestService {
       nearbyDriverEtaStatus = 'matrix_unavailable';
     }
 
+    const quoteStops = stops.map((stop, index) => ({
+      sequence: index + 1,
+      latitude: stop.lat,
+      longitude: stop.lng,
+      address: stop.address ?? null,
+    }));
+
+    let quoteId: string | undefined;
+    let expiresAtIso: string | undefined;
+    if (this.rideQuoteRepository && persistedOptions.length > 0) {
+      const expiresAt = new Date(Date.now() + pricingConfig.quoteTtlSeconds * 1000);
+      const savedQuote = await this.rideQuoteRepository.createWithOptions({
+        customerId: params.userId ?? null,
+        pickupLat: params.pickupLat,
+        pickupLng: params.pickupLng,
+        dropLat: params.dropLat,
+        dropLng: params.dropLng,
+        stops: quoteStops as unknown as Prisma.InputJsonValue,
+        cityCode: resolvedCityCode,
+        promoCode: params.promoCode?.trim() ? params.promoCode.trim().toUpperCase() : null,
+        estimatedDistanceKm: trip.distanceKm,
+        estimatedDurationMin: trip.durationMin,
+        distanceSource: trip.source,
+        expiresAt,
+        options: persistedOptions,
+      });
+      quoteId = savedQuote.id;
+      expiresAtIso = savedQuote.expiresAt.toISOString();
+    }
+
     return {
+      ...(quoteId !== undefined ? { quoteId } : {}),
+      ...(expiresAtIso !== undefined ? { expiresAt: expiresAtIso } : {}),
       pickup: { latitude: params.pickupLat, longitude: params.pickupLng },
       drop: { latitude: params.dropLat, longitude: params.dropLng },
       estimatedDistanceKm: trip.distanceKm,
@@ -390,12 +514,7 @@ export class RideRequestService {
       nearbyDrivers,
       routePath: trip.path ?? [],
       ...(resolvedCityCode !== undefined ? { cityCode: resolvedCityCode } : {}),
-      stops: stops.map((stop, index) => ({
-        sequence: index + 1,
-        latitude: stop.lat,
-        longitude: stop.lng,
-        address: stop.address ?? null,
-      })),
+      stops: quoteStops,
       options,
     };
   }
@@ -472,6 +591,8 @@ export class RideRequestService {
     pickupNotes?: string;
     scheduledFor?: Date;
     boostAmount?: number;
+    quoteId?: string;
+    expectedFare?: number;
   }): Promise<RideRequest> {
     const stops = input.stops ?? [];
     const scheduledFor = input.scheduledFor ?? null;
@@ -554,72 +675,193 @@ export class RideRequestService {
       });
     }
 
-    const surgeMultiplier = await this.surgeService.resolveSurgeMultiplier(
-      input.pickupLat,
-      input.pickupLng,
-      input.vehicleTypeId,
-      // FR-013. Peak hours are read in the pickup city, not on the server.
-      // FR-015. The city scopes which service zones can carry a surge window.
-      { timeZone: city.timezone, cityCode: city.code },
-    );
+    const quoteLockEnabled = this.featureFlagService
+      ? await this.featureFlagService.isEnabledReadOnly(PRICING_FEATURE_FLAG_KEYS.QUOTE_LOCK)
+      : false;
 
-    // FR-002. Resolved once, here, and both remembered and reused: the id goes
-    // onto the request so completion bills on this exact rule, and the card
-    // itself is handed to every fare pass below so a second lookup cannot land
-    // on a different rule mid-booking.
-    const { card: rateCard, ruleId: pricingRuleId } = await this.pricingService.resolveRateCard(
-      input.vehicleTypeId,
-      city.code,
-      { pickupLat: input.pickupLat, pickupLng: input.pickupLng },
-    );
-
-    // Estimated once and shared by both fare passes, so the promo pass cannot
-    // land on a different route (and, with stops, sums every leg).
-    const trip = await this.pricingService.estimateRoute(
-      routePoints(input.pickupLat, input.pickupLng, stops, input.dropLat, input.dropLng),
-    );
-
-    const baseFare = await this.pricingService.calculateFareQuote({
-      pickupLat: input.pickupLat,
-      pickupLng: input.pickupLng,
-      dropLat: input.dropLat,
-      dropLng: input.dropLng,
-      vehicleTypeId: input.vehicleTypeId,
-      cityCode: city.code,
-      surgeMultiplier,
-      rateCard,
-      trip,
-    });
-
+    let rateCard: PricingRateCard;
+    let pricingRuleId: string | null = null;
+    let ruleVersion: number | null = null;
+    let surgeMultiplier = 1;
+    let surgeWindowId: string | null = null;
     let discountAmount = 0;
-    if (input.promoCode?.trim()) {
-      const resolved = await this.promotionService.validateAndResolve(input.promoCode.trim(), {
-        userId: input.customerId,
-        cityCode: city.code,
-        vehicleTypeId: input.vehicleTypeId,
-        subtotal: baseFare.subtotal,
+    let fareQuote: ItemizedFareResult;
+    let lockedQuoteId: string | null = null;
+
+    if (input.quoteId) {
+      if (!this.rideQuoteRepository) {
+        throw new QuoteNotFoundError(input.quoteId);
+      }
+      const quote = await this.rideQuoteRepository.findByIdWithOptions(input.quoteId);
+      if (!quote) {
+        throw new QuoteNotFoundError(input.quoteId);
+      }
+      if (quote.customerId && quote.customerId !== input.customerId) {
+        throw new QuoteCustomerMismatchError();
+      }
+      if (quote.consumedAt) {
+        throw new QuoteAlreadyUsedError();
+      }
+      if (quote.expiresAt.getTime() <= Date.now()) {
+        throw new QuoteExpiredError(quote.expiresAt);
+      }
+      const option = quote.options.find((opt) => opt.vehicleTypeId === input.vehicleTypeId);
+      if (!option) {
+        throw new QuoteVehicleMismatchError(input.vehicleTypeId);
+      }
+
+      const lockedTotal = Number(option.totalFare);
+      if (
+        input.expectedFare !== undefined &&
+        Math.abs(lockedTotal - input.expectedFare) > DESTINATION_FARE_TOLERANCE
+      ) {
+        throw new FareChangedError(lockedTotal, input.expectedFare);
+      }
+
+      const parsedCard = this.pricingService.parseSnapshotRateCard({
+        rateCard: option.rateCardSnapshot,
       });
-      discountAmount = resolved.discountAmount;
+      rateCard = parsedCard ?? this.pricingService.rateCardFor(null);
+      pricingRuleId = option.pricingRuleId ?? null;
+      ruleVersion = option.ruleVersion ?? null;
+      surgeMultiplier = Number(option.surgeMultiplier);
+      surgeWindowId = option.surgeWindowId ?? null;
+
+      // Re-validate promo eligibility if promo code is supplied on booking.
+      const savedFareSnap = option.fareSnapshot as unknown as ItemizedFareResult & {
+        promoDiscountAmount?: number;
+      };
+      if (input.promoCode?.trim()) {
+        const resolved = await this.promotionService.validateAndResolve(input.promoCode.trim(), {
+          userId: input.customerId,
+          cityCode: city.code,
+          vehicleTypeId: input.vehicleTypeId,
+          subtotal: savedFareSnap.subtotal,
+        });
+        discountAmount = resolved.discountAmount;
+      } else {
+        discountAmount = Number(savedFareSnap.discountAmount ?? 0);
+      }
+
+      fareQuote = {
+        ...savedFareSnap,
+        estimatedDistanceKm: Number(quote.estimatedDistanceKm),
+        estimatedDurationMin: quote.estimatedDurationMin,
+        surgeMultiplier,
+        discountAmount,
+        totalFare: lockedTotal,
+      };
+      lockedQuoteId = quote.id;
+    } else {
+      if (quoteLockEnabled) {
+        throw new QuoteRequiredError();
+      }
+
+      const surgeDetail = await this.surgeService.resolveSurgeDetail(
+        input.pickupLat,
+        input.pickupLng,
+        input.vehicleTypeId,
+        // FR-013. Peak hours are read in the pickup city, not on the server.
+        // FR-015. The city scopes which service zones can carry a surge window.
+        { timeZone: city.timezone, cityCode: city.code, maxMultiplier: city.maxSurgeMultiplier },
+      );
+      surgeMultiplier = surgeDetail.multiplier;
+      surgeWindowId = surgeDetail.windowId;
+
+      // FR-002. Resolved once, here, and both remembered and reused: the id goes
+      // onto the request so completion bills on this exact rule, and the card
+      // itself is handed to every fare pass below so a second lookup cannot land
+      // on a different rule mid-booking.
+      const resolvedCard = await this.pricingService.resolveRateCard(
+        input.vehicleTypeId,
+        city.code,
+        { pickupLat: input.pickupLat, pickupLng: input.pickupLng },
+      );
+      rateCard = resolvedCard.card;
+      pricingRuleId = resolvedCard.ruleId;
+      ruleVersion = resolvedCard.ruleVersion;
+
+      // Estimated once and shared by both fare passes, so the promo pass cannot
+      // land on a different route (and, with stops, sums every leg).
+      const trip = await this.pricingService.estimateRoute(
+        routePoints(input.pickupLat, input.pickupLng, stops, input.dropLat, input.dropLng),
+      );
+
+      const baseFare = await this.pricingService.calculateFareQuote({
+        pickupLat: input.pickupLat,
+        pickupLng: input.pickupLng,
+        dropLat: input.dropLat,
+        dropLng: input.dropLng,
+        vehicleTypeId: input.vehicleTypeId,
+        cityCode: city.code,
+        surgeMultiplier,
+        rateCard,
+        trip,
+      });
+
+      if (input.promoCode?.trim()) {
+        const resolved = await this.promotionService.validateAndResolve(input.promoCode.trim(), {
+          userId: input.customerId,
+          cityCode: city.code,
+          vehicleTypeId: input.vehicleTypeId,
+          subtotal: baseFare.subtotal,
+        });
+        discountAmount = resolved.discountAmount;
+      }
+
+      fareQuote =
+        discountAmount > 0
+          ? await this.pricingService.calculateFareQuote({
+              pickupLat: input.pickupLat,
+              pickupLng: input.pickupLng,
+              vehicleTypeId: input.vehicleTypeId,
+              cityCode: city.code,
+              surgeMultiplier,
+              discountAmount,
+              rateCard,
+              trip,
+              dropLat: input.dropLat,
+              dropLng: input.dropLng,
+            })
+          : baseFare;
+
+      if (
+        input.expectedFare !== undefined &&
+        Math.abs(fareQuote.totalFare - input.expectedFare) > DESTINATION_FARE_TOLERANCE
+      ) {
+        throw new FareChangedError(fareQuote.totalFare, input.expectedFare);
+      }
     }
 
-    const fareQuote =
-      discountAmount > 0
-        ? await this.pricingService.calculateFareQuote({
-            pickupLat: input.pickupLat,
-            pickupLng: input.pickupLng,
-            vehicleTypeId: input.vehicleTypeId,
-            cityCode: city.code,
-            surgeMultiplier,
-            discountAmount,
-            rateCard,
-            trip,
-            dropLat: input.dropLat,
-            dropLng: input.dropLng,
-          })
-        : baseFare;
+    const pricingSnapshot: PricingSnapshot = {
+      schemaVersion: 1,
+      capturedAt: new Date().toISOString(),
+      cityCode: city.code,
+      pricingRuleId,
+      ruleVersion,
+      surgeMultiplier: fareQuote.surgeMultiplier,
+      surgeWindowId,
+      promoCode: input.promoCode?.trim() ? input.promoCode.trim().toUpperCase() : null,
+      promoDiscountAmount: discountAmount,
+      quotedFare: fareQuote.totalFare,
+      rateCard,
+    };
 
     try {
       return await this.txManager.execute(async (tx) => {
+        if (lockedQuoteId && this.rideQuoteRepository) {
+          const claimed = await this.rideQuoteRepository.consumeIfValid(
+            lockedQuoteId,
+            new Date(),
+            tx,
+          );
+          if (!claimed) {
+            const latest = await this.rideQuoteRepository.findByIdWithOptions(lockedQuoteId, tx);
+            if (latest?.consumedAt) throw new QuoteAlreadyUsedError();
+            throw new QuoteExpiredError(latest?.expiresAt);
+          }
+        }
+
         const createInput: CreateRideRequestInput = {
           customerId: input.customerId,
           vehicleTypeId: input.vehicleTypeId,
@@ -635,7 +877,10 @@ export class RideRequestService {
               : 0,
           ),
           surgeMultiplier: new Decimal(fareQuote.surgeMultiplier),
+          surgeWindowId,
           pricingRuleId,
+          quoteId: lockedQuoteId,
+          pricingSnapshot: pricingSnapshot as unknown as Prisma.InputJsonValue,
           // A scheduled booking must not age out like an instant search does;
           // RequestExpiryJob only sweeps rows with an `expiresAt`.
           expiresAt: scheduledFor
@@ -731,8 +976,58 @@ export class RideRequestService {
       }
       const cancelled = await this.requestRepo.updateStatus(requestId, 'ABANDONED', tx);
       await this.dispatchRepo.cancelAllPendingForRequest(requestId, tx);
+
+      let cancellationAssessment: {
+        policyId: string | null;
+        policyVersion: number | null;
+        cancellationFee: number;
+        feeStatus: string;
+        withinGraceWindow: boolean;
+      } | null = null;
+      if (
+        this.cancellationPolicyService &&
+        (await this.cancellationPolicyService.isEnforcementEnabled())
+      ) {
+        const snap =
+          request.pricingSnapshot && typeof request.pricingSnapshot === 'object'
+            ? (request.pricingSnapshot as Partial<PricingSnapshot>)
+            : null;
+        const elapsedSec = Math.max(
+          0,
+          Math.floor((Date.now() - request.createdAt.getTime()) / 1000),
+        );
+        const evaluation = await this.cancellationPolicyService.resolve(
+          {
+            actor: 'CUSTOMER',
+            scenario: 'BEFORE_ASSIGNMENT',
+            cityCode:
+              typeof snap?.cityCode === 'string' && snap.cityCode !== 'GLOBAL'
+                ? snap.cityCode
+                : null,
+            vehicleTypeId: request.vehicleTypeId,
+            elapsedSec,
+            quotedFare: request.quotedFare != null ? Number(request.quotedFare) : 0,
+            baseFare:
+              typeof snap?.rateCard?.baseFare === 'number' ? snap.rateCard.baseFare : null,
+            minimumFare:
+              typeof snap?.rateCard?.minimumFare === 'number' ? snap.rateCard.minimumFare : null,
+          },
+          tx,
+        );
+        cancellationAssessment = {
+          policyId: evaluation.matchedPolicy?.id ?? null,
+          policyVersion: evaluation.matchedPolicy?.version ?? null,
+          cancellationFee: evaluation.cancellationFee,
+          feeStatus: evaluation.feeStatus,
+          withinGraceWindow: evaluation.withinGraceWindow,
+        };
+      }
+
       await this.eventPublisher.publish(
-        rideEvent(RIDE_EVENT_CATALOG.REQUEST_ABANDONED, customerId, { requestId }),
+        rideEvent(RIDE_EVENT_CATALOG.REQUEST_ABANDONED, customerId, {
+          requestId,
+          ...(cancellationAssessment ? { cancellationAssessment } : {}),
+        }),
         tx,
       );
       return cancelled;

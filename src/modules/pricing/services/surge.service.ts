@@ -1,6 +1,7 @@
 import { SurgeRepository } from '../repositories/surge.repository.js';
 import { PricingMetrics } from '../metrics/pricing.metrics.js';
-import { isWithinPeakWindow } from '../utils/peak-window.js';
+import { isWithinPeakWindow, surgeWindowVehicleIds } from '../utils/peak-window.js';
+import { SURGE_FEATURE_FLAG_KEY, type FeatureFlagReader } from '../constants.js';
 import { logger } from '@shared/logger/index.js';
 
 /// Where peak hours are read when the caller does not know the pickup city's
@@ -12,74 +13,111 @@ export const DEFAULT_SURGE_MULTIPLIER = 1.0;
 export const MIN_SURGE_MULTIPLIER = 1.0;
 export const MAX_SURGE_MULTIPLIER = 2.0;
 
+export interface SurgeOptions {
+  timeZone?: string | undefined;
+  at?: Date | undefined;
+  cityCode?: string | undefined;
+  /// The legal cap in the pickup city. Never raises the platform limit.
+  maxMultiplier?: number | undefined;
+}
+
+export interface ResolvedSurge {
+  multiplier: number;
+  windowId: string | null;
+  reason: string | null;
+}
+
+const NO_SURGE: ResolvedSurge = Object.freeze({
+  multiplier: DEFAULT_SURGE_MULTIPLIER,
+  windowId: null,
+  reason: null,
+});
+
 export class SurgeService {
   constructor(
     private readonly surgeRepository: SurgeRepository,
     private readonly pricingMetrics: PricingMetrics,
+    private readonly featureFlagService: FeatureFlagReader,
   ) {}
 
-  /**
-   * Resolves the applicable surge multiplier for a given pickup location and vehicle type.
-   * If multiple surge windows overlap, the highest multiplier is selected.
-   * Ensures the returned multiplier is always between MIN_SURGE_MULTIPLIER and MAX_SURGE_MULTIPLIER.
-   */
-  /// FR-039. One surge resolution for a whole catalog at one point.
+  /// Phase 2.3 (M-08): Resolves the winning surge window (multiplier + windowId + reason)
+  /// for each vehicle type at one pickup point using deterministic highest-wins precedence
+  /// (ties broken by latest `startsAt`, then deterministic `id`) clamped to city & platform caps.
   ///
-  /// The zone containment query and the window lookup do not depend on the
-  /// vehicle type — only the final per-window `vehicleTypeId` filter does. Called
-  /// once per category, this ran the same PostGIS ST_Intersects once per row in
-  /// the picker.
-  async resolveSurgeMultipliersForTypes(
+  /// FR-016. Failing open to 1.0 is right for availability: a booking must not fail
+  /// because surge lookup did. The metric is what keeps that from being silent.
+  async resolveSurgeDetailsForTypes(
     pickupLat: number,
     pickupLng: number,
     vehicleTypeIds: readonly string[],
-    options: {
-      timeZone?: string | undefined;
-      at?: Date | undefined;
-      cityCode?: string | undefined;
-    } = {},
-  ): Promise<Map<string, number>> {
-    const fallback = new Map(vehicleTypeIds.map((id) => [id, DEFAULT_SURGE_MULTIPLIER] as const));
+    options: SurgeOptions = {},
+  ): Promise<Map<string, ResolvedSurge>> {
+    const fallback = new Map(vehicleTypeIds.map((id) => [id, NO_SURGE] as const));
     try {
       if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
         logger.warn({ pickupLat, pickupLng }, '[SurgeService] Invalid coordinates provided');
         return fallback;
       }
+      if (!(await this.featureFlagService.isOn(SURGE_FEATURE_FLAG_KEY))) return fallback;
 
+      const at = options.at ?? new Date();
       const zones = await this.surgeRepository.findZonesForLocation(
         pickupLat,
         pickupLng,
         options.cityCode,
       );
-      if (zones.serviceZoneIds.length === 0 && zones.legacySurgeZoneIds.length === 0) {
+      const cityCode = options.cityCode !== 'GLOBAL' ? options.cityCode : undefined;
+      if (zones.serviceZoneIds.length === 0 && zones.legacySurgeZoneIds.length === 0 && !cityCode) {
         return fallback;
       }
 
-      // Every window for every category, in one query rather than one per
-      // category. The per-type filter is applied in memory below.
       const windows = await this.surgeRepository.findActiveWindowsForZones(
         zones.legacySurgeZoneIds,
-        undefined,
         zones.serviceZoneIds,
+        cityCode,
+        at,
       );
       if (windows.length === 0) return fallback;
 
-      const at = options.at ?? new Date();
       const timeZone = options.timeZone ?? FALLBACK_TIME_ZONE;
-      const resolved = new Map<string, number>();
+      const cap = Math.min(options.maxMultiplier ?? MAX_SURGE_MULTIPLIER, MAX_SURGE_MULTIPLIER);
+      const resolved = new Map<string, ResolvedSurge>();
 
       for (const vehicleTypeId of vehicleTypeIds) {
-        let max = DEFAULT_SURGE_MULTIPLIER;
+        let bestMultiplier = DEFAULT_SURGE_MULTIPLIER;
+        let winningWindow: (typeof windows)[number] | null = null;
+
         for (const window of windows) {
-          // A window with no vehicle type applies to every category.
-          if (window.vehicleTypeId !== null && window.vehicleTypeId !== vehicleTypeId) continue;
+          const ids = surgeWindowVehicleIds(window);
+          if (ids.length > 0 && !ids.includes(vehicleTypeId)) continue;
           if (!isWithinPeakWindow(window, at, timeZone)) continue;
           const value = Number(window.multiplier);
-          if (Number.isFinite(value) && value > max) max = value;
+          if (!Number.isFinite(value) || value <= MIN_SURGE_MULTIPLIER) continue;
+
+          const isHigher = value > bestMultiplier;
+          const isTieBreakWin =
+            value === bestMultiplier &&
+            winningWindow !== null &&
+            ((window.startsAt?.getTime() ?? 0) > (winningWindow.startsAt?.getTime() ?? 0) ||
+              ((window.startsAt?.getTime() ?? 0) === (winningWindow.startsAt?.getTime() ?? 0) &&
+                String(window.id ?? '') > String(winningWindow.id ?? '')));
+
+          if (isHigher || isTieBreakWin) {
+            bestMultiplier = value;
+            winningWindow = window;
+          }
         }
+
+        const clamped = Math.max(MIN_SURGE_MULTIPLIER, Math.min(cap, bestMultiplier));
         resolved.set(
           vehicleTypeId,
-          Math.max(MIN_SURGE_MULTIPLIER, Math.min(MAX_SURGE_MULTIPLIER, max)),
+          clamped > MIN_SURGE_MULTIPLIER && winningWindow
+            ? {
+                multiplier: clamped,
+                windowId: winningWindow.id ?? null,
+                reason: winningWindow.reason ?? null,
+              }
+            : NO_SURGE,
         );
       }
       return resolved;
@@ -93,78 +131,45 @@ export class SurgeService {
     }
   }
 
+  async resolveSurgeDetail(
+    pickupLat: number,
+    pickupLng: number,
+    vehicleTypeId: string,
+    options: SurgeOptions = {},
+  ): Promise<ResolvedSurge> {
+    const resolved = await this.resolveSurgeDetailsForTypes(
+      pickupLat,
+      pickupLng,
+      [vehicleTypeId],
+      options,
+    );
+    return resolved.get(vehicleTypeId) ?? NO_SURGE;
+  }
+
+  async resolveSurgeMultipliersForTypes(
+    pickupLat: number,
+    pickupLng: number,
+    vehicleTypeIds: readonly string[],
+    options: SurgeOptions = {},
+  ): Promise<Map<string, number>> {
+    const details = await this.resolveSurgeDetailsForTypes(
+      pickupLat,
+      pickupLng,
+      vehicleTypeIds,
+      options,
+    );
+    return new Map(
+      vehicleTypeIds.map((id) => [id, details.get(id)?.multiplier ?? DEFAULT_SURGE_MULTIPLIER]),
+    );
+  }
+
   async resolveSurgeMultiplier(
     pickupLat: number,
     pickupLng: number,
     vehicleTypeId: string,
-    options: {
-      timeZone?: string | undefined;
-      at?: Date | undefined;
-      cityCode?: string | undefined;
-    } = {},
+    options: SurgeOptions = {},
   ): Promise<number> {
-    try {
-      // 1. Validate coordinates
-      if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
-        logger.warn({ pickupLat, pickupLng }, '[SurgeService] Invalid coordinates provided');
-        return DEFAULT_SURGE_MULTIPLIER;
-      }
-
-      // 2. Find the zones containing the pickup point — the geographic module's
-      // service zones (BD-4's single polygon of record) and, for one release,
-      // the legacy surge polygons that have not been re-pointed yet.
-      const zones = await this.surgeRepository.findZonesForLocation(
-        pickupLat,
-        pickupLng,
-        options.cityCode,
-      );
-      if (zones.serviceZoneIds.length === 0 && zones.legacySurgeZoneIds.length === 0) {
-        return DEFAULT_SURGE_MULTIPLIER;
-      }
-
-      // 3. Find currently active SurgeWindows for those zones
-      const activeWindows = await this.surgeRepository.findActiveWindowsForZones(
-        zones.legacySurgeZoneIds,
-        vehicleTypeId,
-        zones.serviceZoneIds,
-      );
-
-      if (activeWindows.length === 0) {
-        return DEFAULT_SURGE_MULTIPLIER;
-      }
-
-      // 4. Select highest valid multiplier, among windows that are actually in
-      // force right now. FR-013: `isPeakHourOnly` and its bounds were stored,
-      // validated and returned by the API, and evaluated by nothing — so a
-      // window configured for the morning peak surged at 03:00 as well.
-      const at = options.at ?? new Date();
-      const timeZone = options.timeZone ?? FALLBACK_TIME_ZONE;
-      let maxMultiplier = DEFAULT_SURGE_MULTIPLIER;
-
-      for (const window of activeWindows) {
-        if (!isWithinPeakWindow(window, at, timeZone)) continue;
-        const windowMultiplier = Number(window.multiplier);
-        if (Number.isFinite(windowMultiplier) && windowMultiplier > maxMultiplier) {
-          maxMultiplier = windowMultiplier;
-        }
-      }
-
-      // 5. Validate against policy bounds
-      maxMultiplier = Math.max(MIN_SURGE_MULTIPLIER, Math.min(MAX_SURGE_MULTIPLIER, maxMultiplier));
-
-      return maxMultiplier;
-    } catch (err) {
-      // FR-016. Failing open to 1.0 is right for availability — a booking must
-      // not fail because surge lookup did. But the whole method was wrapped, so
-      // a malformed polygon, a dropped connection and a genuinely quiet zone all
-      // produced the same number and the same silence: revenue stopped surging
-      // and only the log knew.
-      this.pricingMetrics.surgeResolutionFailed();
-      logger.error(
-        { err, pickupLat, pickupLng },
-        '[SurgeService] Error resolving surge multiplier',
-      );
-      return DEFAULT_SURGE_MULTIPLIER; // Fallback to safe default
-    }
+    const detail = await this.resolveSurgeDetail(pickupLat, pickupLng, vehicleTypeId, options);
+    return detail.multiplier;
   }
 }

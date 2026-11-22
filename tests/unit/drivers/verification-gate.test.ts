@@ -84,6 +84,7 @@ function makeStatusService(options: {
     (options.eventPublisher ?? {}) as never,
     { driverOnline: () => {} } as never,
     {} as never,
+    {} as never,
   );
 }
 

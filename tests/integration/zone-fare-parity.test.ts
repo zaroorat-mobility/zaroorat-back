@@ -76,7 +76,9 @@ describe('zone fare parity: quote === booked === billed (integration)', () => {
   });
   beforeEach(async () => {
     await resetState();
-    const cab = await db().client.vehicleType.findUniqueOrThrow({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUniqueOrThrow({
+      where: { code: 'CAB_ECONOMY_NON_AC' },
+    });
     vehicleTypeId = cab.id;
   });
   afterEach(async () => {

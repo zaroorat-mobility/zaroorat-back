@@ -14,6 +14,7 @@ import type {
   FareCalculationParams,
   FinalFareParams,
   ItemizedFareResult,
+  PricingSnapshot,
   RateCardLookupOptions,
   TripEstimate,
 } from '../domain/pricing.types.js';
@@ -59,6 +60,21 @@ function decimal(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/// What `rateCardFor` reads from a rule. A blank (null) rate inherits the environment default.
+export type RateCardSource = Pick<
+  Record<keyof PricingRule, unknown>,
+  | 'baseFare'
+  | 'perKmRate'
+  | 'perMinuteRate'
+  | 'waitingPerMin'
+  | 'bookingFee'
+  | 'platformFeePct'
+  | 'platformFeeFlat'
+  | 'taxRatePct'
+  | 'commissionRatePct'
+  | 'minimumFare'
+> & { freeWaitingMin: number | null };
+
 export class PricingService {
   constructor(
     private readonly pricingRuleRepository: PricingRuleRepository,
@@ -68,7 +84,9 @@ export class PricingService {
     private readonly mapProviderService?: MapProviderService,
   ) {}
 
-  rateCardFor(rule: PricingRule | null): PricingRateCard {
+  /// Takes a stored rule or an unsaved one (the admin fare preview), so both are turned
+  /// into a rate card — defaults included — by this one mapping.
+  rateCardFor(rule: RateCardSource | null): PricingRateCard {
     const fallback = pricingConfig.defaultRateCard;
     if (!rule) return fallback;
     return Object.freeze({
@@ -112,7 +130,7 @@ export class PricingService {
     vehicleTypeId: string,
     cityCode?: string,
     options?: RateCardLookupOptions,
-  ): Promise<{ card: PricingRateCard; ruleId: string | null }> {
+  ): Promise<{ card: PricingRateCard; ruleId: string | null; ruleVersion: number | null }> {
     const rule = await this.pricingRuleRepository.findBestActiveRule({
       vehicleTypeId,
       ...(cityCode !== undefined ? { cityCode } : {}),
@@ -120,7 +138,73 @@ export class PricingService {
       ...(options?.pickupLat !== undefined ? { pickupLat: options.pickupLat } : {}),
       ...(options?.pickupLng !== undefined ? { pickupLng: options.pickupLng } : {}),
     });
-    return { card: this.rateCardFor(rule), ruleId: rule?.id ?? null };
+    return {
+      card: this.rateCardFor(rule),
+      ruleId: rule?.id ?? null,
+      ruleVersion: rule?.version ?? null,
+    };
+  }
+
+  /// Phase 1 (M-01/M-02). Same batched resolution as `rateCardsForPoint`,
+  /// also returning the matched rule ID and version for quote & request snapshots.
+  async rateCardsWithRuleMetaForPoint(params: {
+    vehicleTypeIds: readonly string[];
+    cityCode?: string | undefined;
+    serviceType?: RideServiceType | undefined;
+    pickupLat: number;
+    pickupLng: number;
+  }): Promise<
+    Map<string, { card: PricingRateCard; ruleId: string | null; ruleVersion: number | null }>
+  > {
+    const rules = await this.pricingRuleRepository.findBestActiveRulesForPoint(params);
+    return new Map(
+      params.vehicleTypeIds.map((id) => {
+        const rule = rules.get(id) ?? null;
+        return [
+          id,
+          {
+            card: this.rateCardFor(rule),
+            ruleId: rule?.id ?? null,
+            ruleVersion: rule?.version ?? null,
+          },
+        ] as const;
+      }),
+    );
+  }
+
+  /// Safely extracts a `PricingRateCard` from a persisted JSON `pricing_snapshot`.
+  parseSnapshotRateCard(raw: unknown): PricingRateCard | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const snap = raw as Partial<PricingSnapshot>;
+    const rc = snap.rateCard;
+    if (!rc || typeof rc !== 'object') return null;
+    const nums = [
+      rc.baseFare,
+      rc.perKm,
+      rc.perMinute,
+      rc.perWaitingMinute,
+      rc.freeWaitingMin,
+      rc.bookingFee,
+      rc.platformFeePct,
+      rc.platformFeeFlat,
+      rc.taxRatePct,
+      rc.commissionRatePct,
+      rc.minimumFare,
+    ];
+    if (nums.some((n) => typeof n !== 'number' || !Number.isFinite(n))) return null;
+    return Object.freeze({
+      baseFare: rc.baseFare,
+      perKm: rc.perKm,
+      perMinute: rc.perMinute,
+      perWaitingMinute: rc.perWaitingMinute,
+      freeWaitingMin: rc.freeWaitingMin,
+      bookingFee: rc.bookingFee,
+      platformFeePct: rc.platformFeePct,
+      platformFeeFlat: rc.platformFeeFlat,
+      taxRatePct: rc.taxRatePct,
+      commissionRatePct: rc.commissionRatePct,
+      minimumFare: rc.minimumFare,
+    });
   }
 
   /// FR-001. The card a booked ride must be billed on.
@@ -207,16 +291,9 @@ export class PricingService {
     const waitingCharge = toPaise(D(billableWaitingMin).times(card.perWaitingMinute));
     const bookingFee = toPaise(D(card.bookingFee));
 
-    /// FR-047. A night multiplier used to be applied here, gated on an
-    /// `isNightTrip` flag that no caller in the codebase ever set. The admin form
-    /// collected a night percentage, the service converted it to a multiplier,
-    /// the column stored it, the rate card carried it — and the branch that would
-    /// have charged it was unreachable. Every part of that chain is removed
-    /// rather than left in place looking configured; the column itself goes in
-    /// the deferred drop, one release after this one.
-    const subtotalBeforeSurge = toPaise(
-      D(card.baseFare).plus(distanceFare).plus(timeFare).plus(waitingCharge).plus(bookingFee),
-    );
+    /// Phase 2.2 (D-08): Surge applies strictly to ride movement charges
+    /// (Base + Distance + Time). Waiting charges and booking fees are never surged.
+    const surgeableSubtotal = toPaise(D(card.baseFare).plus(distanceFare).plus(timeFare));
 
     // FR-011. `SurgeService` already clamps, so today every caller arrives inside
     // the band. The bound belongs here too: this is a public method taking a
@@ -226,8 +303,10 @@ export class PricingService {
       MAX_SURGE_MULTIPLIER,
       Math.max(MIN_SURGE_MULTIPLIER, params.surgeMultiplier ?? 1),
     );
-    const surgeAmount = toPaise(subtotalBeforeSurge.times(D(surgeMultiplier).minus(1)));
-    const subtotal = toPaise(subtotalBeforeSurge.plus(surgeAmount));
+    const surgeAmount = toPaise(surgeableSubtotal.times(D(surgeMultiplier).minus(1)));
+    const subtotal = toPaise(
+      surgeableSubtotal.plus(surgeAmount).plus(waitingCharge).plus(bookingFee),
+    );
 
     /// FR-008. The floor binds here, on the fare, **before** the discount.
     ///
@@ -487,8 +566,12 @@ export class PricingService {
         `actualDurationMin must be a non-negative number, got ${params.actualDurationMin}`,
       );
     }
+    const snapshotCard = params.pricingSnapshot
+      ? this.parseSnapshotRateCard(params.pricingSnapshot)
+      : null;
     const card =
       params.rateCard ??
+      snapshotCard ??
       (await this.rateCardForRuleId(params.pricingRuleId, {
         vehicleTypeId: params.vehicleTypeId,
         ...(params.cityCode !== undefined ? { cityCode: params.cityCode } : {}),
@@ -499,5 +582,25 @@ export class PricingService {
         },
       }));
     return this.price(params.actualDistanceKm, params.actualDurationMin, card, params);
+  }
+
+  /// BD-7. What a COMMISSION-model driver is charged for a request: its own
+  /// quote-time distance, duration and pinned rule, never the trip as driven.
+  /// `acceptRideRequest` locks exactly this onto the ride; dispatch asks the same
+  /// question first so it never offers a ride acceptance would refuse.
+  async estimatedCommission(request: {
+    estimatedDistanceKm: { toString(): string } | number | null;
+    estimatedDurationMin: number | null;
+    vehicleTypeId: string;
+    pricingRuleId: string | null;
+  }): Promise<number> {
+    const fare = await this.calculateFinalFare({
+      actualDistanceKm:
+        request.estimatedDistanceKm != null ? Number(request.estimatedDistanceKm) : 0,
+      actualDurationMin: request.estimatedDurationMin ?? 0,
+      vehicleTypeId: request.vehicleTypeId,
+      pricingRuleId: request.pricingRuleId,
+    });
+    return fare.platformCommission;
   }
 }

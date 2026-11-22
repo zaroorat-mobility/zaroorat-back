@@ -2,6 +2,7 @@ import { RedisService } from '@core/cache/RedisService.js';
 import { TransactionManager } from '@core/database';
 import { logger } from '@shared/logger/index.js';
 import { DriverRepository } from '@modules/drivers/repositories/driver.repository.js';
+import { StatusService } from '@modules/drivers/services/status/status.service.js';
 import { DriverSubscriptionRepository } from '../repositories/driver-subscription.repository.js';
 
 /// decisions.md BD-2/BD-3/BD-5 — the scheduled sweep that expires ACTIVE
@@ -17,6 +18,7 @@ export class SubscriptionExpiryJob {
     private readonly driverSubscriptionRepository: DriverSubscriptionRepository,
     private readonly driverRepository: DriverRepository,
     private readonly txManager: TransactionManager,
+    private readonly statusService: StatusService,
   ) {}
 
   async run(now: Date = new Date()): Promise<number> {
@@ -51,11 +53,29 @@ export class SubscriptionExpiryJob {
           );
         }
       }
+      await this.takeExpiredDriversOffline(now);
     } catch (err) {
       logger.error({ err }, '[subscriptions] error running subscription expiry job');
     } finally {
       await this.redis.lock.release('job:subscription_expiry', lockToken);
     }
     return expiredCount;
+  }
+
+  /// An expired plan left the driver ONLINE and in the dispatch index. Swept
+  /// from current state rather than from this run's expiries, so a driver whose
+  /// plan lapsed mid-ride, or whose earlier attempt failed, is caught on a later
+  /// run — and a driver already offline is simply not found again.
+  private async takeExpiredDriversOffline(now: Date): Promise<void> {
+    const driverIds = await this.driverSubscriptionRepository.findOnShiftWithoutActivePlan(now);
+    for (const driverId of driverIds) {
+      try {
+        await this.statusService.setOffline(driverId, 'SUBSCRIPTION_EXPIRED');
+      } catch (err) {
+        // DriverOnTripError: a ride was accepted between the read and the lock.
+        // It finishes normally; the next run takes the driver offline.
+        logger.warn({ err, driverId }, '[subscriptions] could not take a driver offline');
+      }
+    }
   }
 }

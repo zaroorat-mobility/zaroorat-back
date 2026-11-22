@@ -345,6 +345,11 @@ describe('admin applications (integration)', () => {
   it('creates a manual application that appears in apps, drivers, and vehicles after approve', async () => {
     const admin = await loginStaff(ADMIN_PHONE, 'system_admin');
     const nextYear = new Date().getFullYear() + 1;
+    // Every seeded city has several cab variants, so the form must name one.
+    const car = await db().client.vehicleType.findFirstOrThrow({
+      where: { category: 'car', isActive: true },
+      orderBy: { displayOrder: 'asc' },
+    });
 
     const created = await app.inject({
       method: 'POST',
@@ -372,6 +377,7 @@ describe('admin applications (integration)', () => {
         panUrl: 'https://example.invalid/pan.jpg',
         driverSelfieUrl: 'https://example.invalid/selfie.jpg',
         vehicleType: 'cab',
+        vehicleTypeId: car.id,
         vehicleCategory: 'Sedan',
         brand: 'Maruti Suzuki',
         model: 'Swift',
@@ -410,6 +416,10 @@ describe('admin applications (integration)', () => {
       application.documents.some((d: { fileUrl: string }) => d.fileUrl.includes('license-front')),
     );
     assert.equal(application.vehicle?.registrationPlate, 'JK-01-MN-8899');
+    const stored = await db().client.vehicle.findUniqueOrThrow({
+      where: { registrationNumber: 'JK-01-MN-8899' },
+    });
+    assert.equal(stored.vehicleTypeId, car.id);
 
     const apps = await app.inject({
       method: 'GET',

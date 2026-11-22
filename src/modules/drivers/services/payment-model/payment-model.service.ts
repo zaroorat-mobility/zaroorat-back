@@ -1,6 +1,15 @@
 import { DriverRepository } from '../../repositories/driver.repository.js';
 import { DriverSubscriptionRepository } from '@modules/subscriptions/repositories/driver-subscription.repository.js';
-import { DriverNotFoundError } from '../../errors/driver.errors.js';
+import {
+  CommissionService,
+  GstRecoveryService,
+  REV5_PRICING_FLAGS,
+  type FeatureFlagReader,
+} from '@modules/pricing';
+import {
+  DriverNotFoundError,
+  SubscriptionModelDisabledError,
+} from '../../errors/driver.errors.js';
 import type { Driver } from '../../types';
 
 export interface PaymentModelStatus {
@@ -9,19 +18,34 @@ export interface PaymentModelStatus {
   effectiveAt: Date | null;
 }
 
-/// 004-driver-subscription-wallet. plan.md "Driver Payment Model Selection &
-/// Switching" — first selection and the SUBSCRIPTION -> COMMISSION switch
-/// (the only direction this service ever persists). The opposite direction,
-/// COMMISSION -> SUBSCRIPTION, is never staged or written here: per BD-5 it
-/// finalises only when a purchased subscription actually activates
-/// (`SubscriptionPaymentConsumer`), through the normal `POST
-/// /api/v1/subscriptions` flow — there is nothing for this service to persist
-/// for that direction ahead of time.
+export interface DriverCommissionTerms {
+  paymentModel: string | null;
+  grandfathered: boolean;
+  expiresAt: string | null;
+  autoRenew: boolean;
+  subscriptionModelEnabled: boolean;
+  commissionRatePct: number | null;
+  gstRecoveryRatePct: number | null;
+  combinedDeductionPct: number | null;
+  commissionDeductionActive: boolean;
+  gstRecoveryActive: boolean;
+}
+
 export class PaymentModelService {
   constructor(
     private readonly driverRepository: DriverRepository,
     private readonly driverSubscriptionRepository: DriverSubscriptionRepository,
+    private readonly featureFlagService?: FeatureFlagReader,
+    private readonly commissionService?: CommissionService,
+    private readonly gstRecoveryService?: GstRecoveryService,
   ) {}
+
+  private async isSubscriptionModelEnabled(): Promise<boolean> {
+    if (!this.featureFlagService) return false;
+    return this.featureFlagService.isEnabledReadOnly(
+      REV5_PRICING_FLAGS.SUBSCRIPTION_MODEL_ENABLED,
+    );
+  }
 
   async select(
     driverId: string,
@@ -29,13 +53,17 @@ export class PaymentModelService {
   ): Promise<PaymentModelStatus> {
     const driver = await this.driverRepository.findById(driverId);
     if (!driver) throw new DriverNotFoundError(driverId);
+
+    // Rev 5 R2-7 / §1.5: Block new subscription onboarding/switching while flag is OFF.
+    if (model === 'SUBSCRIPTION' && !(await this.isSubscriptionModelEnabled())) {
+      throw new SubscriptionModelDisabledError();
+    }
+
     if (!driver.paymentModel) {
       if (model === 'COMMISSION') {
         const updated = await this.driverRepository.updatePaymentModel(driverId, 'COMMISSION');
         return this.toStatus(updated, null);
       }
-      // First selection of SUBSCRIPTION is recorded nowhere yet — it only
-      // takes effect once the driver purchases a plan and it activates.
       return this.toStatus(driver, null);
     }
     if (driver.paymentModel === model) {
@@ -51,13 +79,13 @@ export class PaymentModelService {
     const driver = await this.driverRepository.findById(driverId);
     if (!driver) throw new DriverNotFoundError(driverId);
     if (targetModel === 'SUBSCRIPTION') {
+      if (!(await this.isSubscriptionModelEnabled())) {
+        throw new SubscriptionModelDisabledError();
+      }
       return this.toStatus(driver, null);
     }
-    // targetModel === 'COMMISSION', switching away from SUBSCRIPTION.
     const activeSubscription = await this.driverSubscriptionRepository.findActive(driverId);
     if (activeSubscription) {
-      // Staged (BD-5): the driver stays SUBSCRIPTION until the paid period
-      // they already own runs its course — the expiry sweep applies this.
       await this.driverRepository.setPendingPaymentModel(driverId, 'COMMISSION');
       return this.toStatus(
         { ...driver, pendingPaymentModel: 'COMMISSION' },
@@ -77,6 +105,85 @@ export class PaymentModelService {
       effectiveAt = activeSubscription?.expiryDate ?? null;
     }
     return this.toStatus(driver, effectiveAt);
+  }
+
+  /// Rev 5 §3.4: Returns dynamic active commission/recovery rates for Path B,
+  /// or grandfathered subscription expiry notice for Path A — zero hardcoded percentages.
+  async getCommissionTerms(
+    driverId: string,
+    ctx?: { cityCode?: string | null; vehicleTypeId?: string | null },
+  ): Promise<DriverCommissionTerms> {
+    const driver = await this.driverRepository.findById(driverId);
+    if (!driver) throw new DriverNotFoundError(driverId);
+
+    const subscriptionModelEnabled = await this.isSubscriptionModelEnabled();
+
+    if (driver.paymentModel === 'SUBSCRIPTION') {
+      const activeSub = await this.driverSubscriptionRepository.findActive(driverId);
+      if (activeSub && activeSub.expiryDate && activeSub.expiryDate > new Date()) {
+        return {
+          paymentModel: 'SUBSCRIPTION',
+          grandfathered: true,
+          expiresAt: activeSub.expiryDate.toISOString(),
+          autoRenew: false,
+          subscriptionModelEnabled,
+          commissionRatePct: null,
+          gstRecoveryRatePct: null,
+          combinedDeductionPct: null,
+          commissionDeductionActive: false,
+          gstRecoveryActive: false,
+        };
+      }
+    }
+
+    let commissionRatePct: number | null = null;
+    let gstRecoveryRatePct: number | null = null;
+    let commissionDeductionActive = false;
+    let gstRecoveryActive = false;
+
+    if (this.commissionService) {
+      commissionDeductionActive = await this.commissionService.isWalletDeductionEnabled();
+      try {
+        const cfg = await this.commissionService.resolve({
+          cityCode: ctx?.cityCode ?? null,
+          vehicleTypeId: ctx?.vehicleTypeId ?? null,
+        });
+        commissionRatePct = cfg.isEnabled ? cfg.commissionRatePct : 0;
+      } catch {
+        commissionRatePct = null;
+      }
+    }
+
+    if (this.gstRecoveryService) {
+      gstRecoveryActive = await this.gstRecoveryService.isGstRecoveryEnabled();
+      try {
+        const cfg = await this.gstRecoveryService.resolve({
+          cityCode: ctx?.cityCode ?? null,
+          vehicleTypeId: ctx?.vehicleTypeId ?? null,
+        });
+        gstRecoveryRatePct = cfg.isEnabled ? cfg.recoveryRatePct : 0;
+      } catch {
+        gstRecoveryRatePct = null;
+      }
+    }
+
+    const combinedDeductionPct =
+      commissionRatePct !== null || gstRecoveryRatePct !== null
+        ? Math.round(((commissionRatePct ?? 0) + (gstRecoveryRatePct ?? 0)) * 100) / 100
+        : null;
+
+    return {
+      paymentModel: driver.paymentModel,
+      grandfathered: false,
+      expiresAt: null,
+      autoRenew: false,
+      subscriptionModelEnabled,
+      commissionRatePct,
+      gstRecoveryRatePct,
+      combinedDeductionPct,
+      commissionDeductionActive,
+      gstRecoveryActive,
+    };
   }
 
   private toStatus(

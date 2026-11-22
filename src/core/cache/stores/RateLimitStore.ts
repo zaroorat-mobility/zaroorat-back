@@ -11,7 +11,10 @@ export interface RateLimitResult {
 /// unexpected APP_ENV / NODE_ENV never disables it: this guards OTP and login
 /// brute-force budgets, so it must fail closed.
 export function rateLimitsBypassed(): boolean {
-  return process.env.APP_ENV === 'development' && process.env.RATE_LIMIT_BYPASS === 'true';
+  return (
+    (process.env.APP_ENV === 'development' || process.env.APP_ENV === 'local') &&
+    process.env.RATE_LIMIT_BYPASS === 'true'
+  );
 }
 export class RateLimitStore {
   private readonly client: Redis;

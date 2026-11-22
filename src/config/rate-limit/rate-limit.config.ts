@@ -71,6 +71,14 @@ export const rateLimits = Object.freeze({
     windowSeconds: Number(process.env.RL_DRIVER_MAP_ZONES_WINDOW ?? 60),
     keyBy: 'user',
   }),
+  /// Asked when a rider's map pin settles. Leaves headroom for real panning while
+  /// capping a client that loops, or someone probing where zones are.
+  riderServiceability: Object.freeze<RateLimitOptions>({
+    scope: 'rl:rider-serviceability',
+    limit: Number(process.env.RL_RIDER_SERVICEABILITY_LIMIT ?? 120),
+    windowSeconds: Number(process.env.RL_RIDER_SERVICEABILITY_WINDOW ?? 60),
+    keyBy: 'user',
+  }),
   adminLogin: Object.freeze<RateLimitOptions>({
     scope: 'rl:admin-login',
     limit: Number(process.env.RL_ADMIN_LOGIN_LIMIT ?? 10),

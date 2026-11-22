@@ -32,6 +32,9 @@ export interface PricingConfig {
   /// percentage. 0 makes the quote binding; the cap never applies downward,
   /// because billing a shorter trip for less is not a promise being broken.
   maxFareIncreaseOverQuotePct: number;
+  /// Phase 1 (D-10). How long a persisted customer fare quote stays valid
+  /// before expiring (default 300s = 5 minutes).
+  quoteTtlSeconds: number;
 }
 
 const defaultRateCard: PricingRateCard = Object.freeze({
@@ -44,7 +47,7 @@ const defaultRateCard: PricingRateCard = Object.freeze({
   freeWaitingMin: numericEnv('RIDE_FREE_WAITING_MIN', 3, { min: 0 }),
   bookingFee: numericEnv('RIDE_BOOKING_FEE', 0, { min: 0 }),
   platformFeePct: numericEnv('RIDE_PLATFORM_FEE_PCT', 0, { min: 0, max: 100 }),
-  platformFeeFlat: numericEnv('RIDE_PLATFORM_FEE', 15, { min: 0 }),
+  platformFeeFlat: numericEnv('RIDE_PLATFORM_FEE', 0, { min: 0 }),
   taxRatePct: numericEnv('RIDE_TAX_RATE', 0.05, { min: 0, max: 1 }) * 100,
   commissionRatePct: numericEnv('RIDE_COMMISSION_RATE', 0.2, { min: 0, max: 1 }) * 100,
   minimumFare: numericEnv('RIDE_MINIMUM_FARE', 50, { min: 0 }),
@@ -61,4 +64,5 @@ export const pricingConfig: PricingConfig = Object.freeze({
     min: 0,
     max: 100,
   }),
+  quoteTtlSeconds: numericEnv('RIDE_QUOTE_TTL_SECONDS', 300, { min: 30, max: 3600 }),
 });

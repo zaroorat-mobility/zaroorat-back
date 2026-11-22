@@ -1,31 +1,421 @@
-# Zaroorat Backend
+# Zaroorat Mobility Backend
 
-![Build](https://img.shields.io/github/actions/workflow/status/zaroorat-mobility/zaroorat-back/build.yml?branch=main)
-![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
-![Node Version](https://img.shields.io/badge/node-v26.4.0-blue)
+[![Node.js Version](https://img.shields.io/badge/node-v22.21.0-339933?logo=node.js&logoColor=white)](.nvmrc)
+[![TypeScript](https://img.shields.io/badge/typescript-v5.8-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
+[![Fastify](https://img.shields.io/badge/fastify-v5.10-000000?logo=fastify&logoColor=white)](package.json)
+[![PostgreSQL / PostGIS](https://img.shields.io/badge/postgis-17--3.5-336791?logo=postgresql&logoColor=white)](docker-compose.yml)
+[![Prisma ORM](https://img.shields.io/badge/prisma-v7.9-2D3748?logo=prisma&logoColor=white)](prisma.config.ts)
+[![Valkey](https://img.shields.io/badge/valkey-v8.1-CC0000?logo=redis&logoColor=white)](compose.local.yml)
+[![Docker](https://img.shields.io/badge/docker-multi--stage-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![License](https://img.shields.io/badge/license-ISC-green)](package.json)
 
-## Husky Hooks
+Production-grade real-time ride-hailing backend, pricing calculation engine, intelligent matching dispatcher, and automated driver payout settlement system powering **Zaroorat Mobility**.
 
-We use Husky to enforce Git hooks across the team for linting, typechecking, and commit messages.
+---
 
-### Bypassing Husky in CI or Docker
+## Table of Contents
 
-In environments like CI/CD pipelines or Docker builds, you often do not need to install or run Husky. To skip Husky installation, run:
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+- [Multi-Environment Architecture](#multi-environment-architecture)
+- [Quick Start: Local Development](#quick-start-local-development)
+  - [Option A: Host-Native Hot Reload (Recommended)](#option-a-host-native-hot-reload-recommended)
+  - [Option B: Containerized Local Stack](#option-b-containerized-local-stack)
+- [Environment Configuration & Secrets](#environment-configuration--secrets)
+- [Database Management & Migrations](#database-management--migrations)
+  - [Dual-Role Security Model](#dual-role-security-model)
+  - [Running Migrations](#running-migrations)
+  - [Database Seeding & Admin Provisioning](#database-seeding--admin-provisioning)
+- [Quality Gates & Testing](#quality-gates--testing)
+- [Docker & Container Strategy](#docker--container-strategy)
+  - [Multi-Stage Build Targets](#multi-stage-build-targets)
+  - [Container Security & Health Checks](#container-security--health-checks)
+- [Deployment & CI/CD Pipeline](#deployment--cicd-pipeline)
+  - [DigitalOcean DEV Deployment Flow](#digitalocean-dev-deployment-flow)
+  - [Zero-Downtime Rolling Deploys & Rollback](#zero-downtime-rolling-deploys--rollback)
+- [NPM Script Reference](#npm-script-reference)
+- [Project Directory Layout](#project-directory-layout)
 
-```bash
-HUSKY=0 npm install
+---
+
+## Architecture Overview
+
+```
+                                      [ Internet / Clients ]
+                                                │
+                                                ▼
+                             ┌───────────────────────────────────────┐
+                             │       Caddy Reverse Proxy (HTTPS)     │
+                             │   TLS Termination / Reverse Proxy     │
+                             └──────────────────┬────────────────────┘
+                                                │
+                                                ▼
+                             ┌───────────────────────────────────────┐
+                             │    Zaroorat Fastify API (Port 3000)   │
+                             │  REST Endpoints + Socket.IO Realtime  │
+                             └──────┬─────────────────────────┬──────┘
+                                    │                         │
+                                    ▼                         ▼
+                  ┌───────────────────────────┐   ┌───────────────────────────┐
+                  │ PgBouncer Connection Pool │   │   Valkey 8.1 (In-Memory)  │
+                  │   Transaction-Level Pool  │   │  Pub/Sub, Caches & BullMQ │
+                  └─────────────┬─────────────┘   └─────────────┬─────────────┘
+                                │                               │
+                                ▼                               ▼
+                  ┌───────────────────────────┐   ┌───────────────────────────┐
+                  │ PostgreSQL 17 + PostGIS   │   │  Background Queue Worker  │
+                  │ Spatial Geospatial Data   │◄──┤  Asynchronous BullMQ Jobs │
+                  └───────────────────────────┘   └───────────────────────────┘
 ```
 
-## Local Development Database
+The system is engineered as a high-throughput, low-latency distributed platform:
 
-To start the database (PostgreSQL with PostGIS) via Docker, run the following command:
+- **Fastify 5 Framework**: Highly optimized HTTP server with Awilix dependency injection, strict Zod request validation, and OpenAPI documentation.
+- **Socket.IO Real-Time Engine**: Bidirectional geospatial telemetry streaming with Valkey Pub/Sub adapter.
+- **BullMQ Distributed Worker**: Asynchronous queue processor handling OTP generation, push notifications, driver document verification, and fiscal invoices.
+- **PostgreSQL 17 + PostGIS 3.5**: Geospatial indexing (H3 hexagons and spatial queries) for location-based driver matching and geofenced pricing zones.
+- **PgBouncer**: High-performance transaction pooling shielding the PostgreSQL engine from connection starvation during traffic spikes.
+
+---
+
+## Prerequisites
+
+Before starting, ensure you have the following installed on your workstation:
+
+- **Node.js**: `v22.21.0` (matching [.nvmrc](.nvmrc)). We recommend using `nvm` or `fnm`:
+  ```bash
+  nvm use
+  ```
+- **npm**: `v10.x` or higher
+- **Docker & Docker Compose**: Docker Engine `v26+` / Docker Compose `v2.20+`
+- **PostgreSQL Client Tools** (Optional for local CLI access): `psql` v17
+
+---
+
+## Multi-Environment Architecture
+
+The codebase enforces strict, unified naming conventions across code, schemas, and configurations:
+
+| Environment | `APP_ENV` | `NODE_ENV`    | Compose Stack         | Env File       | Database           | Purpose                                                        |
+| :---------- | :-------- | :------------ | :-------------------- | :------------- | :----------------- | :------------------------------------------------------------- |
+| **LOCAL**   | `local`   | `development` | `compose.local.yml`   | `.env.local`   | `zaroorat_local`   | Workstation development with hot-reload                        |
+| **DEV**     | `dev`     | `production`  | `compose.dev.yml`     | `.env.dev`     | `zaroorat_dev`     | Continuous integration & cloud testing on DigitalOcean         |
+| **TEST**    | `test`    | `test`        | `compose.test.yml`    | `.env.test`    | `zaroorat_test`    | Ephemeral automated testing (Jest / node:test)                 |
+| **STAGING** | `staging` | `production`  | `compose.staging.yml` | `.env.staging` | `zaroorat_staging` | Pre-production staging replica with sandboxed third-parties    |
+| **PROD**    | `prod`    | `production`  | `compose.prod.yml`    | `.env.prod`    | `zaroorat_prod`    | High-availability production environment on AWS / DigitalOcean |
+
+> **Environment Loading Rule**: In deployed environments (`dev`, `staging`, `prod`), `src/config/env/loader.ts` bypasses reading `.env` files from disk, as all variables are securely injected by Docker Compose or secret managers. In `local`, it reads `.env.local`. In `test`, it requires `.env.test`.
+
+---
+
+## Quick Start: Local Development
+
+### Option A: Host-Native Hot Reload (Recommended)
+
+This mode runs the Node.js/TypeScript code directly on your workstation with instant file-watching and hot reload via `tsx watch`, while PostgreSQL and Valkey run in lightweight Docker containers.
 
 ```bash
-docker compose up -d postgres
+# 1. Clone repository and navigate to backend directory
+cd zaroorat-back
+
+# 2. Install dependencies (Husky git hooks are auto-configured)
+npm install
+
+# 3. Start local infrastructure containers (PostgreSQL + PostGIS & Valkey)
+docker compose --env-file .env.local -f compose.local.yml up -d postgres valkey
+
+# 4. Run database migrations and seed default platform roles
+npm run migrate:local
+npm run seed:local
+
+# 5. (Optional) Provision local super-admin credentials
+npm run admin:local
+
+# 6. Start the API server in watch mode (Port 3000)
+npm run dev:local        # or: npm run local
+
+# 7. In a separate terminal, start the background BullMQ worker (Port 3001)
+npm run worker:local
 ```
 
-Alternatively, to start the entire stack (API, Database, and Redis), you can run:
+API Server will be live at: [http://localhost:3000](http://localhost:3000)  
+Swagger API Documentation: [http://localhost:3000/docs](http://localhost:3000/docs)  
+Health Endpoint: [http://localhost:3000/health](http://localhost:3000/health)
+
+---
+
+### Option B: Containerized Local Stack
+
+Run the entire application stack (PostgreSQL, Valkey, Database Migration, API, and Worker) inside Docker with Compose file-watch synchronization:
 
 ```bash
-make up
+# Start all services with automated migrations and live source code sync
+npm run docker:local:up
+
+# Tail live application and worker logs
+npm run docker:local:logs
+
+# Stop all local containers (preserves database volumes)
+npm run docker:local:stop
+
+# Teardown stack and purge database volumes (clean slate)
+npm run docker:local:reset
 ```
+
+---
+
+## Environment Configuration & Secrets
+
+Environment variables are validated on startup using **Zod** (`src/config/env/schema.ts`). Missing or invalid configuration immediately terminates the process with explicit error diagnostics.
+
+- **Local Development**: `.env.local`
+- **Committed Environment Blueprints**: Available in [`deploy/env/`](deploy/env/):
+  - `deploy/env/.env.dev.example`
+  - `deploy/env/.env.staging.example`
+  - `deploy/env/.env.prod.example`
+
+### Core Cryptographic Keys (Required in Deployed Environments)
+
+- `JWT_ACCESS_SECRET` & `JWT_REFRESH_SECRET`: Minimum 32-character high-entropy secret keys for HMAC-SHA256 tokens.
+- `ENCRYPTION_KEY`: 64-character hex key for symmetric AES-256-GCM encryption of third-party credentials.
+- `BANK_DATA_ENCRYPTION_KEY` & `BANK_ACCOUNT_HASH_KEY`: Isolated encryption keys protecting driver bank account numbers.
+- `RIDE_PIN_PEPPER`: Standalone 32+ byte secret for hashing 4-digit ride authentication PINs.
+
+---
+
+## Database Management & Migrations
+
+### Dual-Role Security Model
+
+Zaroorat implements a strict privilege-separation architecture for database security:
+
+1. **`zaroorat` (Schema Owner & Migration Role)**:
+   - Holds full DDL permissions (`CREATE`, `ALTER`, `DROP`, `REFERENCES`).
+   - Used exclusively during CI/CD migration runs via `MIGRATION_DATABASE_URL`.
+   - Never exposed to the running application container.
+2. **`zaroorat_app` (Runtime Application Role)**:
+   - Holds least-privilege DML permissions (`SELECT`, `INSERT`, `UPDATE`, `DELETE`).
+   - Explicitly denied DDL execution (`CREATE TABLE`, `DROP TABLE`, `ALTER SCHEMA`).
+   - Connects via PgBouncer using `DATABASE_URL`.
+
+### Running Migrations
+
+```bash
+# Check migration status across environments
+npm run migrate:status:local
+npm run migrate:status:dev
+npm run migrate:status:staging
+npm run migrate:status:prod
+
+# Apply pending migrations safely
+npm run migrate:local
+npm run migrate:dev
+npm run migrate:staging
+npm run migrate:prod
+
+# Generate Prisma Client after schema modifications
+npm run prisma:generate
+```
+
+### Database Seeding & Admin Provisioning
+
+```bash
+# Seed base platform roles, system settings, and default lookup data
+npm run seed:local
+npm run seed:dev
+npm run seed:staging
+
+# Provision a Super-Admin user
+npm run admin:local
+npm run admin:dev
+npm run admin:staging
+```
+
+---
+
+## Quality Gates & Testing
+
+Before creating a pull request or deploying, ensure all quality gates pass:
+
+```bash
+# 1. TypeScript compilation (Project + Tools configs)
+npm run typecheck
+
+# 2. ESLint (Zero warnings allowed)
+npm run lint
+
+# 3. Prettier formatting check
+npm run format:check
+
+# 4. Unit Test Suite (Node.js native test runner with tsx)
+npm run test:unit
+
+# 5. Integration Test Suite
+npm run test:integration
+
+# 6. Containerized Ephemeral Test Harness (Isolated Postgres + Redis)
+npm run docker:test:run
+npm run docker:test:down
+```
+
+---
+
+## Docker & Container Strategy
+
+### Multi-Stage Build Targets
+
+The project utilizes a single, optimized, multi-stage [`Dockerfile`](Dockerfile) pinned to Debian Trixie Slim:
+
+```
+  deps ──┬── local / development  (tsx watch, bind-mounted source sync)
+         ├── test                 (Self-contained test execution environment)
+         ├── build ── ops         (Prisma CLI, migration status, seeder tools)
+         └── build ── prod-deps ── prod / runner (Lean production runtime, non-root)
+```
+
+1. **`deps`**: Resolves and installs complete `node_modules` with `npm ci --ignore-scripts`.
+2. **`local` / `development`**: Configured for development container hot-reload.
+3. **`test`**: Encapsulates test suites for CI pipelines.
+4. **`build`**: Compiles TypeScript into JavaScript (`dist/`) and resolves path aliases via `tsc-alias`.
+5. **`ops`**: Administrative image containing deployment and migration tools.
+6. **`prod-deps`**: Strips devDependencies and rebuilds `@prisma/engines` schema engine binaries.
+7. **`prod` / `runner`**: Minimal, hardened production image running under non-root `USER node` (UID 1000) wrapped by `dumb-init`.
+
+### Container Security & Health Checks
+
+- **Read-Only / Least Privilege**: Container runs as unprivileged user `node`.
+- **Signal Handling**: `dumb-init` traps `SIGTERM` and `SIGINT`, initiating graceful drainage of active HTTP connections and BullMQ jobs.
+- **Native Liveness Probes**:
+  ```dockerfile
+  HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  ```
+
+---
+
+## Deployment & CI/CD Pipeline
+
+### DigitalOcean DEV Deployment Flow
+
+Continuous deployment to the DEV environment is managed through GitHub Actions ([`.github/workflows/deploy-dev.yml`](.github/workflows/deploy-dev.yml)):
+
+```
+  [ git push develop ]
+          │
+          ▼
+  1. Build Docker Images (Target: `prod` & `ops`)
+  2. Push Immutable Images to GitHub Container Registry (GHCR)
+     Tag: `ghcr.io/zaroorat-mobility/zaroorat-backend:sha-<commit>`
+          │
+          ▼
+  3. SSH into DigitalOcean Droplet
+     Command: `deploy sha-<commit> <image-digest>`
+          │
+          ▼
+  4. Remote Execution on Droplet (`deploy/bin/deploy.sh`):
+     ├─ Acquire deployment lock (`flock`)
+     ├─ Pull exact image by cryptographic digest
+     ├─ Run Prisma migrations: `docker compose run --rm migrate`
+     ├─ Verify database user permissions: `docker compose run --rm db-roles`
+     ├─ Zero-downtime rolling restart: `docker compose up -d --wait api worker caddy`
+     └─ Healthcheck verification & automated rollback on failure
+          │
+          ▼
+  5. Post-Deployment Smoke Test: `curl -fsS https://dev-api.zaroorat.com/health`
+```
+
+### Manual DEV Deployment from Local Workstation
+
+If you need to manually build and deploy a release to the DEV environment:
+
+```bash
+# 1. Commit and get current SHA
+$SHA = (git rev-parse --short HEAD)
+
+# 2. Build and push immutable images
+docker build --target prod -t ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA .
+docker build --target ops  -t ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA-ops .
+docker push ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA
+docker push ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA-ops
+
+# 3. Retrieve digest and trigger remote deploy
+$DIGEST = (docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA)
+ssh -i ~/.ssh/id_ed25519 deploy@<DEV_DROPLET_IP> "deploy sha-$SHA $DIGEST"
+```
+
+---
+
+## NPM Script Reference
+
+| Script                                    | Purpose                                                     |
+| :---------------------------------------- | :---------------------------------------------------------- |
+| `npm run dev:local` / `npm run local`     | Start API server in watch mode with `.env.local`            |
+| `npm run worker:local`                    | Start BullMQ worker in watch mode with `.env.local`         |
+| `npm run migrate:local`                   | Run Prisma migrations against local database                |
+| `npm run seed:local`                      | Seed default platform roles into local database             |
+| `npm run admin:local`                     | Provision super-admin account on local database             |
+| `npm run build`                           | Clean `dist/` and compile TypeScript                        |
+| `npm run typecheck`                       | Run complete TypeScript typechecking without emit           |
+| `npm run lint` / `npm run lint:fix`       | Lint codebase with ESLint                                   |
+| `npm run format` / `npm run format:check` | Format code with Prettier                                   |
+| `npm run test:unit`                       | Run all unit tests with Node test runner                    |
+| `npm run test:integration`                | Run integration test suite                                  |
+| `npm run docker:local:up`                 | Boot full containerized local stack with hot-reload         |
+| `npm run docker:local:down`               | Stop local container stack (data preserved)                 |
+| `npm run docker:local:reset`              | Teardown local stack and delete database volumes            |
+| `npm run docker:dev:up`                   | Start containerized DEV stack                               |
+| `npm run docker:dev:migrate`              | Execute DEV migrations inside ops container                 |
+| `npm run docker:staging:up`               | Start containerized Staging stack                           |
+| `npm run docker:prod:up`                  | Start containerized Production stack (requires `IMAGE_TAG`) |
+
+---
+
+## Project Directory Layout
+
+```
+zaroorat-back/
+├── .github/
+│   └── workflows/              # GitHub Actions CI/CD workflows
+├── deploy/
+│   ├── bin/                    # Production deployment and rollback shell scripts
+│   ├── caddy/                  # Reverse proxy Caddyfile configurations
+│   └── env/                    # Environment blueprint templates (.example)
+├── docker/
+│   └── postgres/init/          # PostgreSQL database & PostGIS extension init scripts
+├── docs/                       # Project documentation & architectural runbooks
+│   └── DEPLOYMENT/             # Multi-environment audit & migration guides
+├── prisma/
+│   ├── migrations/             # Timestamped SQL migration history
+│   ├── schema/                 # Domain-driven Prisma schema modules
+│   └── seed/                   # Database seeders (development, staging, production)
+├── scripts/                    # Operational automation, admin creation, and utilities
+├── src/
+│   ├── app/                    # Fastify application factory & route registration
+│   ├── bootstrap/              # Database, Redis, and infrastructure bootstrap loaders
+│   ├── config/                 # Environment validation (Zod) and service configurations
+│   ├── core/                   # Shared kernel (caching, logging, events, rate limiting)
+│   ├── integrations/           # Third-party clients (Airtel SMS, Maps, S3/Spaces)
+│   ├── modules/                # Feature modules (auth, drivers, rides, pricing, etc.)
+│   ├── plugins/                # Fastify plugins (CORS, Swagger, Awilix DI, Helmet)
+│   ├── server.ts               # HTTP API server entry point
+│   └── worker.ts               # Asynchronous queue worker entry point
+├── tests/
+│   ├── integration/            # End-to-end integration test suites
+│   └── unit/                   # Fast, isolated unit tests
+├── compose.local.yml           # Docker Compose stack for Local development
+├── compose.dev.yml             # Docker Compose stack for DigitalOcean DEV
+├── compose.staging.yml         # Docker Compose stack for Staging
+├── compose.prod.yml            # Docker Compose stack for Production
+├── compose.test.yml            # Docker Compose ephemeral test harness
+├── Dockerfile                  # Hardened multi-stage container specification
+├── Makefile                    # Developer shortcut command wrappers
+├── package.json                # Project dependencies, scripts, and engine constraints
+└── tsconfig.json               # TypeScript compiler configuration
+```
+
+---
+
+## License
+
+Copyright &copy; 2026 Zaroorat Mobility. All rights reserved.  
+Licensed under the [ISC License](package.json).

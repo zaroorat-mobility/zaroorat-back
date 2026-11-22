@@ -16,6 +16,7 @@ import { EventPublisher } from '@core/events';
 import { driverEvent, DRIVER_EVENT_CATALOG } from '@modules/drivers/events/catalog.js';
 import { VehicleVerificationService } from '@modules/vehicles/services/vehicle-verification.service.js';
 import { VehicleEligibilityService } from '@modules/vehicles/services/vehicle-eligibility.service.js';
+import { VehicleTypeService } from '@modules/vehicles/services/vehicle-type.service.js';
 import {
   AdminDriverService,
   type DriverDetailsDto,
@@ -83,11 +84,15 @@ export interface ApplicationDetailsDto extends ApplicationListItemDto {
   auditLogs: DriverDetailsDto['auditLogs'];
 }
 
-const VEHICLE_TYPE_CODE: Record<CreateManualApplicationBody['vehicleType'], string> = {
-  cab: 'CAB_ECONOMY',
-  auto: 'AUTO',
-  bike: 'BIKE',
-  carpool: 'CAB_ECONOMY',
+/// The form's coarse choice, as the catalog's own `category` column. It only
+/// picks a type when the category holds exactly one active one; otherwise the
+/// caller must send `vehicleTypeId`. (This was `cab -> CAB_ECONOMY`, a code the
+/// seed no longer creates, so every manually registered cab was refused.)
+const VEHICLE_GROUP_CATEGORY: Record<CreateManualApplicationBody['vehicleType'], string> = {
+  cab: 'car',
+  carpool: 'car',
+  auto: 'auto',
+  bike: 'bike',
 };
 
 function normalizePhone(raw: string): string {
@@ -239,8 +244,23 @@ export class AdminApplicationService {
     private readonly referralApplyService: ReferralApplyService,
     private readonly vehicleVerificationService: VehicleVerificationService,
     private readonly vehicleEligibilityService: VehicleEligibilityService,
+    private readonly vehicleTypeService: VehicleTypeService,
     private readonly eventPublisher?: EventPublisher,
   ) {}
+
+  private async onlyActiveTypeIn(category: string) {
+    const types = await this.databaseService.client.vehicleType.findMany({
+      where: { category, isActive: true, displayOrder: { gte: 0 } },
+      take: 2,
+    });
+    const [only] = types;
+    if (!only || types.length > 1) {
+      throw new AdminDriverConflictError(
+        `Choose the exact vehicle type (vehicleTypeId): the '${category}' category has ${types.length === 0 ? 'no' : 'more than one'} active type`,
+      );
+    }
+    return only;
+  }
 
   async getVerificationStats(): Promise<{
     total: number;
@@ -419,13 +439,9 @@ export class AdminApplicationService {
       throw new AdminDriverConflictError('A vehicle with this registration number already exists');
     }
 
-    const vehicleTypeCode = VEHICLE_TYPE_CODE[input.vehicleType];
-    const vehicleType = await this.databaseService.client.vehicleType.findUnique({
-      where: { code: vehicleTypeCode },
-    });
-    if (!vehicleType) {
-      throw new AdminDriverConflictError(`Vehicle type ${vehicleTypeCode} is not configured`);
-    }
+    const vehicleType = input.vehicleTypeId
+      ? await this.vehicleTypeService.resolveForConfig({ id: input.vehicleTypeId })
+      : await this.onlyActiveTypeIn(VEHICLE_GROUP_CATEGORY[input.vehicleType]);
 
     const driverId = await this.databaseService.client.$transaction(async (tx) => {
       const user =

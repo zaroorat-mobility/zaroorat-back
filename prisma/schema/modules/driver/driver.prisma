@@ -36,6 +36,8 @@ model Driver {
   bankAccounts       DriverBankAccount[]
   wallet             DriverWallet?
   commissionWallet   DriverCommissionWallet?
+  walletReservations DriverWalletReservation[]
+  collectionFailures CommissionCollectionFailure[]
   subscriptions      DriverSubscription[]
   onlineStatus       DriverOnlineStatus?
   location           DriverLocation?

@@ -1,4 +1,5 @@
 import { config } from '@config';
+import { isDeployed } from '@config/env/environment.js';
 import { container } from '../core/di.js';
 import { PrismaClientProvider } from '@core/database/client/PrismaClientProvider.js';
 import { RetryService } from '@core/database/retry/RetryService.js';
@@ -36,7 +37,7 @@ export async function auditTrailRewriteRights(db: RawQuery): Promise<string[]> {
 /// the application. Fails closed — there is no override. Development and test connect as
 /// the owner on purpose (the test harness truncates).
 export async function assertRestrictedDatabaseRole(db: RawQuery, environment: string) {
-  if (environment !== 'production' && environment !== 'staging') return;
+  if (!isDeployed(environment)) return;
   const rights = await auditTrailRewriteRights(db);
   if (rights.length > 0) {
     throw new Error(

@@ -41,7 +41,9 @@ describe('ride geographic coverage (integration)', () => {
   });
   beforeEach(async () => {
     await resetState();
-    const cab = await db().client.vehicleType.findUniqueOrThrow({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUniqueOrThrow({
+      where: { code: 'CAB_ECONOMY_NON_AC' },
+    });
     await ensureCity('SGR', 'Srinagar');
     const boundaryJson = JSON.stringify({ type: 'Polygon', coordinates: SGR_BOUNDARY });
     await db().client.$executeRaw`
@@ -69,7 +71,9 @@ describe('ride geographic coverage (integration)', () => {
   });
 
   it('blocks pickup inside restricted zone', async () => {
-    const cab = await db().client.vehicleType.findUniqueOrThrow({ where: { code: 'CAB_ECONOMY' } });
+    const cab = await db().client.vehicleType.findUniqueOrThrow({
+      where: { code: 'CAB_ECONOMY_NON_AC' },
+    });
     await assert.rejects(
       () =>
         coverage.assertPickupServiceable({

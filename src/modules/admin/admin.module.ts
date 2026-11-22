@@ -1,3 +1,6 @@
+import { GeographicSimulationService } from './geographic-management/geographic-simulation.service.js';
+import { AdminDriverMonetizationService } from './payment-management/driver-monetization.service.js';
+import { AdminDriverMonetizationController } from './payment-management/driver-monetization.controller.js';
 import type { FastifyInstance } from 'fastify';
 import { asClass, AwilixContainer } from 'awilix';
 import { registerFileReference } from '@modules/files';
@@ -15,6 +18,12 @@ import {
   AdminServiceZoneService,
   AdminInvoiceController,
   AdminInvoiceService,
+  AdminPricingSimulateController,
+  AdminPricingSimulateService,
+  AdminPricingGovernanceController,
+  AdminPricingGovernanceService,
+  AdminFiscalDocumentController,
+  AdminFiscalDocumentService,
 } from './pricing-management/index.js';
 import {
   promotionsManagementRoutes,
@@ -169,6 +178,12 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminCancellationController: asClass(AdminCancellationController).singleton(),
     adminInvoiceService: asClass(AdminInvoiceService).singleton(),
     adminInvoiceController: asClass(AdminInvoiceController).singleton(),
+    adminPricingSimulateService: asClass(AdminPricingSimulateService).singleton(),
+    adminPricingSimulateController: asClass(AdminPricingSimulateController).singleton(),
+    adminPricingGovernanceService: asClass(AdminPricingGovernanceService).singleton(),
+    adminPricingGovernanceController: asClass(AdminPricingGovernanceController).singleton(),
+    adminFiscalDocumentService: asClass(AdminFiscalDocumentService).singleton(),
+    adminFiscalDocumentController: asClass(AdminFiscalDocumentController).singleton(),
     adminPromotionService: asClass(AdminPromotionService).singleton(),
     adminCampaignService: asClass(AdminCampaignService).singleton(),
     adminSegmentService: asClass(AdminSegmentService).singleton(),
@@ -190,6 +205,8 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminPaymentManagementController: asClass(AdminPaymentManagementController).singleton(),
     adminFinanceService: asClass(AdminFinanceService).singleton(),
     adminFinanceController: asClass(AdminFinanceController).singleton(),
+    adminDriverMonetizationService: asClass(AdminDriverMonetizationService).singleton(),
+    adminDriverMonetizationController: asClass(AdminDriverMonetizationController).singleton(),
     documentComplianceService: asClass(DocumentComplianceService).singleton(),
     documentComplianceController: asClass(DocumentComplianceController).singleton(),
     adminStaffService: asClass(AdminStaffService).singleton(),
@@ -199,6 +216,7 @@ export function registerAdminModule(container: AwilixContainer): void {
     adminRiderService: asClass(AdminRiderService).singleton(),
     adminRiderController: asClass(AdminRiderController).singleton(),
     adminGeographicService: asClass(AdminGeographicService).singleton(),
+    geographicSimulationService: asClass(GeographicSimulationService).singleton(),
     adminGeographicController: asClass(AdminGeographicController).singleton(),
     adminRideService: asClass(AdminRideService).singleton(),
     adminRideController: asClass(AdminRideController).singleton(),

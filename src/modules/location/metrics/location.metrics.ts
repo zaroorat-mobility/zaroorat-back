@@ -58,6 +58,12 @@ export class GeographicMetrics {
     this.emit('pickup_outside_coverage_total', fields);
   }
 
+  /// A booking or quote was refused because of where the pickup is. A jump right
+  /// after a zone or city edit usually means the edit closed more than intended.
+  pickupRefused(fields: { reason: string; cityCode: string }): void {
+    this.emit('pickup_refused_total', fields);
+  }
+
   private emit(metric: string, fields?: GeographicMetricFields, by = 1): void {
     const name = `geographic.${metric}`;
     incrementCounter(name, fields, by);

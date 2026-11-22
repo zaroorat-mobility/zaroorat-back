@@ -1,22 +1,31 @@
 import { defineConfig } from '@prisma/config';
 import * as dotenv from 'dotenv';
+import * as fs from 'fs';
 import * as path from 'path';
 
-// Environment handling: load the dotenv file matching the current environment.
-// Deployed environments have no such file and rely on injected variables, so a
-// miss here is not an error.
+// Environment handling: load the dotenv file matching the current environment, first
+// match wins. Deployed environments normally have no such file and rely on injected
+// variables, so a miss here is not an error. An environment not listed loads nothing:
+// it must never fall through to a developer's local file.
+const ENV_FILES: Record<string, string[]> = {
+  local: ['.env.local'],
+  development: ['.env.local', '.env.dev'],
+  dev: ['.env.dev'],
+  test: ['.env.test'],
+  testing: ['.env.test'],
+  staging: ['.env.staging'],
+  production: ['.env.production', '.env.prod'],
+  prod: ['.env.production', '.env.prod'],
+};
 const env = process.env.APP_ENV || process.env.NODE_ENV || 'development';
-const envFile =
-  env === 'production'
-    ? '.env.production'
-    : env === 'test' || env === 'testing'
-      ? '.env.test'
-      : '.env.development';
+const envFile = (ENV_FILES[env] ?? [])
+  .map((file) => path.resolve(process.cwd(), file))
+  .find((file) => fs.existsSync(file));
 
 // quiet: true is required, not cosmetic. dotenv v17 prints a banner to stdout,
 // which lands inside the SQL whenever a prisma command is redirected, e.g.
 // `prisma migrate diff --script > migration.sql`.
-dotenv.config({ path: path.resolve(process.cwd(), envFile), quiet: true });
+if (envFile) dotenv.config({ path: envFile, quiet: true });
 
 export default defineConfig({
   schema: 'prisma/schema',

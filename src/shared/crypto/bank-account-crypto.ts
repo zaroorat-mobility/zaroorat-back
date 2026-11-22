@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
+import { isDeployed } from '@config/env/environment.js';
 
 /// Driver bank-account number protection (Phase 1).
 ///
@@ -27,7 +28,7 @@ function key(name: KeyName, label: string): Buffer {
     return createHash('sha256').update(configured).digest();
   }
   const environment = process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development';
-  if (environment === 'production' || environment === 'staging') {
+  if (isDeployed(environment)) {
     throw new Error(`${name} must be set (min 32 chars) when APP_ENV=${environment}`);
   }
   // Development/test only: a stable derivation so local data stays readable.

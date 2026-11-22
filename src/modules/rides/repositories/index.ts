@@ -1,4 +1,5 @@
 export * from './ride-request.repository.js';
+export * from './ride-quote.repository.js';
 export * from './ride-dispatch.repository.js';
 export * from './ride.repository.js';
 export * from './ride-fare.repository.js';

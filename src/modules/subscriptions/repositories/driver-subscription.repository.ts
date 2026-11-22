@@ -132,6 +132,22 @@ export class DriverSubscriptionRepository {
     });
   }
 
+  /// SUBSCRIPTION-model drivers still on shift with no ACTIVE, unexpired plan:
+  /// expired while online, or while on a ride that has since ended. ON_TRIP is
+  /// left alone — an accepted ride always runs to completion.
+  async findOnShiftWithoutActivePlan(now: Date, limit = 200): Promise<string[]> {
+    const rows = await this.db.client.driver.findMany({
+      where: {
+        paymentModel: 'SUBSCRIPTION',
+        onlineStatus: { status: { notIn: ['OFFLINE', 'ON_TRIP'] } },
+        subscriptions: { none: { status: 'ACTIVE', expiryDate: { gt: now } } },
+      },
+      select: { id: true },
+      take: limit,
+    });
+    return rows.map((row) => row.id);
+  }
+
   async expireIfActive(id: string, tx: TransactionClient): Promise<boolean> {
     const { count } = await tx.driverSubscription.updateMany({
       where: { id, status: 'ACTIVE' },

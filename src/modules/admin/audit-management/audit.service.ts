@@ -26,14 +26,35 @@ export class AdminAuditService {
     limit: number;
     actorId?: string | undefined;
     entityType?: string | undefined;
+    entityTypes?: string[] | undefined;
     entityId?: string | undefined;
     action?: string | undefined;
+    from?: string | undefined;
+    to?: string | undefined;
+    search?: string | undefined;
   }): Promise<{ data: AuditLogDto[]; meta: { page: number; limit: number; total: number } }> {
-    const where = {
+    const createdAtFilter: { gte?: Date; lte?: Date } = {};
+    if (input.from) createdAtFilter.gte = new Date(input.from);
+    if (input.to) createdAtFilter.lte = new Date(input.to);
+
+    const where: Record<string, unknown> = {
       ...(input.actorId ? { actorId: input.actorId } : {}),
-      ...(input.entityType ? { entityType: input.entityType } : {}),
+      ...(input.entityTypes && input.entityTypes.length > 0
+        ? { entityType: { in: input.entityTypes } }
+        : input.entityType
+          ? { entityType: input.entityType }
+          : {}),
       ...(input.entityId ? { entityId: input.entityId } : {}),
       ...(input.action ? { action: input.action as never } : {}),
+      ...(Object.keys(createdAtFilter).length > 0 ? { createdAt: createdAtFilter } : {}),
+      ...(input.search
+        ? {
+            OR: [
+              { summary: { contains: input.search, mode: 'insensitive' } },
+              { entityType: { contains: input.search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
     };
 
     const [rows, total] = await Promise.all([

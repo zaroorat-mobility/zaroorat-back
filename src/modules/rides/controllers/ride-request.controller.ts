@@ -4,6 +4,7 @@ import { RedisService, IDEMPOTENCY_OPERATIONS } from '@core/cache';
 import { RideService } from '../services/ride.service.js';
 import {
   quoteFareSchema,
+  serviceabilityQuerySchema,
   createRideRequestSchema,
   boostRequestSchema,
   changeDestinationQuoteSchema,
@@ -16,6 +17,13 @@ export class RideRequestController {
     private readonly rideService: RideService,
     private readonly redisService: RedisService,
   ) {}
+
+  async serviceability(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { lat, lng } = serviceabilityQuerySchema.parse(req.query);
+    const data = await this.rideService.request.checkServiceability(lat, lng);
+    reply.send({ data });
+  }
+
   async quote(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const body = quoteFareSchema.parse(req.body);
     const userId = req.auth?.userId;
@@ -72,6 +80,8 @@ export class RideRequestController {
         ...(body.pickupNotes !== undefined ? { pickupNotes: body.pickupNotes } : {}),
         ...(body.scheduledFor !== undefined ? { scheduledFor: body.scheduledFor } : {}),
         ...(body.boostAmount !== undefined ? { boostAmount: body.boostAmount } : {}),
+        ...(body.quoteId !== undefined ? { quoteId: body.quoteId } : {}),
+        ...(body.expectedFare !== undefined ? { expectedFare: body.expectedFare } : {}),
       });
     // Optional, unlike payments' mandatory Idempotency-Key: a client retrying
     // a timed-out POST /rides/requests with the same key gets back the

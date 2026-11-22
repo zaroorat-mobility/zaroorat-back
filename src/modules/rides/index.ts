@@ -2,6 +2,7 @@ import { asClass, asFunction, aliasTo, AwilixContainer } from 'awilix';
 import { RideMetrics } from './metrics/ride.metrics.js';
 import {
   RideRequestRepository,
+  RideQuoteRepository,
   RideDispatchRepository,
   RideRepository,
   RideFareRepository,
@@ -22,6 +23,7 @@ import {
   RideSafetyService,
 } from './services/index.js';
 import { ScheduledRideService } from './services/scheduled/index.js';
+import { RideFinancialSettlementService } from './services/settlement/ride-financial-settlement.service.js';
 import { RideChatService } from './services/chat/index.js';
 import { RideCallService, createCallProvider } from './services/call/index.js';
 import {
@@ -63,6 +65,7 @@ export function registerRidesModule(container: AwilixContainer): void {
   container.register({
     rideMetrics: asClass(RideMetrics).singleton(),
     rideRequestRepository: asClass(RideRequestRepository).singleton(),
+    rideQuoteRepository: asClass(RideQuoteRepository).singleton(),
     rideDispatchRepository: asClass(RideDispatchRepository).singleton(),
     rideRepository: asClass(RideRepository).singleton(),
     rideFareRepository: asClass(RideFareRepository).singleton(),
@@ -74,6 +77,7 @@ export function registerRidesModule(container: AwilixContainer): void {
     ridePinThrottle: asClass(RidePinThrottle).singleton(),
     ridePinVerificationService: asClass(RidePinVerificationService).singleton(),
     cancellationService: asClass(CancellationService).singleton(),
+    rideFinancialSettlementService: asClass(RideFinancialSettlementService).singleton(),
     dispatchService: asClass(DispatchService).singleton(),
     lifecycleService: asClass(LifecycleService).singleton(),
     arrivalDetectionService: asClass(ArrivalDetectionService).singleton(),

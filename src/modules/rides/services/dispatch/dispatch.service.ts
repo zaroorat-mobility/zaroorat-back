@@ -1,4 +1,5 @@
 import { geoConfig, rideConfig } from '@config';
+import { PricingService } from '@modules/pricing';
 import { TransactionManager } from '@core/database';
 import { RedisService } from '@core/cache/RedisService.js';
 import { EventPublisher } from '@core/events';
@@ -55,6 +56,7 @@ export class DispatchService {
     private readonly txManager: TransactionManager,
     private readonly eventPublisher: EventPublisher,
     private readonly rideMetrics: RideMetrics,
+    private readonly pricingService: PricingService,
   ) {}
   async offerToDriver(
     data: {
@@ -178,6 +180,7 @@ export class DispatchService {
     }
 
     const origin = { latitude: Number(request.pickupLat), longitude: Number(request.pickupLng) };
+    const commissionDue = await this.commissionDueFor(request);
     let candidates: MatchCandidate[] = [];
     let searchRadiusMeters = 0;
     for (const radius of searchRadiiFrom(dispatchRound)) {
@@ -188,6 +191,7 @@ export class DispatchService {
         availableSlots,
         request.vehicleTypeId,
         radius,
+        commissionDue,
       );
       if (candidates.length > 0) break;
     }
@@ -225,6 +229,27 @@ export class DispatchService {
       await this.requestRepo.updateStatus(requestId, 'SEARCHING');
     }
     return offered;
+  }
+
+  /// Priced once per round, not per driver. A failure here must not stall
+  /// dispatch: the balance filter is skipped and acceptance, which prices the
+  /// same request itself, still refuses a wallet that cannot cover it.
+  private async commissionDueFor(request: {
+    id: string;
+    estimatedDistanceKm: { toString(): string } | null;
+    estimatedDurationMin: number | null;
+    vehicleTypeId: string;
+    pricingRuleId: string | null;
+  }): Promise<number | undefined> {
+    try {
+      return await this.pricingService.estimatedCommission(request);
+    } catch (err) {
+      logger.warn(
+        { err, requestId: request.id },
+        '[rides] could not price the commission; dispatch will not filter on wallet balance',
+      );
+      return undefined;
+    }
   }
 
   /// A driver saying "no" explicitly. Before this existed the enum value,

@@ -328,15 +328,16 @@ export class AdminInvoiceService {
     const gstAmount = invoice.amount - taxableValue;
     const cgstAmount = taxableValue * (template.cgstRate / 100);
     const sgstAmount = taxableValue * (template.sgstRate / 100);
+    const igstAmount = taxableValue * (template.igstRate / 100);
 
     return {
       invoice_number: invoice.invoiceNumber,
       invoice_date: invoice.date,
       customer_name:
-        invoice.recipientType === 'rider' ? invoice.recipientName : 'Zaroorat Mobility',
+        invoice.recipientType === 'rider' ? invoice.recipientName : '—',
       customer_contact: '',
-      driver_name: invoice.recipientType === 'driver' ? invoice.recipientName : 'Demo Driver',
-      driver_id: 'DRV0001',
+      driver_name: invoice.recipientType === 'driver' ? invoice.recipientName : '—',
+      driver_id: invoice.recipientType === 'driver' ? (invoice.recipientUserId ?? '—') : '—',
       trip_id: invoice.bookingId ?? '',
       booking_id: invoice.bookingId ?? '',
       fare_breakdown: `₹${taxableValue.toFixed(2)} (base) + ₹${gstAmount.toFixed(2)} (GST)`,
@@ -345,10 +346,10 @@ export class AdminInvoiceService {
       commission_amount:
         invoice.recipientType === 'driver'
           ? `₹${invoice.amount.toFixed(2)}`
-          : `₹${(invoice.amount * 0.07).toFixed(2)}`,
+          : '—',
       subscription_plan: '—',
       subscription_amount: '—',
-      tax_breakdown: `CGST: ₹${cgstAmount.toFixed(2)} | SGST: ₹${sgstAmount.toFixed(2)} | IGST: ₹0.00`,
+      tax_breakdown: `CGST: ₹${cgstAmount.toFixed(2)} | SGST: ₹${sgstAmount.toFixed(2)} | IGST: ₹${igstAmount.toFixed(2)}`,
       company_gstin: template.gstin,
       company_address: template.address,
     };

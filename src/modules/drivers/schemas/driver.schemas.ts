@@ -147,6 +147,11 @@ export const selectPaymentModelSchema = z.object({
 });
 export type SelectPaymentModelBody = z.infer<typeof selectPaymentModelSchema>;
 
+export const commissionTermsQuerySchema = z.object({
+  cityCode: z.string().trim().min(1).max(20).optional(),
+  vehicleTypeId: z.string().uuid().optional(),
+});
+
 export const submitDriverBankAccountSchema = z
   .object({
     accountHolderName: z.string().min(2).max(100),

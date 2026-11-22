@@ -38,6 +38,9 @@ export const PAYMENT_EVENT_CATALOG = {
   /// observability/investigation signal, not a financial transaction — no
   /// wallet write or ledger entry accompanies it.
   DRIVER_COMMISSION_WALLET_COLLECTION_FAILED: 'driver.commission_wallet.collection_failed',
+  /// Phase 4 (Rev 5 §4.3 & §4.5): Independent GST recovery & atomic failure recovery events.
+  GST_RECOVERY_COLLECTION_FAILED: 'gst_recovery.collection_failed',
+  SETTLEMENT_FAILURE_RECOVERED: 'settlement_failure.recovered',
 } as const;
 export function paymentEvent(
   name: (typeof PAYMENT_EVENT_CATALOG)[keyof typeof PAYMENT_EVENT_CATALOG],

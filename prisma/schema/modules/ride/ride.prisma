@@ -17,7 +17,12 @@ model RideRequest {
   /// Extra ₹ the customer adds while searching. Drivers are shown quoted + boost.
   boostAmount          Decimal                               @default(0) @map("boost_amount") @db.Decimal(10, 2)
   surgeMultiplier      Decimal                               @default(1.0) @map("surge_multiplier") @db.Decimal(4, 2)
+  surgeWindowId        String?                               @map("surge_window_id") @db.Uuid
   pricingRuleId        String?                               @map("pricing_rule_id") @db.Uuid
+  quoteId              String?                               @map("quote_id") @db.Uuid
+  /// Write-once immutable snapshot of the resolved rate card, rule metadata,
+  /// surge and promo terms captured when this request was priced (M-02).
+  pricingSnapshot      Json?                                 @map("pricing_snapshot")
   paymentMethod        String?                               @map("payment_method")
   promoCode            String?                               @map("promo_code")
   scheduledFor         DateTime?                             @map("scheduled_for")
@@ -37,6 +42,8 @@ model RideRequest {
 
   vehicleType    VehicleType       @relation(fields: [vehicleTypeId], references: [id])
   pricingRule    PricingRule?      @relation(fields: [pricingRuleId], references: [id])
+  surgeWindow    SurgeWindow?      @relation(fields: [surgeWindowId], references: [id])
+  quote          RideQuote?        @relation(fields: [quoteId], references: [id])
   dispatches     RideDispatch[]
   rides          Ride[]
   scheduledRides ScheduledRide[]
@@ -45,9 +52,59 @@ model RideRequest {
   @@index([customerId])
   @@index([status])
   @@index([pricingRuleId])
+  @@index([surgeWindowId])
+  @@index([quoteId])
   /// Driver map demand reads the last few minutes of requests (map-zones.repository.ts).
   @@index([createdAt])
   @@map("ride_requests")
+}
+
+/// Persisted customer fare quote lock (M-01). Valid until `expiresAt` and
+/// single-use once `consumedAt` is set on booking.
+model RideQuote {
+  id                   String    @id @default(uuid(7)) @db.Uuid
+  customerId           String?   @map("customer_id") @db.Uuid
+  pickupLat            Decimal   @map("pickup_lat") @db.Decimal(10, 7)
+  pickupLng            Decimal   @map("pickup_lng") @db.Decimal(10, 7)
+  dropLat              Decimal   @map("drop_lat") @db.Decimal(10, 7)
+  dropLng              Decimal   @map("drop_lng") @db.Decimal(10, 7)
+  stops                Json      @default("[]")
+  cityCode             String    @map("city_code")
+  promoCode            String?   @map("promo_code")
+  estimatedDistanceKm  Decimal   @map("estimated_distance_km") @db.Decimal(8, 2)
+  estimatedDurationMin Int       @map("estimated_duration_min")
+  distanceSource       String    @map("distance_source")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  expiresAt            DateTime  @map("expires_at")
+  consumedAt           DateTime? @map("consumed_at")
+
+  options      RideQuoteOption[]
+  rideRequests RideRequest[]
+
+  @@index([customerId, createdAt])
+  @@index([expiresAt])
+  @@map("ride_quotes")
+}
+
+model RideQuoteOption {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  quoteId          String   @map("quote_id") @db.Uuid
+  vehicleTypeId    String   @map("vehicle_type_id") @db.Uuid
+  pricingRuleId    String?  @map("pricing_rule_id") @db.Uuid
+  ruleVersion      Int?     @map("rule_version")
+  surgeMultiplier  Decimal  @default(1.0) @map("surge_multiplier") @db.Decimal(4, 2)
+  surgeWindowId    String?  @map("surge_window_id") @db.Uuid
+  rateCardSnapshot Json     @map("rate_card_snapshot")
+  fareSnapshot     Json     @map("fare_snapshot")
+  totalFare        Decimal  @map("total_fare") @db.Decimal(10, 2)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  quote       RideQuote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  vehicleType VehicleType  @relation(fields: [vehicleTypeId], references: [id])
+  pricingRule PricingRule? @relation(fields: [pricingRuleId], references: [id])
+
+  @@unique([quoteId, vehicleTypeId])
+  @@map("ride_quote_options")
 }
 
 /// Intermediate stops between pickup and drop, in travel order (1-based).
@@ -148,11 +205,16 @@ model Ride {
   /// NULL means "created before this column existed," and completion treats
   /// that as a legacy ride with no dual-model handling, never as an error.
   /// DB CHECK `rides_driver_payment_model_check` enforces the allowed values.
-  driverPaymentModel String?                               @map("driver_payment_model")
+  driverPaymentModel   String?  @map("driver_payment_model")
+  /// Phase 4 (M-02): Locked at accept time for Path A grandfathered subscribers.
+  driverSubscriptionId String?  @map("driver_subscription_id") @db.Uuid
   /// COMMISSION-model rides only; determined ONCE at acceptance from the
-  /// ride's pinned PricingRule and never recalculated (spec.md FR-013b/FR-020).
-  /// Null for SUBSCRIPTION-model rides.
-  commissionAmount   Decimal?                              @map("commission_amount") @db.Decimal(12, 2)
+  /// ride's pinned PricingRule / CommissionConfiguration.
+  commissionAmount     Decimal? @map("commission_amount") @db.Decimal(12, 2)
+  /// Phase 4 (M-02): Write-once immutable accept-time snapshots (enforced by DB trigger).
+  commissionSnapshot   Json?    @map("commission_snapshot")
+  passengerGstSnapshot Json?    @map("passenger_gst_snapshot")
+  gstRecoverySnapshot  Json?    @map("gst_recovery_snapshot")
   /// Optional early-end reason when the trip finished short of destination.
   earlyEndReasonCode RideEndReason?                        @map("early_end_reason_code")
   earlyEndReasonText String?                               @map("early_end_reason_text")
@@ -192,6 +254,11 @@ model Ride {
   payoutItems                  PayoutItem[]
   cashbackGrants               CashbackGrant[]
   commissionWalletTransactions DriverCommissionWalletTransaction[]
+  pricingRevisions             RidePricingRevision[]
+  walletReservation            DriverWalletReservation?
+  settlementSteps              RideSettlementStep[]
+  collectionFailures           CommissionCollectionFailure[]
+  fiscalDocuments              FiscalDocument[]
   chatConversations            ChatConversation[]
   supportTickets               SupportTicket[]
   redeemedCoupons              Coupon[]
@@ -260,11 +327,41 @@ model RideFare {
   totalFare          Decimal  @map("total_fare") @db.Decimal(10, 2)
   driverEarning      Decimal  @map("driver_earning") @db.Decimal(10, 2)
   platformCommission Decimal  @map("platform_commission") @db.Decimal(10, 2)
+  /// Snapshot of the exact rate card used to finalize this fare (M-02).
+  ratesSnapshot      Json?    @map("rates_snapshot")
   createdAt          DateTime @default(now()) @map("created_at")
 
   ride Ride @relation(fields: [rideId], references: [id])
 
   @@map("ride_fares")
+}
+
+/// Phase 4 (M-02, Rev 5 R5-5): Append-only post-accept pricing revision log.
+/// Protected by DB BEFORE UPDATE/DELETE trigger so accept-time snapshots stay untouched.
+model RidePricingRevision {
+  id                      String    @id @default(uuid(7)) @db.Uuid
+  rideId                  String    @map("ride_id") @db.Uuid
+  revisionNumber          Int       @map("revision_number")
+  reason                  String // DESTINATION_CHANGE | STOP_ADDED | ROUTE_CHANGE | COMPLETION_FINALIZATION
+  originalPricingRuleId   String?   @map("original_pricing_rule_id") @db.Uuid
+  originalCommissionCfgId String?   @map("original_commission_cfg_id") @db.Uuid
+  originalTaxCfgId        String?   @map("original_tax_cfg_id") @db.Uuid
+  originalRecoveryCfgId   String?   @map("original_recovery_cfg_id") @db.Uuid
+  calculationDetailsJson  Json      @map("calculation_details_json")
+  previousReservedAmount  Decimal   @default(0) @map("previous_reserved_amount") @db.Decimal(12, 2)
+  newReservedAmount       Decimal   @default(0) @map("new_reserved_amount") @db.Decimal(12, 2)
+  deltaReservedAmount     Decimal   @default(0) @map("delta_reserved_amount") @db.Decimal(12, 2)
+  walletReservationId     String?   @map("wallet_reservation_id") @db.Uuid
+  customerConfirmedAt     DateTime? @map("customer_confirmed_at")
+  driverConfirmedAt       DateTime? @map("driver_confirmed_at")
+  confirmedByActorId      String?   @map("confirmed_by_actor_id") @db.Uuid
+  createdAt               DateTime  @default(now()) @map("created_at")
+
+  ride Ride @relation(fields: [rideId], references: [id])
+
+  @@unique([rideId, revisionNumber])
+  @@index([rideId, createdAt])
+  @@map("ride_pricing_revisions")
 }
 
 model RideFareLine {
@@ -282,19 +379,28 @@ model RideFareLine {
 }
 
 model RideCancellation {
-  id                String   @id @default(uuid(7)) @db.Uuid
-  rideId            String   @unique @map("ride_id") @db.Uuid
-  cancelledBy       String   @map("cancelled_by")
-  actorId           String?  @map("actor_id") @db.Uuid
-  reasonCode        String   @map("reason_code")
-  reasonText        String?  @map("reason_text")
-  cancelledAtStatus String?  @map("cancelled_at_status")
-  cancellationFee   Decimal  @default(0) @map("cancellation_fee") @db.Decimal(10, 2)
-  feeCharged        Boolean  @default(false) @map("fee_charged")
-  createdAt         DateTime @default(now()) @map("created_at")
+  id                 String   @id @default(uuid(7)) @db.Uuid
+  rideId             String   @unique @map("ride_id") @db.Uuid
+  cancelledBy        String   @map("cancelled_by")
+  actorId            String?  @map("actor_id") @db.Uuid
+  reasonCode         String   @map("reason_code")
+  reasonText         String?  @map("reason_text")
+  cancelledAtStatus  String?  @map("cancelled_at_status")
+  cancellationFee    Decimal  @default(0) @map("cancellation_fee") @db.Decimal(10, 2)
+  driverCompensation Decimal  @default(0) @map("driver_compensation") @db.Decimal(10, 2)
+  feeCharged         Boolean  @default(false) @map("fee_charged")
+  feeStatus          String   @default("WAIVED") @map("fee_status")
+  policyId           String?  @map("policy_id") @db.Uuid
+  policyVersion      Int?     @map("policy_version")
+  /// Write-once immutable snapshot of the policy and fee evaluation at cancellation time (M-06).
+  policySnapshot     Json?    @map("policy_snapshot")
+  createdAt          DateTime @default(now()) @map("created_at")
 
-  ride Ride @relation(fields: [rideId], references: [id])
+  ride   Ride                @relation(fields: [rideId], references: [id])
+  policy CancellationPolicy? @relation(fields: [policyId], references: [id])
 
+  @@index([policyId])
+  @@index([feeStatus])
   @@map("ride_cancellations")
 }
 

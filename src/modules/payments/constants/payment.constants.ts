@@ -72,6 +72,11 @@ export const LEDGER_ACCOUNTS = {
   /// 004-driver-subscription-wallet. Revenue — credited once, when a driver's
   /// subscription payment is confirmed. Recognised immediately, not per ride.
   SUBSCRIPTION_REVENUE: 'SUBSCRIPTION_REVENUE',
+  /// Phase 4 (Rev 5 G2/G3): Clearing/receivable account separating Passenger GST
+  /// liability (G2: Dr DRIVER_GST_RECOVERY_CLEARING / Cr TAX_PAYABLE — 1x only)
+  /// from driver wallet GST recovery (G3: Dr DRIVER_COMMISSION_WALLET / Cr DRIVER_GST_RECOVERY_CLEARING).
+  /// Mode B rides (recovery OFF) NEVER touch this account.
+  DRIVER_GST_RECOVERY_CLEARING: 'DRIVER_GST_RECOVERY_CLEARING',
 } as const;
 export type LedgerAccount = (typeof LEDGER_ACCOUNTS)[keyof typeof LEDGER_ACCOUNTS];
 export const LEDGER_DIRECTION = {

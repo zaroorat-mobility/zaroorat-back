@@ -136,8 +136,13 @@ type CancellationInput = {
   cancelledBy?: string | null;
   reasonCode?: string | null;
   reasonText?: string | null;
+  cancelledAtStatus?: string | null;
   cancellationFee?: unknown;
+  driverCompensation?: unknown;
   feeCharged?: boolean | null;
+  feeStatus?: string | null;
+  policyId?: string | null;
+  policyVersion?: number | null;
   createdAt?: Date | string | null;
 };
 
@@ -536,13 +541,68 @@ export function toClientRideRequestView(
   };
 }
 
+export type RideViewAudience = 'customer' | 'driver';
+
+/**
+ * Customer-safe fare DTO allow-list (Phase 1.6 / PRICING-009).
+ * Never exposes `driverEarning`, `driverEarnings`, `platformCommission`, or `ratesSnapshot`,
+ * and reports the true `platformFee` (never aliasing `platformCommission`).
+ */
+export function toCustomerFareDto(f: FareInput | null | undefined): Record<string, unknown> | null {
+  if (!f) return null;
+  const waitingCharge = dec(f.waitingCharge ?? f.waitingFare);
+  const taxAmount = dec(
+    f.taxAmount ?? ((dec(f.cgst) ?? 0) + (dec(f.sgst) ?? 0) + (dec(f.igst) ?? 0) || null),
+  );
+  return {
+    ...(f.id !== undefined ? { id: f.id } : {}),
+    ...(f.rideId !== undefined ? { rideId: f.rideId } : {}),
+    currency: f.currency ?? 'INR',
+    baseFare: dec(f.baseFare),
+    distanceFare: dec(f.distanceFare),
+    timeFare: dec(f.timeFare),
+    waitingFare: waitingCharge,
+    waitingCharge,
+    surgeAmount: dec(f.surgeAmount),
+    discountAmount: dec(f.discountAmount),
+    platformFee: dec(f.platformFee) ?? 0,
+    taxAmount,
+    cgst: dec(f.cgst),
+    sgst: dec(f.sgst),
+    igst: dec(f.igst),
+    tipAmount: dec(f.tipAmount),
+    tollAmount: dec(f.tollAmount),
+    totalFare: dec(f.totalFare),
+    ...(f.createdAt !== undefined ? { createdAt: f.createdAt } : {}),
+  };
+}
+
+/**
+ * Driver fare DTO (Phase 1.6). Extends customer fare fields with driver economics
+ * (`driverEarning`, `platformCommission`), keeping `platformFee` distinct from `platformCommission`.
+ */
+export function toDriverFareDto(f: FareInput | null | undefined): Record<string, unknown> | null {
+  if (!f) return null;
+  const base = toCustomerFareDto(f)!;
+  const driverEarning = dec(f.driverEarning ?? f.driverEarnings);
+  const platformCommission = dec(f.platformCommission);
+  return {
+    ...base,
+    platformCommission,
+    driverEarning,
+    driverEarnings: driverEarning,
+  };
+}
+
 export function toClientRideView(
   ride: RideInput | null | undefined,
   eta?: RideEtaSnapshot | null,
   media?: ClientRideMedia | null,
+  audience: RideViewAudience = 'driver',
 ): Record<string, unknown> | null {
   if (!ride) return null;
 
+  const isCustomer = audience === 'customer';
   const req = ride.request ?? null;
   const pickupLat = dec(req?.pickupLat);
   const pickupLng = dec(req?.pickupLng);
@@ -634,39 +694,16 @@ export function toClientRideView(
     actualDurationMin: ride.actualDurationMin ?? null,
     distanceKm: dec(ride.actualDistanceKm) ?? dec(req?.estimatedDistanceKm) ?? null,
     durationMin: ride.actualDurationMin ?? req?.estimatedDurationMin ?? null,
-    driverPaymentModel: ride.driverPaymentModel ?? null,
-    commissionAmount: dec(ride.commissionAmount),
+    ...(!isCustomer
+      ? {
+          driverPaymentModel: ride.driverPaymentModel ?? null,
+          commissionAmount: dec(ride.commissionAmount),
+        }
+      : {}),
     fare: ride.fare
-      ? (() => {
-          const f = ride.fare as FareInput;
-          const driverEarning = dec(f.driverEarning ?? f.driverEarnings);
-          const platformCommission = dec(f.platformCommission ?? f.platformFee);
-          const waitingCharge = dec(f.waitingCharge ?? f.waitingFare);
-          const taxAmount = dec(
-            f.taxAmount ?? ((dec(f.cgst) ?? 0) + (dec(f.sgst) ?? 0) + (dec(f.igst) ?? 0) || null),
-          );
-          return {
-            ...(f as Record<string, unknown>),
-            baseFare: dec(f.baseFare),
-            distanceFare: dec(f.distanceFare),
-            timeFare: dec(f.timeFare),
-            waitingFare: waitingCharge,
-            waitingCharge,
-            surgeAmount: dec(f.surgeAmount),
-            discountAmount: dec(f.discountAmount),
-            platformFee: platformCommission,
-            platformCommission,
-            taxAmount,
-            cgst: dec(f.cgst),
-            sgst: dec(f.sgst),
-            igst: dec(f.igst),
-            tipAmount: dec(f.tipAmount),
-            tollAmount: dec(f.tollAmount),
-            totalFare: dec(f.totalFare),
-            driverEarning,
-            driverEarnings: driverEarning,
-          };
-        })()
+      ? isCustomer
+        ? toCustomerFareDto(ride.fare as FareInput)
+        : toDriverFareDto(ride.fare as FareInput)
       : null,
     cancellation: ride.cancellation
       ? {
@@ -674,8 +711,17 @@ export function toClientRideView(
           cancelledBy: ride.cancellation.cancelledBy,
           reasonCode: ride.cancellation.reasonCode,
           reasonText: ride.cancellation.reasonText ?? null,
+          cancelledAtStatus: ride.cancellation.cancelledAtStatus ?? null,
           cancellationFee: dec(ride.cancellation.cancellationFee),
           feeCharged: Boolean(ride.cancellation.feeCharged),
+          feeStatus: ride.cancellation.feeStatus ?? 'WAIVED',
+          policyId: ride.cancellation.policyId ?? null,
+          policyVersion: ride.cancellation.policyVersion ?? null,
+          ...(!isCustomer
+            ? {
+                driverCompensation: dec(ride.cancellation.driverCompensation),
+              }
+            : {}),
           createdAt: ride.cancellation.createdAt,
         }
       : null,
@@ -715,6 +761,22 @@ export function toClientRideView(
   };
 }
 
+export function toCustomerRideView(
+  ride: RideInput | null | undefined,
+  eta?: RideEtaSnapshot | null,
+  media?: ClientRideMedia | null,
+): Record<string, unknown> | null {
+  return toClientRideView(ride, eta, media, 'customer');
+}
+
+export function toDriverRideView(
+  ride: RideInput | null | undefined,
+  eta?: RideEtaSnapshot | null,
+  media?: ClientRideMedia | null,
+): Record<string, unknown> | null {
+  return toClientRideView(ride, eta, media, 'driver');
+}
+
 /**
  * Resolves ride-party-scoped media (signing stored driver profile photo file IDs
  * when file dependencies are injected) and returns the client ride view.
@@ -723,6 +785,7 @@ export async function toClientRideViewWithMedia(
   ride: RideInput | null | undefined,
   eta?: RideEtaSnapshot | null,
   deps?: RideMediaDependencies,
+  audience: RideViewAudience = 'driver',
 ): Promise<Record<string, unknown> | null> {
   if (!ride) return null;
 
@@ -750,7 +813,7 @@ export async function toClientRideViewWithMedia(
     }
   }
 
-  return toClientRideView(ride, eta, { driverProfileImageUrl });
+  return toClientRideView(ride, eta, { driverProfileImageUrl }, audience);
 }
 
 /** Shape a RideRequest row for the customer app (active search / resume). */

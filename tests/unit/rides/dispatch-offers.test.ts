@@ -181,6 +181,7 @@ function makeWorld(
         metrics.push('rejected');
       },
     } as never,
+    { estimatedCommission: async () => 0 } as never,
   );
 
   return {

@@ -164,6 +164,56 @@ export class AdminPlatformSettingsController {
       reply.send({ data });
     } catch (error) {
       rethrowServerFault(error);
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        'statusCode' in error &&
+        typeof (error as { statusCode: unknown }).statusCode === 'number'
+      ) {
+        const coded = error as { code: string; statusCode: number; message: string };
+        reply.status(coded.statusCode).send(errorEnvelope(coded.code, coded.message, req.id));
+        return;
+      }
+      reply
+        .status(400)
+        .send(
+          errorEnvelope(
+            'SETTINGS_UPDATE_FAILED',
+            error instanceof Error ? error.message : 'Update failed',
+            req.id,
+          ),
+        );
+    }
+  }
+
+  async patchFeatureFlag(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    try {
+      const { key } = req.params as { key: string };
+      const raw = (req.body ?? {}) as {
+        status?: 'ON' | 'OFF' | 'PARTIAL';
+        rolloutPercentage?: number;
+        isActive?: boolean;
+      };
+      const data = await this.adminPlatformSettingsService.patchSingleFeatureFlag(
+        key,
+        raw,
+        auditActor(req),
+      );
+      reply.send({ data });
+    } catch (error) {
+      rethrowServerFault(error);
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        'statusCode' in error &&
+        typeof (error as { statusCode: unknown }).statusCode === 'number'
+      ) {
+        const coded = error as { code: string; statusCode: number; message: string };
+        reply.status(coded.statusCode).send(errorEnvelope(coded.code, coded.message, req.id));
+        return;
+      }
       reply
         .status(400)
         .send(

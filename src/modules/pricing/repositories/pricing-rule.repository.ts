@@ -27,8 +27,10 @@ export interface FindBestActiveRuleParams {
   vehicleTypeId: string;
   cityCode?: string | undefined;
   serviceType?: RideServiceType | undefined;
+  serviceZoneId?: string | undefined;
   pickupLat?: number | undefined;
   pickupLng?: number | undefined;
+  at?: Date | undefined;
 }
 
 export class PricingRuleRepository {
@@ -51,9 +53,11 @@ export class PricingRuleRepository {
 
   async findBestActiveRule(params: FindBestActiveRuleParams): Promise<PricingRule | null> {
     const serviceType = params.serviceType ?? 'INSTANT';
-    const now = new Date();
-    let resolvedZoneId: string | null = null;
-    if (
+    const now = params.at ?? new Date();
+    let resolvedZoneIds: string[] = [];
+    if (params.serviceZoneId) {
+      resolvedZoneIds = [params.serviceZoneId];
+    } else if (
       params.cityCode &&
       params.cityCode !== 'GLOBAL' &&
       params.pickupLat != null &&
@@ -65,7 +69,7 @@ export class PricingRuleRepository {
       // `GeographicCoverageService` is now the only definition of "the zone this
       // point is in", and it filters to SERVICE/AIRPORT and honours the explicit
       // precedence FR-005 adds.
-      resolvedZoneId = await this.geographicCoverageService.resolveServiceZoneIdAtPoint(
+      resolvedZoneIds = await this.geographicCoverageService.resolveServiceZoneIdsAtPoint(
         params.cityCode,
         params.pickupLat,
         params.pickupLng,
@@ -86,7 +90,7 @@ export class PricingRuleRepository {
       orderBy: { effectiveFrom: 'desc' },
     });
 
-    return this.pickByPrecedence(candidates, cityCodes, resolvedZoneId, serviceType);
+    return this.pickByPrecedence(candidates, cityCodes, resolvedZoneIds, serviceType);
   }
 
   /// FR-041. Every category's rule for one pickup point, resolved the way
@@ -108,9 +112,9 @@ export class PricingRuleRepository {
     const serviceType = params.serviceType ?? 'INSTANT';
     const now = new Date();
 
-    let resolvedZoneId: string | null = null;
+    let resolvedZoneIds: string[] = [];
     if (params.cityCode && params.cityCode !== 'GLOBAL') {
-      resolvedZoneId = await this.geographicCoverageService.resolveServiceZoneIdAtPoint(
+      resolvedZoneIds = await this.geographicCoverageService.resolveServiceZoneIdsAtPoint(
         params.cityCode,
         params.pickupLat,
         params.pickupLng,
@@ -132,29 +136,31 @@ export class PricingRuleRepository {
     const resolved = new Map<string, PricingRule>();
     for (const vehicleTypeId of params.vehicleTypeIds) {
       const mine = candidates.filter((row) => row.vehicleTypeId === vehicleTypeId);
-      const match = this.pickByPrecedence(mine, cityCodes, resolvedZoneId, serviceType);
+      const match = this.pickByPrecedence(mine, cityCodes, resolvedZoneIds, serviceType);
       if (match) resolved.set(vehicleTypeId, match);
     }
     return resolved;
   }
 
   /// The single precedence ladder both lookups walk: city before GLOBAL, and
-  /// within a city, zone+service before zone before service before neither.
+  /// within a city, zone+service before zone before service before neither. Zones
+  /// are tried smallest first, so a small zone with no fare of its own does not drop
+  /// the fare of the larger zone around it.
   /// Shared so the batched catalog path and the per-ride path cannot drift into
   /// answering the same question differently — which is exactly how the catalog
   /// came to advertise a rate the quote did not charge.
   private pickByPrecedence(
     rules: readonly PricingRule[],
     cityCodes: readonly string[],
-    resolvedZoneId: string | null,
+    resolvedZoneIds: readonly string[],
     serviceType: RideServiceType,
   ): PricingRule | null {
     for (const cityCode of cityCodes) {
       const inCity = rules.filter((row) => row.cityCode === cityCode);
       const tries: Array<{ zoneId: string | null; svc: RideServiceType | null }> = [];
-      if (resolvedZoneId) {
-        tries.push({ zoneId: resolvedZoneId, svc: serviceType });
-        tries.push({ zoneId: resolvedZoneId, svc: null });
+      for (const zoneId of resolvedZoneIds) {
+        tries.push({ zoneId, svc: serviceType });
+        tries.push({ zoneId, svc: null });
       }
       tries.push({ zoneId: null, svc: serviceType });
       tries.push({ zoneId: null, svc: null });

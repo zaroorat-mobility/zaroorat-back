@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { config } from '@config';
+import { isLocal } from '@config/env/environment.js';
 import { logger } from '@shared/logger/index.js';
 import type { PushMessage, PushProvider, PushSendResult } from './push.provider';
 /// The only push provider that exists today (see the platform audit's P1
@@ -16,7 +17,7 @@ export class MockPushProvider implements PushProvider {
       { tokenSuffix: message.to.slice(-8), providerRef, provider: this.name, title: message.title },
       '[MockPush] accepted',
     );
-    if (config.app.environment === 'development') {
+    if (isLocal(config.app.environment)) {
       logger.debug(
         { devPushBody: message.body, data: message.data },
         '[MockPush] payload (development only)',

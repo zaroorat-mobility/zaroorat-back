@@ -54,20 +54,18 @@ export class SurgeRepository {
     `;
   }
 
-  /// Windows in force right now for any of the given zones.
-  ///
-  /// `vehicleTypeId` is deliberately optional: FR-039's batched path resolves
-  /// every category from one query and filters in memory, because the containment
-  /// work does not vary by category and running it per category was most of the
-  /// cost of a multi-category quote.
+  /// Windows in force right now for any of the given zones, or for the whole city.
+  /// Every vehicle type's windows come back at once: the containment work does not
+  /// vary by vehicle, and running it per vehicle was most of the cost of a quote.
   async findActiveWindowsForZones(
     zoneIds: string[],
-    vehicleTypeId?: string,
     serviceZoneIds: string[] = [],
+    cityCode?: string,
+    at: Date = new Date(),
   ): Promise<SurgeWindow[]> {
-    if (zoneIds.length === 0 && serviceZoneIds.length === 0) return [];
+    if (zoneIds.length === 0 && serviceZoneIds.length === 0 && !cityCode) return [];
 
-    const now = new Date();
+    const now = at;
 
     // An active window is one where:
     // 1. isActive is true
@@ -84,19 +82,13 @@ export class SurgeRepository {
       // the two paths cannot double-count the same window.
       linkedToAZone.push({ serviceZoneId: null, zoneId: { in: zoneIds } });
     }
+    if (cityCode) linkedToAZone.push({ cityCode });
 
     const whereClause: Prisma.SurgeWindowWhereInput = {
       isActive: true,
       startsAt: { lte: now },
       AND: [{ OR: linkedToAZone }, { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }],
     };
-
-    if (vehicleTypeId) {
-      // If vehicleTypeId is provided, the window must either match it OR be null (applies to all)
-      (whereClause.AND as Prisma.SurgeWindowWhereInput[]).push({
-        OR: [{ vehicleTypeId: null }, { vehicleTypeId }],
-      });
-    }
 
     return this.db.client.surgeWindow.findMany({ where: whereClause });
   }

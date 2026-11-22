@@ -18,6 +18,7 @@ async function main() {
   console.log(`\n🌱 Starting Prisma Database Seed [Environment: ${env}]`);
 
   switch (env) {
+    case 'local':
     case 'development':
       await seedDevelopment(prisma);
       break;
@@ -25,7 +26,10 @@ async function main() {
     case 'testing':
       await seedTesting(prisma);
       break;
+    case 'dev':
+    case 'staging':
     case 'production':
+    case 'prod':
       await seedProduction(prisma);
       break;
     default:
