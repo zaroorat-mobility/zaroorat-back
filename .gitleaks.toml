@@ -1,3 +1,9 @@
+# Keep the built-in gitleaks rules. Without this block a custom config REPLACES them, and the
+# scanner runs with no rules at all: that is how a live Google Maps key and an AWS access key id
+# in docs/DEPLOYMENT/ passed the Secret scan on develop (DO-12, 2026-11-22).
+[extend]
+useDefault = true
+
 [allowlist]
 description = "Global allowlist for mock secrets in tests and CI sample configs"
 paths = [
@@ -13,4 +19,6 @@ stopwords = [
 regexes = [
   '''rzp_test_[a-zA-Z0-9]+''',
   '''test_[a-zA-Z0-9_]+''',
+  # Placeholders in the committed env templates (deploy/env/*.example), whole value only.
+  '''^REPLACE_WITH_[A-Z0-9_]+$''',
 ]
