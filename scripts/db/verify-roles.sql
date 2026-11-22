@@ -91,7 +91,12 @@ BEGIN
     INSERT INTO _verify (label, ok) SELECT format('%s cannot act as the owner role %s', app, owner_),
       app <> owner_ AND NOT pg_has_role(app, owner_, 'MEMBER');
 
-    FOR t IN SELECT * FROM (VALUES ('admin_activity_logs'), ('audit_field_changes')) AS x(tbl) LOOP
+    FOR t IN SELECT * FROM (VALUES
+      ('admin_activity_logs'),
+      ('audit_field_changes'),
+      ('payment_ledger_entries'),
+      ('driver_commission_wallet_transactions')
+    ) AS x(tbl) LOOP
       INSERT INTO _verify (label, ok) SELECT format('%s on %s: SELECT and INSERT only (no UPDATE, DELETE, TRUNCATE, TRIGGER)', app, t.tbl),
         has_table_privilege(app, format('public.%I', t.tbl), 'SELECT')
         AND has_table_privilege(app, format('public.%I', t.tbl), 'INSERT')
@@ -117,11 +122,19 @@ BEGIN
     END IF;
 
     -- The app needs CRUD on every application table, or it fails at runtime instead.
+    -- Append-only tables (audit logs, financial ledgers) are checked above for SELECT+INSERT only.
     SELECT string_agg(DISTINCT tb.table_name, ', ') INTO missing
       FROM information_schema.tables tb
      CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) AS p(priv)
      WHERE tb.table_schema = 'public' AND tb.table_type = 'BASE TABLE'
-       AND tb.table_name NOT IN ('_prisma_migrations', 'spatial_ref_sys', 'admin_activity_logs', 'audit_field_changes')
+       AND tb.table_name NOT IN (
+         '_prisma_migrations',
+         'spatial_ref_sys',
+         'admin_activity_logs',
+         'audit_field_changes',
+         'payment_ledger_entries',
+         'driver_commission_wallet_transactions'
+       )
        AND NOT has_table_privilege(app, format('public.%I', tb.table_name), p.priv);
     INSERT INTO _verify (label, ok) SELECT
       format('%s has SELECT/INSERT/UPDATE/DELETE on every application table%s', app,
