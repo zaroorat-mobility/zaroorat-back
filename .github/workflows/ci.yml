@@ -15,6 +15,8 @@ on:
     branches:
       - main
       - develop
+  # deploy-dev.yml calls this workflow and deploys only if every job passes.
+  workflow_call:
 
 # A new push to the same PR cancels the previous run; main is never cancelled.
 concurrency:
@@ -33,9 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -55,7 +57,9 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The serial suite (--test-concurrency=1) outgrew 15 minutes: every run since
+    # 2026-11-19 was cancelled mid-suite, so a passing gate was impossible.
+    timeout-minutes: 40
     services:
       postgres:
         # PostGIS variant: prisma/schema.prisma declares
@@ -82,9 +86,9 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -140,9 +144,9 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -165,11 +169,11 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # Build only — publishing happens in the staging/production workflows.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: false
@@ -230,6 +234,31 @@ jobs:
             exit 1
           fi
           echo "Image loaded its modules and configuration and stopped at the placeholder database. API readiness is NOT verified by this step."
+
+      # The same boot, but configured exactly the way compose.dev.yml runs it: APP_ENV=dev,
+      # every variable injected from the committed DEV template, no dotenv file in the image.
+      # Catches the loader demanding a file a container never has, and template drift
+      # (a key the deployed-env guards require but the template leaves empty).
+      # The template holds placeholders only — nothing secret reaches this log.
+      - name: Smoke-test the image with the DEV env template
+        run: |
+          docker run -d --name api-dev --network none \
+            --env-file deploy/env/.env.dev.example \
+            -e DB_BOOT_RETRIES=1 \
+            zaroorat-backend:ci
+          if ! status=$(timeout 60 docker wait api-dev); then
+            docker logs api-dev
+            echo "::error::Container still running after 60s; expected it to stop at the unreachable database."
+            exit 1
+          fi
+          log="$RUNNER_TEMP/api-dev.log"
+          docker logs api-dev > "$log" 2>&1
+          cat "$log"
+          if ! grep -q "Failed to start application orchestration" "$log" || ! grep -q "at async bootstrapDatabase" "$log"; then
+            echo "::error::With deploy/env/.env.dev.example the image exited (status $status) before reaching the database bootstrap."
+            exit 1
+          fi
+          echo "DEV template accepted: the image loads its configuration as APP_ENV=dev without any dotenv file."
 
       # The image compiles its own dist/ from source (.dockerignore excludes any host
       # build), so this checks the code that ships: real auth-otp jobs in every state,

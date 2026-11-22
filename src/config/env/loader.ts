@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
-// First match wins. Standard local environment loads from .env.local.
-// Deployed environments (dev, staging, production) rely on injected variables or explicit --env-file.
+// First match wins. Only developer machines and the test runner read a dotenv file.
+// Deployed environments (dev, staging, prod) get injected variables from Compose — the
+// image ships no dotenv file — and must never fall back to a developer's local file.
 const ENV_FILES: Record<string, readonly string[]> = {
   local: ['.env.local'],
-  development: ['.env.local', '.env.dev'],
-  dev: ['.env.dev', '.env.local'],
+  development: ['.env.local'],
   test: ['.env.test'],
   testing: ['.env.test'],
 };

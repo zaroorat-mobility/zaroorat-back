@@ -7,3 +7,12 @@ eff1f9bb81dedc70907683a630684aad031084c6:tests/unit/admin/audit-safety.test.ts:j
 c7113a811015b2b4b77b9f461dc0a45be2ec9dbe:tests/unit/integrations/airtel-failure-matrix.test.ts:generic-api-key:7
 c7113a811015b2b4b77b9f461dc0a45be2ec9dbe:tests/unit/integrations/network-failure-sim.test.ts:generic-api-key:7
 e35f9bf08feae46aaf7fd68e62c5258ca61c486a:tests/integration/admin-payment-gateway-settings.test.ts:generic-api-key:129
+# False positive: an exported constant name, not a credential.
+5d5cc5916de3330e46a001277678f46134adf397:src/modules/admin/system-settings/platform/constants/pricing-feature-flags.constants.ts:generic-api-key:6
+# DO-01 (2026-11-22): a live DEV AWS access key id and Google Maps key were committed in
+# 5780d60 and pushed to the public repository. The file was removed from the tree on
+# bugfix/dev-deploy-readiness, but public history keeps the values for good, so these two
+# findings can never be fixed by a commit. Listing them here does NOT make them safe: both
+# credentials must be revoked and replaced by the owner (Google Cloud console, AWS IAM).
+5780d60a9b7d6ad833ab2a149012448d59b779a6:docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md:gcp-api-key:80
+5780d60a9b7d6ad833ab2a149012448d59b779a6:docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md:aws-access-token:63

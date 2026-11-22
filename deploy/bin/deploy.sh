@@ -1,70 +1,127 @@
 #!/usr/bin/env bash
+# DEV deploy entry point: deploy | rollback | status.
+#
+# Runs as root, only through `sudo -n /usr/local/sbin/zaroorat-deploy` from zaroorat-ssh-entry
+# (deploy key) or by an admin. Installed root-owned, outside the git checkout, and re-installed
+# by an admin after every reviewed change to this file:
+#   install -o root -g root -m 0755 /opt/zaroorat/src/deploy/bin/deploy.sh /usr/local/sbin/zaroorat-deploy
+#
+# Server layout (all root-owned; see docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md):
+#   /opt/zaroorat/src       git checkout of zaroorat-back (detached at the deployed commit)
+#   /opt/zaroorat/env/dev.env   the single DEV env file (Compose interpolation + app env_file), 0600
+#   /opt/zaroorat/state     current.env / previous.env release records (image digests + commit)
+#
+# Images are never built here: both are pulled by digest, and the runtime image's
+# org.opencontainers.image.revision label must equal the commit being deployed.
+# Database migrations are forward-only; rollback swaps images and checkout, never the schema.
 set -euo pipefail
+umask 077
 
-SHA="${1:-}"
-DIGEST="${2:-}"
+SRC=/opt/zaroorat/src
+ENV_FILE=/opt/zaroorat/env/dev.env
+STATE=/opt/zaroorat/state
+REPO=ghcr.io/zaroorat-mobility/zaroorat-backend
+LOCK=/run/lock/zaroorat-deploy.lock
 
-if [[ -z "$SHA" || -z "$DIGEST" ]]; then
-  echo "Usage: $0 <git-sha> <image-digest>" >&2
+die() {
+  echo "error: $*" >&2
   exit 1
-fi
+}
 
-APP_DIR="/opt/zaroorat/src"
-LOCK_FILE="/tmp/zaroorat-deploy.lock"
-COMPOSE_FILE="compose.dev.yml"
-REGISTRY_IMAGE="ghcr.io/zaroorat-mobility/zaroorat-backend"
+# $1 = release file (APP_IMAGE, OPS_IMAGE, GIT_SHA); the remaining arguments go to compose.
+dc() {
+  local release=$1
+  shift
+  APP_ENV_FILE=$ENV_FILE docker compose --project-directory "$SRC" -f "$SRC/compose.dev.yml" \
+    --env-file "$ENV_FILE" --env-file "$release" "$@"
+}
 
-cd "$APP_DIR"
+ready() { # release service port
+  dc "$1" exec -T "$2" node -e \
+    "fetch('http://127.0.0.1:$3/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+}
 
-exec 200>"$LOCK_FILE"
-if ! flock -n 200; then
-  echo "Error: Another deployment is currently in progress." >&2
-  exit 1
-fi
+sha_of() { sed -n 's/^GIT_SHA=//p' "$1"; }
 
-echo "==> Deploying commit $SHA ($DIGEST)"
+# Matching checkout (compose file, Caddyfile), containers, then readiness of api and worker.
+start() { # release
+  git -C "$SRC" checkout --quiet --detach "$(sha_of "$1")" &&
+    dc "$1" up -d --no-build --wait --wait-timeout 180 api worker caddy &&
+    ready "$1" api 3000 &&
+    ready "$1" worker 3001
+}
 
-# 1. Update working tree to the target commit
-git fetch origin develop
-git checkout --detach "$SHA"
+lock() {
+  exec 9> "$LOCK"
+  flock -w 600 9 || die "another deploy is still running"
+}
 
-# 2. Pull immutable image by digest
-IMAGE_REF="${REGISTRY_IMAGE}@${DIGEST}"
-echo "==> Pulling image $IMAGE_REF"
-docker pull "$IMAGE_REF"
-
-# 3. Pull ops image by digest if available or tag
-OPS_REF="${REGISTRY_IMAGE}:sha-${SHA}-ops"
-docker pull "$OPS_REF" || true
-
-# 4. Save previous deployment pointer for rollback
-PREV_IMAGE=""
-if [[ -f /opt/zaroorat/current-image.txt ]]; then
-  PREV_IMAGE="$(cat /opt/zaroorat/current-image.txt)"
-fi
-
-# 5. Run database migrations
-echo "==> Executing database migrations"
-APP_IMAGE="$IMAGE_REF" OPS_IMAGE="$OPS_REF" docker compose --env-file "${APP_ENV_FILE:-.env.dev}" -f "$COMPOSE_FILE" run --rm migrate
-
-# 6. Ensure runtime database login and grants
-echo "==> Verifying runtime database roles"
-APP_IMAGE="$IMAGE_REF" OPS_IMAGE="$OPS_REF" docker compose --env-file "${APP_ENV_FILE:-.env.dev}" -f "$COMPOSE_FILE" run --rm db-roles
-
-# 7. Roll application services with healthcheck wait
-echo "==> Starting application containers"
-if ! APP_IMAGE="$IMAGE_REF" OPS_IMAGE="$OPS_REF" docker compose --env-file "${APP_ENV_FILE:-.env.dev}" -f "$COMPOSE_FILE" up -d --wait api worker caddy; then
-  echo "::error:: Deployment failed during container startup. Initiating rollback..." >&2
-  if [[ -n "$PREV_IMAGE" ]]; then
-    APP_IMAGE="$PREV_IMAGE" docker compose --env-file "${APP_ENV_FILE:-.env.dev}" -f "$COMPOSE_FILE" up -d --wait api worker caddy || true
+deploy() {
+  local sha=$1 app=$2 ops=$3 next=$STATE/next.env rev
+  [[ $sha =~ ^[0-9a-f]{40}$ ]] || die "invalid commit sha"
+  [[ $app =~ ^sha256:[0-9a-f]{64}$ && $ops =~ ^sha256:[0-9a-f]{64}$ ]] || die "invalid image digest"
+  lock
+  git -C "$SRC" fetch --quiet origin develop
+  git -C "$SRC" merge-base --is-ancestor "$sha" origin/develop || die "$sha is not on origin/develop"
+  docker pull --quiet "$REPO@$app" > /dev/null
+  docker pull --quiet "$REPO@$ops" > /dev/null
+  rev=$(docker image inspect "$REPO@$app" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+  [[ $rev == "$sha" ]] || die "image $app was built from '$rev', not $sha"
+  printf 'APP_IMAGE=%s@%s\nOPS_IMAGE=%s@%s\nGIT_SHA=%s\n' "$REPO" "$app" "$REPO" "$ops" "$sha" > "$next"
+  git -C "$SRC" checkout --quiet --detach "$sha"
+  # A failed migration stops here: the running release is untouched and keeps serving,
+  # and the checkout goes back to it so status/rollback keep reading its compose file.
+  if ! { dc "$next" run --rm migrate && dc "$next" run --rm db-roles; }; then
+    if [[ -f $STATE/current.env ]]; then
+      git -C "$SRC" checkout --quiet --detach "$(sha_of "$STATE/current.env")"
+    fi
+    die "migration or db-roles failed for $sha; the running release was not touched"
   fi
-  exit 1
-fi
+  if start "$next"; then
+    if [[ -f $STATE/current.env ]]; then mv "$STATE/current.env" "$STATE/previous.env"; fi
+    mv "$next" "$STATE/current.env"
+    echo "deployed $sha"
+  else
+    echo "error: release $sha failed its health checks" >&2
+    if [[ -f $STATE/current.env ]]; then
+      echo "restoring the previous release $(sha_of "$STATE/current.env")" >&2
+      start "$STATE/current.env" || echo "error: restoring the previous release ALSO failed" >&2
+    fi
+    exit 1
+  fi
+}
 
-# 8. Record successful deployment
-echo "$IMAGE_REF" > /opt/zaroorat/current-image.txt
-if [[ -n "$PREV_IMAGE" ]]; then
-  echo "$PREV_IMAGE" > /opt/zaroorat/previous-image.txt
-fi
+rollback() {
+  lock
+  [[ -f $STATE/previous.env ]] || die "no previous release recorded"
+  start "$STATE/previous.env" || die "previous release failed its health checks"
+  mv "$STATE/current.env" "$STATE/rolled-back.env"
+  mv "$STATE/previous.env" "$STATE/current.env"
+  echo "rolled back to $(sha_of "$STATE/current.env"); database migrations are NOT reverted"
+}
 
-echo "==> Deployment successful: $SHA"
+status() {
+  [[ -f $STATE/current.env ]] || die "nothing deployed yet"
+  cat "$STATE/current.env"
+  dc "$STATE/current.env" ps
+  if ready "$STATE/current.env" api 3000; then echo "api: ready"; else echo "api: NOT ready"; fi
+  if ready "$STATE/current.env" worker 3001; then echo "worker: ready"; else echo "worker: NOT ready"; fi
+}
+
+[[ $EUID -eq 0 ]] || die "run as root (sudo /usr/local/sbin/zaroorat-deploy)"
+
+case "${1:-}" in
+  deploy)
+    [[ $# -eq 4 ]] || die "usage: deploy <sha> <app-digest> <ops-digest>"
+    deploy "$2" "$3" "$4"
+    ;;
+  rollback)
+    [[ $# -eq 1 ]] || die "usage: rollback"
+    rollback
+    ;;
+  status)
+    [[ $# -eq 1 ]] || die "usage: status"
+    status
+    ;;
+  *) die "usage: deploy <sha> <app-digest> <ops-digest> | rollback | status" ;;
+esac

@@ -1,9 +1,12 @@
 name: Deploy DEV (DigitalOcean)
 
+# develop → CI + Security (called below, both must pass) → build & push images by digest →
+# SSH forced command on the droplet → public readiness check. Nothing is built on the server.
+# Server side: deploy/bin/ssh-entry.sh + deploy/bin/deploy.sh, installed root-owned under
+# /usr/local/sbin (docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md).
 on:
   push:
-    branches:
-      - develop
+    branches: [develop]
   workflow_dispatch:
 
 concurrency:
@@ -12,38 +15,56 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
-  # Fixed, not github.repository (= zaroorat-mobility/zaroorat-back): deploy/bin/deploy.sh and
-  # every compose file pull ghcr.io/zaroorat-mobility/zaroorat-backend.
+  # Fixed, not github.repository (= zaroorat-mobility/zaroorat-back): the compose files and
+  # deploy/bin/deploy.sh pull ghcr.io/zaroorat-mobility/zaroorat-backend.
   IMAGE_NAME: zaroorat-mobility/zaroorat-backend
 
 jobs:
+  # A manual dispatch from any other branch skips everything: only develop deploys to DEV.
+  ci:
+    name: CI
+    if: github.ref == 'refs/heads/develop'
+    uses: ./.github/workflows/ci.yml
+
+  security:
+    name: Security
+    if: github.ref == 'refs/heads/develop'
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      security-events: write
+
   build:
     name: Build & Push Images
+    needs: [ci, security]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
     outputs:
-      image_tag: sha-${{ github.sha }}
-      digest: ${{ steps.push.outputs.digest }}
+      app_digest: ${{ steps.app.outputs.digest }}
+      ops_digest: ${{ steps.ops.outputs.digest }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & Push Production Image
-        id: push
-        uses: docker/build-push-action@v6
+      # The revision label is what deploy.sh checks against the commit it is asked to deploy.
+      - name: Build & push runtime image
+        id: app
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           target: prod
@@ -58,8 +79,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build & Push Ops Image
-        uses: docker/build-push-action@v6
+      - name: Build & push ops image (migrate, seed, admin)
+        id: ops
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           target: ops
@@ -74,34 +96,43 @@ jobs:
 
   deploy:
     name: Deploy to DigitalOcean DEV
+    needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build]
     environment:
       name: dev
+      url: https://dev-api.zaroorat.com
     steps:
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          echo "${{ secrets.SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
-
-      - name: Trigger Remote Deployment
+      # Secrets reach the script as environment variables, never interpolated into its text.
+      # StrictHostKeyChecking=yes: the host key must already be in SSH_KNOWN_HOSTS.
+      - name: Deploy over SSH (pinned host key, restricted key)
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST || secrets.DEPLOY_HOST }}
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          APP_DIGEST: ${{ needs.build.outputs.app_digest }}
+          OPS_DIGEST: ${{ needs.build.outputs.ops_digest }}
         run: |
-          if [ -z "$DEPLOY_HOST" ]; then
-            echo "::error::DEPLOY_HOST is not set! Please add DEPLOY_HOST (Droplet IP or dev-api.zaroorat.com) in GitHub Settings -> Environments -> dev -> Variables or Secrets."
-            exit 1
-          fi
-          echo "Connecting to deploy@${DEPLOY_HOST}..."
-          ssh -i ~/.ssh/id_ed25519 "deploy@${DEPLOY_HOST}" "deploy ${{ github.sha }} ${{ needs.build.outputs.digest }}"
+          for v in DEPLOY_HOST SSH_KEY KNOWN_HOSTS APP_DIGEST OPS_DIGEST; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is empty (GitHub → Settings → Environments → dev)"
+              exit 1
+            fi
+          done
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+            "deploy@$DEPLOY_HOST" "deploy $GITHUB_SHA $APP_DIGEST $OPS_DIGEST"
 
-      - name: Smoke Test Deployed Endpoint
+      - name: Verify public HTTPS endpoint
         env:
           API_URL: ${{ vars.API_URL || secrets.API_URL || 'https://dev-api.zaroorat.com' }}
         run: |
-          sleep 5
-          curl -fsS --retry 5 --retry-delay 3 "${API_URL}/health"
+          curl -fsS --retry 10 --retry-delay 6 --retry-all-errors "$API_URL/ready"
+          if ! curl -fsS "$API_URL/health" | grep -q '"environment":"dev"'; then
+            echo "::error::$API_URL is not answering as the dev environment"
+            exit 1
+          fi

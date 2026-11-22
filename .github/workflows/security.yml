@@ -17,6 +17,8 @@ on:
     # Weekly, Monday 03:00 UTC — catches advisories published against code
     # that hasn't changed. Push-triggered scans alone would never see these.
     - cron: '0 3 * * 1'
+  # deploy-dev.yml calls this workflow and deploys only if every job passes.
+  workflow_call:
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
@@ -34,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # Gitleaks needs history to scan commits, not just the tip tree.
           fetch-depth: 0
@@ -45,17 +47,19 @@ jobs:
           tar -xzf gitleaks.tar.gz
           sudo mv gitleaks /usr/local/bin/
 
+      # --redact: this repository is public, and so are its Actions logs. Without it a finding
+      # would print the very secret it found.
       - name: Run Gitleaks
-        run: gitleaks detect --source . -v
+        run: gitleaks detect --source . --redact -v
 
   dependencies:
     name: Dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -73,9 +77,9 @@ jobs:
     timeout-minutes: 10
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Review dependency changes
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           fail-on-severity: high
 
@@ -87,16 +91,16 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
         with:
           languages: javascript-typescript
           queries: security-and-quality
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
 
   image:
     name: Image vulnerability scan
@@ -106,10 +110,10 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: false
@@ -117,7 +121,7 @@ jobs:
           tags: zaroorat-backend:scan
 
       - name: Scan with Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: zaroorat-backend:scan
           format: sarif
@@ -128,7 +132,7 @@ jobs:
           exit-code: '0'
 
       - name: Upload results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
         if: always() && hashFiles('trivy.sarif') != ''
         with:
           sarif_file: trivy.sarif
