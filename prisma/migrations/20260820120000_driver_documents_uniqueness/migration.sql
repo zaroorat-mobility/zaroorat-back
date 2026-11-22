@@ -1,0 +1,28 @@
+-- One DriverDocument per (driver, documentType) — invariant #3 (plan.md §H.1).
+--
+-- Application code (`upsertDocument`, driver-document.repository.ts) has always
+-- intended one row per (driver_id, document_type): it does a findFirst-then-
+-- update/create keyed on that pair before writing. Nothing in the schema ever
+-- enforced it, so two concurrent submissions of the same document type can both
+-- pass the findFirst check and both insert — a genuine TOCTOU race, not a
+-- theoretical one. This index closes it, and the repository is converted to a
+-- real `upsert` against this same key in the same change, so the constraint and
+-- the write path agree with each other from the moment this ships.
+--
+-- Plain (not partial): there is no soft-delete or status dimension on this table
+-- that should ever coexist with a duplicate — a REJECTED document does not free
+-- up the (driver, type) slot, re-submission updates that same row instead.
+--
+-- Pre-deploy data check (run manually against the target environment before
+-- applying, per spec.md §18/Migration A step 1 — not embedded in this migration
+-- so its blast radius stays auditable):
+--
+--   SELECT driver_id, document_type, COUNT(*)
+--   FROM driver_documents
+--   GROUP BY driver_id, document_type
+--   HAVING COUNT(*) > 1;
+--
+-- If any rows return, deduplicate by keeping the row with the latest
+-- updated_at per group before applying this migration.
+CREATE UNIQUE INDEX "driver_documents_driver_id_document_type_key"
+  ON "driver_documents" ("driver_id", "document_type");

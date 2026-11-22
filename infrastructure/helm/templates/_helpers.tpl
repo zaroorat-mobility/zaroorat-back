@@ -30,6 +30,30 @@ app.kubernetes.io/name: {{ include "zaroorat-backend.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/*
+Worker selector labels. The name is deliberately distinct rather than the API's
+name plus a `component` label: matchLabels is a subset match, so worker pods
+carrying the API's name would be selected by the API Deployment AND served
+traffic by its Service. A Deployment's selector is immutable, so the API's
+cannot be narrowed after the fact — the worker has to not collide in the first
+place.
+*/}}
+{{- define "zaroorat-backend.workerSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "zaroorat-backend.name" . }}-worker
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{- define "zaroorat-backend.workerLabels" -}}
+helm.sh/chart: {{ include "zaroorat-backend.chart" . }}
+{{ include "zaroorat-backend.workerSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: zaroorat
+app.kubernetes.io/component: worker
+{{- end -}}
+
 {{- define "zaroorat-backend.labels" -}}
 helm.sh/chart: {{ include "zaroorat-backend.chart" . }}
 {{ include "zaroorat-backend.selectorLabels" . }}

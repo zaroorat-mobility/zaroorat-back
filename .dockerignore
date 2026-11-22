@@ -12,25 +12,30 @@ tsconfig.tsbuildinfo
 .idea
 
 # Secrets — only .env.example is safe, and even that isn't needed at build time.
+# No stage copies an env file. Dev and test receive theirs as a read-only
+# mount from the compose file; production receives injected variables only.
 .env
 .env.*
 
 docs
-tests
 observability
 infrastructure
 
+# tests/ is NOT excluded: the `test` Dockerfile stage COPYs it.
 # scripts/ is NOT excluded: `npm run build` runs scripts/copy-generated.js.
 
 # The Prisma client is generated inside the image (22MB of engines otherwise
-# shipped through the build context on every build).
+# shipped through the build context on every build). Every stage that needs it
+# runs `npx prisma generate`.
 src/generated
 
 *.log
 .DS_Store
 Dockerfile
 .dockerignore
+compose.*.yml
 docker-compose.yml
+Makefile
 README.md
 CONTRIBUTING.md
 LICENSE

@@ -1,2 +1,141 @@
-// Drivers module (routes, controllers, services, schemas) will be wired here
-export {};
+import { asClass, aliasTo, AwilixContainer } from 'awilix';
+import { registerFileReference } from '@modules/files';
+import { DriverMetrics } from './metrics/driver.metrics.js';
+import {
+  DriverRepository,
+  DriverDocumentRepository,
+  DriverBankRepository,
+  DriverWalletRepository,
+  DriverStatusRepository,
+  DriverLocationRepository,
+  DriverShiftRepository,
+} from './repositories/index.js';
+import {
+  OnboardingService,
+  DocumentsService,
+  StatusService,
+  LocationService,
+  DriverWalletViewService,
+  ShiftService,
+  DriverService,
+  DriverEligibilityService,
+  PaymentModelService,
+} from './services/index.js';
+import { DriverEarningsService } from './services/earnings/index.js';
+import { DriverWithdrawalService } from './services/withdrawal/index.js';
+import {
+  DriverOnboardingController,
+  DriverDocumentsController,
+  DriverStatusController,
+  DriverLocationController,
+  DriverWalletController,
+  DriverPaymentModelController,
+  DriverCommissionWalletController,
+  DriverEarningsController,
+  DriverWithdrawalController,
+  DriverScheduledController,
+  DriverMapZonesController,
+  DriverBankController,
+  DriverController,
+} from './controllers/index.js';
+import { DriverMapZonesRepository } from './services/map-zones/map-zones.repository.js';
+import { DriverMapZonesService } from './services/map-zones/map-zones.service.js';
+import { HeartbeatTimeoutJob, DocExpirationJob } from './jobs/index.js';
+export * from './controllers/index.js';
+export * from './routes/index.js';
+export * from './schemas/index.js';
+export * from './services/index.js';
+export * from './repositories/index.js';
+export * from './jobs/index.js';
+export * from './metrics/index.js';
+export * from './plugins/index.js';
+export * from './events/index.js';
+export * from './errors/index.js';
+export * from './constants/index.js';
+export * from './types/index.js';
+export * from './utils/index.js';
+export function registerDriversModule(container: AwilixContainer): void {
+  container.register({
+    driverMetrics: asClass(DriverMetrics).singleton(),
+    driverRepository: asClass(DriverRepository).singleton(),
+    driverDocumentRepository: asClass(DriverDocumentRepository).singleton(),
+    driverBankRepository: asClass(DriverBankRepository).singleton(),
+    driverWalletRepository: asClass(DriverWalletRepository).singleton(),
+    driverStatusRepository: asClass(DriverStatusRepository).singleton(),
+    driverLocationRepository: asClass(DriverLocationRepository).singleton(),
+    driverShiftRepository: asClass(DriverShiftRepository).singleton(),
+    onboardingService: asClass(OnboardingService).singleton(),
+    documentsService: asClass(DocumentsService).singleton(),
+    statusService: asClass(StatusService).singleton(),
+    locationService: asClass(LocationService).singleton(),
+    driverEligibilityService: asClass(DriverEligibilityService).singleton(),
+    eligibilityService: aliasTo('driverEligibilityService'),
+    driverWalletViewService: asClass(DriverWalletViewService).singleton(),
+    shiftService: asClass(ShiftService).singleton(),
+    paymentModelService: asClass(PaymentModelService).singleton(),
+    driverEarningsService: asClass(DriverEarningsService).singleton(),
+    driverWithdrawalService: asClass(DriverWithdrawalService).singleton(),
+    driverService: asClass(DriverService)
+      .singleton()
+      .inject((c) => ({
+        onboarding: c.resolve('onboardingService'),
+        documents: c.resolve('documentsService'),
+        status: c.resolve('statusService'),
+        location: c.resolve('locationService'),
+        wallet: c.resolve('driverWalletViewService'),
+        shift: c.resolve('shiftService'),
+      })),
+    driverOnboardingController: asClass(DriverOnboardingController).singleton(),
+    driverDocumentsController: asClass(DriverDocumentsController).singleton(),
+    driverStatusController: asClass(DriverStatusController).singleton(),
+    driverLocationController: asClass(DriverLocationController).singleton(),
+    driverWalletController: asClass(DriverWalletController).singleton(),
+    driverPaymentModelController: asClass(DriverPaymentModelController).singleton(),
+    driverCommissionWalletController: asClass(DriverCommissionWalletController).singleton(),
+    driverEarningsController: asClass(DriverEarningsController).singleton(),
+    driverWithdrawalController: asClass(DriverWithdrawalController).singleton(),
+    driverScheduledController: asClass(DriverScheduledController).singleton(),
+    driverMapZonesRepository: asClass(DriverMapZonesRepository).singleton(),
+    driverMapZonesService: asClass(DriverMapZonesService).singleton(),
+    driverMapZonesController: asClass(DriverMapZonesController).singleton(),
+    driverBankController: asClass(DriverBankController)
+      .singleton()
+      .inject((c) => ({
+        driverRepository: c.resolve('driverRepository'),
+        driverBankRepository: c.resolve('driverBankRepository'),
+        eventPublisher: c.resolve('eventPublisher'),
+        realtimeGateway: c.resolve('realtimeGateway'),
+      })),
+    driverController: asClass(DriverController)
+      .singleton()
+      .inject((c) => ({
+        onboarding: c.resolve('driverOnboardingController'),
+        documents: c.resolve('driverDocumentsController'),
+        status: c.resolve('driverStatusController'),
+        location: c.resolve('driverLocationController'),
+        wallet: c.resolve('driverWalletController'),
+        paymentModel: c.resolve('driverPaymentModelController'),
+        commissionWallet: c.resolve('driverCommissionWalletController'),
+        earnings: c.resolve('driverEarningsController'),
+        withdrawals: c.resolve('driverWithdrawalController'),
+        scheduled: c.resolve('driverScheduledController'),
+        mapZones: c.resolve('driverMapZonesController'),
+        bank: c.resolve('driverBankController'),
+      })),
+    heartbeatTimeoutJob: asClass(HeartbeatTimeoutJob).singleton(),
+    driverRepo: aliasTo('driverRepository'),
+    docRepo: aliasTo('driverDocumentRepository'),
+    locationRepo: aliasTo('driverLocationRepository'),
+    shiftRepo: aliasTo('driverShiftRepository'),
+    statusRepo: aliasTo('driverStatusRepository'),
+    txManager: aliasTo('transactionManager'),
+    docExpirationJob: asClass(DocExpirationJob).singleton(),
+  });
+  registerFileReference('DRIVER_DOCUMENT', {
+    module: 'drivers',
+    isReferenced: (fileId, tx) =>
+      container
+        .resolve<DriverDocumentRepository>('driverDocumentRepository')
+        .isDocumentFile(fileId, tx),
+  });
+}

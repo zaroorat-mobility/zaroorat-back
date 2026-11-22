@@ -1,0 +1,152 @@
+diff --git a/app.json b/app.json
+index 0392be9..a7fdaa3 100644
+--- a/app.json
++++ b/app.json
+@@ -66,7 +66,8 @@
+             "imageWidth": 200
+           }
+         }
+-      ]
++      ],
++      "./plugins/withRazorpay"
+     ],
+     "experiments": {
+       "typedRoutes": true,
+diff --git a/package.json b/package.json
+index 8e831be..885ef42 100644
+--- a/package.json
++++ b/package.json
+@@ -53,6 +53,7 @@
+     "react-native": "0.86.3",
+     "react-native-gesture-handler": "~2.32.0",
+     "react-native-maps": "1.27.2",
++    "react-native-razorpay": "3.0.0",
+     "react-native-reanimated": "4.5.1",
+     "react-native-safe-area-context": "~5.7.0",
+     "react-native-screens": "~4.26.0",
+diff --git a/plugins/__tests__/withRazorpay.test.ts b/plugins/__tests__/withRazorpay.test.ts
+new file mode 100644
+index 0000000..44a7b94
+--- /dev/null
++++ b/plugins/__tests__/withRazorpay.test.ts
+@@ -0,0 +1,18 @@
++import assert from 'node:assert/strict';
++import { test } from 'node:test';
++
++// The config plugin exports its pure Gradle edit for this test (TM-18).
++import { pinStandardCore } from '../withRazorpay';
++
++const template = "apply plugin: \"com.facebook.react.rootproject\"\n";
++
++test('appends the standard-core pin once, and a second prebuild changes nothing', () => {
++  const once = pinStandardCore({ language: 'groovy', contents: template });
++  assert.ok(once.startsWith(template));
++  assert.match(once, /details\.useVersion '1\.7\.20'/);
++  assert.equal(pinStandardCore({ language: 'groovy', contents: once }), once);
++});
++
++test('refuses a non-Groovy root build file instead of building unpinned', () => {
++  assert.throws(() => pinStandardCore({ language: 'kt', contents: template }), /Groovy/);
++});
+diff --git a/plugins/withRazorpay.js b/plugins/withRazorpay.js
+new file mode 100644
+index 0000000..d80dd5a
+--- /dev/null
++++ b/plugins/withRazorpay.js
+@@ -0,0 +1,46 @@
++/**
++ * Expo config plugin for react-native-razorpay (005 T005 / T044).
++ *
++ * com.razorpay:checkout:1.6.41 depends on com.razorpay:standard-core:LATEST,
++ * so every fresh dependency resolution could ship a different payment SDK.
++ * This pins it to the version whose manifest and consumer ProGuard rules were
++ * inspected (1.7.20, Maven Central, 2026-10-14).
++ *
++ * Nothing else is added on Android: standard-core's own manifest declares the
++ * UPI <queries> and CheckoutActivity, and its AAR bundles the README's
++ * ProGuard rules.
++ */
++const { withProjectBuildGradle, createRunOncePlugin } = require('expo/config-plugins');
++
++const STANDARD_CORE_VERSION = '1.7.20';
++const MARKER = '// withRazorpay: pin com.razorpay:standard-core';
++
++/** Appends the pin once; throws rather than build with the pin missing. */
++function pinStandardCore({ language, contents }) {
++  if (language !== 'groovy') {
++    throw new Error('withRazorpay: expected a Groovy android/build.gradle');
++  }
++  if (contents.includes(MARKER)) return contents;
++  return `${contents}
++${MARKER}
++allprojects {
++  configurations.configureEach {
++    resolutionStrategy.eachDependency { details ->
++      if (details.requested.group == 'com.razorpay' && details.requested.name == 'standard-core') {
++        details.useVersion '${STANDARD_CORE_VERSION}'
++        details.because 'checkout:1.6.41 declares standard-core:LATEST'
++      }
++    }
++  }
++}
++`;
++}
++
++const withRazorpay = (config) =>
++  withProjectBuildGradle(config, (cfg) => {
++    cfg.modResults.contents = pinStandardCore(cfg.modResults);
++    return cfg;
++  });
++
++module.exports = createRunOncePlugin(withRazorpay, 'withRazorpay', '1.0.0');
++module.exports.pinStandardCore = pinStandardCore;
+diff --git a/react-native-razorpay.d.ts b/react-native-razorpay.d.ts
+new file mode 100644
+index 0000000..b7f154d
+--- /dev/null
++++ b/react-native-razorpay.d.ts
+@@ -0,0 +1,44 @@
++// react-native-razorpay@3.0.0 ships no `types` entry (its src/types.ts is not
++// exported), so under `strict` the import is TS7016. Mirrors that file and
++// RazorpayCheckout.js. Error fields beyond code/description are unverified
++// until the T005 device run (U2).
++declare module 'react-native-razorpay' {
++  export type RazorpayOptions = {
++    key: string;
++    amount: number | string;
++    currency?: string;
++    name?: string;
++    description?: string;
++    image?: string;
++    order_id?: string;
++    prefill?: { name?: string; email?: string; contact?: string };
++    notes?: Record<string, string>;
++    theme?: { color?: string; hide_topbar?: boolean };
++    timeout?: number;
++  };
++  export type PaymentSuccessData = {
++    razorpay_payment_id: string;
++    razorpay_order_id?: string;
++    razorpay_signature?: string;
++  };
++  export type PaymentErrorData = {
++    code: number;
++    description: string;
++    source?: string;
++    step?: string;
++    reason?: string;
++    metadata?: { order_id?: string; payment_id?: string };
++  };
++  export type ExternalWalletData = { external_wallet: string };
++
++  const RazorpayCheckout: {
++    /** Rejects with PaymentErrorData (dismissal included). */
++    open(
++      options: RazorpayOptions,
++      successCallback?: (data: PaymentSuccessData) => void,
++      errorCallback?: (error: PaymentErrorData) => void,
++    ): Promise<PaymentSuccessData>;
++    onExternalWalletSelection(callback: (data: ExternalWalletData) => void): void;
++  };
++  export default RazorpayCheckout;
++}

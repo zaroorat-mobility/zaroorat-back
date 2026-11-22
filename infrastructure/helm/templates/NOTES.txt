@@ -19,7 +19,14 @@ Ingress is disabled; the service is reachable in-cluster only.
 
 Secrets come from the Secret "{{ .Values.existingSecret }}", which this chart does
 not create. It must exist in {{ .Release.Namespace }} before the pods start, and
-must define: DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET.
+must define: DATABASE_URL, REDIS_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET,
+FIREBASE_SERVICE_ACCOUNT_JSON (FCM push; omit only where Application Default
+Credentials are provided).
 Both JWT secrets must be at least 32 characters or the app exits at boot.
+
+DATABASE_URL must be the restricted runtime login (a member of zaroorat_app_runtime),
+never the schema owner or master user: the owner can disable the audit triggers.
+Run `prisma migrate deploy` separately with the owner's URL, then
+scripts/db/create-app-login.sql. See docs/15_Security/database-roles.md.
 
   kubectl get secret {{ .Values.existingSecret }} -n {{ .Release.Namespace }}

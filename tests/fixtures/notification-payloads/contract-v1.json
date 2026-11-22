@@ -1,0 +1,98 @@
+{
+  "contractVersion": "1",
+  "alwaysPresent": ["v", "type", "eventType", "eventId", "timestamp", "category"],
+  "forbidden": ["userId", "title", "body", "deepLink"],
+  "maxDataBytes": 4096,
+  "events": [
+    {
+      "type": "ride.dispatch.offered",
+      "recipient": "driver",
+      "category": "RIDE_OFFER",
+      "conditionalIds": ["requestId", "dispatchId", "expiresAt"],
+      "channelId": "ride-offer",
+      "ttlMs": 45000,
+      "collapseKey": "offer:<dispatchId>"
+    },
+    {
+      "type": "ride.accepted",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:status"
+    },
+    {
+      "type": "ride.driver_arriving",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:status"
+    },
+    {
+      "type": "ride.driver_arrived",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:status"
+    },
+    {
+      "type": "ride.started",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:status"
+    },
+    {
+      "type": "ride.completed",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:status"
+    },
+    {
+      "type": "ride.cancelled",
+      "recipient": "customer+driver",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:status"
+    },
+    {
+      "type": "ride.request.expired",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["requestId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": null
+    },
+    {
+      "type": "payment.ride.collected",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:payment"
+    },
+    {
+      "type": "payment.ride.collection_failed",
+      "recipient": "customer",
+      "category": "TRANSACTIONAL",
+      "conditionalIds": ["rideId"],
+      "channelId": "ride",
+      "ttlMs": 3600000,
+      "collapseKey": "ride:<rideId>:payment"
+    }
+  ]
+}

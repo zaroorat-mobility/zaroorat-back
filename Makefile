@@ -4,8 +4,12 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-COMPOSE := docker compose
-IMAGE   := zaroorat-backend
+IMAGE     := zaroorat-backend
+LOCAL     := docker compose --env-file .env.local -f compose.local.yml
+DEV       := docker compose --env-file .env.dev -f compose.dev.yml
+STAGING   := docker compose --env-file .env.staging -f compose.staging.yml
+PROD      := docker compose --env-file .env.prod -f compose.prod.yml
+TEST      := docker compose --env-file .env.test -f compose.test.yml
 
 .PHONY: help
 help: ## Show this help
@@ -51,37 +55,211 @@ test: ## Run the test suite
 .PHONY: verify
 verify: lint typecheck test build ## Run everything CI runs
 
-# ── Docker ────────────────────────────────────────────────────
+# ── Docker: local development ──────────────────────
 
-.PHONY: up
-up: ## Start API + Postgres + Redis
-	$(COMPOSE) up -d --build
+.PHONY: build-local
+build-local: ## Build the local development images
+	$(LOCAL) build
 
-.PHONY: down
-down: ## Stop the stack and delete its volumes
-	$(COMPOSE) down -v
+.PHONY: env-local
+env-local:
+	@test -f .env.local || { cp .env.local.example .env.local; echo "Created .env.local from .env.local.example - review it before use."; }
 
-.PHONY: logs
-logs: ## Tail the API logs
-	$(COMPOSE) logs -f api
+.PHONY: up-local
+up-local: env-local ## Start local stack (API + Worker + Postgres + Valkey)
+	$(LOCAL) up -d --build
 
-.PHONY: ps
-ps: ## Show container status
-	$(COMPOSE) ps
+.PHONY: watch-local
+watch-local: env-local ## Start the local stack with Compose file watch (foreground)
+	$(LOCAL) watch
 
-.PHONY: shell
-shell: ## Open a shell in the running API container
-	$(COMPOSE) exec api sh
+.PHONY: stop-local
+stop-local: ## Stop the local stack and KEEP database volumes
+	$(LOCAL) stop
+
+.PHONY: down-local
+down-local: ## Tear down containers and networks but KEEP database volumes
+	$(LOCAL) down
+
+.PHONY: reset-local
+reset-local: ## Tear down containers and DELETE local database volumes
+	$(LOCAL) down -v
+
+.PHONY: logs-local
+logs-local: ## Tail local API logs
+	$(LOCAL) logs -f api
+
+.PHONY: worker-logs-local
+worker-logs-local: ## Tail local worker logs
+	$(LOCAL) logs -f worker
+
+.PHONY: ps-local
+ps-local: ## Show local container status
+	$(LOCAL) ps
+
+.PHONY: shell-local
+shell-local: ## Open shell in the running local API container
+	$(LOCAL) exec api sh
+
+.PHONY: migrate-local
+migrate-local: env-local ## Apply database migrations locally
+	$(LOCAL) run --rm migrate
+
+.PHONY: seed-local
+seed-local: env-local ## Seed local database fixtures
+	$(LOCAL) run --rm -e APP_ENV=local migrate npx prisma db seed
+
+# ── Docker: dev ──────────────────────────────────
+
+.PHONY: build-dev
+build-dev: ## Build the dev image
+	$(DEV) build
+
+.PHONY: up-dev
+up-dev: ## Start the dev stack
+	$(DEV) up -d
+
+.PHONY: down-dev
+down-dev: ## Stop the dev stack (volumes PRESERVED)
+	$(DEV) down
+
+.PHONY: logs-dev
+logs-dev: ## Tail the dev API and worker logs
+	$(DEV) logs -f api worker
+
+.PHONY: migrate-dev
+migrate-dev: ## Run migrations and assert runtime DB roles on dev
+	$(DEV) run --rm migrate
+	$(DEV) run --rm db-roles
+
+.PHONY: seed-dev
+seed-dev: ## Seed reference data on dev
+	$(DEV) run --rm ops npx prisma db seed
+
+.PHONY: admin-dev
+admin-dev: ## Provision admin user on dev
+	$(DEV) run --rm -e ADMIN_EMAIL -e ADMIN_PHONE -e ADMIN_PASSWORD -e ADMIN_FIRST_NAME -e ADMIN_LAST_NAME ops npx tsx scripts/create-admin.ts
+
+# ── Docker: staging ──────────────────────────────
+
+.PHONY: build-staging
+build-staging: ## Build the staging image
+	$(STAGING) build
+
+.PHONY: up-staging
+up-staging: ## Start the staging stack
+	$(STAGING) up -d
+
+.PHONY: down-staging
+down-staging: ## Stop the staging stack (volumes PRESERVED)
+	$(STAGING) down
+
+.PHONY: logs-staging
+logs-staging: ## Tail the staging API and worker logs
+	$(STAGING) logs -f api worker
+
+.PHONY: migrate-staging
+migrate-staging: ## Run migrations and assert runtime DB roles on staging
+	$(STAGING) run --rm migrate
+	$(STAGING) run --rm db-roles
+
+.PHONY: seed-staging
+seed-staging: ## Seed reference data on staging
+	$(STAGING) run --rm ops npx prisma db seed
+
+.PHONY: admin-staging
+admin-staging: ## Provision admin user on staging
+	$(STAGING) run --rm -e ADMIN_EMAIL -e ADMIN_PHONE -e ADMIN_PASSWORD -e ADMIN_FIRST_NAME -e ADMIN_LAST_NAME ops npx tsx scripts/create-admin.ts
+
+# ── Docker: test ─────────────────────────────────
+
+# `run --rm` propagates the suite's exit code; the trap tears the stack down
+# either way so a failed run does not leave postgres/redis behind.
+.PHONY: test-docker
+test-docker: ## Run the full suite in Docker (Postgres + Redis), then clean up
+	@$(TEST) run --rm test; status=$$?; $(TEST) down -v >/dev/null 2>&1; exit $$status
+
+.PHONY: up-test
+up-test: ## Start the test infrastructure only (Postgres + Redis)
+	$(TEST) up -d postgres redis
+
+.PHONY: down-test
+down-test: ## Stop the test stack and delete its volumes
+	$(TEST) down -v
+
+.PHONY: logs-test
+logs-test: ## Tail the test runner logs
+	$(TEST) logs -f test
+
+# ── Docker: production ───────────────────────────
+
+# Every prod target needs POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_ACCESS_SECRET
+# and JWT_REFRESH_SECRET in the environment. compose.prod.yml fails loudly if
+# any is missing. Never put them in this file.
+
+.PHONY: build-prod
+build-prod: ## Build the production image
+	$(PROD) build
+
+.PHONY: migrate-prod
+migrate-prod: ## Run migrations once, then (re)provision the runtime DB login (deployment step)
+	$(PROD) run --rm migrate
+	$(PROD) run --rm db-roles
+
+.PHONY: up-prod
+up-prod: ## Start the production stack
+	$(PROD) up -d
+
+.PHONY: down-prod
+down-prod: ## Stop the production stack (volumes are PRESERVED)
+	$(PROD) down
+
+.PHONY: restart-prod
+restart-prod: ## Restart the production API and worker
+	$(PROD) restart api worker
+
+.PHONY: seed-prod
+seed-prod: ## Seed reference data on prod
+	$(PROD) run --rm ops npx prisma db seed
+
+.PHONY: admin-prod
+admin-prod: ## Provision admin user on prod
+	$(PROD) run --rm -e ADMIN_EMAIL -e ADMIN_PHONE -e ADMIN_PASSWORD -e ADMIN_FIRST_NAME -e ADMIN_LAST_NAME ops npx tsx scripts/create-admin.ts
+
+.PHONY: logs-prod
+logs-prod: ## Tail the production API logs
+	$(PROD) logs -f api
+
+.PHONY: ps-prod
+ps-prod: ## Show production container status
+	$(PROD) ps
 
 .PHONY: image
-image: ## Build the production image locally
+image: ## Build the production image standalone
 	docker build -t $(IMAGE):local .
 
-# ── Database ──────────────────────────────────────────────────
+# ── Validation ──────────────────────────────────
+
+.PHONY: config-dev
+config-dev: ## Validate compose.dev.yml
+	$(DEV) config -q && echo "compose.dev.yml OK"
+
+.PHONY: config-test
+config-test: ## Validate compose.test.yml
+	$(TEST) config -q && echo "compose.test.yml OK"
+
+.PHONY: config-prod
+config-prod: ## Validate compose.prod.yml (requires the prod env vars)
+	$(PROD) config -q && echo "compose.prod.yml OK"
+
+.PHONY: config-all
+config-all: config-dev config-test ## Validate the compose files that need no secrets
+
+# ── Database ───────────────────────────────────
 
 .PHONY: db-shell
-db-shell: ## Open psql against the local database
-	$(COMPOSE) exec postgres psql -U zaroorat -d zaroorat
+db-shell: ## Open psql against the local development database
+	$(DEV) exec postgres psql -U zaroorat -d zaroorat_dev
 
 .PHONY: db-backup
 db-backup: ## Dump the database to backups/

@@ -1,0 +1,178 @@
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import { callerId } from '@core/auth';
+import { SYSTEM_ADMIN_ROLE_SLUG } from '@modules/auth/constants/auth.constants';
+import type { PermissionRepository } from '@modules/auth/repositories/permission.repository';
+import { AdminGeographicService } from './admin-geographic.service.js';
+import type { GeographicSimulationService } from './geographic-simulation.service.js';
+import {
+  cityIdParamSchema,
+  createCityBodySchema,
+  createServiceZoneBodySchema,
+  createStateBodySchema,
+  listCitiesQuerySchema,
+  listServiceZonesQuerySchema,
+  listStatesQuerySchema,
+  reconcileApplyBodySchema,
+  reconcilePreviewQuerySchema,
+  serviceZoneIdParamSchema,
+  simulateQuerySchema,
+  stateIdParamSchema,
+  updateCityBodySchema,
+  updateServiceZoneBodySchema,
+  updateStateBodySchema,
+} from './geo.schemas.js';
+
+export class AdminGeographicController {
+  constructor(
+    private readonly adminGeographicService: AdminGeographicService,
+    private readonly geographicSimulationService: GeographicSimulationService,
+    private readonly permissionRepository: PermissionRepository,
+  ) {}
+
+  /// Geography staff can test a point. Only those who may see pricing get the fare.
+  async simulate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = simulateQuerySchema.parse(req.query);
+    const auth = req.auth;
+    const canSeePricing =
+      auth != null &&
+      (auth.roles.includes(SYSTEM_ADMIN_ROLE_SLUG) ||
+        (await this.permissionRepository.findAllowedCodesForUser(auth.userId)).includes(
+          'pricing:read',
+        ));
+    const data = await this.geographicSimulationService.simulate(
+      { ...query, at: query.at ? new Date(query.at) : undefined },
+      canSeePricing,
+    );
+    reply.send({ data });
+  }
+
+  async getCitySetup(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = cityIdParamSchema.parse(req.params);
+    const data = await this.adminGeographicService.getCitySetup(id);
+    reply.send({ data });
+  }
+
+  async listCountries(_req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const result = await this.adminGeographicService.listCountries();
+    reply.send(result);
+  }
+
+  async listStates(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = listStatesQuerySchema.parse(req.query);
+    const result = await this.adminGeographicService.listStates({
+      ...(query.countryCode !== undefined ? { countryCode: query.countryCode } : {}),
+      ...(query.divisionType !== undefined ? { divisionType: query.divisionType } : {}),
+      activeOnly: query.activeOnly,
+    });
+    reply.send(result);
+  }
+
+  async createState(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = createStateBodySchema.parse(req.body);
+    const data = await this.adminGeographicService.createState(body, callerId(req));
+    reply.status(201).send({ data });
+  }
+
+  async updateState(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = stateIdParamSchema.parse(req.params);
+    const body = updateStateBodySchema.parse(req.body ?? {});
+    const data = await this.adminGeographicService.updateState(id, body, callerId(req));
+    reply.send({ data });
+  }
+
+  async reconcilePreview(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const payload = (req.body ?? req.query ?? {}) as Record<string, unknown>;
+    const parsed = reconcilePreviewQuerySchema.parse(payload);
+    const data = await this.adminGeographicService.reconcileStates(
+      {
+        countryCode: parsed.countryCode,
+        mode: 'PREVIEW',
+      },
+      callerId(req),
+    );
+    reply.send({ data });
+  }
+
+  async reconcileApply(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = reconcileApplyBodySchema.parse(req.body);
+    const data = await this.adminGeographicService.reconcileStates(
+      {
+        countryCode: body.countryCode,
+        mode: 'APPLY',
+        ...(body.expectedVersion !== undefined ? { expectedVersion: body.expectedVersion } : {}),
+      },
+      callerId(req),
+    );
+    reply.send({ data });
+  }
+
+  async listCities(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = listCitiesQuerySchema.parse(req.query);
+    const result = await this.adminGeographicService.listCities({
+      ...(query.countryCode !== undefined ? { countryCode: query.countryCode } : {}),
+      ...(query.stateId !== undefined ? { stateId: query.stateId } : {}),
+      activeOnly: query.activeOnly,
+    });
+    reply.send(result);
+  }
+
+  async getCity(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = cityIdParamSchema.parse(req.params);
+    const data = await this.adminGeographicService.getCityById(id);
+    reply.send({ data });
+  }
+
+  async createCity(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = createCityBodySchema.parse(req.body);
+    const data = await this.adminGeographicService.createCity(body, callerId(req));
+    reply.status(201).send({ data });
+  }
+
+  async updateCity(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = cityIdParamSchema.parse(req.params);
+    const body = updateCityBodySchema.parse(req.body ?? {});
+    const data = await this.adminGeographicService.updateCity(id, body, callerId(req));
+    reply.send({ data });
+  }
+
+  async listServiceZones(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const query = listServiceZonesQuerySchema.parse(req.query);
+    const result = await this.adminGeographicService.listServiceZones({
+      ...(query.cityCode !== undefined ? { cityCode: query.cityCode } : {}),
+      ...(query.zoneType !== undefined ? { zoneType: query.zoneType } : {}),
+      activeOnly: query.activeOnly,
+    });
+    reply.send(result);
+  }
+
+  async getServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = serviceZoneIdParamSchema.parse(req.params);
+    const data = await this.adminGeographicService.getServiceZoneById(id);
+    reply.send({ data });
+  }
+
+  async createServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const body = createServiceZoneBodySchema.parse(req.body);
+    const data = await this.adminGeographicService.createServiceZone(body, callerId(req));
+    reply.status(201).send({ data });
+  }
+
+  async updateServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = serviceZoneIdParamSchema.parse(req.params);
+    const body = updateServiceZoneBodySchema.parse(req.body ?? {});
+    const data = await this.adminGeographicService.updateServiceZone(id, body, callerId(req));
+    reply.send({ data });
+  }
+
+  async activateServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = serviceZoneIdParamSchema.parse(req.params);
+    const data = await this.adminGeographicService.activateServiceZone(id, callerId(req));
+    reply.send({ data });
+  }
+
+  async deactivateServiceZone(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = serviceZoneIdParamSchema.parse(req.params);
+    const data = await this.adminGeographicService.deactivateServiceZone(id, callerId(req));
+    reply.send({ data });
+  }
+}

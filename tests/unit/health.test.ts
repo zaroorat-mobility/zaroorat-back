@@ -3,9 +3,8 @@ import { after, before, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { createApp } from '../../src/app/app.js';
+import { clearReadinessChecks, registerReadinessCheck } from '../../src/core/health/index.js';
 
-// Smoke test: boots the real Fastify app in-process (no socket, no DB) and
-// exercises the load-balancer health contract from docs/04_Architecture/05_deployment-architecture.md "Zero-downtime deploys".
 describe('GET /health', () => {
   let app: FastifyInstance;
 
@@ -40,8 +39,6 @@ describe('GET /health', () => {
   });
 });
 
-// The Helm readiness probe targets this exact path. If it 404s, pods never
-// become ready and every `helm upgrade --wait` hangs until it times out.
 describe('GET /ready', () => {
   let app: FastifyInstance;
 
@@ -65,5 +62,16 @@ describe('GET /ready', () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/ready' });
 
     assert.equal(response.statusCode, 200);
+  });
+
+  it('reports each registered check by name', async () => {
+    registerReadinessCheck({ name: 'probe-under-test', probe: () => {} });
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/ready' })).json();
+
+      assert.deepEqual(body.checks, [{ name: 'probe-under-test', ok: true }]);
+    } finally {
+      clearReadinessChecks();
+    }
   });
 });

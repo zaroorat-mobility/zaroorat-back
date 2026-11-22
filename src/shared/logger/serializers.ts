@@ -1,5 +1,4 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-
 export const serializers = {
   req(request: FastifyRequest) {
     return {
@@ -9,13 +8,11 @@ export const serializers = {
       ip: request.ip,
     };
   },
-
   res(reply: FastifyReply) {
     return {
       statusCode: reply.statusCode,
     };
   },
-
   err(error: Error) {
     return {
       name: error.name,

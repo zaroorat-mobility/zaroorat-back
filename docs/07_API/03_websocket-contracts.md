@@ -1,7 +1,13 @@
 # WebSocket Contracts
 
-**Owner:** Engineering (API) · **Last reviewed:** 2026-07-06
+**Owner:** Engineering (API) · **Last reviewed:** 2026-09-02
 **Realizes:** FR-TRIP-03, FR-MATCH-02, Volume 4 realtime architecture
+
+> **Implementation note (2026-09):** The live backend uses **Socket.IO** on the API port at
+> `REALTIME_PATH` (default `/socket.io`) with JWT auth in the handshake (`auth.token`), not a
+> separate `/api/v1/ws` listener. Server events use the names in
+> [`src/modules/realtime/events.ts`](../../src/modules/realtime/events.ts), including
+> `ride.driver.location` and `ride.eta.updated`.
 
 REST handles request/response; **WebSockets handle the live, server-pushed stream** — driver
 location to the rider, ride offers to the driver, trip-state changes to both. This page is the

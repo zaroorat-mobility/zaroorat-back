@@ -1,0 +1,416 @@
+model PaymentInstrument {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  methodType   String   @map("method_type")
+  gateway      String?
+  gatewayToken String?  @map("gateway_token")
+  brand        String?
+  last4        String?  @db.Char(4)
+  upiVpa       String?  @map("upi_vpa")
+  expiryMonth  Int?     @map("expiry_month") @db.SmallInt
+  expiryYear   Int?     @map("expiry_year") @db.SmallInt
+  isDefault    Boolean  @default(false) @map("is_default")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user    User            @relation(fields: [userId], references: [id])
+  intents PaymentIntent[]
+
+  @@index([userId])
+  @@map("payment_methods")
+}
+
+model CustomerWallet {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  userId            String    @unique @map("user_id") @db.Uuid
+  balance           Decimal   @default(0) @db.Decimal(12, 2)
+  lockedBalance     Decimal   @default(0) @map("locked_balance") @db.Decimal(12, 2)
+  currency          String    @default("INR") @db.Char(3)
+  lastTransactionAt DateTime? @map("last_transaction_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user         User                        @relation(fields: [userId], references: [id])
+  transactions CustomerWalletTransaction[]
+  topups       WalletTopup[]
+
+  @@map("customer_wallets")
+}
+
+model CustomerWalletTransaction {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  walletId      String   @map("wallet_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  txnType       String   @map("txn_type")
+  amount        Decimal  @db.Decimal(12, 2)
+  balanceAfter  Decimal  @map("balance_after") @db.Decimal(12, 2)
+  referenceType String?  @map("reference_type")
+  referenceId   String?  @map("reference_id") @db.Uuid
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  wallet CustomerWallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, createdAt])
+  @@map("customer_wallet_transactions")
+}
+
+model PaymentIntent {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  rideId          String?  @map("ride_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  amount          Decimal  @db.Decimal(10, 2)
+  currency        String   @default("INR") @db.Char(3)
+  methodType      String   @map("method_type")
+  paymentMethodId String?  @map("payment_method_id") @db.Uuid
+  status          String   @default("CREATED")
+  gateway         String?
+  gatewayIntentId String?  @map("gateway_intent_id")
+  idempotencyKey  String   @unique @map("idempotency_key")
+  /// 004-driver-subscription-wallet. What this intent is funding —
+  /// 'CUSTOMER_WALLET_TOPUP' (default, existing behavior preserved for every
+  /// historical row) | 'DRIVER_COMMISSION_RECHARGE' | 'DRIVER_SUBSCRIPTION_PAYMENT'.
+  /// IntentService.applyConfirmation dispatches its SUCCEEDED effect on this
+  /// field instead of unconditionally crediting the customer wallet.
+  purpose         String   @default("CUSTOMER_WALLET_TOPUP")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  ride          Ride?                @relation(fields: [rideId], references: [id])
+  user          User                 @relation(fields: [userId], references: [id])
+  paymentMethod PaymentInstrument?   @relation(fields: [paymentMethodId], references: [id])
+  transactions  PaymentTransaction[]
+  reviewCases   PaymentReviewCase[]
+
+  @@index([rideId])
+  @@index([userId])
+  @@map("payment_intents")
+}
+
+model PaymentTransaction {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  intentId         String    @map("intent_id") @db.Uuid
+  rideId           String?   @map("ride_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  txnType          String    @map("txn_type")
+  amount           Decimal   @db.Decimal(10, 2)
+  currency         String    @default("INR") @db.Char(3)
+  status           String
+  gateway          String?
+  gatewayTxnId     String?   @map("gateway_txn_id")
+  gatewayFee       Decimal   @default(0) @map("gateway_fee") @db.Decimal(10, 2)
+  errorCode        String?   @map("error_code")
+  errorMessage     String?   @map("error_message")
+  varianceStatus   String?   @map("variance_status")
+  reconciledBy     String?   @map("reconciled_by")
+  lastReconciledAt DateTime? @map("last_reconciled_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  intent      PaymentIntent       @relation(fields: [intentId], references: [id])
+  ride        Ride?               @relation(fields: [rideId], references: [id])
+  user        User                @relation(fields: [userId], references: [id])
+  refunds     Refund[]
+  chargebacks Chargeback[]
+  reviewCases PaymentReviewCase[]
+
+  @@index([intentId])
+  @@index([rideId])
+  @@map("payment_transactions")
+}
+
+model GatewayEvent {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  gateway        String
+  eventType      String    @map("event_type")
+  gatewayEventId String    @map("gateway_event_id")
+  payload        Json
+  signature      String?
+  processed      Boolean   @default(false)
+  processedAt    DateTime? @map("processed_at")
+  receivedAt     DateTime  @default(now()) @map("received_at")
+
+  @@unique([gateway, gatewayEventId])
+  @@map("gateway_events")
+}
+
+model Refund {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  transactionId   String    @map("transaction_id") @db.Uuid
+  rideId          String?   @map("ride_id") @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  amount          Decimal   @db.Decimal(10, 2)
+  reason          String?
+  /// PENDING    — requested; nothing reserved, no provider call (admin review).
+  /// PROCESSING — the refunded amount is reserved (balance debited, ledger in
+  ///              REFUND_IN_TRANSIT) and the provider was, or may have been,
+  ///              asked to refund. An unknown provider outcome STAYS here and is
+  ///              resolved by `RefundReconciliationJob` — it never becomes FAILED
+  ///              on a timeout.
+  /// SUCCEEDED  — provider-confirmed. FAILED — provider-refused; reservation undone.
+  status          String    @default("PENDING")
+  gatewayRefundId String?   @unique @map("gateway_refund_id")
+  idempotencyKey  String    @unique @map("idempotency_key")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  completedAt     DateTime? @map("completed_at")
+
+  /// Phase 1 refund lifecycle. `purpose` is copied from the original
+  /// PaymentIntent at reservation and decides which balance and which ledger
+  /// accounts the refund reverses. `providerPaymentId` is the provider's own
+  /// payment id (`PaymentTransaction.gatewayTxnId`) — never our internal id.
+  purpose           String?   @map("purpose")
+  providerPaymentId String?   @map("provider_payment_id")
+  reservedAt        DateTime? @map("reserved_at")
+  dispatchAttempts  Int       @default(0) @map("dispatch_attempts")
+  lastDispatchAt    DateTime? @map("last_dispatch_at")
+  lastDispatchError String?   @map("last_dispatch_error")
+  failedAt          DateTime? @map("failed_at")
+  failureReason     String?   @map("failure_reason")
+
+  // Admin finance workflow (optional; gateway fields above remain source of truth for payout)
+  displayCode    String?   @map("display_code")
+  refundType     String?   @map("refund_type")
+  workflowStatus String    @default("requested") @map("workflow_status")
+  approvalLevel  String?   @map("approval_level")
+  refundSource   String?   @map("refund_source")
+  disputeId      String?   @map("dispute_id") @db.Uuid
+  reviewedBy     String?   @map("reviewed_by")
+  reviewedAt     DateTime? @map("reviewed_at")
+  processedBy    String?   @map("processed_by")
+  adminNotes     String?   @map("admin_notes")
+  timeline       Json?
+  riderName      String?   @map("rider_name")
+
+  transaction PaymentTransaction  @relation(fields: [transactionId], references: [id])
+  ride        Ride?               @relation(fields: [rideId], references: [id])
+  user        User                @relation(fields: [userId], references: [id])
+  reviewCases PaymentReviewCase[]
+
+  @@index([transactionId])
+  @@index([workflowStatus, createdAt])
+  @@index([status, lastDispatchAt])
+  @@map("refunds")
+}
+
+/// 005-razorpay-driver-payments (data-model §5, TD-9). A captured payment that
+/// could not be applied automatically, held for Finance. Opening the same case
+/// twice is a no-op (unique kind + payment); resolution is a conditional claim
+/// on OPEN. Kind, status and the resolution fields are CHECK-constrained in
+/// migration 20261021120000_razorpay_payment_safeguards.
+model PaymentReviewCase {
+  id                   String    @id @default(uuid(7)) @db.Uuid
+  kind                 String
+  status               String    @default("OPEN")
+  /// Null only for UNKNOWN_ORDER.
+  intentId             String?   @map("intent_id") @db.Uuid
+  /// The CAPTURED_REVIEW hold row; for PAYMENT_ID_REUSED, the existing
+  /// SUCCEEDED row of the other intent.
+  paymentTransactionId String?   @map("payment_transaction_id") @db.Uuid
+  gateway              String
+  providerPaymentId    String    @map("provider_payment_id")
+  providerOrderId      String?   @map("provider_order_id")
+  expectedAmount       Decimal?  @map("expected_amount") @db.Decimal(12, 2)
+  observedAmount       Decimal   @map("observed_amount") @db.Decimal(12, 2)
+  expectedCurrency     String?   @map("expected_currency") @db.Char(3)
+  observedCurrency     String    @map("observed_currency") @db.Char(3)
+  /// Sanitised provider fields only: no contact, email, VPA or card data.
+  evidence             Json
+  refundId             String?   @map("refund_id") @db.Uuid
+  resolvedBy           String?   @map("resolved_by")
+  resolvedAt           DateTime? @map("resolved_at")
+  resolutionNote       String?   @map("resolution_note")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  intent             PaymentIntent?      @relation(fields: [intentId], references: [id], onDelete: Restrict)
+  paymentTransaction PaymentTransaction? @relation(fields: [paymentTransactionId], references: [id], onDelete: Restrict)
+  refund             Refund?             @relation(fields: [refundId], references: [id], onDelete: Restrict)
+
+  @@unique([kind, providerPaymentId])
+  @@index([status, createdAt])
+  @@map("payment_review_cases")
+}
+
+/// 005-razorpay-driver-payments (data-model §6). One row per reconciliation
+/// job run: the heartbeat (FR-033) and the provider sweep's window.
+model PaymentReconciliationRun {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  job         String
+  windowStart DateTime? @map("window_start")
+  windowEnd   DateTime? @map("window_end")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+  status      String    @default("RUNNING")
+  counts      Json?
+  error       String?
+
+  @@index([job, finishedAt(sort: Desc)])
+  @@map("payment_reconciliation_runs")
+}
+
+model PaymentLedgerEntry {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  entryGroup    String   @map("entry_group") @db.Uuid
+  account       String
+  accountRefId  String?  @map("account_ref_id") @db.Uuid
+  direction     String // DEBIT | CREDIT
+  amount        Decimal  @db.Decimal(12, 2)
+  currency      String   @default("INR") @db.Char(3)
+  referenceType String?  @map("reference_type")
+  referenceId   String?  @map("reference_id") @db.Uuid
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([entryGroup])
+  @@index([account, accountRefId, createdAt])
+  @@map("payment_ledger_entries")
+}
+
+model SettlementBatch {
+  id                     String    @id @default(uuid(7)) @db.Uuid
+  batchNumber            String    @unique @map("batch_number")
+  periodStart            DateTime  @map("period_start") @db.Date
+  periodEnd              DateTime  @map("period_end") @db.Date
+  status                 String    @default("draft")
+  generatedBy            String    @map("generated_by")
+  processedAt            DateTime? @map("processed_at")
+  completedAt            DateTime? @map("completed_at")
+  totalDrivers           Int       @default(0) @map("total_drivers")
+  totalGrossAmount       Decimal   @default(0) @map("total_gross_amount") @db.Decimal(12, 2)
+  totalCommission        Decimal   @default(0) @map("total_commission") @db.Decimal(12, 2)
+  totalRefundAdjustments Decimal   @default(0) @map("total_refund_adjustments") @db.Decimal(12, 2)
+  totalPenalties         Decimal   @default(0) @map("total_penalties") @db.Decimal(12, 2)
+  totalBonuses           Decimal   @default(0) @map("total_bonuses") @db.Decimal(12, 2)
+  totalNetPayable        Decimal   @default(0) @map("total_net_payable") @db.Decimal(12, 2)
+  timeline               Json      @default("[]")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  settlements DriverSettlement[]
+
+  @@index([periodStart, periodEnd])
+  @@index([status, createdAt])
+  @@map("settlement_batches")
+}
+
+model DriverSettlement {
+  id                String           @id @default(uuid(7)) @db.Uuid
+  driverId          String           @map("driver_id") @db.Uuid
+  periodStart       DateTime         @map("period_start") @db.Date
+  periodEnd         DateTime         @map("period_end") @db.Date
+  grossEarnings     Decimal          @default(0) @map("gross_earnings") @db.Decimal(12, 2)
+  commission        Decimal          @default(0) @db.Decimal(12, 2)
+  adjustments       Decimal          @default(0) @db.Decimal(12, 2)
+  netPayable        Decimal          @default(0) @map("net_payable") @db.Decimal(12, 2)
+  /// Only a COMPLETED DriverPayout covering the full `netPayable` may set
+  /// PAID — see `PayoutService.confirmPayout`. Neither the settlement job nor
+  /// admin batch completion writes it.
+  status            SettlementStatus @default(PENDING)
+  settlementBatchId String?          @map("settlement_batch_id") @db.Uuid
+  createdAt         DateTime         @default(now()) @map("created_at")
+
+  driver          Driver           @relation(fields: [driverId], references: [id])
+  settlementBatch SettlementBatch? @relation(fields: [settlementBatchId], references: [id])
+  payouts         DriverPayout[]
+
+  @@unique([driverId, periodStart, periodEnd])
+  @@index([settlementBatchId])
+  @@map("driver_settlements")
+}
+
+model PaymentDispute {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  rideId           String    @map("ride_id") @db.Uuid
+  complaintId      String?   @map("complaint_id") @db.Uuid
+  type             String
+  status           String    @default("open")
+  riderUserId      String    @map("rider_user_id") @db.Uuid
+  riderName        String    @map("rider_name")
+  driverId         String    @map("driver_id") @db.Uuid
+  driverName       String    @map("driver_name")
+  amount           Decimal   @db.Decimal(10, 2)
+  requestedAmount  Decimal?  @map("requested_amount") @db.Decimal(10, 2)
+  reason           String
+  assignedTo       String?   @map("assigned_to")
+  assignedAt       DateTime? @map("assigned_at")
+  resolvedBy       String?   @map("resolved_by")
+  resolvedAt       DateTime? @map("resolved_at")
+  resolutionType   String?   @map("resolution_type")
+  resolutionNotes  String?   @map("resolution_notes")
+  adjustmentAmount Decimal?  @map("adjustment_amount") @db.Decimal(10, 2)
+  version          Int       @default(1)
+  timeline         Json
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  ride Ride @relation(fields: [rideId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([rideId])
+  @@map("payment_disputes")
+}
+
+model DriverPayout {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  driverId          String       @map("driver_id") @db.Uuid
+  settlementId      String?      @map("settlement_id") @db.Uuid
+  bankAccountId     String?      @map("bank_account_id") @db.Uuid
+  amount            Decimal      @db.Decimal(12, 2)
+  status            PayoutStatus @default(INITIATED)
+  /// 'MANUAL' for an externally executed bank transfer — the only kind this
+  /// platform performs today. A provider name goes here when a payout rail is
+  /// actually integrated.
+  gateway           String?
+  gatewayPayoutId   String?      @map("gateway_payout_id")
+  /// The bank's own reference for a manual transfer (UTR/NEFT ref), supplied
+  /// by finance at confirmation. This is the audit link between our row and
+  /// the money that actually left the platform's bank account.
+  externalReference String?      @map("external_reference")
+  idempotencyKey    String       @unique @map("idempotency_key")
+  failureReason     String?      @map("failure_reason")
+  initiatedAt       DateTime     @default(now()) @map("initiated_at")
+  completedAt       DateTime?    @map("completed_at")
+
+  driver      Driver             @relation(fields: [driverId], references: [id])
+  settlement  DriverSettlement?  @relation(fields: [settlementId], references: [id])
+  bankAccount DriverBankAccount? @relation(fields: [bankAccountId], references: [id])
+  items       PayoutItem[]
+
+  @@index([driverId])
+  @@index([settlementId])
+  @@map("driver_payouts")
+}
+
+model PayoutItem {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  payoutId  String   @map("payout_id") @db.Uuid
+  rideId    String?  @map("ride_id") @db.Uuid
+  itemType  String   @map("item_type")
+  amount    Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  payout DriverPayout @relation(fields: [payoutId], references: [id])
+  ride   Ride?        @relation(fields: [rideId], references: [id])
+
+  @@index([payoutId])
+  @@map("payout_items")
+}
+
+model Chargeback {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  transactionId String    @map("transaction_id") @db.Uuid
+  rideId        String?   @map("ride_id") @db.Uuid
+  amount        Decimal   @db.Decimal(10, 2)
+  reasonCode    String?   @map("reason_code")
+  status        String    @default("OPEN")
+  gatewayCaseId String?   @map("gateway_case_id")
+  evidenceDueAt DateTime? @map("evidence_due_at")
+  resolvedAt    DateTime? @map("resolved_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  transaction PaymentTransaction @relation(fields: [transactionId], references: [id])
+  ride        Ride?              @relation(fields: [rideId], references: [id])
+
+  @@index([transactionId])
+  @@index([status])
+  @@map("chargebacks")
+}

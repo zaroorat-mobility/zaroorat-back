@@ -6,9 +6,10 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'prisma/shared/**'
-      - 'prisma/modules/**'
-      - 'prisma/schema.prisma'
+      # The schema is a native Prisma multi-file directory (prisma.config.ts
+      # sets `schema: 'prisma/schema'`), so every path lives under prisma/schema.
+      - 'prisma/schema/**'
+      - 'prisma.config.ts'
 
 concurrency:
   group: prisma-check-${{ github.ref }}
@@ -19,6 +20,10 @@ permissions:
 
 env:
   HUSKY: '0'
+  # Makes prisma.config.ts load the committed .env.test rather than looking for
+  # a .env.development that does not exist on a runner. Neither `prisma format`
+  # nor `prisma validate` connects to a database.
+  APP_ENV: test
 
 jobs:
   check-schema:
@@ -38,20 +43,22 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Merge Prisma Schema
-        run: npm run prisma:merge
-
+      # There is no merge step. Prisma 7 reads prisma/schema/ directly, so the
+      # single-file schema these checks were originally written against — and
+      # the `prisma:merge` script that produced it — no longer exist.
       - name: Format Prisma Schema
         run: npm run prisma:format
 
       - name: Validate Prisma Schema
         run: npm run prisma:validate
 
+      # `prisma format` rewrites in place, so a non-empty diff means someone
+      # committed an unformatted schema.
       - name: Check for Uncommitted Schema Changes
-        run: git diff --exit-code prisma/schema.prisma
+        run: git diff --exit-code prisma/schema/
 
       - name: Fail Instructions
         if: failure()
         run: |
-          echo "::error::prisma/schema.prisma is out of sync with the modules! Please run 'npm run prisma:merge && npm run prisma:format' locally and commit the result."
+          echo "::error::prisma/schema/ is not formatted. Run 'npm run prisma:format' locally and commit the result."
           exit 1

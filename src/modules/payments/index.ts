@@ -1,2 +1,155 @@
-// Payments module (routes, controllers, services, schemas) will be wired here
-export {};
+import { asClass, aliasTo, AwilixContainer } from 'awilix';
+import { PaymentMetrics } from './metrics/payment.metrics.js';
+import {
+  PaymentMethodRepository,
+  WalletRepository,
+  IntentRepository,
+  LedgerRepository,
+  SettlementRepository,
+  SettlementWalletRepository,
+  PayoutRepository,
+  RefundRepository,
+  WebhookRepository,
+  IdempotencyRepository,
+  RidePaymentRepository,
+  CommissionWalletRepository,
+  WalletRechargeOptionRepository,
+  PaymentReviewCaseRepository,
+} from './repositories/index.js';
+import { PaymentGatewayResolverService } from './services/gateway/payment-gateway-resolver.service.js';
+import {
+  LedgerService,
+  WalletService,
+  IntentService,
+  RefundService,
+  SettlementService,
+  PayoutService,
+  WebhookService,
+  PaymentService,
+  RideCollectionService,
+  DebtService,
+  WriteOffService,
+  CommissionWalletService,
+  SettlementFailureRecoveryService,
+  PricingReconciliationService,
+} from './services/index.js';
+import {
+  PaymentMethodController,
+  WalletController,
+  IntentController,
+  RefundController,
+  WebhookController,
+  PaymentController,
+  RidePaymentController,
+  CommissionWalletController,
+} from './controllers/index.js';
+import {
+  SettlementJob,
+  ReconciliationJob,
+  PaymentIntentReconciliationJob,
+  RefundReconciliationJob,
+  CollectionSweepJob,
+  ReceivableWriteOffJob,
+} from './jobs/index.js';
+import { RideCollectionConsumer } from './consumers/index.js';
+export * from './controllers/index.js';
+export * from './routes/index.js';
+export * from './schemas/index.js';
+export * from './services/index.js';
+export * from './repositories/index.js';
+export * from './jobs/index.js';
+export * from './metrics/index.js';
+export * from './plugins/index.js';
+export * from './consumers/index.js';
+export * from './events/index.js';
+export * from './errors/index.js';
+export * from './constants/index.js';
+export * from './types/index.js';
+export * from './utils/index.js';
+export function registerPaymentsModule(container: AwilixContainer): void {
+  container.register({
+    paymentMetrics: asClass(PaymentMetrics).singleton(),
+    paymentMethodRepository: asClass(PaymentMethodRepository).singleton(),
+    walletRepository: asClass(WalletRepository).singleton(),
+    intentRepository: asClass(IntentRepository).singleton(),
+    ledgerRepository: asClass(LedgerRepository).singleton(),
+    settlementRepository: asClass(SettlementRepository).singleton(),
+    settlementWalletRepository: asClass(SettlementWalletRepository).singleton(),
+    payoutRepository: asClass(PayoutRepository).singleton(),
+    refundRepository: asClass(RefundRepository).singleton(),
+    webhookRepository: asClass(WebhookRepository).singleton(),
+    idempotencyRepository: asClass(IdempotencyRepository).singleton(),
+    ridePaymentRepository: asClass(RidePaymentRepository).singleton(),
+    commissionWalletRepository: asClass(CommissionWalletRepository).singleton(),
+    rechargeOptionRepository: asClass(WalletRechargeOptionRepository).singleton(),
+    paymentReviewCaseRepository: asClass(PaymentReviewCaseRepository).singleton(),
+    // Resolves the one admin-active gateway (Razorpay/Stripe/Mock) or an
+    // existing PaymentIntent/PaymentTransaction's own stored `gateway` — the
+    // one seam every business service consults instead of instantiating a
+    // gateway client directly. Depends on `systemSettingService`, registered
+    // by the admin module (see `MapProviderService` for the same cross-module
+    // pattern already established for map providers).
+    gatewayResolver: asClass(PaymentGatewayResolverService).singleton(),
+    ledgerService: asClass(LedgerService).singleton(),
+    rideCollectionService: asClass(RideCollectionService).singleton(),
+    debtService: asClass(DebtService).singleton(),
+    writeOffService: asClass(WriteOffService).singleton(),
+    walletService: asClass(WalletService).singleton(),
+    commissionWalletService: asClass(CommissionWalletService).singleton(),
+    settlementFailureRecoveryService: asClass(SettlementFailureRecoveryService).singleton(),
+    pricingReconciliationService: asClass(PricingReconciliationService).singleton(),
+    intentService: asClass(IntentService).singleton(),
+    refundService: asClass(RefundService).singleton(),
+    settlementService: asClass(SettlementService).singleton(),
+    payoutService: asClass(PayoutService).singleton(),
+    webhookService: asClass(WebhookService).singleton(),
+    paymentService: asClass(PaymentService)
+      .singleton()
+      .inject((c) => ({
+        wallet: c.resolve('walletService'),
+        intent: c.resolve('intentService'),
+        refund: c.resolve('refundService'),
+        payout: c.resolve('payoutService'),
+        settlement: c.resolve('settlementService'),
+        webhook: c.resolve('webhookService'),
+        idempotencyRepo: c.resolve('idempotencyRepository'),
+      })),
+    paymentMethodController: asClass(PaymentMethodController).singleton(),
+    walletController: asClass(WalletController).singleton(),
+    intentController: asClass(IntentController).singleton(),
+    refundController: asClass(RefundController).singleton(),
+    webhookController: asClass(WebhookController).singleton(),
+    ridePaymentController: asClass(RidePaymentController).singleton(),
+    commissionWalletController: asClass(CommissionWalletController).singleton(),
+    paymentController: asClass(PaymentController)
+      .singleton()
+      .inject((c) => ({
+        paymentMethod: c.resolve('paymentMethodController'),
+        wallet: c.resolve('walletController'),
+        intent: c.resolve('intentController'),
+        refund: c.resolve('refundController'),
+        webhook: c.resolve('webhookController'),
+        ridePayment: c.resolve('ridePaymentController'),
+        commissionWallet: c.resolve('commissionWalletController'),
+      })),
+    rideCollectionConsumer: asClass(RideCollectionConsumer).singleton(),
+    settlementJob: asClass(SettlementJob).singleton(),
+    collectionSweepJob: asClass(CollectionSweepJob).singleton(),
+    receivableWriteOffJob: asClass(ReceivableWriteOffJob).singleton(),
+    reconciliationJob: asClass(ReconciliationJob).singleton(),
+    paymentIntentReconciliationJob: asClass(PaymentIntentReconciliationJob).singleton(),
+    refundReconciliationJob: asClass(RefundReconciliationJob).singleton(),
+    intentRepo: aliasTo('intentRepository'),
+    ledgerRepo: aliasTo('ledgerRepository'),
+    webhookRepo: aliasTo('webhookRepository'),
+    refundRepo: aliasTo('refundRepository'),
+    payoutRepo: aliasTo('payoutRepository'),
+    settlementRepo: aliasTo('settlementRepository'),
+    settlementWalletRepo: aliasTo('settlementWalletRepository'),
+    paymentMethodRepo: aliasTo('paymentMethodRepository'),
+    idempotencyRepo: aliasTo('idempotencyRepository'),
+    ridePaymentRepo: aliasTo('ridePaymentRepository'),
+    paymentReviewCaseRepo: aliasTo('paymentReviewCaseRepository'),
+    txManager: aliasTo('transactionManager'),
+  });
+}

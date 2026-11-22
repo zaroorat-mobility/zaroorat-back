@@ -1,2 +1,69 @@
-// Notifications module (routes, controllers, services, schemas) will be wired here
-export {};
+import { asClass, asFunction, asValue, AwilixContainer } from 'awilix';
+import type { PushProvider } from './providers/push.provider';
+import {
+  getNotificationConfig,
+  createSmsProvider,
+  createPushProvider,
+} from './notification.config';
+import { NotificationService } from './notification.service';
+import { NotificationRepository } from './repositories/notification.repository.js';
+import { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
+import { NotificationReconciliationJob } from './jobs/notification-reconciliation.job.js';
+import { registerNotificationInbox } from './inbox.js';
+import { DriverDecisionSmsConsumer } from './consumers/driver-decision-sms.consumer.js';
+export type { SmsProvider, SmsMessage, SmsSendResult } from './providers/sms.provider';
+export type { PushProvider, PushMessage, PushSendResult } from './providers/push.provider';
+export type { EmailProvider, EmailMessage, EmailSendResult } from './providers/email.provider';
+export { MockProvider } from './providers/mock.provider';
+export { SmtpEmailProvider, type SmtpConfig } from './providers/smtp.provider.js';
+export { AirtelProvider, type AirtelConfig } from '../../integrations/airtel/airtel.client.js';
+export { MockPushProvider } from './providers/mock-push.provider';
+export { FcmPushProvider } from '../../integrations/firebase/fcm-push.provider.js';
+export { NotificationRepository } from './repositories/notification.repository.js';
+export { DriverDecisionSmsConsumer } from './consumers/driver-decision-sms.consumer.js';
+export { NotificationDeliveryJob } from './jobs/notification-delivery.job.js';
+export {
+  NotificationReconciliationJob,
+  type NotificationReconciliationReport,
+} from './jobs/notification-reconciliation.job.js';
+export {
+  notificationCreated,
+  notificationEnqueueFailed,
+  notificationNoActiveDevice,
+} from './metrics/notification.metrics.js';
+export {
+  getNotificationConfig,
+  createSmsProvider,
+  createPushProvider,
+  resolveSmsProviderName,
+  SmsProviderNotDeliverableError,
+  type NotificationConfig,
+  type SmsProviderName,
+  type PushProviderName,
+} from './notification.config';
+export {
+  NotificationService,
+  type SendSmsOptions,
+  type SendOtpOptions,
+} from './notification.service';
+export {
+  registerNotificationInbox,
+  notificationInboxRoutes,
+  NotificationInboxService,
+  NotificationInboxController,
+} from './inbox.js';
+export function registerNotificationModule(container: AwilixContainer): void {
+  container.register({
+    notificationConfig: asFunction(getNotificationConfig).singleton(),
+    smsProvider: asFunction(createSmsProvider).singleton(),
+    pushProvider: asFunction(createPushProvider).singleton(),
+    // NotificationService's lazy handle on the push provider (see there).
+    resolvePushProvider: asValue(() => container.resolve<PushProvider>('pushProvider')),
+    notificationRepository: asClass(NotificationRepository).singleton(),
+    notificationDeliveryJob: asClass(NotificationDeliveryJob).singleton(),
+    notificationReconciliationJob: asClass(NotificationReconciliationJob).singleton(),
+    notificationService: asClass(NotificationService).singleton(),
+    driverDecisionSmsConsumer: asClass(DriverDecisionSmsConsumer).singleton(),
+  });
+  registerNotificationInbox(container);
+}

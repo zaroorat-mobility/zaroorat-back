@@ -1,0 +1,119 @@
+{{- if .Values.worker.enabled }}
+# Background job processor. Same image as the API, different entrypoint: it owns
+# every BullMQ queue, including OTP SMS delivery, so an API-only release delivers
+# no SMS and runs no scheduled maintenance.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "zaroorat-backend.fullname" . }}-worker
+  labels:
+    {{- include "zaroorat-backend.workerLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  revisionHistoryLimit: 5
+  strategy:
+    # Recreate is wrong here (it would pause all processing) and surge is cheap,
+    # because BullMQ hands an unfinished job back to the queue on close.
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "zaroorat-backend.workerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "zaroorat-backend.workerLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "zaroorat-backend.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Must exceed WORKER_SHUTDOWN_GRACE_MS or Kubernetes SIGKILLs the process
+      # while it is still finishing jobs.
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ .Chart.Name }}-worker
+          image: {{ include "zaroorat-backend.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ['node', 'dist/worker.js']
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            # Probes only. No Service and no Ingress selects this pod.
+            - name: health
+              containerPort: {{ .Values.worker.healthPort }}
+              protocol: TCP
+          env:
+            - name: WORKER_HEALTH_PORT
+              value: {{ .Values.worker.healthPort | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "zaroorat-backend.fullname" . }}-config
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+            {{- with .Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.worker.probes.startup.enabled }}
+          # The health server only binds after Postgres and Redis are verified,
+          # so probes are refused until the process can genuinely take a job.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: {{ .Values.worker.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.worker.probes.startup.failureThreshold }}
+          {{- end }}
+          livenessProbe:
+            # Stays healthy while draining: the process is working, not wedged,
+            # and restarting it would abandon in-flight deliveries.
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: {{ .Values.worker.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.worker.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.worker.probes.liveness.failureThreshold }}
+          readinessProbe:
+            # Backed by the same readiness registry as the API's /ready, and flips
+            # to 503 the moment SIGTERM starts the drain.
+            httpGet:
+              path: /ready
+              port: health
+            periodSeconds: {{ .Values.worker.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.worker.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.worker.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpDirSizeLimit }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

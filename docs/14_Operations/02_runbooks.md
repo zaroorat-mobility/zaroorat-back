@@ -119,6 +119,29 @@ page-level alert links here. Runbooks are living: game days and incidents update
 - **Verify:** test SOS end-to-end; confirm routing + logging (R-SAFE-3).
 - **Escalate:** safety owner + eng lead; regulatory/comms per policy.
 
+## RB-09 — Notification event reconciliation: disable or roll back 🟡 SEV3
+
+- **Alert:** `notification_event_reconciliation_runs{result="error"}` or `…_failed{result="permanent"}`
+  rising, `…_lag_seconds` stuck above 600, or the job misbehaving after a deploy.
+- **Impact:** none to rides or payments — it only writes missing push notifications. Disabling it
+  returns to the pre-F3 state: a notification lost to a failed insert stays lost; PA-11 still
+  re-enqueues notifications whose row exists.
+- **Mitigate — disable (no deploy):** set `NOTIFICATION_EVENT_RECONCILIATION_MODE=off` on the worker
+  and restart it. Each run then does nothing; `runs{result="off"}` confirms.
+- **Mitigate — roll back the code:** reverting the wiring is **not enough**. The BullMQ scheduler
+  lives in Redis and outlives the code; left behind, it fires a job no handler claims and fails it
+  every minute. After the revert, remove it from the worker container:
+
+  ```sh
+  node -e "const {Queue}=require('bullmq');const Redis=require('ioredis');const q=new Queue('notifications-maintenance',{connection:new Redis(process.env.REDIS_URL,{maxRetriesPerRequest:null})});q.removeJobScheduler('notification-event-reconciliation').then(r=>{console.log('removed:',r);return q.close();}).then(()=>process.exit(0),e=>{console.error(e);process.exit(1);})"
+  ```
+
+  Optionally clear its cursor: `DEL notification:event-reconciliation:cursor` (and `…:cursor:dry-run`).
+
+- **Verify:** `getJobSchedulers()` on `notifications-maintenance` lists only
+  `notification-reconciliation` (PA-11); no `No handler registered` failures in the worker log.
+- **Escalate:** eng lead (notifications owner).
+
 ---
 
 ## Runbook hygiene

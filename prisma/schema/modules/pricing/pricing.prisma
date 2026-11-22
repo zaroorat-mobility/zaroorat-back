@@ -1,0 +1,515 @@
+/// FR-047. `included_km` and `night_multiplier` are gone from the model and
+/// remain as columns until the deferred drop — see
+/// `specs/003-zone-pricing-integrity/deferred/`. `included_km` was never read by
+/// anything at all; `night_multiplier` was written by the admin form and read by
+/// a branch gated on a flag no caller ever set.
+model PricingRule {
+  id                String           @id @default(uuid(7)) @db.Uuid
+  vehicleTypeId     String           @map("vehicle_type_id") @db.Uuid
+  cityCode          String           @map("city_code")
+  serviceType       RideServiceType? @map("service_type")
+  serviceZoneId     String?          @map("service_zone_id") @db.Uuid
+  currency          String           @default("INR") @db.Char(3)
+  baseFare          Decimal          @map("base_fare") @db.Decimal(10, 2)
+  minimumFare       Decimal          @map("minimum_fare") @db.Decimal(10, 2)
+  perKmRate         Decimal          @map("per_km_rate") @db.Decimal(10, 2)
+  perMinuteRate     Decimal          @map("per_minute_rate") @db.Decimal(10, 2)
+  freeWaitingMin    Int              @default(3) @map("free_waiting_min") @db.SmallInt
+  waitingPerMin     Decimal          @default(0) @map("waiting_per_min") @db.Decimal(10, 2)
+  bookingFee        Decimal          @default(0) @map("booking_fee") @db.Decimal(10, 2)
+  platformFeePct    Decimal          @default(0) @map("platform_fee_pct") @db.Decimal(5, 2)
+  /// FR-009. Null means "this rule says nothing about a flat fee" — the
+  /// environment default applies. A value, including 0, is the rule speaking.
+  platformFeeFlat   Decimal?         @map("platform_fee_flat") @db.Decimal(10, 2)
+  taxRatePct        Decimal?         @map("tax_rate_pct") @db.Decimal(5, 2)
+  commissionRatePct Decimal?         @map("commission_rate_pct") @db.Decimal(5, 2)
+  version           Int              @default(1)
+  ruleFamilyId      String?          @map("rule_family_id") @db.Uuid
+  supersedesId      String?          @map("supersedes_id") @db.Uuid
+  isActive          Boolean          @default(true) @map("is_active")
+  effectiveFrom     DateTime         @default(now()) @map("effective_from")
+  effectiveTo       DateTime?        @map("effective_to")
+  createdBy         String?          @map("created_by") @db.Uuid
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @default(now()) @updatedAt @map("updated_at")
+
+  vehicleType      VehicleType       @relation(fields: [vehicleTypeId], references: [id])
+  serviceZone      ServiceZone?      @relation(fields: [serviceZoneId], references: [id])
+  supersedes       PricingRule?      @relation("PricingRuleLineage", fields: [supersedesId], references: [id])
+  supersededBy     PricingRule[]     @relation("PricingRuleLineage")
+  rideRequests     RideRequest[]
+  rideQuoteOptions RideQuoteOption[]
+
+  @@index([cityCode, vehicleTypeId, serviceType, serviceZoneId])
+  @@index([ruleFamilyId, version])
+  @@map("pricing_rules")
+}
+
+model SurgeZone {
+  id        String                                 @id @default(uuid(7)) @db.Uuid
+  cityCode  String                                 @map("city_code")
+  name      String
+  boundary  Unsupported("geography(Polygon,4326)")
+  isActive  Boolean                                @default(true) @map("is_active")
+  createdAt DateTime                               @default(now()) @map("created_at")
+
+  windows SurgeWindow[]
+
+  @@index([cityCode])
+  @@map("surge_zones")
+}
+
+model SurgeWindow {
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  /// BD-4. The geographic module's zone — the single polygon of record. Nullable
+  /// only while legacy windows still resolve through `zoneId`; the follow-up
+  /// release drops `SurgeZone` and makes this required.
+  serviceZoneId      String?   @map("service_zone_id") @db.Uuid
+  /// @deprecated BD-4. The legacy `SurgeZone` link, nullable so a window can
+  /// exist against a service zone alone. Removed with the table.
+  zoneId             String?   @map("zone_id") @db.Uuid
+  /// A whole-city rule, instead of a zone.
+  cityCode           String?   @map("city_code")
+  /// @deprecated Replaced by `vehicleTypeIds`, which can name more than one.
+  vehicleTypeId      String?   @map("vehicle_type_id") @db.Uuid
+  /// Empty means every vehicle type.
+  vehicleTypeIds     String[]  @default([]) @map("vehicle_type_ids") @db.Uuid
+  /// Empty means every day. 0 is Sunday. An overnight window belongs to the day it starts.
+  daysOfWeek         Int[]     @default([]) @map("days_of_week") @db.SmallInt
+  multiplier         Decimal   @db.Decimal(4, 2)
+  source             String    @default("MANUAL")
+  reason             String?
+  demandThresholdPct Decimal?  @map("demand_threshold_pct") @db.Decimal(5, 2)
+  supplyThresholdPct Decimal?  @map("supply_threshold_pct") @db.Decimal(5, 2)
+  peakHourStart      String?   @map("peak_hour_start")
+  peakHourEnd        String?   @map("peak_hour_end")
+  isPeakHourOnly     Boolean   @default(false) @map("is_peak_hour_only")
+  startsAt           DateTime  @map("starts_at")
+  endsAt             DateTime? @map("ends_at")
+  isActive           Boolean   @default(true) @map("is_active")
+  supersedesId       String?   @map("supersedes_id") @db.Uuid
+  createdBy          String?   @map("created_by") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  zone         SurgeZone?    @relation(fields: [zoneId], references: [id])
+  serviceZone  ServiceZone?  @relation(fields: [serviceZoneId], references: [id])
+  vehicleType  VehicleType?  @relation(fields: [vehicleTypeId], references: [id])
+  supersedes   SurgeWindow?  @relation("SurgeWindowLineage", fields: [supersedesId], references: [id])
+  supersededBy SurgeWindow[] @relation("SurgeWindowLineage")
+  rideRequests RideRequest[]
+
+  @@index([zoneId, startsAt])
+  @@index([serviceZoneId, startsAt])
+  @@index([cityCode, startsAt])
+  @@index([supersedesId])
+  @@map("surge_windows")
+}
+
+/// FR-047. `TollZone` and `TaxConfig` were removed from the schema: nothing read
+/// either one. Toll charging does not exist in any pricing path, and tax comes
+/// from `PricingRule.taxRatePct`, not from `tax_configs`. The tables survive
+/// until the deferred drop — see `specs/003-zone-pricing-integrity/deferred/`.
+
+model CancellationPolicy {
+  id                       String    @id @default(uuid(7)) @db.Uuid
+  ruleName                 String?   @map("rule_name")
+  familyId                 String    @default(uuid(7)) @map("family_id") @db.Uuid
+  version                  Int       @default(1)
+  supersedesId             String?   @map("supersedes_id") @db.Uuid
+  vehicleTypeId            String?   @map("vehicle_type_id") @db.Uuid
+  cityCode                 String?   @map("city_code")
+  cancelledBy              String    @map("cancelled_by")
+  freeCancelWindowSec      Int       @default(120) @map("free_cancel_window_sec")
+  minStatus                String?   @map("min_status")
+  feeAmount                Decimal   @default(0) @map("fee_amount") @db.Decimal(10, 2)
+  feeType                  String    @default("FLAT") @map("fee_type")
+  maxFee                   Decimal?  @map("max_fee") @db.Decimal(10, 2)
+  feeBase                  String    @default("QUOTED_FARE") @map("fee_base")
+  driverCompensationType   String    @default("NONE") @map("driver_compensation_type")
+  driverCompensationAmount Decimal   @default(0) @map("driver_compensation_amount") @db.Decimal(10, 2)
+  driverPenaltyAmount      Decimal?  @map("driver_penalty_amount") @db.Decimal(10, 2)
+  effectiveFrom            DateTime  @default(now()) @map("effective_from")
+  effectiveTo              DateTime? @map("effective_to")
+  isActive                 Boolean   @default(true) @map("is_active")
+  createdBy                String?   @map("created_by") @db.Uuid
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  vehicleType       VehicleType?         @relation(fields: [vehicleTypeId], references: [id])
+  supersedes        CancellationPolicy?  @relation("CancellationPolicyLineage", fields: [supersedesId], references: [id])
+  supersededBy      CancellationPolicy[] @relation("CancellationPolicyLineage")
+  rideCancellations RideCancellation[]
+
+  @@index([familyId, version])
+  @@index([cancelledBy, minStatus, isActive])
+  @@index([supersedesId])
+  @@map("cancellation_policies")
+}
+
+model BillingInvoice {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  invoiceNumber   String   @unique @map("invoice_number")
+  rideId          String?  @map("ride_id") @db.Uuid
+  recipientType   String   @map("recipient_type")
+  recipientUserId String?  @map("recipient_user_id") @db.Uuid
+  recipientName   String   @map("recipient_name")
+  bookingCode     String?  @map("booking_code")
+  amount          Decimal  @db.Decimal(10, 2)
+  taxAmount       Decimal  @default(0) @map("tax_amount") @db.Decimal(10, 2)
+  status          String   @default("GENERATED")
+  hsnCode         String   @default("9964") @map("hsn_code")
+  fromRoute       String?  @map("from_route")
+  toRoute         String?  @map("to_route")
+  issuedAt        DateTime @default(now()) @map("issued_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  ride Ride? @relation(fields: [rideId], references: [id])
+
+  @@index([recipientType])
+  @@index([issuedAt])
+  @@map("billing_invoices")
+}
+
+model InvoiceTemplate {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  name           String
+  templateType   String   @default("RIDER_INVOICE") @map("template_type")
+  headerLogoText String   @map("header_logo_text")
+  address        String
+  gstin          String
+  footerTerms    String   @map("footer_terms")
+  cgstRate       Decimal  @default(2.5) @map("cgst_rate") @db.Decimal(5, 2)
+  sgstRate       Decimal  @default(2.5) @map("sgst_rate") @db.Decimal(5, 2)
+  igstRate       Decimal  @default(0) @map("igst_rate") @db.Decimal(5, 2)
+  appliesTo      String   @default("ride") @map("applies_to")
+  isDefault      Boolean  @default(false) @map("is_default")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("invoice_templates")
+}
+
+// ─── Phase 4 (M-03): Central Commission Configurations + Per-Scope Enforcement ─
+
+model CommissionConfiguration {
+  id                    String    @id @default(uuid(7)) @db.Uuid
+  familyId              String    @map("family_id") @db.Uuid
+  version               Int       @default(1)
+  status                String    @default("PENDING_APPROVAL")
+  commissionRatePct     Decimal   @map("commission_rate_pct") @db.Decimal(5, 2)
+  isEnabled             Boolean   @default(true) @map("is_enabled")
+  baseRule              String    @default("RIDE_SUBTOTAL_BEFORE_DISCOUNT") @map("base_rule")
+  includeSurge          Boolean   @default(true) @map("include_surge")
+  includeWaiting        Boolean   @default(false) @map("include_waiting")
+  includeBookingFee     Boolean   @default(false) @map("include_booking_fee")
+  applyMinimumFloor     Boolean   @default(true) @map("apply_minimum_floor")
+  roundOffRupee         Boolean   @default(false) @map("round_off_rupee")
+  applyTo               String    @default("NEW_RIDES_ONLY") @map("apply_to")
+  declaredEffectiveFrom DateTime  @map("declared_effective_from")
+  declaredEffectiveTo   DateTime? @map("declared_effective_to")
+  reason                String?
+  createdBy             String    @map("created_by") @db.Uuid
+  approvedBy            String?   @map("approved_by") @db.Uuid
+  approvedAt            DateTime? @map("approved_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  scopes CommissionConfigurationScope[]
+
+  @@unique([familyId, version])
+  @@index([status])
+  @@map("commission_configurations")
+}
+
+model CommissionConfigurationScope {
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  configId            String    @map("config_id") @db.Uuid
+  scopeLevel          String    @map("scope_level")
+  cityCode            String    @default("__GLOBAL__") @map("city_code")
+  serviceZoneId       String    @default("00000000-0000-0000-0000-000000000000") @map("service_zone_id") @db.Uuid
+  vehicleTypeId       String    @default("00000000-0000-0000-0000-000000000000") @map("vehicle_type_id") @db.Uuid
+  effectiveFrom       DateTime  @map("effective_from")
+  effectiveTo         DateTime? @map("effective_to")
+  isEnforced          Boolean   @default(false) @map("is_enforced")
+  supersededByScopeId String?   @map("superseded_by_scope_id") @db.Uuid
+  closedAt            DateTime? @map("closed_at")
+  closedBy            String?   @map("closed_by") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  config            CommissionConfiguration        @relation(fields: [configId], references: [id])
+  supersededByScope CommissionConfigurationScope?  @relation("CommissionScopeSupersession", fields: [supersededByScopeId], references: [id])
+  supersededScopes  CommissionConfigurationScope[] @relation("CommissionScopeSupersession")
+
+  @@index([configId])
+  @@index([isEnforced, cityCode, serviceZoneId, vehicleTypeId])
+  @@map("commission_configuration_scopes")
+}
+
+// ─── Phase 4 (M-04a): Tax Configurations (Passenger Ride GST & Commission GST) ─
+
+model TaxConfiguration {
+  id                    String    @id @default(uuid(7)) @db.Uuid
+  familyId              String    @map("family_id") @db.Uuid
+  version               Int       @default(1)
+  kind                  String // PASSENGER_RIDE_GST | COMMISSION_GST
+  status                String    @default("PENDING_APPROVAL")
+  ratePct               Decimal   @map("rate_pct") @db.Decimal(5, 2)
+  isEnabled             Boolean   @default(false) @map("is_enabled")
+  inclusive             Boolean   @default(false)
+  waitingTaxable        Boolean?  @map("waiting_taxable")
+  sacCode               String?   @map("sac_code")
+  applyTo               String    @default("NEW_RIDES_ONLY") @map("apply_to")
+  declaredEffectiveFrom DateTime  @map("declared_effective_from")
+  declaredEffectiveTo   DateTime? @map("declared_effective_to")
+  legalReference        String?   @map("legal_reference")
+  createdBy             String    @map("created_by") @db.Uuid
+  approvedBy            String?   @map("approved_by") @db.Uuid
+  approvedAt            DateTime? @map("approved_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  scopes TaxConfigurationScope[]
+
+  @@unique([familyId, version])
+  @@index([kind, status])
+  @@map("tax_configurations")
+}
+
+model TaxConfigurationScope {
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  configId            String    @map("config_id") @db.Uuid
+  taxKind             String    @map("tax_kind")
+  scopeLevel          String    @map("scope_level")
+  cityCode            String    @default("__GLOBAL__") @map("city_code")
+  serviceZoneId       String    @default("00000000-0000-0000-0000-000000000000") @map("service_zone_id") @db.Uuid
+  vehicleTypeId       String    @default("00000000-0000-0000-0000-000000000000") @map("vehicle_type_id") @db.Uuid
+  effectiveFrom       DateTime  @map("effective_from")
+  effectiveTo         DateTime? @map("effective_to")
+  isEnforced          Boolean   @default(false) @map("is_enforced")
+  supersededByScopeId String?   @map("superseded_by_scope_id") @db.Uuid
+  closedAt            DateTime? @map("closed_at")
+  closedBy            String?   @map("closed_by") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  config            TaxConfiguration        @relation(fields: [configId], references: [id])
+  supersededByScope TaxConfigurationScope?  @relation("TaxScopeSupersession", fields: [supersededByScopeId], references: [id])
+  supersededScopes  TaxConfigurationScope[] @relation("TaxScopeSupersession")
+
+  @@index([configId])
+  @@index([isEnforced, taxKind, cityCode, serviceZoneId, vehicleTypeId])
+  @@map("tax_configuration_scopes")
+}
+
+// ─── Phase 4 (M-04b): Independent Driver GST Wallet Recovery Configurations ───
+
+model GstRecoveryConfiguration {
+  id                    String    @id @default(uuid(7)) @db.Uuid
+  familyId              String    @map("family_id") @db.Uuid
+  version               Int       @default(1)
+  status                String    @default("PENDING_APPROVAL")
+  recoveryRatePct       Decimal   @map("recovery_rate_pct") @db.Decimal(5, 2)
+  isEnabled             Boolean   @default(false) @map("is_enabled")
+  baseRule              String    @default("PASSENGER_GST_AMOUNT") @map("base_rule")
+  roundOffRupee         Boolean   @default(false) @map("round_off_rupee")
+  applyTo               String    @default("NEW_RIDES_ONLY") @map("apply_to")
+  declaredEffectiveFrom DateTime  @map("declared_effective_from")
+  declaredEffectiveTo   DateTime? @map("declared_effective_to")
+  legalReference        String?   @map("legal_reference")
+  createdBy             String    @map("created_by") @db.Uuid
+  approvedBy            String?   @map("approved_by") @db.Uuid
+  approvedAt            DateTime? @map("approved_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  scopes GstRecoveryConfigurationScope[]
+
+  @@unique([familyId, version])
+  @@index([status])
+  @@map("gst_recovery_configurations")
+}
+
+model GstRecoveryConfigurationScope {
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  configId            String    @map("config_id") @db.Uuid
+  scopeLevel          String    @map("scope_level")
+  cityCode            String    @default("__GLOBAL__") @map("city_code")
+  serviceZoneId       String    @default("00000000-0000-0000-0000-000000000000") @map("service_zone_id") @db.Uuid
+  vehicleTypeId       String    @default("00000000-0000-0000-0000-000000000000") @map("vehicle_type_id") @db.Uuid
+  effectiveFrom       DateTime  @map("effective_from")
+  effectiveTo         DateTime? @map("effective_to")
+  isEnforced          Boolean   @default(false) @map("is_enforced")
+  supersededByScopeId String?   @map("superseded_by_scope_id") @db.Uuid
+  closedAt            DateTime? @map("closed_at")
+  closedBy            String?   @map("closed_by") @db.Uuid
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  config            GstRecoveryConfiguration        @relation(fields: [configId], references: [id])
+  supersededByScope GstRecoveryConfigurationScope?  @relation("GstRecoveryScopeSupersession", fields: [supersededByScopeId], references: [id])
+  supersededScopes  GstRecoveryConfigurationScope[] @relation("GstRecoveryScopeSupersession")
+
+  @@index([configId])
+  @@index([isEnforced, cityCode, serviceZoneId, vehicleTypeId])
+  @@map("gst_recovery_configuration_scopes")
+}
+
+// ─── Phase 4 (M-04c): Multi-Entity & Multi-State Legal Jurisdiction ─────────
+
+model LegalEntity {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  legalEntityName   String   @map("legal_entity_name")
+  tradeName         String?  @map("trade_name")
+  pan               String   @db.VarChar(10)
+  headOfficeAddress String   @map("head_office_address")
+  isActive          Boolean  @default(true) @map("is_active")
+  updatedBy         String?  @map("updated_by") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
+
+  gstRegistrations        CompanyGstRegistration[]
+  citySupplyRegistrations CitySupplyRegistration[]
+  fiscalDocuments         FiscalDocument[]
+
+  @@map("legal_entities")
+}
+
+model CompanyGstRegistration {
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  legalEntityId       String    @map("legal_entity_id") @db.Uuid
+  gstin               String    @unique @db.VarChar(15)
+  stateCode           String    @map("state_code") @db.VarChar(2)
+  stateName           String    @map("state_name")
+  registrationAddress String    @map("registration_address")
+  effectiveFrom       DateTime  @default(now()) @map("effective_from")
+  effectiveTo         DateTime? @map("effective_to")
+  isActive            Boolean   @default(true) @map("is_active")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  legalEntity             LegalEntity              @relation(fields: [legalEntityId], references: [id])
+  citySupplyRegistrations CitySupplyRegistration[]
+  documentSeries          DocumentSeries[]
+  fiscalDocuments         FiscalDocument[]
+
+  @@index([legalEntityId, stateCode, isActive])
+  @@map("company_gst_registrations")
+}
+
+model CitySupplyRegistration {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  cityCode          String    @map("city_code")
+  supplyKind        String    @map("supply_kind") // PASSENGER_RIDE | PLATFORM_COMMISSION
+  legalEntityId     String    @map("legal_entity_id") @db.Uuid
+  gstRegistrationId String    @map("gst_registration_id") @db.Uuid
+  effectiveFrom     DateTime  @default(now()) @map("effective_from")
+  effectiveTo       DateTime? @map("effective_to")
+  isActive          Boolean   @default(true) @map("is_active")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  legalEntity     LegalEntity            @relation(fields: [legalEntityId], references: [id])
+  gstRegistration CompanyGstRegistration @relation(fields: [gstRegistrationId], references: [id])
+
+  @@index([cityCode, supplyKind, isActive])
+  @@map("city_supply_registrations")
+}
+
+// ─── Phase 6 (M-09): Fiscal Documents, Gapless Series & Compliance Templates ─
+
+model DocumentSeries {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  gstRegistrationId String   @map("gst_registration_id") @db.Uuid
+  documentType      String   @map("document_type")
+  financialYear     String   @map("financial_year")
+  prefix            String
+  lastSequence      BigInt   @default(0) @map("last_sequence")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdBy         String   @map("created_by") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
+
+  gstRegistration CompanyGstRegistration @relation(fields: [gstRegistrationId], references: [id])
+  documents       FiscalDocument[]
+
+  @@unique([gstRegistrationId, documentType, financialYear])
+  @@unique([prefix, financialYear])
+  @@index([gstRegistrationId, documentType, isActive])
+  @@map("document_series")
+}
+
+model ComplianceTemplate {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  familyId          String    @map("family_id") @db.Uuid
+  version           Int
+  documentType      String    @map("document_type")
+  name              String
+  fileName          String    @map("file_name")
+  mimeType          String    @default("text/html") @map("mime_type")
+  content           String
+  versionNote       String?   @map("version_note")
+  effectiveFrom     DateTime  @default(now()) @map("effective_from")
+  previewApproved   Boolean   @default(false) @map("preview_approved")
+  previewApprovedBy String?   @map("preview_approved_by") @db.Uuid
+  previewApprovedAt DateTime? @map("preview_approved_at")
+  isActive          Boolean   @default(false) @map("is_active")
+  createdBy         String    @map("created_by") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  documents FiscalDocument[]
+
+  @@unique([familyId, version])
+  @@index([documentType, createdAt])
+  @@map("compliance_templates")
+}
+
+model FiscalDocument {
+  id                     String    @id @default(uuid(7)) @db.Uuid
+  documentNumber         String    @unique @map("document_number")
+  seriesId               String    @map("series_id") @db.Uuid
+  sequenceNumber         BigInt    @map("sequence_number")
+  documentType           String    @map("document_type")
+  status                 String    @default("ISSUED")
+  rideId                 String?   @map("ride_id") @db.Uuid
+  recipientUserId        String?   @map("recipient_user_id") @db.Uuid
+  recipientType          String    @map("recipient_type")
+  recipientName          String    @map("recipient_name")
+  legalEntityId          String    @map("legal_entity_id") @db.Uuid
+  gstRegistrationId      String    @map("gst_registration_id") @db.Uuid
+  supplierLegalName      String    @map("supplier_legal_name")
+  supplierGstin          String    @map("supplier_gstin") @db.VarChar(15)
+  supplierStateCode      String    @map("supplier_state_code") @db.VarChar(2)
+  placeOfSupplyStateCode String    @map("place_of_supply_state_code") @db.VarChar(2)
+  isInterState           Boolean   @default(false) @map("is_inter_state")
+  sacCode                String?   @map("sac_code")
+  currency               String    @default("INR") @db.VarChar(3)
+  taxableValue           Decimal   @default(0) @map("taxable_value") @db.Decimal(12, 2)
+  nonTaxableValue        Decimal   @default(0) @map("non_taxable_value") @db.Decimal(12, 2)
+  cgstRatePct            Decimal   @default(0) @map("cgst_rate_pct") @db.Decimal(5, 2)
+  sgstRatePct            Decimal   @default(0) @map("sgst_rate_pct") @db.Decimal(5, 2)
+  igstRatePct            Decimal   @default(0) @map("igst_rate_pct") @db.Decimal(5, 2)
+  cgstAmount             Decimal   @default(0) @map("cgst_amount") @db.Decimal(12, 2)
+  sgstAmount             Decimal   @default(0) @map("sgst_amount") @db.Decimal(12, 2)
+  igstAmount             Decimal   @default(0) @map("igst_amount") @db.Decimal(12, 2)
+  totalTaxAmount         Decimal   @default(0) @map("total_tax_amount") @db.Decimal(12, 2)
+  totalAmount            Decimal   @map("total_amount") @db.Decimal(12, 2)
+  lineItemsJson          Json      @map("line_items_json")
+  snapshotRefsJson       Json      @map("snapshot_refs_json")
+  templateId             String?   @map("template_id") @db.Uuid
+  contentSha256          String    @map("content_sha256") @db.VarChar(64)
+  voidReason             String?   @map("void_reason")
+  voidedBy               String?   @map("voided_by") @db.Uuid
+  voidedAt               DateTime? @map("voided_at")
+  issuedAt               DateTime  @default(now()) @map("issued_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  series          DocumentSeries         @relation(fields: [seriesId], references: [id])
+  ride            Ride?                  @relation(fields: [rideId], references: [id])
+  legalEntity     LegalEntity            @relation(fields: [legalEntityId], references: [id])
+  gstRegistration CompanyGstRegistration @relation(fields: [gstRegistrationId], references: [id])
+  template        ComplianceTemplate?    @relation(fields: [templateId], references: [id])
+
+  @@unique([seriesId, sequenceNumber])
+  @@index([issuedAt])
+  @@index([recipientType, recipientUserId])
+  @@index([rideId])
+  @@map("fiscal_documents")
+}

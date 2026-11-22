@@ -1,0 +1,108 @@
+model File {
+  id          String      @id @default(uuid(7)) @db.Uuid
+  ownerUserId String      @map("owner_user_id") @db.Uuid
+  purpose     FilePurpose
+  status      FileStatus  @default(PENDING)
+
+  storageKey String @map("storage_key")
+
+  storageProvider String @map("storage_provider")
+
+  storageBucket String? @map("storage_bucket")
+
+  storageVersionId String? @map("storage_version_id")
+
+  fileName String @map("file_name")
+
+  contentType String @map("content_type")
+
+  detectedContentType String? @map("detected_content_type")
+
+  sizeBytes Int @map("size_bytes")
+
+  checksumSha256 String? @map("checksum_sha256")
+
+  scanStatus FileScanStatus @default(PENDING) @map("scan_status")
+  scannedAt  DateTime?      @map("scanned_at")
+
+  scanThreat String? @map("scan_threat")
+
+  rejectedReason String? @map("rejected_reason")
+
+  uploadExpiresAt DateTime @map("upload_expires_at")
+
+  uploadedAt DateTime? @map("uploaded_at")
+
+  verifiedAt  DateTime? @map("verified_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  deletedAt DateTime? @map("deleted_at")
+
+  archivedAt DateTime? @map("archived_at")
+
+  erasedAt DateTime? @map("erased_at")
+
+  supersededById String? @unique @map("superseded_by_id") @db.Uuid
+
+  owner        User  @relation(fields: [ownerUserId], references: [id])
+  supersededBy File? @relation("FileVersion", fields: [supersededById], references: [id])
+  supersedes   File? @relation("FileVersion")
+
+  profileOf UserProfile? @relation("ProfileImage")
+
+  driverDocuments     DriverDocument[] @relation("DriverDocumentFile")
+  driverDocumentBacks DriverDocument[] @relation("DriverDocumentBackFile")
+
+  vehicleDocuments     VehicleDocument[] @relation("VehicleDocumentFile")
+  vehicleDocumentBacks VehicleDocument[] @relation("VehicleDocumentBackFile")
+  promoBannerImage     PromoBanner?      @relation("BannerImage")
+  vehicleTypeImages    VehicleType[]     @relation("VehicleTypeImage")
+
+  @@unique([storageKey], map: "uq_files_storage_key")
+  @@index([ownerUserId], map: "ix_files_owner")
+  @@index([status, uploadExpiresAt], map: "ix_files_sweep")
+  @@index([status, scanStatus], map: "ix_files_scan")
+  @@index([status, deletedAt], map: "ix_files_retention")
+  @@map("files")
+}
+
+enum FilePurpose {
+  PROFILE_IMAGE
+  DRIVER_DOCUMENT
+  VEHICLE_DOCUMENT
+  VEHICLE_IMAGE
+  SOS_EVIDENCE
+  DISPUTE_EVIDENCE
+  PROMO_BANNER
+}
+
+enum FileStatus {
+  PENDING
+
+  UPLOADED
+
+  SCANNING
+
+  VALIDATING
+  READY
+
+  REJECTED
+  EXPIRED
+  DELETED
+
+  SUPERSEDED
+}
+
+enum FileScanStatus {
+  PENDING
+
+  CLEAN
+
+  THREAT
+
+  FAILED
+
+  SKIPPED
+}

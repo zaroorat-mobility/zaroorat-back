@@ -8,13 +8,10 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "postgis";
 
 -- CreateEnum
-CREATE TYPE "UserRole" AS ENUM ('CUSTOMER', 'DRIVER', 'ADMIN', 'SUPPORT');
+CREATE TYPE "OtpPurpose" AS ENUM ('LOGIN', 'REGISTER');
 
 -- CreateEnum
-CREATE TYPE "UserStatus" AS ENUM ('ACTIVE', 'INACTIVE', 'BLOCKED', 'SUSPENDED');
-
--- CreateEnum
-CREATE TYPE "OtpPurpose" AS ENUM ('LOGIN', 'REGISTER', 'RESET_PASSWORD', 'CHANGE_PHONE', 'DELETE_ACCOUNT');
+CREATE TYPE "UserStatus" AS ENUM ('UNVERIFIED', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED');
 
 -- CreateEnum
 CREATE TYPE "VerificationStatus" AS ENUM ('PENDING', 'VERIFIED', 'REJECTED');
@@ -30,9 +27,6 @@ CREATE TYPE "DriverDocumentType" AS ENUM ('DRIVING_LICENSE', 'RC', 'INSURANCE', 
 
 -- CreateEnum
 CREATE TYPE "DriverWalletTxnType" AS ENUM ('RIDE_EARNING', 'BONUS', 'INCENTIVE', 'PENALTY', 'WITHDRAWAL', 'REFUND', 'ADJUSTMENT');
-
--- CreateEnum
-CREATE TYPE "DriverOnboardingStatus" AS ENUM ('PENDING', 'DOCUMENT_REVIEW', 'VERIFIED', 'REJECTED', 'SUSPENDED');
 
 -- CreateEnum
 CREATE TYPE "DriverVerificationStatus" AS ENUM ('PENDING', 'DOCUMENT_REVIEW', 'VERIFIED', 'REJECTED', 'SUSPENDED');
@@ -163,10 +157,13 @@ CREATE TYPE "WebhookDeliveryStatus" AS ENUM ('PENDING', 'DELIVERED', 'FAILED', '
 -- CreateEnum
 CREATE TYPE "AppPlatform" AS ENUM ('IOS', 'ANDROID', 'WEB');
 
+-- CreateEnum
+CREATE TYPE "DeviceTrustState" AS ENUM ('REGISTERED', 'TRUSTED', 'SUSPICIOUS', 'REVOKED');
+
 -- CreateTable
 CREATE TABLE "roles" (
     "id" UUID NOT NULL,
-    "code" TEXT NOT NULL,
+    "slug" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "description" TEXT,
     "is_system" BOOLEAN NOT NULL DEFAULT false,
@@ -204,6 +201,7 @@ CREATE TABLE "user_roles" (
     "role_id" UUID NOT NULL,
     "granted_by" UUID,
     "granted_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "revoked_at" TIMESTAMP(3),
     "expires_at" TIMESTAMP(3),
 
     CONSTRAINT "user_roles_pkey" PRIMARY KEY ("id")
@@ -624,11 +622,66 @@ CREATE TABLE "report_exports" (
 );
 
 -- CreateTable
+CREATE TABLE "user_sessions" (
+    "id" UUID NOT NULL,
+    "user_id" UUID NOT NULL,
+    "device_id" UUID,
+    "ip_address" INET,
+    "user_agent" TEXT,
+    "login_method" TEXT,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "last_seen_at" TIMESTAMP(3),
+    "expires_at" TIMESTAMP(3) NOT NULL,
+    "revoked_at" TIMESTAMP(3),
+    "revoked_reason" TEXT,
+
+    CONSTRAINT "user_sessions_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "refresh_tokens" (
+    "id" UUID NOT NULL,
+    "user_id" UUID NOT NULL,
+    "session_id" UUID NOT NULL,
+    "token_hash" TEXT NOT NULL,
+    "rotated_from" UUID,
+    "rotated_to" UUID,
+    "expires_at" TIMESTAMP(3) NOT NULL,
+    "revoked_at" TIMESTAMP(3),
+    "revoked_reason" TEXT,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "otp_verifications" (
+    "id" UUID NOT NULL,
+    "user_id" UUID,
+    "phone_number" TEXT NOT NULL,
+    "purpose" "OtpPurpose" NOT NULL,
+    "outcome" TEXT,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "ip_address" INET,
+    "device_id" UUID,
+    "device_fingerprint" TEXT,
+    "user_agent" TEXT,
+    "provider" TEXT,
+    "provider_ref" TEXT,
+    "latency_ms" INTEGER,
+    "failure_reason" TEXT,
+    "verified_at" TIMESTAMP(3),
+    "expires_at" TIMESTAMP(3) NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "otp_verifications_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "drivers" (
     "id" UUID NOT NULL,
     "user_id" UUID NOT NULL,
     "driver_code" TEXT NOT NULL,
-    "onboarding_status" "DriverOnboardingStatus" NOT NULL DEFAULT 'PENDING',
     "verification_status" "DriverVerificationStatus" NOT NULL DEFAULT 'PENDING',
     "current_vehicle_id" UUID,
     "rating" DECIMAL(3,2) NOT NULL DEFAULT 5.0,
@@ -2061,8 +2114,7 @@ CREATE TABLE "users" (
     "phone_number" TEXT NOT NULL,
     "email" TEXT,
     "password_hash" TEXT,
-    "role" "UserRole" NOT NULL,
-    "status" "UserStatus" NOT NULL DEFAULT 'ACTIVE',
+    "status" "UserStatus" NOT NULL DEFAULT 'UNVERIFIED',
     "is_phone_verified" BOOLEAN NOT NULL DEFAULT false,
     "is_email_verified" BOOLEAN NOT NULL DEFAULT false,
     "last_login_at" TIMESTAMP(3),
@@ -2096,72 +2148,17 @@ CREATE TABLE "user_devices" (
     "user_id" UUID NOT NULL,
     "device_id" TEXT,
     "platform" "AppPlatform",
-    "device_name" TEXT,
-    "app_version" TEXT,
-    "fcm_token" TEXT,
-    "ip_address" INET,
+    "trust_state" "DeviceTrustState" NOT NULL DEFAULT 'REGISTERED',
     "device_fingerprint" TEXT,
-    "os_version" TEXT,
     "is_rooted" BOOLEAN NOT NULL DEFAULT false,
     "is_jailbroken" BOOLEAN NOT NULL DEFAULT false,
-    "timezone" TEXT,
-    "metadata" JSONB,
+    "fcm_token" TEXT,
+    "app_version" TEXT,
+    "os_version" TEXT,
     "last_seen_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "user_devices_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "user_sessions" (
-    "id" UUID NOT NULL,
-    "user_id" UUID NOT NULL,
-    "device_id" UUID,
-    "access_token_id" UUID,
-    "refresh_token_id" UUID,
-    "ip_address" INET,
-    "location" TEXT,
-    "login_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "logout_at" TIMESTAMP(3),
-    "revoked_reason" TEXT,
-    "ended_by" TEXT,
-    "expires_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "user_sessions_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "refresh_tokens" (
-    "id" UUID NOT NULL,
-    "user_id" UUID NOT NULL,
-    "device_id" UUID,
-    "token_hash" TEXT NOT NULL,
-    "is_revoked" BOOLEAN NOT NULL DEFAULT false,
-    "revoked_at" TIMESTAMP(3),
-    "revoked_reason" TEXT,
-    "rotated_from" UUID,
-    "rotated_to" UUID,
-    "expires_at" TIMESTAMP(3) NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "otp_verifications" (
-    "id" UUID NOT NULL,
-    "user_id" UUID,
-    "phone_number" TEXT NOT NULL,
-    "otp_hash" TEXT NOT NULL,
-    "purpose" "OtpPurpose" NOT NULL,
-    "attempts" INTEGER NOT NULL DEFAULT 0,
-    "max_attempts" INTEGER NOT NULL DEFAULT 5,
-    "is_verified" BOOLEAN NOT NULL DEFAULT false,
-    "verified_at" TIMESTAMP(3),
-    "expires_at" TIMESTAMP(3) NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "otp_verifications_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -2493,7 +2490,7 @@ CREATE TABLE "wallet_reconciliations" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "roles_code_key" ON "roles"("code");
+CREATE UNIQUE INDEX "roles_slug_key" ON "roles"("slug");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "permissions_code_key" ON "permissions"("code");
@@ -2506,9 +2503,6 @@ CREATE UNIQUE INDEX "role_permissions_role_id_permission_id_key" ON "role_permis
 
 -- CreateIndex
 CREATE INDEX "user_roles_user_id_idx" ON "user_roles"("user_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "user_roles_user_id_role_id_key" ON "user_roles"("user_id", "role_id");
 
 -- CreateIndex
 CREATE INDEX "admin_activity_logs_actor_id_created_at_idx" ON "admin_activity_logs"("actor_id", "created_at");
@@ -2596,6 +2590,27 @@ CREATE INDEX "dashboard_widgets_dashboard_key_idx" ON "dashboard_widgets"("dashb
 
 -- CreateIndex
 CREATE INDEX "report_exports_status_idx" ON "report_exports"("status");
+
+-- CreateIndex
+CREATE INDEX "user_sessions_user_id_idx" ON "user_sessions"("user_id");
+
+-- CreateIndex
+CREATE INDEX "user_sessions_expires_at_idx" ON "user_sessions"("expires_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "refresh_tokens_token_hash_key" ON "refresh_tokens"("token_hash");
+
+-- CreateIndex
+CREATE INDEX "refresh_tokens_session_id_idx" ON "refresh_tokens"("session_id");
+
+-- CreateIndex
+CREATE INDEX "refresh_tokens_expires_at_idx" ON "refresh_tokens"("expires_at");
+
+-- CreateIndex
+CREATE INDEX "otp_verifications_phone_number_idx" ON "otp_verifications"("phone_number");
+
+-- CreateIndex
+CREATE INDEX "otp_verifications_created_at_idx" ON "otp_verifications"("created_at");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "drivers_user_id_key" ON "drivers"("user_id");
@@ -2985,13 +3000,7 @@ CREATE INDEX "ticket_assignments_agent_id_idx" ON "ticket_assignments"("agent_id
 CREATE INDEX "ticket_escalations_ticket_id_idx" ON "ticket_escalations"("ticket_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "users_phone_number_key" ON "users"("phone_number");
-
--- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
-
--- CreateIndex
-CREATE INDEX "users_role_idx" ON "users"("role");
 
 -- CreateIndex
 CREATE INDEX "users_status_idx" ON "users"("status");
@@ -3003,22 +3012,10 @@ CREATE UNIQUE INDEX "user_profiles_user_id_key" ON "user_profiles"("user_id");
 CREATE UNIQUE INDEX "user_profiles_referral_code_key" ON "user_profiles"("referral_code");
 
 -- CreateIndex
+CREATE INDEX "user_devices_user_id_idx" ON "user_devices"("user_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "user_devices_user_id_device_id_key" ON "user_devices"("user_id", "device_id");
-
--- CreateIndex
-CREATE INDEX "user_sessions_expires_at_idx" ON "user_sessions"("expires_at");
-
--- CreateIndex
-CREATE INDEX "refresh_tokens_token_hash_idx" ON "refresh_tokens"("token_hash");
-
--- CreateIndex
-CREATE INDEX "refresh_tokens_expires_at_idx" ON "refresh_tokens"("expires_at");
-
--- CreateIndex
-CREATE INDEX "otp_verifications_phone_number_idx" ON "otp_verifications"("phone_number");
-
--- CreateIndex
-CREATE INDEX "otp_verifications_purpose_idx" ON "otp_verifications"("purpose");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "vehicle_types_code_key" ON "vehicle_types"("code");
@@ -3148,6 +3145,24 @@ ALTER TABLE "funnel_steps" ADD CONSTRAINT "funnel_steps_funnel_id_fkey" FOREIGN 
 
 -- AddForeignKey
 ALTER TABLE "cohort_retention" ADD CONSTRAINT "cohort_retention_cohort_id_fkey" FOREIGN KEY ("cohort_id") REFERENCES "cohorts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "user_sessions" ADD CONSTRAINT "user_sessions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "user_sessions" ADD CONSTRAINT "user_sessions_device_id_fkey" FOREIGN KEY ("device_id") REFERENCES "user_devices"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "user_sessions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_rotated_from_fkey" FOREIGN KEY ("rotated_from") REFERENCES "refresh_tokens"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "otp_verifications" ADD CONSTRAINT "otp_verifications_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "drivers" ADD CONSTRAINT "drivers_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -3543,21 +3558,6 @@ ALTER TABLE "user_profiles" ADD CONSTRAINT "user_profiles_user_id_fkey" FOREIGN 
 ALTER TABLE "user_devices" ADD CONSTRAINT "user_devices_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "user_sessions" ADD CONSTRAINT "user_sessions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "user_sessions" ADD CONSTRAINT "user_sessions_device_id_fkey" FOREIGN KEY ("device_id") REFERENCES "user_devices"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_device_id_fkey" FOREIGN KEY ("device_id") REFERENCES "user_devices"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_rotated_from_fkey" FOREIGN KEY ("rotated_from") REFERENCES "refresh_tokens"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
 ALTER TABLE "emergency_contacts" ADD CONSTRAINT "emergency_contacts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -3614,3 +3614,9 @@ ALTER TABLE "cashback_grants" ADD CONSTRAINT "cashback_grants_user_id_fkey" FORE
 -- AddForeignKey
 ALTER TABLE "cashback_grants" ADD CONSTRAINT "cashback_grants_ride_id_fkey" FOREIGN KEY ("ride_id") REFERENCES "rides"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+
+-- Raw-SQL invariants (auth doc 03 §4).
+CREATE UNIQUE INDEX "uq_users_phone_active" ON "users" ("phone_number") WHERE "deleted_at" IS NULL;
+CREATE UNIQUE INDEX "uq_user_role_active" ON "user_roles" ("user_id", "role_id") WHERE "revoked_at" IS NULL;
+CREATE INDEX "ix_sessions_user_active" ON "user_sessions" ("user_id") WHERE "revoked_at" IS NULL;
+CREATE INDEX "ix_refresh_expired" ON "refresh_tokens" ("expires_at") WHERE "revoked_at" IS NULL;

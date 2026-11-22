@@ -7,22 +7,14 @@ import { RetryService } from './retry/RetryService';
 import { DatabaseMetrics } from './monitoring/DatabaseMetrics';
 import { getDatabaseConfiguration } from './configuration/DatabaseConfiguration';
 import { getPoolConfiguration } from './configuration/PoolConfiguration';
-
-/**
- * Registers all database infrastructure into the Awilix DI container.
- * Registration order matters: dependencies must appear before their consumers.
- */
 export function registerDatabaseModule(container: AwilixContainer) {
   container.register({
     dbConfig: asFunction(getDatabaseConfiguration).singleton(),
     poolConfig: asFunction(getPoolConfiguration).singleton(),
-
     databaseMetrics: asClass(DatabaseMetrics).singleton(),
     retryService: asClass(RetryService).singleton(),
-
     factory: asClass(PrismaClientFactory).singleton(),
     provider: asClass(PrismaClientProvider).singleton(),
-
     transactionManager: asClass(TransactionManager).singleton(),
     databaseService: asClass(DatabaseService).singleton(),
   });

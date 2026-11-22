@@ -1,7 +1,17 @@
 import { ProviderClient } from '../../../src/core/database';
+import { seedRoles } from '../shared/roles';
+import { seedVehicleTypes } from '../shared/vehicle-types';
+import { seedNotificationTemplates } from '../shared/notification-templates';
+import { seedAppConfig } from '../shared/app-config';
 
-export async function seedTesting(_prisma: ProviderClient) {
+export async function seedTesting(prisma: ProviderClient) {
   console.log('  -> Seeding testing data...');
-  // Add minimal deterministic data required for unit/integration tests
-  // E.g. Default settings, standard user, test car category
+  // The four canonical RBAC roles are the minimum the auth test suite depends on
+  // (doc 07 §2): role grants during login resolve `customer` by slug.
+  await seedRoles(prisma);
+  // The service catalog — reference data, same as roles: every environment
+  // needs it, and no client can obtain a vehicleTypeId without it.
+  await seedVehicleTypes(prisma);
+  await seedNotificationTemplates(prisma);
+  await seedAppConfig(prisma);
 }

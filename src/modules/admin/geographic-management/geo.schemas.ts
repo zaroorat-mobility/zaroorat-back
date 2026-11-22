@@ -1,0 +1,127 @@
+import { z } from 'zod';
+
+const polygonCoordinatesSchema = z.array(z.array(z.tuple([z.number(), z.number()]))).min(1);
+
+const pointSchema = z.object({
+  lng: z.number().min(-180).max(180),
+  lat: z.number().min(-90).max(90),
+});
+
+export const serviceZoneTypeSchema = z.enum(['SERVICE', 'AIRPORT', 'RESTRICTED']);
+export const stateDivisionTypeSchema = z.enum(['STATE', 'UNION_TERRITORY']);
+export const coverageModeSchema = z.enum(['WHOLE_CITY', 'ZONES_ONLY']);
+const riderMessageSchema = z.string().trim().max(200).nullable();
+
+export const listStatesQuerySchema = z.object({
+  countryCode: z.string().trim().min(1).max(10).optional(),
+  divisionType: stateDivisionTypeSchema.optional(),
+  activeOnly: z.coerce.boolean().optional().default(false),
+});
+
+export const listCitiesQuerySchema = z.object({
+  countryCode: z.string().trim().max(10).optional(),
+  stateId: z.string().uuid().optional(),
+  activeOnly: z.coerce.boolean().optional().default(false),
+});
+
+export const cityIdParamSchema = z.object({ id: z.string().uuid() });
+export const stateIdParamSchema = z.object({ id: z.string().uuid() });
+export const serviceZoneIdParamSchema = z.object({ id: z.string().uuid() });
+
+export const createCityBodySchema = z.object({
+  code: z.string().trim().min(2).max(20),
+  name: z.string().trim().min(1).max(120),
+  stateId: z.string().uuid().optional().nullable(),
+  timezone: z.string().trim().max(60).optional(),
+  currency: z.string().trim().length(3).optional(),
+  launchedAt: z.string().optional(),
+  center: pointSchema.optional(),
+  boundary: polygonCoordinatesSchema.optional(),
+  isActive: z.boolean().optional().default(true),
+  coverageMode: coverageModeSchema.optional(),
+});
+
+export const updateCityBodySchema = createCityBodySchema.partial().extend({
+  code: z.string().trim().min(2).max(20).optional(),
+  name: z.string().trim().min(1).max(120).optional(),
+});
+
+export const createStateBodySchema = z.object({
+  countryCode: z.string().trim().min(1).max(10).default('IN'),
+  code: z.string().trim().min(1).max(10),
+  name: z.string().trim().min(1).max(120),
+  nativeName: z.string().trim().max(150).optional().nullable(),
+  divisionType: stateDivisionTypeSchema.default('STATE'),
+  lgdCode: z.number().int().positive().optional().nullable(),
+  isoCode: z.string().trim().max(6).optional().nullable(),
+  censusCode: z.string().trim().max(4).optional().nullable(),
+  isActive: z.boolean().optional().default(true),
+});
+
+export const updateStateBodySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  nativeName: z.string().trim().max(150).optional().nullable(),
+  divisionType: stateDivisionTypeSchema.optional(),
+  lgdCode: z.number().int().positive().optional().nullable(),
+  isoCode: z.string().trim().max(6).optional().nullable(),
+  censusCode: z.string().trim().max(4).optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
+export const reconcilePreviewQuerySchema = z.object({
+  countryCode: z.string().trim().min(1).max(10).default('IN'),
+});
+
+export const reconcileApplyBodySchema = z.object({
+  countryCode: z.string().trim().min(1).max(10).default('IN'),
+  confirm: z.literal(true),
+  expectedVersion: z.string().trim().min(1).optional(),
+});
+
+export const listServiceZonesQuerySchema = z.object({
+  cityCode: z.string().trim().min(1).max(20).optional(),
+  zoneType: serviceZoneTypeSchema.optional(),
+  activeOnly: z.coerce.boolean().optional().default(false),
+});
+
+export const createServiceZoneBodySchema = z.object({
+  cityCode: z.string().trim().min(1).max(20),
+  code: z.string().trim().min(1).max(40),
+  name: z.string().trim().min(1).max(120),
+  zoneType: serviceZoneTypeSchema.default('SERVICE'),
+  coordinates: polygonCoordinatesSchema,
+  allowsPickup: z.boolean().optional().default(true),
+  allowsDropoff: z.boolean().optional().default(true),
+  riderMessage: riderMessageSchema.optional(),
+  vehicleTypeIds: z.array(z.string().uuid()).optional(),
+  isActive: z.boolean().optional().default(true),
+});
+
+export const updateServiceZoneBodySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  zoneType: serviceZoneTypeSchema.optional(),
+  coordinates: polygonCoordinatesSchema.optional(),
+  allowsPickup: z.boolean().optional(),
+  allowsDropoff: z.boolean().optional(),
+  riderMessage: riderMessageSchema.optional(),
+  vehicleTypeIds: z.array(z.string().uuid()).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const simulateQuerySchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+  dropLat: z.coerce.number().min(-90).max(90).optional(),
+  dropLng: z.coerce.number().min(-180).max(180).optional(),
+  vehicleTypeId: z.string().uuid().optional(),
+  at: z.string().datetime({ offset: true }).optional(),
+});
+
+export type CreateCityBody = z.infer<typeof createCityBodySchema>;
+export type UpdateCityBody = z.infer<typeof updateCityBodySchema>;
+export type CreateStateBody = z.infer<typeof createStateBodySchema>;
+export type UpdateStateBody = z.infer<typeof updateStateBodySchema>;
+export type ReconcilePreviewQuery = z.infer<typeof reconcilePreviewQuerySchema>;
+export type ReconcileApplyBody = z.infer<typeof reconcileApplyBodySchema>;
+export type CreateServiceZoneBody = z.infer<typeof createServiceZoneBodySchema>;
+export type UpdateServiceZoneBody = z.infer<typeof updateServiceZoneBodySchema>;

@@ -1,0 +1,196 @@
+model User {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  phoneNumber     String     @map("phone_number") // E.164 (+91…); active-uniqueness is PARTIAL (doc 03 §4)
+  email           String?    @unique // reserved (OD-7), nullable
+  passwordHash    String?    @map("password_hash") // reserved (OD-7), nullable
+  status          UserStatus @default(UNVERIFIED)
+  isPhoneVerified Boolean    @default(false) @map("is_phone_verified")
+  isEmailVerified Boolean    @default(false) @map("is_email_verified")
+  lastLoginAt     DateTime?  @map("last_login_at")
+
+  /// The rider's standing 4-digit Ride PIN, which a driver must be told before a
+  /// ride can start. A scrypt verifier over a peppered PIN, never the PIN — see
+  /// `hashRidePin`. Here rather than on `UserProfile` because this is a
+  /// credential and belongs beside `passwordHash`: `user_profiles` is serialised
+  /// wholesale into `GET /users/me`, and a verifier there is one careless
+  /// `select` away from a response body.
+  ///
+  /// Null means "not configured yet", which `RideRequestService` refuses to book
+  /// against. Deliberately not unique and deliberately unindexed: two riders
+  /// sharing a PIN is expected, and verification always reads by `users.id`.
+  ridePinVerifier  String?   @map("ride_pin_verifier")
+  ridePinUpdatedAt DateTime? @map("ride_pin_updated_at")
+  /// Bumped on every set/change/reset. Recorded in the audit trail so a ride
+  /// start can be tied to the PIN generation it verified against, without the
+  /// PIN itself ever being written down.
+  ridePinVersion   Int       @default(0) @map("ride_pin_version") @db.SmallInt
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  deletedAt        DateTime? @map("deleted_at")
+
+  profile                       UserProfile?
+  devices                       UserDevice[]
+  sessions                      UserSession[]
+  refreshTokens                 RefreshToken[]
+  otpVerifications              OtpVerification[]
+  emergencyContacts             EmergencyContact[]
+  savedPlaces                   SavedPlace[]
+  files                         File[]
+  driver                        Driver?
+  customerRides                 Ride[]                         @relation("CustomerRides")
+  promoRedemptions              PromotionRedemption[]
+  paymentMethods                PaymentInstrument[]
+  customerWallet                CustomerWallet?
+  paymentIntents                PaymentIntent[]
+  paymentTransactions           PaymentTransaction[]
+  refunds                       Refund[]
+  walletTopups                  WalletTopup[]
+  cashbackGrants                CashbackGrant[]
+  notifications                 Notification[]
+  notificationPreferences       NotificationPreference[]
+  inAppMessages                 InAppMessage[]
+  campaignRecipients            CampaignRecipient[]
+  chatParticipants              ChatParticipant[]
+  chatMessages                  ChatMessage[]
+  chatReadReceipts              ChatReadReceipt[]
+  chatBlocksMade                ChatBlock[]                    @relation("Blocker")
+  chatBlocksReceived            ChatBlock[]                    @relation("Blocked")
+  chatReportsMade               ChatReport[]                   @relation("Reporter")
+  chatReportsReceived           ChatReport[]                   @relation("Reported")
+  customerRatingAggregate       CustomerRatingAggregate?
+  reviewFlagsRaised             ReviewFlag[]                   @relation("FlaggedBy")
+  reviewFlagsModerated          ReviewFlag[]                   @relation("Moderator")
+  reviewResponses               ReviewResponse[]
+  supportTickets                SupportTicket[]
+  supportAgent                  SupportAgent?
+  ticketMessages                SupportTicketMessage[]
+  referralCodes                 ReferralCode[]
+  referralsMade                 Referral[]                     @relation("Referrer")
+  referralsReceived             Referral[]                     @relation("Referee")
+  referralRewards               ReferralReward[]
+  referralMilestoneAchievements ReferralMilestoneAchievement[]
+  referralFraudReviews          ReferralFraudFlag[]
+  assignedCoupons               Coupon[]
+  roleAssignments               UserRoleAssignment[]
+  adminActivityLogs             AdminActivityLog[]
+  featureFlagOverrides          FeatureFlagOverride[]
+  adminSessions                 AdminSession[]
+  deletionRequests              AccountDeletionRequest[]
+  safetyIncidentsReported       SafetyIncident[]               @relation("IncidentReporter")
+  safetyIncidentsSubject        SafetyIncident[]               @relation("IncidentSubject")
+  safetyIncidentEvents          SafetyIncidentEvent[]
+  rideOpsNotes                  RideOpsNote[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model AccountDeletionRequest {
+  id     String                @id @default(uuid(7)) @db.Uuid
+  userId String                @map("user_id") @db.Uuid
+  status DeletionRequestStatus @default(PENDING)
+
+  requestedAt DateTime @default(now()) @map("requested_at")
+
+  scheduledFor DateTime  @map("scheduled_for")
+  erasedAt     DateTime? @map("erased_at")
+
+  cancelledAt DateTime? @map("cancelled_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([status, scheduledFor], map: "ix_deletion_requests_due")
+  @@map("account_deletion_requests")
+}
+
+enum DeletionRequestStatus {
+  PENDING
+  ERASED
+  CANCELLED
+}
+
+model UserProfile {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  userId      String    @unique @map("user_id") @db.Uuid
+  firstName   String?   @map("first_name")
+  lastName    String?   @map("last_name")
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  gender      String?
+
+  profileImageFileId String?  @unique @map("profile_image_file_id") @db.Uuid
+  languageCode       String?  @default("en") @map("language_code")
+  referralCode       String?  @unique @map("referral_code")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  profileImageFile File? @relation("ProfileImage", fields: [profileImageFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("user_profiles")
+}
+
+model UserDevice {
+  id           String           @id @default(uuid(7)) @db.Uuid
+  userId       String           @map("user_id") @db.Uuid
+  deviceId     String?          @map("device_id") // client-reported stable id
+  platform     AppPlatform?
+  trustState   DeviceTrustState @default(REGISTERED) @map("trust_state")
+  fingerprint  String?          @map("device_fingerprint")
+  isRooted     Boolean          @default(false) @map("is_rooted")
+  isJailbroken Boolean          @default(false) @map("is_jailbroken")
+  fcmToken     String?          @map("fcm_token")
+  appVersion   String?          @map("app_version")
+  osVersion    String?          @map("os_version")
+  lastSeenAt   DateTime?        @map("last_seen_at")
+  // When trustState became REVOKED. The state alone carried no timestamp, so
+  // "revoked devices older than N days" was not expressible — which is what a
+  // stale-device sweep needs. Nullable: never-revoked devices have no value, and
+  // rows revoked before this column existed have none either.
+  revokedAt    DateTime?        @map("revoked_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  user       User                   @relation(fields: [userId], references: [id])
+  sessions   UserSession[]
+  deliveries NotificationDelivery[]
+
+  @@unique([userId, deviceId])
+  @@index([userId])
+  @@map("user_devices")
+}
+
+model EmergencyContact {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  contactName  String   @map("contact_name")
+  phoneNumber  String   @map("phone_number")
+  relationship String?
+  priority     Int      @default(1)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "ix_emergency_contacts_user")
+  @@index([userId, priority], map: "ix_emergency_contacts_priority")
+  @@map("emergency_contacts")
+}
+
+model SavedPlace {
+  id           String                                @id @default(uuid(7)) @db.Uuid
+  userId       String                                @map("user_id") @db.Uuid
+  label        String
+  address      String?
+  buildingName String?                               @map("building_name")
+  landmark     String?
+  floor        String?
+  instructions String?
+  latitude     Decimal?                              @db.Decimal(10, 7)
+  longitude    Decimal?                              @db.Decimal(10, 7)
+  location     Unsupported("geography(Point,4326)")?
+  createdAt    DateTime                              @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId], map: "ix_saved_places_user")
+  @@map("saved_places")
+}

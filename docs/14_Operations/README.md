@@ -11,13 +11,14 @@
 
 ## Contents
 
-| Doc                                                      | Topic                                                            |
-| -------------------------------------------------------- | ---------------------------------------------------------------- |
-| [01_incident-response.md](01_incident-response.md)       | Severities, on-call, escalation, incident lifecycle, postmortems |
-| [02_runbooks.md](02_runbooks.md)                         | Step-by-step runbooks for the critical alerts                    |
-| [03_release-process.md](03_release-process.md)           | Cadence, rollout gates, feature flags, rollback, change mgmt     |
-| [04_scaling-and-capacity.md](04_scaling-and-capacity.md) | Scaling playbooks, capacity planning, seasonal peaks             |
-| [05_database-maintenance.md](05_database-maintenance.md) | Partitions, vacuum, reconciliation, backup verification          |
+| Doc                                                                                    | Topic                                                            |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| [01_incident-response.md](01_incident-response.md)                                     | Severities, on-call, escalation, incident lifecycle, postmortems |
+| [02_runbooks.md](02_runbooks.md)                                                       | Step-by-step runbooks for the critical alerts                    |
+| [03_release-process.md](03_release-process.md)                                         | Cadence, rollout gates, feature flags, rollback, change mgmt     |
+| [04_scaling-and-capacity.md](04_scaling-and-capacity.md)                               | Scaling playbooks, capacity planning, seasonal peaks             |
+| [05_database-maintenance.md](05_database-maintenance.md)                               | Partitions, vacuum, reconciliation, backup verification          |
+| [06_notification-reconciliation-go-live.md](06_notification-reconciliation-go-live.md) | F3 notification reconciliation: dry run → verification → on      |
 
 > Related: [Observability & alerts (V11 §05)](../11_Infrastructure/05_observability.md) ·
 > [Backups/DR (V11 §06)](../11_Infrastructure/06_backups-and-dr.md) ·

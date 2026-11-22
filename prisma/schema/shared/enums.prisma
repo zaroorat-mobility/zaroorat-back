@@ -1,0 +1,514 @@
+enum UserStatus {
+  UNVERIFIED
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum RideRequestStatus {
+  CREATED
+  SEARCHING
+  MATCHED
+  EXPIRED
+  ABANDONED
+}
+
+enum DispatchResponse {
+  PENDING
+  ACCEPTED
+  REJECTED
+  TIMEOUT
+  CANCELLED
+}
+
+enum DriverDocumentType {
+  DRIVING_LICENSE
+  RC
+  INSURANCE
+  AADHAAR
+  PAN
+  PUC
+  POLICE_VERIFICATION
+  PROFILE_PHOTO
+}
+
+enum DriverWalletTxnType {
+  RIDE_EARNING
+  BONUS
+  INCENTIVE
+  PENALTY
+  WITHDRAWAL
+  REFUND
+  ADJUSTMENT
+}
+
+enum DriverVerificationStatus {
+  PENDING
+  DOCUMENT_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum DriverStatus {
+  ONLINE
+  OFFLINE
+  BUSY
+  ON_TRIP
+  BREAK
+}
+
+enum PaymentMethod {
+  CASH
+  WALLET
+  CARD
+  UPI
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum RideStatus {
+  REQUESTED
+  SEARCHING
+  ACCEPTED
+  DRIVER_ARRIVING
+  DRIVER_ARRIVED
+  IN_PROGRESS
+  DRIVER_AT_DROPOFF
+  COMPLETED
+  CANCELLED_BY_CUSTOMER
+  CANCELLED_BY_DRIVER
+  CANCELLED_BY_SYSTEM
+  NO_DRIVERS_FOUND
+}
+
+/// Early-end-trip reason codes reported by the driver app when completing a
+/// ride before the planned destination (Phase 6b).
+enum RideEndReason {
+  RIDER_REQUESTED_END
+  DESTINATION_CHANGED
+  RIDER_STOP_HERE
+  SAFETY_CONCERN
+  VEHICLE_BREAKDOWN
+  ACCIDENT
+  MEDICAL_EMERGENCY
+  ROAD_BLOCKED
+  RIDER_BEHAVIOUR
+  UNABLE_TO_CONTINUE
+  OTHER
+}
+
+enum NotificationChannel {
+  PUSH
+  SMS
+  EMAIL
+  IN_APP
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum NotificationCategory {
+  TRANSACTIONAL
+  PROMOTIONAL
+  SAFETY
+  SYSTEM
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum AdminBroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum ChatConversationType {
+  RIDE
+  SUPPORT
+  SYSTEM
+}
+
+enum ChatConversationStatus {
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum ChatParticipantRole {
+  CUSTOMER
+  DRIVER
+  SUPPORT
+  SYSTEM
+}
+
+enum ChatMessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  LOCATION
+  SYSTEM
+  CANNED
+}
+
+enum ChatMessageStatus {
+  SENT
+  DELIVERED
+  READ
+  DELETED
+}
+
+enum RatingTargetType {
+  DRIVER
+  CUSTOMER
+}
+
+enum RatingSentiment {
+  POSITIVE
+  NEGATIVE
+  NEUTRAL
+}
+
+enum ReviewFlagStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  HIDDEN
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_CUSTOMER
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TicketChannel {
+  APP
+  EMAIL
+  PHONE
+  CHAT
+  SOCIAL
+}
+
+enum TicketMessageAuthor {
+  CUSTOMER
+  AGENT
+  SYSTEM
+}
+
+enum AgentStatus {
+  AVAILABLE
+  BUSY
+  AWAY
+  OFFLINE
+}
+
+enum SafetyIncidentType {
+  SOS
+  MISCONDUCT
+  ACCIDENT
+  LOST_FOUND
+  OTHER
+}
+
+enum SafetyIncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  INVESTIGATING
+  RESOLVED
+  CLOSED
+}
+
+enum SafetySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ReferralProgramAudience {
+  RIDER
+  DRIVER
+}
+
+enum ReferralQualifyingEvent {
+  SIGNUP
+  FIRST_RIDE
+  NTH_RIDE
+  DRIVER_APPROVED
+  DRIVER_FIRST_RIDE
+  DRIVER_NTH_RIDE
+}
+
+enum ReferralRewardWallet {
+  CUSTOMER
+  DRIVER
+}
+
+enum ReferralStatus {
+  PENDING
+  SIGNED_UP
+  QUALIFIED
+  REWARDED
+  EXPIRED
+  CANCELLED
+}
+
+enum ReferralRewardStatus {
+  PENDING
+  CREDITED
+  REVOKED
+  EXPIRED
+}
+
+enum ReferralRewardBeneficiary {
+  REFERRER
+  REFEREE
+  MILESTONE
+}
+
+enum ReferralFraudStatus {
+  CLEAN
+  SUSPECTED
+  CONFIRMED
+  CLEARED
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum CampaignObjective {
+  ACQUISITION
+  RETENTION
+  REACTIVATION
+  AWARENESS
+}
+
+enum CouponStatus {
+  ACTIVE
+  ASSIGNED
+  REDEEMED
+  EXPIRED
+  VOID
+}
+
+enum BannerPlacement {
+  HOME
+  RIDE
+  WALLET
+  SPLASH
+  OFFERS
+}
+
+enum PermissionEffect {
+  ALLOW
+  DENY
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  APPROVE
+  REJECT
+}
+
+enum SettingType {
+  STRING
+  NUMBER
+  BOOLEAN
+  JSON
+}
+
+enum FeatureFlagStatus {
+  ON
+  OFF
+  PARTIAL
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum AnalyticsActorType {
+  CUSTOMER
+  DRIVER
+  ADMIN
+  SYSTEM
+  ANONYMOUS
+}
+
+enum MetricGranularity {
+  HOURLY
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum ReportStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ReportFormat {
+  CSV
+  XLSX
+  PDF
+  JSON
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRYING
+  CANCELLED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  RETRYING
+}
+
+enum AppPlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
+enum ServiceZoneType {
+  SERVICE
+  AIRPORT
+  RESTRICTED
+  /// An area a surge rule can price. Never affects coverage, fares or vehicles.
+  SURGE
+}
+
+/// Where rides can start in a city.
+enum CityCoverageMode {
+  /// Anywhere inside the city's boundary.
+  WHOLE_CITY
+  /// Only inside its active SERVICE and AIRPORT zones.
+  ZONES_ONLY
+}
+
+enum StateDivisionType {
+  STATE
+  UNION_TERRITORY
+}
+
+enum RideServiceType {
+  INSTANT
+  SCHEDULED
+  RENTAL
+  OUTSTATION
+}
+
+enum DeviceTrustState {
+  REGISTERED
+  TRUSTED
+  SUSPICIOUS
+  REVOKED
+}
+
+/// Payout/settlement Option A. `status` on these two tables used to be a bare
+/// `String` with no constraint, which is how three separate code paths were
+/// able to write `PAID` without any money having moved.
+///
+/// PENDING   — calculated by the settlement job, nothing approved yet.
+/// APPROVED  — finance approved the batch it belongs to; payable.
+/// PROCESSING— a batch is being paid out; individual payouts are in flight.
+/// PAID      — EVERY rupee of `net_payable` is covered by a COMPLETED payout.
+///             Nothing else may write this value.
+/// FAILED    — finance abandoned the batch; the period stays unpaid.
+enum SettlementStatus {
+  PENDING
+  APPROVED
+  PROCESSING
+  PAID
+  FAILED
+}
+
+/// INITIATED — recorded and reserved against the settlement, money NOT moved.
+/// COMPLETED — finance confirmed an externally executed bank transfer; this is
+///             the only transition that debits the driver wallet and posts the
+///             DRIVER_PAYABLE ledger debit.
+/// FAILED    — the attempt did not move money. The row is kept, never deleted.
+enum PayoutStatus {
+  INITIATED
+  COMPLETED
+  FAILED
+}
+
+/// Phase 1 bank-account lifecycle. A payout is only ever possible from
+/// PAYOUT_ENABLED, and an account only gets there through an explicit,
+/// audited verification by a staff member other than the one who entered it.
+/// PROVISIONED is reserved for the payout-provider fund-account step (later phase).
+enum BankAccountStatus {
+  ENTERED
+  PROVISIONED
+  VERIFIED
+  PAYOUT_ENABLED
+  REJECTED
+  DEACTIVATED
+}

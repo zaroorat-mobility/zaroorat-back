@@ -1,0 +1,199 @@
+import { z } from 'zod';
+import { latitudeSchema, longitudeSchema } from '@modules/location';
+import { ridePinConfig } from '@config';
+import { NEW_RIDE_PAYMENT_METHODS, RIDE_BOOST_AMOUNTS } from '../constants/ride.constants.js';
+
+export const MAX_RIDE_STOPS = 2;
+export const rideStopSchema = z.object({
+  lat: latitudeSchema,
+  lng: longitudeSchema,
+  address: z.string().trim().max(255).optional(),
+});
+export type RideStopBody = z.infer<typeof rideStopSchema>;
+const stopsSchema = z.array(rideStopSchema).max(MAX_RIDE_STOPS);
+
+/// Accepts E.164 or a bare 10-digit Indian mobile number (normalised to +91),
+/// because that is what riders type into a contact field.
+const passengerPhoneSchema = z
+  .string()
+  .trim()
+  .transform((raw) => raw.replace(/[\s-]/g, ''))
+  .transform((raw) => (/^\d{10}$/.test(raw) ? `+91${raw}` : raw))
+  .pipe(z.string().regex(/^\+[1-9]\d{6,14}$/, 'INVALID_FORMAT'));
+
+export const serviceabilityQuerySchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lng: z.coerce.number().min(-180).max(180),
+});
+
+/// Drop coordinates are required, not optional.
+///
+/// They were optional here while every path behind them insisted on having
+/// them: `calculateFareQuote` refuses to price an open-ended trip rather than
+/// assume a default distance, and `RideQuote` has no shape for a missing drop.
+/// So a request that this schema accepted died on a bare `Error` deeper in, and
+/// `handleRideError` — which only maps coded errors — turned it into **500
+/// INTERNAL**. A client sending exactly what the schema advertised was told the
+/// server had broken. Required here, it is a 400 VALIDATION naming the fields,
+/// like every other required field on these routes.
+
+export const quoteFareSchema = z.object({
+  pickupLat: latitudeSchema,
+  pickupLng: longitudeSchema,
+  dropLat: latitudeSchema,
+  dropLng: longitudeSchema,
+  /// Optional: omit to price every active category in one call (the customer
+  /// app's picker), supply one to price just that category.
+  vehicleTypeId: z.string().uuid().optional(),
+  cityId: z.string().uuid().optional(),
+  promoCode: z.string().max(50).optional(),
+  cityCode: z.string().trim().max(40).optional(),
+  /// Intermediate stops in travel order; the fare prices every leg.
+  stops: stopsSchema.optional(),
+});
+export type QuoteFareBody = z.infer<typeof quoteFareSchema>;
+export const FARE_BOOST_AMOUNTS = RIDE_BOOST_AMOUNTS;
+export const rideBoostAmountSchema = z.coerce
+  .number()
+  .transform((n) => Math.round(n))
+  .refine(
+    (n): n is (typeof RIDE_BOOST_AMOUNTS)[number] =>
+      (RIDE_BOOST_AMOUNTS as readonly number[]).includes(n),
+    { message: `boostAmount must be one of: ${RIDE_BOOST_AMOUNTS.join(', ')}` },
+  );
+
+export const createRideRequestSchema = z
+  .object({
+    vehicleTypeId: z.string().uuid(),
+    pickupLat: latitudeSchema,
+    pickupLng: longitudeSchema,
+    pickupAddress: z.string().max(255).optional(),
+    // Required for the same reason as on `quoteFareSchema`: booking priced the
+    // ride through the same `calculateFareQuote`, so a request without a drop was
+    // a 500 too. `dropAddress` stays optional — a label is not a location.
+    dropLat: latitudeSchema,
+    dropLng: longitudeSchema,
+    dropAddress: z.string().max(255).optional(),
+    /// D1. WALLET is not accepted for a new ride — see NEW_RIDE_PAYMENT_METHODS.
+    paymentMethod: z.enum(NEW_RIDE_PAYMENT_METHODS).optional(),
+    promoCode: z.string().max(50).optional(),
+    stops: stopsSchema.optional(),
+    /// Booking for someone else: both or neither.
+    passengerName: z.string().trim().min(1).max(100).optional(),
+    passengerPhone: passengerPhoneSchema.optional(),
+    pickupNotes: z.string().trim().max(280).optional(),
+    /// ISO-8601. The lead-time rule lives in the service so it is enforced
+    /// against the server clock, not the one that parsed the body.
+    scheduledFor: z.coerce.date().optional(),
+    boostAmount: rideBoostAmountSchema.optional(),
+    /// Phase 1 (M-01). Optional persisted quote ID to lock the displayed fare.
+    quoteId: z.string().uuid().optional(),
+    /// Optional customer-displayed fare; refuses booking with 409 FARE_CHANGED if drifted.
+    expectedFare: z.number().finite().nonnegative().optional(),
+  })
+  .superRefine((body, ctx) => {
+    if ((body.passengerName === undefined) !== (body.passengerPhone === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [body.passengerName === undefined ? 'passengerName' : 'passengerPhone'],
+        message: 'passengerName and passengerPhone must be provided together',
+      });
+    }
+  });
+export type CreateRideRequestBody = z.infer<typeof createRideRequestSchema>;
+export const boostRequestSchema = z.object({
+  boostAmount: rideBoostAmountSchema,
+});
+export type BoostRequestBody = z.infer<typeof boostRequestSchema>;
+export const changeDestinationQuoteSchema = z.object({
+  dropLat: latitudeSchema,
+  dropLng: longitudeSchema,
+  dropAddress: z.string().max(255).optional(),
+  /// D1. WALLET is not accepted for a new ride — see NEW_RIDE_PAYMENT_METHODS.
+  paymentMethod: z.enum(NEW_RIDE_PAYMENT_METHODS).optional(),
+  promoCode: z.string().max(50).optional(),
+  /// Optional ₹ offset from the quoted fare (0 … +60) applied at create time.
+  boostAmount: rideBoostAmountSchema.optional(),
+});
+export type ChangeDestinationQuoteBody = z.infer<typeof changeDestinationQuoteSchema>;
+/// `expectedFare` is the figure the rider was shown by the quote call. When
+/// present and the reprice has moved by more than a rupee, the change is
+/// refused so the rider is never billed a number they did not see.
+export const confirmDestinationSchema = changeDestinationQuoteSchema.extend({
+  expectedFare: z.number().nonnegative().optional(),
+});
+export type ConfirmDestinationBody = z.infer<typeof confirmDestinationSchema>;
+export const triggerSosSchema = z.object({
+  latitude: latitudeSchema.optional(),
+  longitude: longitudeSchema.optional(),
+  locationAddress: z.string().trim().max(255).optional(),
+  description: z.string().trim().max(1000).optional(),
+});
+export type TriggerSosBody = z.infer<typeof triggerSosSchema>;
+export const acceptRideRequestSchema = z.object({
+  requestId: z.string().uuid(),
+  vehicleId: z.string().uuid(),
+});
+export type AcceptRideRequestBody = z.infer<typeof acceptRideRequestSchema>;
+/// The rider's standing Ride PIN, recited to the driver at the pickup point.
+///
+/// A string of digits, never a number: `Number('0827')` is 827, and a PIN that
+/// silently loses its leading zero is a rider who cannot start a ride. Digits
+/// are enforced here as well as length — the OTP field this replaces checked
+/// only length, so `"abcdef"` passed validation and reached the verifier.
+export const startRideSchema = z.object({
+  pin: z.string().regex(new RegExp(`^[0-9]{${ridePinConfig.length}}$`), {
+    message: `PIN must be ${ridePinConfig.length} digits`,
+  }),
+});
+export type StartRideBody = z.infer<typeof startRideSchema>;
+export const RIDE_END_REASON_CODES = [
+  'RIDER_REQUESTED_END',
+  'DESTINATION_CHANGED',
+  'RIDER_STOP_HERE',
+  'SAFETY_CONCERN',
+  'VEHICLE_BREAKDOWN',
+  'ACCIDENT',
+  'MEDICAL_EMERGENCY',
+  'ROAD_BLOCKED',
+  'RIDER_BEHAVIOUR',
+  'UNABLE_TO_CONTINUE',
+  'OTHER',
+] as const;
+export const rideEndReasonCodeSchema = z.enum(RIDE_END_REASON_CODES);
+export const completeRideSchema = z
+  .object({
+    actualDistanceKm: z.number().nonnegative(),
+    actualDurationMin: z.number().int().nonnegative(),
+    endReasonCode: rideEndReasonCodeSchema.optional(),
+    endReasonText: z.string().max(500).optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (body.endReasonCode === 'OTHER' && !body.endReasonText?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endReasonText'],
+        message: 'endReasonText is required when endReasonCode is OTHER',
+      });
+    }
+  });
+export type CompleteRideBody = z.infer<typeof completeRideSchema>;
+export const cancelRideSchema = z.object({
+  reasonCode: z.string().trim().min(1, 'Reason code is required').max(50),
+  reasonText: z.string().max(255).optional(),
+});
+export type CancelRideBody = z.infer<typeof cancelRideSchema>;
+
+/// A reason is optional and free-text: it feeds driver-quality analytics, not
+/// any decision the dispatcher makes.
+export const rejectOfferSchema = z.object({
+  reason: z.string().max(255).optional(),
+});
+export type RejectOfferBody = z.infer<typeof rejectOfferSchema>;
+
+/// Discrete ₹ offsets from the quoted fare while a request is still searching.
+/// Negative = offer below quote; 0 = keep quote; positive = bump.
+export const boostRideRequestSchema = z.object({
+  boostAmount: rideBoostAmountSchema,
+});
+export type BoostRideRequestBody = z.infer<typeof boostRideRequestSchema>;

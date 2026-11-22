@@ -1,0 +1,32 @@
+-- Spatial index for nearby-driver search.
+--
+-- `driver_locations.location` is `geography(Point,4326)` and was written on
+-- every GPS ping but never read spatially — there was no proximity query in the
+-- codebase, so nothing exposed the missing index. The Geo module's
+-- `PostgisProvider.findNearbyDrivers` now issues:
+--
+--   WHERE ST_DWithin(dl."location", $point, $radius)
+--
+-- Without a GIST index that predicate cannot be answered from an index at all:
+-- PostgreSQL sequentially scans every driver row and computes a geodesic
+-- distance for each one, per ride request. With the index, ST_DWithin uses the
+-- bounding-box operator to reduce the candidate set first.
+--
+-- ## Why also `recorded_at`
+--
+-- The same query filters `recorded_at >= $freshAfter` to drop stale fixes. That
+-- is a cheap comparison once the spatial predicate has narrowed the rows, so it
+-- does not need its own index today — but the table is one row per driver
+-- (`driver_id` is the primary key), so it stays small and this note exists to
+-- record that the decision was deliberate, not an oversight.
+--
+-- ## Build strategy
+--
+-- Plain build, not CONCURRENTLY, for the reason `20260801000000` records: Prisma
+-- wraps each migration in a transaction and CONCURRENTLY cannot run inside one.
+-- `driver_locations` holds at most one row per driver and is small today, so the
+-- exclusive lock is momentary. If this ever lands on a large fleet, build it
+-- out-of-band with CREATE INDEX CONCURRENTLY first and IF NOT EXISTS turns this
+-- into a no-op.
+CREATE INDEX IF NOT EXISTS "ix_driver_locations_location"
+  ON "driver_locations" USING GIST ("location");

@@ -1,47 +1,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
-
-/**
- * Environments that read configuration from a dotenv file on disk.
- *
- * Deployed environments (staging, production) are deliberately absent: they
- * receive configuration as injected environment variables from the platform
- * secret store, and `.env.*` is excluded by both .gitignore and .dockerignore,
- * so no such file can ever exist inside the image.
- */
-const ENV_FILES: Record<string, string> = {
-  development: '.env.development',
-  test: '.env.test',
+// First match wins. Standard local environment loads from .env.local.
+// Deployed environments (dev, staging, production) rely on injected variables or explicit --env-file.
+const ENV_FILES: Record<string, readonly string[]> = {
+  local: ['.env.local'],
+  development: ['.env.local', '.env.dev'],
+  dev: ['.env.dev', '.env.local'],
+  test: ['.env.test'],
+  testing: ['.env.test'],
 };
-
-/** Environments where a missing dotenv file is a developer mistake, not normal. */
-const REQUIRES_ENV_FILE = new Set(['development', 'test']);
-
-export function loadEnvironment(): void {
+const DEFAULT_ROOTS = [process.cwd(), path.resolve(__dirname, '../../..')];
+export function loadEnvironment(roots: readonly string[] = DEFAULT_ROOTS): void {
   const appEnv = process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development';
-
-  const envFile = ENV_FILES[appEnv];
-
-  if (!envFile) {
-    // Staging, production, and any unknown value rely on injected variables.
+  const candidates = ENV_FILES[appEnv];
+  if (!candidates) {
     return;
   }
-
-  const envPath = path.resolve(process.cwd(), envFile);
-
-  if (!fs.existsSync(envPath)) {
-    if (REQUIRES_ENV_FILE.has(appEnv)) {
-      throw new Error(
-        `Environment file "${envFile}" not found. Copy .env.example to ${envFile} to get started.`,
-      );
-    }
+  for (const file of candidates) {
+    const envPath = roots.map((root) => path.resolve(root, file)).find((p) => fs.existsSync(p));
+    if (!envPath) continue;
+    dotenv.config({ path: envPath, override: false, quiet: true });
     return;
   }
-
-  // override: false — a real injected variable always beats the file.
-  dotenv.config({
-    path: envPath,
-    override: false,
-  });
+  throw new Error(
+    `Environment file "${candidates[0]}" not found. Copy ${candidates[0]}.example to ${candidates[0]} to get started.`,
+  );
 }

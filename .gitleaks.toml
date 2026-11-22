@@ -1,0 +1,16 @@
+[allowlist]
+description = "Global allowlist for mock secrets in tests and CI sample configs"
+paths = [
+  '''tests/''',
+  '''__tests__/''',
+  '''\.github/workflows/ci\.yml''',
+]
+stopwords = [
+  "rzp_test_",
+  "test_airtel_api_key",
+  "ci_encryption_key_padded_to_min_32_chars",
+]
+regexes = [
+  '''rzp_test_[a-zA-Z0-9]+''',
+  '''test_[a-zA-Z0-9_]+''',
+]

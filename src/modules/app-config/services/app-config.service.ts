@@ -1,0 +1,336 @@
+import type { TransactionClient } from '@core/database/TransactionManager.js';
+import type { AppClient, AppColorScheme, Prisma } from '../../../generated/prisma/index.js';
+import { otpConfig } from '@config/otp/otp.config.js';
+import { geoConfig } from '@config/geo/geo.config.js';
+import { rideConfig } from '@config/ride/ride.config.js';
+import { driverConfig } from '@config/driver/driver.config.js';
+import { vehicleConfig } from '@config/vehicle/vehicle.config.js';
+import { SystemSettingService } from '@modules/admin/system-settings/services/system-setting.service.js';
+import { FeatureFlagService } from '@modules/admin/system-settings/platform/services/feature-flag.service.js';
+import { PlatformConfigResolver } from '@modules/admin/system-settings/platform/services/platform-config-resolver.service.js';
+import { logger } from '@shared/logger/index.js';
+import { AppConfigRepository } from '../repositories/app-config.repository.js';
+import { AppConfigCache } from '../cache/app-config.cache.js';
+import {
+  APP_CONFIG_CACHE_TTL_SECONDS,
+  APP_CONFIG_VERSION_KEY,
+  DEFAULT_THEME_COMPONENTS,
+  DEFAULT_THEME_TOKENS_DARK,
+  DEFAULT_THEME_TOKENS_LIGHT,
+  type AppClientSlug,
+  type ColorSchemeSlug,
+} from '../constants/app-config.constants.js';
+
+export interface AppGeneralSettings {
+  platformName: string;
+  logoUrl: string;
+  customerLogoUrl?: string;
+  driverLogoUrl?: string;
+  supportPhone: string;
+  supportEmail: string;
+  defaultLanguage: string;
+  timezone: string;
+  currency: string;
+}
+
+export interface AppRideSettings {
+  requestExpiryMinutes: number;
+  dispatchTimeoutSeconds: number;
+  dispatchBatchSize: number;
+  searchRadiusMeters: number;
+  maxSearchRadiusMeters: number;
+  cancellationGraceMinutes: number;
+  defaultCancellationFee: number;
+}
+
+export interface AppOtpSettings {
+  enabled: boolean;
+  codeLength: number;
+  ttlSeconds: number;
+  maxVerifyAttempts: number;
+  lockoutSeconds: number;
+  resendIntervalSeconds: number;
+}
+
+export interface AppOnboardingSettings {
+  driverRequiredDocuments: string[];
+  vehicleRequiredDocuments: string[];
+  driverDocExpiryWarningDays: number;
+  requireApprovedDocuments: boolean;
+}
+
+/** Public maintenance payload — omit admin-only fields. */
+export interface AppMaintenanceSettings {
+  enabled: boolean;
+  message: string;
+}
+
+export interface AppPlatformSettings {
+  general: AppGeneralSettings;
+  ride: AppRideSettings;
+  otp: AppOtpSettings;
+  onboarding: AppOnboardingSettings;
+  maintenance: AppMaintenanceSettings;
+}
+
+export interface AppConfigBundle {
+  version: number;
+  app: AppClientSlug;
+  locale: string;
+  theme: {
+    light: { tokens: unknown; components: unknown };
+    dark: { tokens: unknown; components: unknown };
+  };
+  fonts: Array<{
+    family: string;
+    weight: string;
+    style: string;
+    source: string;
+    url: string | null;
+  }>;
+  locales: Array<{
+    code: string;
+    label: string;
+    nativeLabel: string;
+    isRtl: boolean;
+    isDefault: boolean;
+    sortOrder: number;
+  }>;
+  strings: Record<string, string>;
+  /** Resolved feature flags (admin `/admin/settings/feature-flags`). */
+  featureFlags: Record<string, boolean>;
+  /**
+   * Platform system settings safe for client apps.
+   * Sourced from admin `/admin/settings/{general,ride,otp,onboarding,maintenance}`.
+   */
+  settings: AppPlatformSettings;
+}
+
+const APP_CLIENT_MAP: Record<AppClientSlug, AppClient> = {
+  driver: 'DRIVER',
+  rider: 'RIDER',
+  admin: 'ADMIN',
+};
+
+const COLOR_SCHEME_MAP: Record<ColorSchemeSlug, AppColorScheme> = {
+  light: 'LIGHT',
+  dark: 'DARK',
+};
+
+export function toAppClient(app: AppClientSlug): AppClient {
+  return APP_CLIENT_MAP[app];
+}
+
+export function toColorScheme(scheme: ColorSchemeSlug): AppColorScheme {
+  return COLOR_SCHEME_MAP[scheme];
+}
+
+export const DEFAULT_PLATFORM_SETTINGS: AppPlatformSettings = Object.freeze({
+  general: {
+    platformName: 'Zaroorat',
+    logoUrl: '',
+    supportPhone: '',
+    supportEmail: '',
+    defaultLanguage: 'en',
+    timezone: 'Asia/Kolkata',
+    currency: 'INR',
+  },
+  ride: {
+    requestExpiryMinutes: rideConfig.requestExpiryMinutes,
+    dispatchTimeoutSeconds: rideConfig.dispatchTimeoutSeconds,
+    dispatchBatchSize: rideConfig.dispatchBatchSize,
+    searchRadiusMeters: geoConfig.searchRadiusMeters,
+    maxSearchRadiusMeters: geoConfig.maxSearchRadiusMeters,
+    cancellationGraceMinutes: rideConfig.cancellationGraceMinutes,
+    defaultCancellationFee: rideConfig.defaultCancellationFee,
+  },
+  otp: {
+    enabled: true,
+    codeLength: otpConfig.codeLength,
+    ttlSeconds: otpConfig.ttlSeconds,
+    maxVerifyAttempts: otpConfig.maxVerifyAttempts,
+    lockoutSeconds: otpConfig.lockoutSeconds,
+    resendIntervalSeconds: otpConfig.resendIntervalSeconds,
+  },
+  onboarding: {
+    driverRequiredDocuments: [...driverConfig.requiredDocumentTypes],
+    vehicleRequiredDocuments: [...vehicleConfig.requiredDocumentTypes],
+    driverDocExpiryWarningDays: 30,
+    requireApprovedDocuments: driverConfig.requireApprovedDocuments,
+  },
+  maintenance: {
+    enabled: false,
+    message: 'The platform is under maintenance. Please try again later.',
+  },
+});
+
+export class AppConfigService {
+  constructor(
+    private readonly appConfigRepository: AppConfigRepository,
+    private readonly appConfigCache: AppConfigCache,
+    private readonly systemSettingService: SystemSettingService,
+    private readonly featureFlagService?: FeatureFlagService,
+    private readonly platformConfigResolver?: PlatformConfigResolver,
+  ) {}
+
+  async getVersion(tx?: TransactionClient): Promise<number> {
+    const raw = await this.systemSettingService.getSettingValue(APP_CONFIG_VERSION_KEY, tx);
+    if (raw === null || raw === undefined || raw === '') return 1;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  }
+
+  async bumpVersion(updatedBy?: string | null, tx?: TransactionClient): Promise<number> {
+    const current = await this.getVersion(tx);
+    const next = current + 1;
+    await this.systemSettingService.setSetting(
+      {
+        key: APP_CONFIG_VERSION_KEY,
+        value: String(next),
+        category: 'app_config',
+        description: 'Public app-config bundle version (ETag / cache bust)',
+        updatedBy: updatedBy ?? null,
+      },
+      tx,
+    );
+    return next;
+  }
+
+  async getPublicBundle(app: AppClientSlug, locale: string): Promise<AppConfigBundle> {
+    const version = await this.getVersion();
+    const cached = await this.appConfigCache.getBundle<AppConfigBundle>(app, locale, version);
+    if (cached) return cached;
+
+    const appKey = toAppClient(app);
+    const [light, dark, fonts, locales, translations, featureFlags, settings] = await Promise.all([
+      this.appConfigRepository.findTheme(appKey, 'LIGHT'),
+      this.appConfigRepository.findTheme(appKey, 'DARK'),
+      this.appConfigRepository.findFontsByApp(appKey),
+      this.appConfigRepository.findLocales(),
+      this.appConfigRepository.findTranslations(locale, appKey),
+      this.loadFeatureFlags(),
+      this.loadPlatformSettings(app),
+    ]);
+
+    const strings: Record<string, string> = {};
+    for (const row of translations) {
+      strings[row.key] = row.value;
+    }
+
+    const bundle: AppConfigBundle = {
+      version,
+      app,
+      locale,
+      theme: {
+        light: light
+          ? { tokens: light.tokens, components: light.components }
+          : { tokens: DEFAULT_THEME_TOKENS_LIGHT, components: DEFAULT_THEME_COMPONENTS },
+        dark: dark
+          ? { tokens: dark.tokens, components: dark.components }
+          : { tokens: DEFAULT_THEME_TOKENS_DARK, components: DEFAULT_THEME_COMPONENTS },
+      },
+      fonts: fonts.map((f) => ({
+        family: f.family,
+        weight: f.weight,
+        style: f.style,
+        source: f.source,
+        url: f.url,
+      })),
+      locales: locales.map((l) => ({
+        code: l.code,
+        label: l.label,
+        nativeLabel: l.nativeLabel,
+        isRtl: l.isRtl,
+        isDefault: l.isDefault,
+        sortOrder: l.sortOrder,
+      })),
+      strings,
+      featureFlags,
+      settings,
+    };
+
+    await this.appConfigCache.setBundle(app, locale, version, bundle, APP_CONFIG_CACHE_TTL_SECONDS);
+    return bundle;
+  }
+
+  async getLocaleStrings(
+    app: AppClientSlug,
+    localeCode: string,
+  ): Promise<{ locale: string; app: AppClientSlug; strings: Record<string, string> }> {
+    const rows = await this.appConfigRepository.findTranslations(localeCode, toAppClient(app));
+    const strings: Record<string, string> = {};
+    for (const row of rows) {
+      strings[row.key] = row.value;
+    }
+    return { locale: localeCode, app, strings };
+  }
+
+  async resetAppTheme(
+    app: AppClientSlug,
+    scheme: ColorSchemeSlug,
+    defaultTokens?: Prisma.InputJsonValue,
+    defaultComponents?: Prisma.InputJsonValue,
+    tx?: TransactionClient,
+  ) {
+    const tokens =
+      defaultTokens ?? (scheme === 'dark' ? DEFAULT_THEME_TOKENS_DARK : DEFAULT_THEME_TOKENS_LIGHT);
+    const components = defaultComponents ?? DEFAULT_THEME_COMPONENTS;
+    return this.appConfigRepository.upsertTheme(
+      {
+        appKey: toAppClient(app),
+        colorScheme: toColorScheme(scheme),
+        tokens: tokens as Prisma.InputJsonValue,
+        components: components as Prisma.InputJsonValue,
+        isDefault: true,
+        isActive: true,
+      },
+      tx,
+    );
+  }
+
+  private async loadFeatureFlags(): Promise<Record<string, boolean>> {
+    if (!this.featureFlagService) return {};
+    try {
+      const flags = await this.featureFlagService.listFlags();
+      const map: Record<string, boolean> = {};
+      for (const flag of flags) {
+        map[flag.key] =
+          flag.isActive &&
+          flag.status !== 'OFF' &&
+          (flag.status === 'ON' || flag.rolloutPercentage > 0);
+      }
+      return map;
+    } catch (err) {
+      logger.warn({ err }, '[AppConfigService] Failed to load feature flags');
+      return {};
+    }
+  }
+
+  private async loadPlatformSettings(app?: AppClientSlug): Promise<AppPlatformSettings> {
+    if (!this.platformConfigResolver) {
+      return structuredClone(DEFAULT_PLATFORM_SETTINGS);
+    }
+    try {
+      const [general, ride, otp, onboarding, maintenance] = await Promise.all([
+        this.platformConfigResolver.getGeneralConfig(app),
+        this.platformConfigResolver.getRideConfig(),
+        this.platformConfigResolver.getOtpConfig(),
+        this.platformConfigResolver.getOnboardingConfig(),
+        this.platformConfigResolver.getMaintenanceConfig(),
+      ]);
+      return {
+        general,
+        ride,
+        otp,
+        onboarding,
+        maintenance: {
+          enabled: maintenance.enabled,
+          message: maintenance.message,
+        },
+      };
+    } catch (err) {
+      logger.warn({ err }, '[AppConfigService] Failed to load platform settings');
+      return structuredClone(DEFAULT_PLATFORM_SETTINGS);
+    }
+  }
+}

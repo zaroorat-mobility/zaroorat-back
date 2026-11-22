@@ -1,2 +1,13 @@
-// Admin module (routes, controllers, services, schemas) will be wired here
-export {};
+export * from './admin.module.js';
+
+// Export submodules for ease of access if needed
+export * from './pricing-management/index.js';
+export * from './promotions-management/index.js';
+export * from './referral-management/index.js';
+export * from './operations-management/index.js';
+export * from './dashboard/index.js';
+export * from './communications-management/index.js';
+export * from './monitoring-management/index.js';
+export * from './security-management/index.js';
+export * from './audit-management/index.js';
+export * from './jobs-management/index.js';

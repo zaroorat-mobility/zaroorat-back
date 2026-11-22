@@ -1,0 +1,508 @@
+import { DatabaseService } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
+import { Prisma, type ReferralProgramAudience } from '../../../../generated/prisma/index.js';
+import { lockForAudit, recordAdminAction, type AuditActor } from '../../audit/index.js';
+import { generateUniqueCode } from '../code/code.util.js';
+import {
+  ReferralProgramConflictError,
+  ReferralProgramNotFoundError,
+  ReferralMilestoneNotFoundError,
+} from '../referral.errors.js';
+import {
+  programConfigError,
+  type CreateMilestoneBody,
+  type CreateProgramBody,
+  type ListProgramsQuery,
+  type UpdateMilestoneBody,
+  type UpdateProgramBody,
+} from '../schemas.js';
+
+function toNum(value: { toString(): string } | number | null | undefined): number | null {
+  if (value == null) return null;
+  return typeof value === 'number' ? value : Number(value.toString());
+}
+
+type ProgramAudience = 'RIDER' | 'DRIVER';
+type QualifyingEvent =
+  | 'SIGNUP'
+  | 'FIRST_RIDE'
+  | 'NTH_RIDE'
+  | 'DRIVER_APPROVED'
+  | 'DRIVER_FIRST_RIDE'
+  | 'DRIVER_NTH_RIDE';
+type RewardWallet = 'CUSTOMER' | 'DRIVER';
+
+function assertProgramConfig(config: Parameters<typeof programConfigError>[0]): void {
+  const message = programConfigError(config);
+  if (message) throw new ReferralProgramConflictError(message);
+}
+
+/// A milestone bonus is paid by the same runtime path as the program's rewards,
+/// so a RIDER program cannot carry an active monetary one either. Deactivating a
+/// legacy one stays allowed.
+function assertMilestoneConfig(
+  audience: ProgramAudience,
+  milestone: { bonusAmount: number; isActive: boolean },
+): void {
+  if (audience === 'RIDER' && milestone.isActive && milestone.bonusAmount > 0) {
+    throw new ReferralProgramConflictError(
+      'A RIDER program cannot have an active monetary milestone bonus',
+    );
+  }
+}
+
+export interface MilestoneDto {
+  id: string;
+  programId: string;
+  name: string;
+  requiredReferrals: number;
+  bonusAmount: number;
+  rewardType: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface ProgramDto {
+  id: string;
+  code: string;
+  name: string | null;
+  audience: ProgramAudience;
+  referrerReward: number;
+  refereeReward: number;
+  rewardType: string;
+  /// Null for RIDER: rider referrals are non-monetary, and the stored column
+  /// (NOT NULL, defaulting to CUSTOMER) is a retired value the runtime ignores.
+  rewardWallet: RewardWallet | null;
+  qualifyingEvent: QualifyingEvent;
+  qualifyingThreshold: number;
+  maxReferralsPerUser: number | null;
+  qualificationWindowDays: number | null;
+  rewardExpiryDays: number | null;
+  validFrom: string;
+  validTo: string;
+  isActive: boolean;
+  status: 'active' | 'inactive';
+  createdAt: string;
+  milestones: MilestoneDto[];
+  codesCount: number;
+  referralsCount: number;
+}
+
+export class AdminReferralProgramService {
+  constructor(private readonly databaseService: DatabaseService) {}
+
+  private toMilestoneDto(row: {
+    id: string;
+    programId: string;
+    name: string;
+    requiredReferrals: number;
+    bonusAmount: { toString(): string };
+    rewardType: string;
+    isActive: boolean;
+    createdAt: Date;
+  }): MilestoneDto {
+    return {
+      id: row.id,
+      programId: row.programId,
+      name: row.name,
+      requiredReferrals: row.requiredReferrals,
+      bonusAmount: toNum(row.bonusAmount) ?? 0,
+      rewardType: row.rewardType,
+      isActive: row.isActive,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  private toDto(row: {
+    id: string;
+    code: string;
+    name: string | null;
+    audience: ProgramAudience;
+    referrerReward: { toString(): string };
+    refereeReward: { toString(): string };
+    rewardType: string;
+    rewardWallet: RewardWallet;
+    qualifyingEvent: QualifyingEvent;
+    qualifyingThreshold: number;
+    maxReferralsPerUser: number | null;
+    qualificationWindowDays: number | null;
+    rewardExpiryDays: number | null;
+    validFrom: Date;
+    validTo: Date;
+    isActive: boolean;
+    createdAt: Date;
+    milestones?: Array<{
+      id: string;
+      programId: string;
+      name: string;
+      requiredReferrals: number;
+      bonusAmount: { toString(): string };
+      rewardType: string;
+      isActive: boolean;
+      createdAt: Date;
+    }>;
+    _count?: { codes: number; referrals: number };
+  }): ProgramDto {
+    return {
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      audience: row.audience,
+      referrerReward: toNum(row.referrerReward) ?? 0,
+      refereeReward: toNum(row.refereeReward) ?? 0,
+      rewardType: row.rewardType,
+      rewardWallet: row.audience === 'RIDER' ? null : row.rewardWallet,
+      qualifyingEvent: row.qualifyingEvent,
+      qualifyingThreshold: row.qualifyingThreshold,
+      maxReferralsPerUser: row.maxReferralsPerUser,
+      qualificationWindowDays: row.qualificationWindowDays ?? row.rewardExpiryDays,
+      rewardExpiryDays: row.rewardExpiryDays,
+      validFrom: row.validFrom.toISOString(),
+      validTo: row.validTo.toISOString(),
+      isActive: row.isActive,
+      status: row.isActive ? 'active' : 'inactive',
+      createdAt: row.createdAt.toISOString(),
+      milestones: (row.milestones ?? []).map((m) => this.toMilestoneDto(m)),
+      codesCount: row._count?.codes ?? 0,
+      referralsCount: row._count?.referrals ?? 0,
+    };
+  }
+
+  private include = {
+    milestones: { orderBy: { requiredReferrals: 'asc' as const } },
+    _count: { select: { codes: true, referrals: true } },
+  };
+
+  async list(query: ListProgramsQuery): Promise<{
+    data: ProgramDto[];
+    meta: { currentPage: number; totalPages: number; pageSize: number; totalCount: number };
+  }> {
+    const where: Prisma.ReferralProgramWhereInput = {};
+    if (query.status === 'active') where.isActive = true;
+    if (query.status === 'inactive') where.isActive = false;
+    if (query.audience) where.audience = query.audience;
+    if (query.search) {
+      where.OR = [
+        { code: { contains: query.search, mode: 'insensitive' } },
+        { name: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const totalCount = await this.databaseService.client.referralProgram.count({ where });
+    const rows = await this.databaseService.client.referralProgram.findMany({
+      where,
+      include: this.include,
+      orderBy: { createdAt: 'desc' },
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+    });
+
+    return {
+      data: rows.map((r) => this.toDto(r)),
+      meta: {
+        currentPage: query.page,
+        totalPages: Math.max(1, Math.ceil(totalCount / query.limit)),
+        pageSize: query.limit,
+        totalCount,
+      },
+    };
+  }
+
+  async getById(id: string): Promise<ProgramDto> {
+    const row = await this.databaseService.client.referralProgram.findUnique({
+      where: { id },
+      include: this.include,
+    });
+    if (!row) throw new ReferralProgramNotFoundError();
+    return this.toDto(row);
+  }
+
+  async create(body: CreateProgramBody, actor: AuditActor): Promise<ProgramDto> {
+    const audience = body.audience ?? 'RIDER';
+    const rewardWallet = body.rewardWallet ?? (audience === 'DRIVER' ? 'DRIVER' : undefined);
+    const qualifyingEvent =
+      body.qualifyingEvent ?? (audience === 'DRIVER' ? 'DRIVER_APPROVED' : 'FIRST_RIDE');
+    assertProgramConfig({
+      audience,
+      qualifyingEvent,
+      rewardWallet,
+      referrerReward: body.referrerReward ?? 0,
+      refereeReward: body.refereeReward ?? 0,
+      isActive: body.isActive ?? true,
+    });
+
+    let code = body.code?.trim().toUpperCase();
+    if (!code) code = generateUniqueCode(body.name, audience === 'DRIVER' ? 'DREF' : 'REF');
+    const existing = await this.databaseService.client.referralProgram.findUnique({
+      where: { code },
+    });
+    if (existing) {
+      if (body.code)
+        throw new ReferralProgramConflictError(`Program code "${code}" already exists`);
+      code = generateUniqueCode(body.name, audience === 'DRIVER' ? 'DREF' : 'REF');
+    }
+
+    // FR-026 / BD-7. One active program per audience.
+    //
+    // `resolveActiveProgram` is a `findFirst` ordered by `createdAt desc` over an
+    // unbounded set, and `Referral` is unique per (programId, refereeId) — so
+    // every additional active program for an audience was another payout to the
+    // same referee. Mirrors the rule-exclusivity `AdminFareService` already
+    // applies to pricing rules.
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      if (body.isActive ?? true) {
+        await this.deactivateOtherProgramsFor(tx, audience, actor);
+      }
+
+      const row = await tx.referralProgram.create({
+        data: {
+          code,
+          name: body.name ?? null,
+          audience,
+          referrerReward: body.referrerReward ?? 0,
+          refereeReward: body.refereeReward ?? 0,
+          rewardType: body.rewardType ?? 'WALLET',
+          // Omitted for RIDER, so the column keeps its database default.
+          ...(rewardWallet !== undefined ? { rewardWallet } : {}),
+          qualifyingEvent,
+          qualifyingThreshold: body.qualifyingThreshold ?? 1,
+          maxReferralsPerUser: body.maxReferralsPerUser ?? null,
+          qualificationWindowDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
+          rewardExpiryDays: body.qualificationWindowDays ?? body.rewardExpiryDays ?? null,
+          validFrom: body.validFrom,
+          validTo: body.validTo,
+          isActive: body.isActive ?? true,
+        },
+        include: this.include,
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'referral_program',
+        entityId: row.id,
+        summary: `Referral program ${row.code} created`,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
+    });
+  }
+
+  async update(id: string, body: UpdateProgramBody, actor: AuditActor): Promise<ProgramDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'referral_programs', id);
+      const existing = await tx.referralProgram.findUnique({ where: { id } });
+      if (!existing) throw new ReferralProgramNotFoundError();
+
+      const audience = body.audience ?? existing.audience;
+      // A RIDER row's stored wallet is the retired default, not a selection, so
+      // only a wallet sent in this request counts against it.
+      const rewardWallet =
+        audience === 'DRIVER' ? (body.rewardWallet ?? existing.rewardWallet) : body.rewardWallet;
+      const qualifyingEvent = body.qualifyingEvent ?? existing.qualifyingEvent;
+      assertProgramConfig({
+        audience,
+        qualifyingEvent,
+        rewardWallet,
+        referrerReward: body.referrerReward ?? toNum(existing.referrerReward) ?? 0,
+        refereeReward: body.refereeReward ?? toNum(existing.refereeReward) ?? 0,
+        isActive: body.isActive ?? existing.isActive,
+      });
+
+      if (body.code) {
+        const code = body.code.trim().toUpperCase();
+        const clash = await tx.referralProgram.findFirst({ where: { code, id: { not: id } } });
+        if (clash) throw new ReferralProgramConflictError(`Program code "${code}" already exists`);
+      }
+
+      const willBeActive = body.isActive ?? existing.isActive;
+      if (willBeActive) {
+        await this.deactivateOtherProgramsFor(tx, audience, actor, id);
+      }
+
+      const row = await tx.referralProgram.update({
+        where: { id },
+        data: {
+          ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.audience !== undefined ? { audience: body.audience } : {}),
+          ...(body.referrerReward !== undefined ? { referrerReward: body.referrerReward } : {}),
+          ...(body.refereeReward !== undefined ? { refereeReward: body.refereeReward } : {}),
+          ...(body.rewardType !== undefined ? { rewardType: body.rewardType } : {}),
+          ...(body.rewardWallet !== undefined ? { rewardWallet: body.rewardWallet } : {}),
+          ...(body.qualifyingEvent !== undefined ? { qualifyingEvent: body.qualifyingEvent } : {}),
+          ...(body.qualifyingThreshold !== undefined
+            ? { qualifyingThreshold: body.qualifyingThreshold }
+            : {}),
+          ...(body.maxReferralsPerUser !== undefined
+            ? { maxReferralsPerUser: body.maxReferralsPerUser }
+            : {}),
+          ...(body.qualificationWindowDays !== undefined
+            ? {
+                qualificationWindowDays: body.qualificationWindowDays,
+                rewardExpiryDays: body.qualificationWindowDays,
+              }
+            : body.rewardExpiryDays !== undefined
+              ? {
+                  qualificationWindowDays: body.rewardExpiryDays,
+                  rewardExpiryDays: body.rewardExpiryDays,
+                }
+              : {}),
+          ...(body.validFrom !== undefined ? { validFrom: body.validFrom } : {}),
+          ...(body.validTo !== undefined ? { validTo: body.validTo } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        },
+        include: this.include,
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'referral_program',
+        entityId: id,
+        summary: `Referral program ${row.code} updated`,
+        before: existing,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toDto(row);
+    });
+  }
+
+  /// Retires whatever else is currently live for this audience. Deliberately not
+  /// a database constraint: Postgres cannot express "at most one row where
+  /// is_active AND audience = X" as a plain unique, and a partial unique index on
+  /// (audience) WHERE is_active would make the handover a two-statement dance
+  /// that can fail between them. The write path is the single place programs are
+  /// activated, and it runs in the activating change's transaction, so the handover
+  /// is atomic. Each program retired here gets its own audit row: its history would
+  /// otherwise show it active forever.
+  private async deactivateOtherProgramsFor(
+    tx: TransactionClient,
+    audience: ReferralProgramAudience,
+    actor: AuditActor,
+    exceptId?: string,
+  ): Promise<void> {
+    const retired = await tx.referralProgram.findMany({
+      where: {
+        audience,
+        isActive: true,
+        ...(exceptId !== undefined ? { NOT: { id: exceptId } } : {}),
+      },
+      select: { id: true, code: true },
+    });
+    if (retired.length === 0) return;
+    await tx.referralProgram.updateMany({
+      where: { id: { in: retired.map((p) => p.id) } },
+      data: { isActive: false },
+    });
+    for (const program of retired) {
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'referral_program',
+        entityId: program.id,
+        summary: `Referral program ${program.code} deactivated: another ${audience} program was activated`,
+        before: { isActive: true },
+        after: { isActive: false },
+        result: 'SUCCESS',
+      });
+    }
+  }
+
+  async activate(id: string, actor: AuditActor): Promise<ProgramDto> {
+    return this.update(id, { isActive: true }, actor);
+  }
+
+  async deactivate(id: string, actor: AuditActor): Promise<ProgramDto> {
+    return this.update(id, { isActive: false }, actor);
+  }
+
+  async addMilestone(
+    programId: string,
+    body: CreateMilestoneBody,
+    actor: AuditActor,
+  ): Promise<MilestoneDto> {
+    const program = await this.databaseService.client.referralProgram.findUnique({
+      where: { id: programId },
+    });
+    if (!program) throw new ReferralProgramNotFoundError();
+    assertMilestoneConfig(program.audience, {
+      bonusAmount: body.bonusAmount,
+      isActive: body.isActive ?? true,
+    });
+
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      const row = await tx.referralMilestone.create({
+        data: {
+          programId,
+          name: body.name,
+          requiredReferrals: body.requiredReferrals,
+          bonusAmount: body.bonusAmount,
+          rewardType: body.rewardType ?? 'WALLET',
+          isActive: body.isActive ?? true,
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'CREATE',
+        entityType: 'referral_milestone',
+        entityId: row.id,
+        summary: `Referral milestone ${row.name} added to program ${program.code}`,
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toMilestoneDto(row);
+    });
+  }
+
+  async updateMilestone(
+    id: string,
+    body: UpdateMilestoneBody,
+    actor: AuditActor,
+  ): Promise<MilestoneDto> {
+    return this.databaseService.transactionManager.execute(async (tx) => {
+      await lockForAudit(tx, 'referral_milestones', id);
+      const existing = await tx.referralMilestone.findUnique({
+        where: { id },
+        include: { program: { select: { audience: true } } },
+      });
+      if (!existing) throw new ReferralMilestoneNotFoundError();
+      assertMilestoneConfig(existing.program.audience, {
+        bonusAmount: body.bonusAmount ?? toNum(existing.bonusAmount) ?? 0,
+        isActive: body.isActive ?? existing.isActive,
+      });
+
+      const row = await tx.referralMilestone.update({
+        where: { id },
+        data: {
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.requiredReferrals !== undefined
+            ? { requiredReferrals: body.requiredReferrals }
+            : {}),
+          ...(body.bonusAmount !== undefined ? { bonusAmount: body.bonusAmount } : {}),
+          ...(body.rewardType !== undefined ? { rewardType: body.rewardType } : {}),
+          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        },
+      });
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'referral_milestone',
+        entityId: id,
+        summary: `Referral milestone ${row.name} updated`,
+        before: { ...existing, program: undefined },
+        after: row,
+        result: 'SUCCESS',
+      });
+      return this.toMilestoneDto(row);
+    });
+  }
+
+  async deactivateMilestone(id: string, actor: AuditActor): Promise<MilestoneDto> {
+    return this.updateMilestone(id, { isActive: false }, actor);
+  }
+
+  async activateMilestone(id: string, actor: AuditActor): Promise<MilestoneDto> {
+    return this.updateMilestone(id, { isActive: true }, actor);
+  }
+}

@@ -1,13 +1,13 @@
-import { PrismaClient } from '../../../generated/prisma';
-
-export function createRideExtensions(prisma: PrismaClient) {
-  return prisma.$extends({
-    model: {
-      ride: {
-        async findActiveRides() {
-          return prisma.ride.findMany({ where: { status: 'IN_PROGRESS' } });
-        },
+import { Prisma } from '../../../generated/prisma';
+export const rideExtension = Prisma.defineExtension({
+  name: 'RideExtension',
+  model: {
+    ride: {
+      async findActiveRides() {
+        const ctx = Prisma.getExtensionContext(this);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (ctx as any).findMany({ where: { status: 'IN_PROGRESS' } });
       },
     },
-  });
-}
+  },
+});

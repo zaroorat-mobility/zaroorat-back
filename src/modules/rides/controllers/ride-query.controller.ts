@@ -1,0 +1,168 @@
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import { assertRideParty, callerId } from '@core/auth';
+import { GeoService } from '@modules/location';
+import type {
+  RideEtaService,
+  RideEtaSnapshot,
+} from '@modules/location/services/ride-eta.service.js';
+import type { FileRepository } from '@modules/files/repositories/file.repository.js';
+import type { FileStorageService } from '@modules/files/services/file-storage.service.js';
+import { RideRepository } from '../repositories/ride.repository.js';
+import { ReceiptService } from '../services/receipt/receipt.service.js';
+import { RideNotFoundError } from '../errors/ride.errors.js';
+import { RIDE_CANCEL_REASONS } from '../constants/ride.constants.js';
+import { ridePartyIds } from '../types/ride-party.js';
+import {
+  toClientRideViewWithMedia,
+  toCustomerFareDto,
+  type RideViewAudience,
+} from '../presenters/ride-client.presenter.js';
+
+const LIVE_TRACKING_STATUSES = new Set([
+  'ACCEPTED',
+  'DRIVER_ARRIVING',
+  'DRIVER_ARRIVED',
+  'IN_PROGRESS',
+  'DRIVER_AT_DROPOFF',
+]);
+
+export class RideQueryController {
+  constructor(
+    private readonly rideRepo: RideRepository,
+    private readonly receiptService: ReceiptService,
+    private readonly geoService: GeoService,
+    private readonly rideEtaService?: RideEtaService,
+    private readonly fileRepository?: FileRepository,
+    private readonly fileStorageService?: FileStorageService,
+  ) {}
+
+  private presentRide(
+    ride: Parameters<typeof toClientRideViewWithMedia>[0],
+    eta?: RideEtaSnapshot | null,
+    audience: RideViewAudience = 'driver',
+  ) {
+    return toClientRideViewWithMedia(
+      ride,
+      eta,
+      {
+        fileRepository: this.fileRepository,
+        fileStorageService: this.fileStorageService,
+      },
+      audience,
+    );
+  }
+
+  private audienceFor(req: FastifyRequest, ride: { customerId?: string | null } | null): RideViewAudience {
+    if (ride?.customerId && callerId(req) === ride.customerId) {
+      return 'customer';
+    }
+    return 'driver';
+  }
+
+  /// The caller's live ride, whichever side of it they are on.
+  ///
+  /// This used to branch on `callerHasRole(req, 'driver')` and look the caller
+  /// up only as a driver if so. Every verified driver keeps that role while
+  /// off duty, so a driver taking a ride as a passenger was searched for as a
+  /// driver, found nothing, and was told they had no active ride while sitting
+  /// in one. One query over both sides needs no such guess.
+  async getActive(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const activeRide = await this.rideRepo.findActiveForUser(callerId(req));
+    const eta =
+      activeRide && this.rideEtaService ? this.rideEtaService.getEta(activeRide.id) : null;
+    return reply.send({
+      data: await this.presentRide(activeRide, eta, this.audienceFor(req, activeRide)),
+    });
+  }
+
+  /// Static list of cancel reasons. Filtered by optional `?actor=DRIVER|CUSTOMER`.
+  async listCancelReasons(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { actor } = (req.query ?? {}) as { actor?: string };
+    const normalized = actor?.toUpperCase();
+    const reasons = RIDE_CANCEL_REASONS.filter((r) => {
+      if (!normalized) return true;
+      return r.actor === 'BOTH' || r.actor === normalized;
+    }).map(({ code, label }) => ({ code, label }));
+    reply.send({ data: reasons });
+  }
+
+  async getById(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as {
+      id: string;
+    };
+    const ride = await this.rideRepo.findById(id);
+    if (!ride) throw new RideNotFoundError(id);
+    assertRideParty(req, ridePartyIds(ride));
+    const eta = this.rideEtaService ? this.rideEtaService.getEta(ride.id) : null;
+    reply.send({ data: await this.presentRide(ride, eta, this.audienceFor(req, ride)) });
+  }
+
+  async getReceipt(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as {
+      id: string;
+    };
+    const ride = await this.rideRepo.findById(id);
+    if (!ride) throw new RideNotFoundError(id);
+    assertRideParty(req, ridePartyIds(ride));
+    const receipt = await this.receiptService.generateReceipt(id);
+    reply.send({ data: receipt });
+  }
+
+  /// The only sanctioned way for a customer to see a driver's live position:
+  /// scoped to their own active ride with that exact driver, not the
+  /// driver-owned `GET /drivers/:id/location` endpoint, which correctly
+  /// refuses every non-driver, non-staff caller and has no ride-scoped
+  /// exception of its own.
+  async getDriverLocation(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const { id } = req.params as { id: string };
+    const ride = await this.rideRepo.findById(id);
+    if (!ride) throw new RideNotFoundError(id);
+    assertRideParty(req, ridePartyIds(ride));
+    if (!LIVE_TRACKING_STATUSES.has(ride.status)) {
+      reply.send({ data: null });
+      return;
+    }
+    const position = await this.geoService.liveDriverPosition(ride.driverId);
+    if (!position) {
+      reply.send({ data: null });
+      return;
+    }
+    const eta = this.rideEtaService ? this.rideEtaService.getEta(ride.id) : null;
+    reply.send({
+      data: {
+        lat: position.latitude,
+        lng: position.longitude,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        recordedAt: position.updatedAt ?? null,
+        ...(eta
+          ? {
+              eta: {
+                destinationType: eta.destinationType,
+                remainingDistanceMeters: eta.remainingDistanceMeters,
+                remainingDurationSeconds: eta.remainingDurationSeconds,
+                providerName: eta.providerName,
+                stale: eta.stale,
+                computedAt: eta.computedAt,
+              },
+            }
+          : {}),
+      },
+    });
+  }
+
+  async listHistory(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const rides = await this.rideRepo.listCustomerRides(callerId(req));
+    const sanitized = rides.map((r) => {
+      const row = r as Record<string, unknown>;
+      const { driverPaymentModel: _dpm, commissionAmount: _ca, fare, ...rest } = row;
+      return {
+        ...rest,
+        ...(fare !== undefined
+          ? { fare: fare ? toCustomerFareDto(fare as Record<string, unknown>) : null }
+          : {}),
+      };
+    });
+    reply.send({ data: sanitized });
+  }
+}

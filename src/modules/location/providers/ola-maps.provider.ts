@@ -1,0 +1,310 @@
+import {
+  OlaMapsClient,
+  type OlaMapsConfig,
+} from '../../../integrations/ola-maps/ola-maps.client.js';
+import type { Coordinate } from '../types/geo.types.js';
+import { offlineMatrixResult, offlineRoutingResult } from '../utils/offline-route.js';
+import type {
+  AutocompleteResult,
+  MapProvider,
+  MapProviderAttribution,
+  MatrixCell,
+  MatrixResult,
+  ReverseGeocodeResult,
+  RoutingResult,
+  SuggestedPlace,
+} from '../types/map-provider.types.js';
+import { type MapCapability } from '../types/map-capabilities.types.js';
+import { logger } from '@shared/logger/index.js';
+import {
+  buildInterpolatedPath,
+  decodeEncodedPolyline,
+  encodeCoordinatesToPolyline,
+} from '@shared/geo/polyline.util.js';
+
+// ─── Raw Ola Maps response shapes ─────────────────────────────────────────────
+
+interface OlaAutocompletePrediction {
+  place_id?: string;
+  structured_formatting?: { main_text?: string; secondary_text?: string };
+  description?: string;
+  name?: string;
+  formatted_address?: string;
+}
+
+interface OlaAutocompleteResponse {
+  predictions?: OlaAutocompletePrediction[];
+  status?: string;
+}
+
+interface OlaReverseGeocodeResult {
+  formatted_address?: string;
+  address_components?: Array<{ long_name: string; short_name: string; types: string[] }>;
+}
+
+interface OlaReverseGeocodeResponse {
+  results?: OlaReverseGeocodeResult[];
+  status?: string;
+}
+
+interface OlaRouteStep {
+  end_location?: { lat?: number; lng?: number };
+}
+
+interface OlaRouteLeg {
+  distance?: number | { value: number };
+  duration?: number | { value: number };
+  steps?: OlaRouteStep[];
+}
+
+interface OlaRoute {
+  overview_polyline?: string;
+  legs?: OlaRouteLeg[];
+}
+
+interface OlaDirectionsResponse {
+  routes?: OlaRoute[];
+  status?: string;
+}
+
+interface OlaMatrixElement {
+  distance?: number | { value: number };
+  duration?: number | { value: number };
+  status?: string;
+}
+
+interface OlaMatrixRow {
+  elements?: OlaMatrixElement[];
+}
+
+interface OlaDistanceMatrixResponse {
+  rows?: OlaMatrixRow[];
+  status?: string;
+}
+
+/**
+ * OlaMapsProvider — Gateway to Ola Maps API endpoints implementing MapProvider.
+ */
+function readOlaMetric(value: number | { value: number } | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === 'number' ? value : value.value;
+}
+
+function pathFromOlaSteps(leg: OlaRouteLeg | undefined): Coordinate[] | null {
+  const steps = leg?.steps;
+  if (!steps?.length) return null;
+
+  const path: Coordinate[] = [];
+  for (const step of steps) {
+    const end = step.end_location;
+    if (end?.lat != null && end?.lng != null) {
+      path.push({ latitude: end.lat, longitude: end.lng });
+    }
+  }
+  return path.length >= 2 ? path : null;
+}
+
+const OLA_SUCCESS_STATUSES = new Set(['OK', 'SUCCESS']);
+
+function isOlaSuccessStatus(status: string | undefined): boolean {
+  if (!status) return true;
+  return OLA_SUCCESS_STATUSES.has(status.toUpperCase());
+}
+
+export class OlaMapsProvider extends OlaMapsClient implements Partial<MapProvider> {
+  readonly providerName = 'ola' as unknown as MapProvider['providerName'];
+
+  constructor(config: OlaMapsConfig) {
+    super(config);
+  }
+
+  isConfigured(): boolean {
+    return Boolean(this.config.apiKey && this.config.apiKey.trim().length > 0);
+  }
+
+  supportedCapabilities(): readonly MapCapability[] {
+    return [];
+  }
+
+  attribution(): MapProviderAttribution {
+    return { text: '© Ola Maps' };
+  }
+
+  /** Lightweight connectivity probe for admin health checks. */
+  async verifyConnectivity(origin: Coordinate, destination: Coordinate): Promise<void> {
+    const response = await this.post<OlaDirectionsResponse>('routing/v1/directions/basic', {
+      origin: `${origin.latitude},${origin.longitude}`,
+      destination: `${destination.latitude},${destination.longitude}`,
+    });
+
+    if (response.status && !isOlaSuccessStatus(response.status)) {
+      throw new Error(`[OlaMaps] connectivity check failed: ${response.status}`);
+    }
+
+    if (!response.routes || response.routes.length === 0) {
+      throw new Error('[OlaMaps] connectivity check: no route returned');
+    }
+  }
+
+  // ─── Address Search ─────────────────────────────────────────────────────────
+
+  async autocomplete(input: string, location?: Coordinate): Promise<AutocompleteResult> {
+    try {
+      const params: Record<string, string> = { input };
+      if (location) {
+        params['location'] = `${location.latitude},${location.longitude}`;
+      }
+
+      const response = await this.get<OlaAutocompleteResponse>('places/v1/autocomplete', params);
+
+      if (!response.predictions || response.predictions.length === 0) {
+        return { status: 'no_results', predictions: [], providerName: this.providerName };
+      }
+
+      const predictions: SuggestedPlace[] = response.predictions.map((p) => ({
+        placeId: p.place_id ?? '',
+        placeName:
+          p.structured_formatting?.main_text ?? p.name ?? p.description?.split(',')[0] ?? '',
+        placeAddress:
+          p.structured_formatting?.secondary_text ?? p.formatted_address ?? p.description ?? '',
+      }));
+
+      return { status: 'ok', predictions, providerName: this.providerName };
+    } catch (error) {
+      logger.error({ error, input }, '[OlaMaps] autocomplete failed');
+      return { status: 'unavailable', predictions: [], providerName: this.providerName };
+    }
+  }
+
+  // ─── Reverse Geocoding ───────────────────────────────────────────────────────
+
+  async reverseGeocode(coordinate: Coordinate): Promise<ReverseGeocodeResult> {
+    const response = await this.get<OlaReverseGeocodeResponse>('places/v1/reverse-geocode', {
+      latlng: `${coordinate.latitude},${coordinate.longitude}`,
+    });
+
+    if (!response.results || response.results.length === 0) {
+      throw new Error(
+        `[OlaMaps] reverseGeocode: no result for ${coordinate.latitude},${coordinate.longitude}`,
+      );
+    }
+
+    const result = response.results[0]!;
+    const components = result.address_components ?? [];
+
+    const find = (...types: string[]): string =>
+      components.find((c) => types.some((t) => c.types.includes(t)))?.long_name ?? '';
+
+    return {
+      formattedAddress: result.formatted_address ?? '',
+      city: find('locality', 'administrative_area_level_2'),
+      state: find('administrative_area_level_1'),
+      pincode: find('postal_code'),
+      providerName: this.providerName,
+    };
+  }
+
+  // ─── Directions (Distance + ETA) ─────────────────────────────────────────────
+
+  async getDirections(origin: Coordinate, destination: Coordinate): Promise<RoutingResult> {
+    // The offline stand-in is gated on the environment alone. It used to also
+    // fire on a credential *shape* — `apiKey.startsWith('test_')`/`'mock_'` — so a
+    // production key that happened to begin with those characters served a fixed
+    // 12.4 km / 31 min route for every journey, while still naming this provider
+    // as the source.
+    const offline = offlineRoutingResult(origin, destination, this.providerName);
+    if (offline) {
+      const path = buildInterpolatedPath(origin, destination);
+      return {
+        ...offline,
+        path,
+        encodedPolyline: encodeCoordinatesToPolyline(path),
+      };
+    }
+
+    const params = {
+      origin: `${origin.latitude},${origin.longitude}`,
+      destination: `${destination.latitude},${destination.longitude}`,
+    };
+
+    let response: OlaDirectionsResponse;
+    try {
+      response = await this.post<OlaDirectionsResponse>('routing/v1/directions', {
+        ...params,
+        overview: 'full',
+      });
+    } catch (primaryErr) {
+      logger.warn({ err: primaryErr }, '[OlaMaps] full directions failed — trying basic');
+      response = await this.post<OlaDirectionsResponse>('routing/v1/directions/basic', params);
+    }
+
+    if (response.status && !isOlaSuccessStatus(response.status)) {
+      throw new Error(`[OlaMaps] getDirections: API status ${response.status}`);
+    }
+
+    if (!response.routes || response.routes.length === 0) {
+      throw new Error('[OlaMaps] getDirections: no route found');
+    }
+
+    const route = response.routes[0]!;
+    const leg = route.legs?.[0];
+    const distanceMeters = readOlaMetric(leg?.distance) ?? 0;
+    const durationSeconds = readOlaMetric(leg?.duration) ?? 0;
+
+    const encodedPolyline = route.overview_polyline;
+    const path =
+      (encodedPolyline ? decodeEncodedPolyline(encodedPolyline) : null) ??
+      pathFromOlaSteps(leg) ??
+      buildInterpolatedPath(origin, destination);
+
+    if (path.length < 2) {
+      throw new Error('[OlaMaps] getDirections: route has no usable geometry');
+    }
+
+    return {
+      distanceMeters,
+      durationSeconds,
+      providerName: this.providerName,
+      ...(encodedPolyline ? { encodedPolyline } : {}),
+      path,
+    };
+  }
+
+  // ─── Distance Matrix (Driver ETA) ────────────────────────────────────────────
+
+  async getDistanceMatrix(
+    origins: Coordinate[],
+    destinations: Coordinate[],
+  ): Promise<MatrixResult> {
+    if (origins.length === 0 || destinations.length === 0) {
+      return { status: 'no_drivers', cells: [], providerName: this.providerName };
+    }
+
+    const offline = offlineMatrixResult(origins, destinations, this.providerName);
+    if (offline) return offline;
+
+    try {
+      const response = await this.get<OlaDistanceMatrixResponse>('routing/v1/distanceMatrix', {
+        origins: origins.map((o) => `${o.latitude},${o.longitude}`).join('|'),
+        destinations: destinations.map((d) => `${d.latitude},${d.longitude}`).join('|'),
+      });
+
+      if (!response.rows || response.rows.length === 0) {
+        return { status: 'unavailable', cells: [], providerName: this.providerName };
+      }
+
+      const cells: MatrixCell[][] = response.rows.map((row) =>
+        (row.elements ?? []).map((el) => ({
+          distanceMeters: readOlaMetric(el.distance) ?? 0,
+          durationSeconds: readOlaMetric(el.duration) ?? 0,
+          status: el.status === 'OK' ? 'OK' : 'ZERO_RESULTS',
+        })),
+      );
+
+      return { status: 'ok', cells, providerName: this.providerName };
+    } catch (error) {
+      logger.error({ error }, '[OlaMaps] distanceMatrix failed');
+      return { status: 'unavailable', cells: [], providerName: this.providerName };
+    }
+  }
+}

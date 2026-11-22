@@ -1,7 +1,61 @@
-import { createContainer, InjectionMode } from 'awilix';
+import { aliasTo, createContainer, InjectionMode } from 'awilix';
 import { registerDatabaseModule } from './database/DatabaseModule';
-
+import { registerRedisModule } from './cache/RedisModule';
+import { registerEventsModule } from './events';
+import { registerNotificationModule } from '@modules/notifications';
+import { registerAuthRepositories } from '@modules/auth/repositories';
+import { registerTokenServices } from '@modules/auth/services';
+import { registerOtpServices } from '@modules/auth/services/otp';
+import { registerSessionServices } from '@modules/auth/services/session';
+import { registerAuthService } from '@modules/auth';
+import { registerUserRepositories, registerUserService } from '@modules/users';
+import { registerFileModule, registerFileRepositories } from '@modules/files';
+import { registerPaymentsModule } from '@modules/payments';
+import { registerSubscriptionsModule } from '@modules/subscriptions';
+import { registerPricingModule } from '@modules/pricing';
+import { registerPromotionsModule } from '@modules/promotions';
+import { registerReferralsModule } from '@modules/referrals';
+import { registerLocationModule } from '@modules/location';
+import { registerAdminModule } from '@modules/admin';
+import { registerMatchingModule } from '@modules/matching';
+import { registerRatingModule } from '@modules/rating';
+import { registerAppConfigModule } from '@modules/app-config';
+import { registerRidesModule } from '@modules/rides';
+import { registerDriversModule } from '@modules/drivers';
+import { registerVehiclesModule } from '@modules/vehicles';
+import { registerRealtimeModule } from '@modules/realtime';
+import { registerSupportModule } from '@modules/support';
 export const container = createContainer({ injectionMode: InjectionMode.CLASSIC });
-
-// Register modules
 registerDatabaseModule(container);
+registerRedisModule(container);
+registerEventsModule(container);
+registerNotificationModule(container);
+registerAuthRepositories(container);
+registerUserRepositories(container);
+registerFileRepositories(container);
+registerTokenServices(container);
+registerOtpServices(container);
+registerSessionServices(container);
+registerAuthService(container);
+registerUserService(container);
+registerFileModule(container);
+registerPaymentsModule(container);
+registerDriversModule(container);
+registerSubscriptionsModule(container);
+registerVehiclesModule(container);
+registerPricingModule(container);
+registerPromotionsModule(container);
+registerReferralsModule(container);
+registerAdminModule(container);
+registerLocationModule(container);
+registerMatchingModule(container);
+registerRatingModule(container);
+registerAppConfigModule(container);
+registerRidesModule(container);
+registerSupportModule(container);
+// Realtime depends on ride chat for socket `chat.message.send`; register after rides.
+registerRealtimeModule(container);
+container.register({
+  db: aliasTo('databaseService'),
+  redis: aliasTo('redisService'),
+});

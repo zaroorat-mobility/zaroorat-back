@@ -1,0 +1,684 @@
+import type { DatabaseService, TransactionManager } from '@core/database';
+import type { TransactionClient } from '@core/database/TransactionManager';
+import { container } from '@core/di';
+import { geoConfig } from '@config/geo/geo.config.js';
+import { otpConfig } from '@config/otp/otp.config.js';
+import { rideConfig } from '@config/ride/ride.config.js';
+import { driverConfig } from '@config/driver/driver.config.js';
+import { vehicleConfig } from '@config/vehicle/vehicle.config.js';
+import {
+  lockForAudit,
+  lockForAuditKey,
+  recordAdminAction,
+  type AuditActor,
+} from '../../../audit/index.js';
+import { SystemSettingService } from '../../services/system-setting.service.js';
+import { SystemSettingsCache } from '../../cache/system-settings.cache.js';
+import { PlatformConfigResolver } from './platform-config-resolver.service.js';
+import { FeatureFlagService } from './feature-flag.service.js';
+import { FeatureFlagDependencyValidator } from '@modules/pricing';
+import {
+  GENERAL_SETTING_KEYS,
+  RIDE_SETTING_KEYS,
+  OTP_SETTING_KEYS,
+  ONBOARDING_SETTING_KEYS,
+  MAINTENANCE_SETTING_KEYS,
+  GENERAL_SETTINGS_CATEGORY,
+  RIDE_SETTINGS_CATEGORY,
+  OTP_SETTINGS_CATEGORY,
+  ONBOARDING_SETTINGS_CATEGORY,
+  MAINTENANCE_SETTINGS_CATEGORY,
+} from '../constants/platform-settings.constants.js';
+import type {
+  UpdateGeneralSettingsBody,
+  UpdateRideSettingsBody,
+  UpdateOtpSettingsBody,
+  UpdateOnboardingSettingsBody,
+  UpdateFeatureFlagsBody,
+  UpdateMaintenanceSettingsBody,
+} from '../schemas/platform-settings.schema.js';
+import { logger } from '@shared/logger/index.js';
+import { SOCKET_EVENT, socketEnvelope } from '@modules/realtime/events.js';
+import type { RealtimeGateway } from '@modules/realtime/realtime.gateway.js';
+import { uuidV7 } from '@shared/crypto';
+
+type SettingField<T> = { value: T; source: 'database' | 'default' };
+
+function withSource<T>(
+  dbValue: string | null | undefined,
+  defaultValue: T,
+  parser: (v: string) => T,
+): SettingField<T> {
+  if (dbValue !== null && dbValue !== undefined && dbValue !== '') {
+    return { value: parser(dbValue), source: 'database' };
+  }
+  return { value: defaultValue, source: 'default' };
+}
+
+function flagState(flag: {
+  key: string;
+  status: string;
+  rolloutPercentage: number;
+  isActive: boolean;
+}) {
+  return {
+    key: flag.key,
+    status: flag.status,
+    rolloutPercentage: flag.rolloutPercentage,
+    isActive: flag.isActive,
+  };
+}
+
+export class AdminPlatformSettingsService {
+  constructor(
+    private readonly systemSettingService: SystemSettingService,
+    private readonly systemSettingsCache: SystemSettingsCache,
+    private readonly platformConfigResolver: PlatformConfigResolver,
+    private readonly featureFlagService: FeatureFlagService,
+    private readonly databaseService: DatabaseService,
+    private readonly txManager: TransactionManager,
+    private readonly featureFlagDependencyValidator?: FeatureFlagDependencyValidator,
+  ) {}
+
+  private get client() {
+    return this.databaseService.client;
+  }
+
+  async getGeneralSettings() {
+    const s = await this.systemSettingService.getCategorySettings(GENERAL_SETTINGS_CATEGORY);
+    return {
+      platformName: withSource(
+        s.get(GENERAL_SETTING_KEYS.PLATFORM_NAME)?.value,
+        'Zaroorat',
+        (v) => v,
+      ),
+      logoUrl: withSource(s.get(GENERAL_SETTING_KEYS.LOGO_URL)?.value, '', (v) => v),
+      customerLogoUrl: withSource(
+        s.get(GENERAL_SETTING_KEYS.CUSTOMER_LOGO_URL)?.value,
+        '',
+        (v) => v,
+      ),
+      driverLogoUrl: withSource(s.get(GENERAL_SETTING_KEYS.DRIVER_LOGO_URL)?.value, '', (v) => v),
+      supportPhone: withSource(s.get(GENERAL_SETTING_KEYS.SUPPORT_PHONE)?.value, '', (v) => v),
+      supportEmail: withSource(s.get(GENERAL_SETTING_KEYS.SUPPORT_EMAIL)?.value, '', (v) => v),
+      defaultLanguage: withSource(
+        s.get(GENERAL_SETTING_KEYS.DEFAULT_LANGUAGE)?.value,
+        'en',
+        (v) => v,
+      ),
+      timezone: withSource(s.get(GENERAL_SETTING_KEYS.TIMEZONE)?.value, 'Asia/Kolkata', (v) => v),
+      currency: withSource(s.get(GENERAL_SETTING_KEYS.CURRENCY)?.value, 'INR', (v) => v),
+    };
+  }
+
+  async updateGeneralSettings(body: UpdateGeneralSettingsBody, actorId?: string) {
+    await this.saveSettings(
+      GENERAL_SETTINGS_CATEGORY,
+      [
+        { key: GENERAL_SETTING_KEYS.PLATFORM_NAME, value: body.platformName },
+        { key: GENERAL_SETTING_KEYS.LOGO_URL, value: body.logoUrl },
+        { key: GENERAL_SETTING_KEYS.CUSTOMER_LOGO_URL, value: body.customerLogoUrl },
+        { key: GENERAL_SETTING_KEYS.DRIVER_LOGO_URL, value: body.driverLogoUrl },
+        { key: GENERAL_SETTING_KEYS.SUPPORT_PHONE, value: body.supportPhone },
+        { key: GENERAL_SETTING_KEYS.SUPPORT_EMAIL, value: body.supportEmail },
+        { key: GENERAL_SETTING_KEYS.DEFAULT_LANGUAGE, value: body.defaultLanguage },
+        { key: GENERAL_SETTING_KEYS.TIMEZONE, value: body.timezone },
+        { key: GENERAL_SETTING_KEYS.CURRENCY, value: body.currency },
+      ],
+      actorId,
+      'general_settings',
+    );
+    return this.getGeneralSettings();
+  }
+
+  async getRideSettings() {
+    const s = await this.systemSettingService.getCategorySettings(RIDE_SETTINGS_CATEGORY);
+    return {
+      requestExpiryMinutes: withSource(
+        s.get(RIDE_SETTING_KEYS.REQUEST_EXPIRY_MINUTES)?.value,
+        rideConfig.requestExpiryMinutes,
+        Number.parseInt,
+      ),
+      dispatchTimeoutSeconds: withSource(
+        s.get(RIDE_SETTING_KEYS.DISPATCH_TIMEOUT_SECONDS)?.value,
+        rideConfig.dispatchTimeoutSeconds,
+        Number.parseInt,
+      ),
+      dispatchBatchSize: withSource(
+        s.get(RIDE_SETTING_KEYS.DISPATCH_BATCH_SIZE)?.value,
+        rideConfig.dispatchBatchSize,
+        Number.parseInt,
+      ),
+      searchRadiusMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.SEARCH_RADIUS_METERS)?.value,
+        geoConfig.searchRadiusMeters,
+        Number.parseInt,
+      ),
+      maxSearchRadiusMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.MAX_SEARCH_RADIUS_METERS)?.value,
+        geoConfig.maxSearchRadiusMeters,
+        Number.parseInt,
+      ),
+      cancellationGraceMinutes: withSource(
+        s.get(RIDE_SETTING_KEYS.CANCELLATION_GRACE_MINUTES)?.value,
+        rideConfig.cancellationGraceMinutes,
+        Number.parseInt,
+      ),
+      defaultCancellationFee: withSource(
+        s.get(RIDE_SETTING_KEYS.DEFAULT_CANCELLATION_FEE)?.value,
+        rideConfig.defaultCancellationFee,
+        Number.parseFloat,
+      ),
+      pickupGeofenceMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.PICKUP_GEOFENCE_METERS)?.value,
+        rideConfig.pickupGeofenceMeters,
+        Number.parseInt,
+      ),
+      dropGeofenceMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.DROP_GEOFENCE_METERS)?.value,
+        rideConfig.dropGeofenceMeters,
+        Number.parseInt,
+      ),
+      arrivalMaxAccuracyMeters: withSource(
+        s.get(RIDE_SETTING_KEYS.ARRIVAL_MAX_ACCURACY_METERS)?.value,
+        rideConfig.arrivalMaxAccuracyMeters,
+        Number.parseInt,
+      ),
+      arrivalRequiredFixes: withSource(
+        s.get(RIDE_SETTING_KEYS.ARRIVAL_REQUIRED_FIXES)?.value,
+        rideConfig.arrivalRequiredFixes,
+        Number.parseInt,
+      ),
+      dispatchMaxRounds: withSource(
+        s.get(RIDE_SETTING_KEYS.DISPATCH_MAX_ROUNDS)?.value,
+        rideConfig.dispatchMaxRounds,
+        Number.parseInt,
+      ),
+      dispatchMaxAttemptedDrivers: withSource(
+        s.get(RIDE_SETTING_KEYS.DISPATCH_MAX_ATTEMPTED_DRIVERS)?.value,
+        rideConfig.dispatchMaxAttemptedDrivers,
+        Number.parseInt,
+      ),
+    };
+  }
+
+  async updateRideSettings(body: UpdateRideSettingsBody, actorId?: string) {
+    await this.saveSettings(
+      RIDE_SETTINGS_CATEGORY,
+      [
+        {
+          key: RIDE_SETTING_KEYS.REQUEST_EXPIRY_MINUTES,
+          value: body.requestExpiryMinutes?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DISPATCH_TIMEOUT_SECONDS,
+          value: body.dispatchTimeoutSeconds?.toString(),
+        },
+        { key: RIDE_SETTING_KEYS.DISPATCH_BATCH_SIZE, value: body.dispatchBatchSize?.toString() },
+        { key: RIDE_SETTING_KEYS.SEARCH_RADIUS_METERS, value: body.searchRadiusMeters?.toString() },
+        {
+          key: RIDE_SETTING_KEYS.MAX_SEARCH_RADIUS_METERS,
+          value: body.maxSearchRadiusMeters?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.CANCELLATION_GRACE_MINUTES,
+          value: body.cancellationGraceMinutes?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DEFAULT_CANCELLATION_FEE,
+          value: body.defaultCancellationFee?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.PICKUP_GEOFENCE_METERS,
+          value: body.pickupGeofenceMeters?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DROP_GEOFENCE_METERS,
+          value: body.dropGeofenceMeters?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.ARRIVAL_MAX_ACCURACY_METERS,
+          value: body.arrivalMaxAccuracyMeters?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.ARRIVAL_REQUIRED_FIXES,
+          value: body.arrivalRequiredFixes?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DISPATCH_MAX_ROUNDS,
+          value: body.dispatchMaxRounds?.toString(),
+        },
+        {
+          key: RIDE_SETTING_KEYS.DISPATCH_MAX_ATTEMPTED_DRIVERS,
+          value: body.dispatchMaxAttemptedDrivers?.toString(),
+        },
+      ],
+      actorId,
+      'ride_settings',
+    );
+    return this.getRideSettings();
+  }
+
+  async getOtpSettings() {
+    const s = await this.systemSettingService.getCategorySettings(OTP_SETTINGS_CATEGORY);
+    return {
+      enabled: withSource(s.get(OTP_SETTING_KEYS.ENABLED)?.value, true, (v) => v === 'true'),
+      codeLength: withSource(
+        s.get(OTP_SETTING_KEYS.CODE_LENGTH)?.value,
+        otpConfig.codeLength,
+        Number.parseInt,
+      ),
+      ttlSeconds: withSource(
+        s.get(OTP_SETTING_KEYS.TTL_SECONDS)?.value,
+        otpConfig.ttlSeconds,
+        Number.parseInt,
+      ),
+      maxVerifyAttempts: withSource(
+        s.get(OTP_SETTING_KEYS.MAX_VERIFY_ATTEMPTS)?.value,
+        otpConfig.maxVerifyAttempts,
+        Number.parseInt,
+      ),
+      lockoutSeconds: withSource(
+        s.get(OTP_SETTING_KEYS.LOCKOUT_SECONDS)?.value,
+        otpConfig.lockoutSeconds,
+        Number.parseInt,
+      ),
+      resendIntervalSeconds: withSource(
+        s.get(OTP_SETTING_KEYS.RESEND_INTERVAL_SECONDS)?.value,
+        otpConfig.resendIntervalSeconds,
+        Number.parseInt,
+      ),
+    };
+  }
+
+  async updateOtpSettings(body: UpdateOtpSettingsBody, actorId?: string) {
+    await this.saveSettings(
+      OTP_SETTINGS_CATEGORY,
+      [
+        {
+          key: OTP_SETTING_KEYS.ENABLED,
+          value: body.enabled !== undefined ? String(body.enabled) : undefined,
+        },
+        { key: OTP_SETTING_KEYS.CODE_LENGTH, value: body.codeLength?.toString() },
+        { key: OTP_SETTING_KEYS.TTL_SECONDS, value: body.ttlSeconds?.toString() },
+        { key: OTP_SETTING_KEYS.MAX_VERIFY_ATTEMPTS, value: body.maxVerifyAttempts?.toString() },
+        { key: OTP_SETTING_KEYS.LOCKOUT_SECONDS, value: body.lockoutSeconds?.toString() },
+        {
+          key: OTP_SETTING_KEYS.RESEND_INTERVAL_SECONDS,
+          value: body.resendIntervalSeconds?.toString(),
+        },
+      ],
+      actorId,
+      'otp_settings',
+    );
+    return this.getOtpSettings();
+  }
+
+  async getOnboardingSettings() {
+    const s = await this.systemSettingService.getCategorySettings(ONBOARDING_SETTINGS_CATEGORY);
+    return {
+      driverRequiredDocuments: withSource(
+        s.get(ONBOARDING_SETTING_KEYS.DRIVER_REQUIRED_DOCUMENTS)?.value,
+        driverConfig.requiredDocumentTypes,
+        (v) =>
+          v
+            .split(',')
+            .map((d) => d.trim())
+            .filter(Boolean),
+      ),
+      vehicleRequiredDocuments: withSource(
+        s.get(ONBOARDING_SETTING_KEYS.VEHICLE_REQUIRED_DOCUMENTS)?.value,
+        vehicleConfig.requiredDocumentTypes,
+        (v) =>
+          v
+            .split(',')
+            .map((d) => d.trim())
+            .filter(Boolean),
+      ),
+      driverDocExpiryWarningDays: withSource(
+        s.get(ONBOARDING_SETTING_KEYS.DRIVER_DOC_EXPIRY_WARNING_DAYS)?.value,
+        30,
+        Number.parseInt,
+      ),
+      requireApprovedDocuments: withSource(
+        s.get(ONBOARDING_SETTING_KEYS.REQUIRE_APPROVED_DOCUMENTS)?.value,
+        driverConfig.requireApprovedDocuments,
+        (v) => v === 'true',
+      ),
+    };
+  }
+
+  async updateOnboardingSettings(body: UpdateOnboardingSettingsBody, actorId?: string) {
+    await this.saveSettings(
+      ONBOARDING_SETTINGS_CATEGORY,
+      [
+        {
+          key: ONBOARDING_SETTING_KEYS.DRIVER_REQUIRED_DOCUMENTS,
+          value: body.driverRequiredDocuments?.join(','),
+        },
+        {
+          key: ONBOARDING_SETTING_KEYS.VEHICLE_REQUIRED_DOCUMENTS,
+          value: body.vehicleRequiredDocuments?.join(','),
+        },
+        {
+          key: ONBOARDING_SETTING_KEYS.DRIVER_DOC_EXPIRY_WARNING_DAYS,
+          value: body.driverDocExpiryWarningDays?.toString(),
+        },
+        {
+          key: ONBOARDING_SETTING_KEYS.REQUIRE_APPROVED_DOCUMENTS,
+          value:
+            body.requireApprovedDocuments !== undefined
+              ? String(body.requireApprovedDocuments)
+              : undefined,
+        },
+      ],
+      actorId,
+      'onboarding_settings',
+    );
+    return this.getOnboardingSettings();
+  }
+
+  async getFeatureFlags() {
+    const flags = await this.featureFlagService.listFlags();
+    return flags.map((f) => ({
+      id: f.id,
+      key: f.key,
+      name: f.name,
+      description: f.description,
+      status: f.status,
+      rolloutPercentage: f.rolloutPercentage,
+      isActive: f.isActive,
+    }));
+  }
+
+  /// Every flag in the request, and one audit row per flag it changes, commit together: an
+  /// unknown key or a failed audit write leaves every flag as it was. Flags are locked in
+  /// key order — code-unit order, not `localeCompare`, so every replica sorts alike — and
+  /// two overlapping requests queue instead of deadlocking; each row's `before` is the
+  /// value its write replaced. A flag the request would not change is neither written nor
+  /// logged.
+  async updateFeatureFlags(body: UpdateFeatureFlagsBody, actor: AuditActor) {
+    await this.featureFlagService.ensureSeeded();
+    const flags = [...body.flags].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    await this.txManager.execute(async (tx) => {
+      // Snapshot current flag state for dependency validation (Rev 5 §1.4)
+      const allFlags = await tx.featureFlag.findMany();
+      const prevState: Record<string, boolean> = {};
+      const nextState: Record<string, boolean> = {};
+      for (const f of allFlags) {
+        const enabled = f.isActive && (f.status === 'ON' || (f.status !== 'OFF' && f.rolloutPercentage > 0));
+        prevState[f.key] = enabled;
+        nextState[f.key] = enabled;
+      }
+
+      const pendingUpdates: Array<{
+        targetId: string;
+        before: typeof allFlags[number];
+        changes: {
+          status?: 'ON' | 'OFF' | 'PARTIAL';
+          rolloutPercentage?: number;
+          isActive?: boolean;
+        };
+      }> = [];
+
+      for (const flag of flags) {
+        const target = await tx.featureFlag.findUnique({ where: { key: flag.key } });
+        if (!target) throw new Error(`Unknown feature flag '${flag.key}'`);
+        await lockForAudit(tx, 'feature_flags', target.id);
+        const before = await tx.featureFlag.findUniqueOrThrow({ where: { id: target.id } });
+        const changes = {
+          ...(flag.status !== undefined && flag.status !== before.status
+            ? { status: flag.status }
+            : {}),
+          ...(flag.rolloutPercentage !== undefined &&
+          flag.rolloutPercentage !== before.rolloutPercentage
+            ? { rolloutPercentage: flag.rolloutPercentage }
+            : {}),
+          ...(flag.isActive !== undefined && flag.isActive !== before.isActive
+            ? { isActive: flag.isActive }
+            : {}),
+        };
+        if (Object.keys(changes).length === 0) continue;
+
+        const mergedActive = changes.isActive ?? before.isActive;
+        const mergedStatus = changes.status ?? before.status;
+        const mergedRollout = changes.rolloutPercentage ?? before.rolloutPercentage;
+        nextState[flag.key] =
+          mergedActive && (mergedStatus === 'ON' || (mergedStatus !== 'OFF' && mergedRollout > 0));
+        pendingUpdates.push({ targetId: target.id, before, changes });
+      }
+
+      if (this.featureFlagDependencyValidator && pendingUpdates.length > 0) {
+        await this.featureFlagDependencyValidator.validateProspectiveState(
+          nextState,
+          prevState,
+          tx,
+        );
+      }
+
+      for (const item of pendingUpdates) {
+        const after = await this.featureFlagService.updateFlag(item.targetId, item.changes, tx);
+        await recordAdminAction(tx, {
+          ...actor,
+          action: 'UPDATE',
+          entityType: 'feature_flag',
+          entityId: after.id,
+          summary: `Feature flag ${after.key} updated`,
+          before: flagState(item.before),
+          after: flagState(after),
+          result: 'SUCCESS',
+        });
+      }
+    });
+    await this.invalidatePublicAppConfig(actor.actorId);
+    return this.getFeatureFlags();
+  }
+
+  async patchSingleFeatureFlag(
+    key: string,
+    patch: { status?: 'ON' | 'OFF' | 'PARTIAL'; rolloutPercentage?: number; isActive?: boolean },
+    actor: AuditActor,
+  ) {
+    const all = await this.updateFeatureFlags({ flags: [{ key, ...patch }] }, actor);
+    return all.find((f) => f.key === key) ?? null;
+  }
+
+  async getMaintenanceSettings() {
+    const config = await this.platformConfigResolver.getMaintenanceConfig();
+    const now = new Date();
+    const activeWindow = await this.client.maintenanceWindow.findFirst({
+      where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } },
+      orderBy: { startsAt: 'desc' },
+    });
+    const scheduled = await this.client.maintenanceWindow.findMany({
+      where: { isActive: true, endsAt: { gte: now } },
+      orderBy: { startsAt: 'asc' },
+      take: 10,
+    });
+    return {
+      enabled: config.enabled || Boolean(activeWindow),
+      message: config.message,
+      allowAdminAccess: config.allowAdminAccess,
+      activeWindow,
+      scheduled,
+    };
+  }
+
+  /// Maintenance can take the platform offline, so the settings, any scheduled window
+  /// and one audit row with the real before/after commit together — a failed audit
+  /// write leaves maintenance exactly as it was. Writers queue on the category lock, so
+  /// each row's `before` is the state its write replaced.
+  async updateMaintenanceSettings(body: UpdateMaintenanceSettingsBody, actor: AuditActor) {
+    const entries = [
+      {
+        key: MAINTENANCE_SETTING_KEYS.ENABLED,
+        value: body.enabled !== undefined ? String(body.enabled) : undefined,
+      },
+      { key: MAINTENANCE_SETTING_KEYS.MESSAGE, value: body.message },
+      {
+        key: MAINTENANCE_SETTING_KEYS.ALLOW_ADMIN_ACCESS,
+        value: body.allowAdminAccess !== undefined ? String(body.allowAdminAccess) : undefined,
+      },
+    ];
+
+    await this.txManager.execute(async (tx) => {
+      await lockForAuditKey(tx, `settings:${MAINTENANCE_SETTINGS_CATEGORY}`);
+      const before = await this.maintenanceState(tx);
+      for (const entry of entries) {
+        if (entry.value === undefined) continue;
+        await this.systemSettingService.setSetting(
+          {
+            key: entry.key,
+            value: entry.value,
+            category: MAINTENANCE_SETTINGS_CATEGORY,
+            updatedBy: actor.actorId,
+          },
+          tx,
+        );
+      }
+      const window = body.schedule
+        ? await tx.maintenanceWindow.create({
+            data: {
+              title: body.schedule.title,
+              description: body.schedule.description ?? null,
+              startsAt: new Date(body.schedule.startsAt),
+              endsAt: new Date(body.schedule.endsAt),
+              affectedServices: body.schedule.affectedServices ?? ['api'],
+              isActive: true,
+            },
+          })
+        : null;
+      await recordAdminAction(tx, {
+        ...actor,
+        action: 'UPDATE',
+        entityType: 'maintenance_settings',
+        summary: window
+          ? `Maintenance settings updated; window scheduled ${window.startsAt.toISOString()} → ${window.endsAt.toISOString()}`
+          : 'Maintenance settings updated',
+        before,
+        after: {
+          ...(await this.maintenanceState(tx)),
+          ...(window
+            ? {
+                scheduledWindow: {
+                  id: window.id,
+                  title: window.title,
+                  startsAt: window.startsAt,
+                  endsAt: window.endsAt,
+                  affectedServices: window.affectedServices,
+                },
+              }
+            : {}),
+        },
+        result: 'SUCCESS',
+      });
+    });
+
+    await this.systemSettingsCache.invalidateCategory(MAINTENANCE_SETTINGS_CATEGORY);
+    await this.invalidatePublicAppConfig(actor.actorId);
+    return this.getMaintenanceSettings();
+  }
+
+  /// The stored maintenance keys and the count of windows still to come, read inside the
+  /// caller's transaction.
+  private async maintenanceState(tx: TransactionClient) {
+    const rows = await tx.systemSetting.findMany({
+      where: { category: MAINTENANCE_SETTINGS_CATEGORY },
+      select: { key: true, value: true },
+    });
+    const value = (key: string) => rows.find((r) => r.key === key)?.value ?? null;
+    return {
+      enabled: value(MAINTENANCE_SETTING_KEYS.ENABLED),
+      message: value(MAINTENANCE_SETTING_KEYS.MESSAGE),
+      allowAdminAccess: value(MAINTENANCE_SETTING_KEYS.ALLOW_ADMIN_ACCESS),
+      upcomingWindows: await tx.maintenanceWindow.count({
+        where: { isActive: true, endsAt: { gte: new Date() } },
+      }),
+    };
+  }
+
+  async isMaintenanceActive(): Promise<{
+    active: boolean;
+    message: string;
+    allowAdminAccess: boolean;
+  }> {
+    const config = await this.platformConfigResolver.getMaintenanceConfig();
+    const now = new Date();
+    const activeWindow = await this.client.maintenanceWindow.findFirst({
+      where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } },
+    });
+    const active = config.enabled || Boolean(activeWindow);
+    return { active, message: config.message, allowAdminAccess: config.allowAdminAccess };
+  }
+
+  private async saveSettings(
+    category: string,
+    entries: Array<{ key: string; value: string | undefined }>,
+    actorId: string | undefined,
+    entityType: string,
+  ): Promise<void> {
+    await this.txManager.execute(async (tx) => {
+      for (const entry of entries) {
+        if (entry.value === undefined) continue;
+        await this.systemSettingService.setSetting(
+          {
+            key: entry.key,
+            value: entry.value,
+            category,
+            ...(actorId ? { updatedBy: actorId } : {}),
+          },
+          tx,
+        );
+      }
+      await recordAdminAction(tx, {
+        actorId,
+        action: 'UPDATE',
+        entityType,
+        summary: `Updated ${entityType.replace('_', ' ')}`,
+        after: Object.fromEntries(
+          entries.filter((e) => e.value !== undefined).map((e) => [e.key, e.value]),
+        ),
+      });
+    });
+    await this.systemSettingsCache.invalidateCategory(category);
+    await this.invalidatePublicAppConfig(actorId);
+  }
+
+  /**
+   * Platform settings are embedded in the public app-config bundle.
+   * Bump version + purge Redis so clients revalidate via ETag on next boot.
+   */
+  private async invalidatePublicAppConfig(actorId?: string): Promise<void> {
+    try {
+      const appConfigService = container.resolve('appConfigService') as {
+        bumpVersion: (updatedBy?: string | null) => Promise<number>;
+      };
+      const appConfigCache = container.resolve('appConfigCache') as {
+        purgeAll: () => Promise<void>;
+      };
+      const newVersion = await appConfigService.bumpVersion(actorId ?? null);
+      await appConfigCache.purgeAll();
+
+      if (container.hasRegistration('realtimeGateway')) {
+        const gateway = container.resolve<RealtimeGateway>('realtimeGateway');
+        const [general, riderConfig, driverConfig] = await Promise.all([
+          this.platformConfigResolver.getGeneralConfig(),
+          this.platformConfigResolver.getGeneralConfig('rider'),
+          this.platformConfigResolver.getGeneralConfig('driver'),
+        ]);
+        gateway.emitBroadcast(
+          socketEnvelope(uuidV7(), SOCKET_EVENT.APP_BRANDING_UPDATED, {
+            logoUrl: general.logoUrl,
+            customerLogoUrl: riderConfig.logoUrl,
+            driverLogoUrl: driverConfig.logoUrl,
+            platformName: general.platformName,
+            version: newVersion,
+            timestamp: Date.now(),
+          }),
+        );
+      }
+    } catch (err) {
+      logger.warn({ err }, '[AdminPlatformSettings] Failed to invalidate public app-config');
+    }
+  }
+}

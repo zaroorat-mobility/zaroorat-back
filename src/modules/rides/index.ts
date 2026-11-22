@@ -1,2 +1,135 @@
-// Rides module (routes, controllers, services, schemas) will be wired here
-export {};
+import { asClass, asFunction, aliasTo, AwilixContainer } from 'awilix';
+import { RideMetrics } from './metrics/ride.metrics.js';
+import {
+  RideRequestRepository,
+  RideQuoteRepository,
+  RideDispatchRepository,
+  RideRepository,
+  RideFareRepository,
+  RideCancellationRepository,
+  RideStatusEventRepository,
+  RideReceiptRepository,
+} from './repositories/index.js';
+import {
+  RideRequestService,
+  CancellationService,
+  DispatchService,
+  LifecycleService,
+  ArrivalDetectionService,
+  ReceiptService,
+  RideService,
+  RidePinThrottle,
+  RidePinVerificationService,
+  RideSafetyService,
+} from './services/index.js';
+import { ScheduledRideService } from './services/scheduled/index.js';
+import { RideFinancialSettlementService } from './services/settlement/ride-financial-settlement.service.js';
+import { RideChatService } from './services/chat/index.js';
+import { RideCallService, createCallProvider } from './services/call/index.js';
+import {
+  RideRequestController,
+  RideStateController,
+  RideQueryController,
+  RideController,
+  RideChatController,
+  RideCallController,
+  RideScheduledController,
+  RideSafetyController,
+} from './controllers/index.js';
+import {
+  DispatchTimeoutJob,
+  NotificationEventReconciliationJob,
+  RequestExpiryJob,
+  ScheduledRideReminderJob,
+} from './jobs/index.js';
+import {
+  RideRequestedConsumer,
+  RideRequestBoostedConsumer,
+  RideNotificationConsumer,
+  RideRealtimeConsumer,
+} from './consumers/index.js';
+export * from './controllers/index.js';
+export * from './routes/index.js';
+export * from './schemas/index.js';
+export * from './services/index.js';
+export * from './repositories/index.js';
+export * from './jobs/index.js';
+export * from './consumers/index.js';
+export * from './metrics/index.js';
+export * from './plugins/index.js';
+export * from './events/index.js';
+export * from './errors/index.js';
+export * from './constants/index.js';
+export * from './types/index.js';
+export function registerRidesModule(container: AwilixContainer): void {
+  container.register({
+    rideMetrics: asClass(RideMetrics).singleton(),
+    rideRequestRepository: asClass(RideRequestRepository).singleton(),
+    rideQuoteRepository: asClass(RideQuoteRepository).singleton(),
+    rideDispatchRepository: asClass(RideDispatchRepository).singleton(),
+    rideRepository: asClass(RideRepository).singleton(),
+    rideFareRepository: asClass(RideFareRepository).singleton(),
+    rideCancellationRepository: asClass(RideCancellationRepository).singleton(),
+    rideStatusEventRepository: asClass(RideStatusEventRepository).singleton(),
+    rideReceiptRepository: asClass(RideReceiptRepository).singleton(),
+    rideRequestService: asClass(RideRequestService).singleton(),
+
+    ridePinThrottle: asClass(RidePinThrottle).singleton(),
+    ridePinVerificationService: asClass(RidePinVerificationService).singleton(),
+    cancellationService: asClass(CancellationService).singleton(),
+    rideFinancialSettlementService: asClass(RideFinancialSettlementService).singleton(),
+    dispatchService: asClass(DispatchService).singleton(),
+    lifecycleService: asClass(LifecycleService).singleton(),
+    arrivalDetectionService: asClass(ArrivalDetectionService).singleton(),
+    receiptService: asClass(ReceiptService).singleton(),
+    scheduledRideService: asClass(ScheduledRideService).singleton(),
+    rideSafetyService: asClass(RideSafetyService).singleton(),
+    rideChatService: asClass(RideChatService).singleton(),
+    callProvider: asFunction(createCallProvider).singleton(),
+    rideCallService: asClass(RideCallService).singleton(),
+    rideService: asClass(RideService)
+      .singleton()
+      .inject((c) => ({
+        request: c.resolve('rideRequestService'),
+        lifecycle: c.resolve('lifecycleService'),
+        pricing: c.resolve('pricingService'),
+        cancellation: c.resolve('cancellationService'),
+        dispatch: c.resolve('dispatchService'),
+        receipt: c.resolve('receiptService'),
+      })),
+    rideRequestController: asClass(RideRequestController).singleton(),
+    rideStateController: asClass(RideStateController).singleton(),
+    rideQueryController: asClass(RideQueryController).singleton(),
+    rideChatController: asClass(RideChatController).singleton(),
+    rideCallController: asClass(RideCallController).singleton(),
+    rideScheduledController: asClass(RideScheduledController).singleton(),
+    rideSafetyController: asClass(RideSafetyController).singleton(),
+    rideController: asClass(RideController)
+      .singleton()
+      .inject((c) => ({
+        request: c.resolve('rideRequestController'),
+        state: c.resolve('rideStateController'),
+        query: c.resolve('rideQueryController'),
+        chat: c.resolve('rideChatController'),
+        call: c.resolve('rideCallController'),
+        scheduled: c.resolve('rideScheduledController'),
+        safety: c.resolve('rideSafetyController'),
+      })),
+    dispatchTimeoutJob: asClass(DispatchTimeoutJob).singleton(),
+    requestExpiryJob: asClass(RequestExpiryJob).singleton(),
+    scheduledRideReminderJob: asClass(ScheduledRideReminderJob).singleton(),
+    notificationEventReconciliationJob: asClass(NotificationEventReconciliationJob).singleton(),
+    rideRequestedConsumer: asClass(RideRequestedConsumer).singleton(),
+    rideRequestBoostedConsumer: asClass(RideRequestBoostedConsumer).singleton(),
+    rideNotificationConsumer: asClass(RideNotificationConsumer).singleton(),
+    rideRealtimeConsumer: asClass(RideRealtimeConsumer).singleton(),
+    rideRepo: aliasTo('rideRepository'),
+    requestRepo: aliasTo('rideRequestRepository'),
+    statusEventRepo: aliasTo('rideStatusEventRepository'),
+    fareRepo: aliasTo('rideFareRepository'),
+    dispatchRepo: aliasTo('rideDispatchRepository'),
+    cancellationRepo: aliasTo('rideCancellationRepository'),
+    receiptRepo: aliasTo('rideReceiptRepository'),
+    txManager: aliasTo('transactionManager'),
+  });
+}

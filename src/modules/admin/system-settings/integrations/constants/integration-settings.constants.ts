@@ -1,0 +1,110 @@
+export const PAYMENT_SETTINGS_CATEGORY = 'integrations.payment';
+export const SMS_SETTINGS_CATEGORY = 'integrations.sms';
+export const PUSH_SETTINGS_CATEGORY = 'integrations.push';
+export const EMAIL_SETTINGS_CATEGORY = 'integrations.email';
+
+export const INTEGRATION_HEALTH_SNAPSHOT_PREFIX = 'integration:health:snapshot';
+export const INTEGRATION_HEALTH_HISTORY_PREFIX = 'integration:health:history';
+export const INTEGRATION_HEALTH_HISTORY_MAX = 20;
+export const INTEGRATION_HEALTH_TTL_SECONDS = 86_400;
+
+export const PAYMENT_SETTING_KEYS = {
+  DEFAULT_GATEWAY: 'payment.default_gateway',
+  DEFAULT_CURRENCY: 'payment.default_currency',
+  /// Legacy single-secret fallback (`readWebhookSecret` in payment.config.ts).
+  /// Superseded by a per-provider secret below; kept so a deployment that only
+  /// ever set one shared secret keeps working unchanged.
+  WEBHOOK_SECRET: 'payment.webhook_secret',
+
+  /// The ONE admin-configured gateway used for every NEW PaymentIntent —
+  /// driver subscription payments, Commission Wallet recharges, and a
+  /// customer's own wallet top-up. There is no per-purpose routing and no
+  /// per-driver selection: whichever provider is active handles all of it,
+  /// automatically. Never consulted for an existing intent
+  /// (PaymentIntent.gateway, fixed at creation, is authoritative for that).
+  ///
+  /// There is deliberately no key for a customer's ride fare: the customer
+  /// pays the driver directly (cash/UPI/card outside the platform), never
+  /// through a gateway, so there is nothing here for that money to route to.
+  ACTIVE_PROVIDER: 'payment.active_provider',
+
+  RAZORPAY_ENABLED: 'payment.razorpay.enabled',
+  RAZORPAY_ENVIRONMENT: 'payment.razorpay.environment',
+  RAZORPAY_KEY_ID: 'payment.razorpay_key_id',
+  RAZORPAY_KEY_SECRET: 'payment.razorpay_key_secret',
+  RAZORPAY_WEBHOOK_SECRET: 'payment.razorpay.webhook_secret',
+
+  STRIPE_ENABLED: 'payment.stripe.enabled',
+  STRIPE_ENVIRONMENT: 'payment.stripe.environment',
+  STRIPE_SECRET_KEY: 'payment.stripe_secret_key',
+  STRIPE_WEBHOOK_SECRET: 'payment.stripe.webhook_secret',
+
+  /// Razorpay refuses a payment without an email (verified 2026-10-27) and a
+  /// driver's own email is never shared (UD-9): this ONE company address goes
+  /// on every driver payment, next to the driver's own phone. Empty means
+  /// driver payments are not configured.
+  CHECKOUT_EMAIL: 'payment.razorpay.checkout_email',
+  /// Which payment methods the Driver App offers. UPI is always offered and
+  /// has no switch; these only hide a method, they never refuse a payment.
+  METHOD_NETBANKING_ENABLED: 'payment.methods.netbanking_enabled',
+  METHOD_WALLET_ENABLED: 'payment.methods.wallet_enabled',
+  METHOD_CARD_ENABLED: 'payment.methods.card_enabled',
+} as const;
+
+export interface DriverCheckoutSettings {
+  email: string | null;
+  methods: { upi: true; netbanking: boolean; wallet: boolean; card: boolean };
+}
+
+/// The one reading of the driver checkout settings, shared by Admin and the
+/// payment flow so both agree on defaults: net banking and wallets ON, cards
+/// OFF until the PCI DSS assessment (an unset row takes its default).
+export function readDriverCheckoutSettings(
+  settings: Map<string, { value: string | null }>,
+): DriverCheckoutSettings {
+  const flag = (key: string, fallback: boolean): boolean => {
+    const raw = settings.get(key)?.value;
+    return raw == null ? fallback : raw === 'true';
+  };
+  const email = settings.get(PAYMENT_SETTING_KEYS.CHECKOUT_EMAIL)?.value?.trim();
+  return {
+    email: email || null,
+    methods: {
+      upi: true,
+      netbanking: flag(PAYMENT_SETTING_KEYS.METHOD_NETBANKING_ENABLED, true),
+      wallet: flag(PAYMENT_SETTING_KEYS.METHOD_WALLET_ENABLED, true),
+      card: flag(PAYMENT_SETTING_KEYS.METHOD_CARD_ENABLED, false),
+    },
+  };
+}
+
+// Cashfree is deliberately absent: not exposed or selectable for now.
+export const PAYMENT_GATEWAY_NAMES = ['mock', 'razorpay', 'stripe'] as const;
+
+export const SMS_SETTING_KEYS = {
+  PROVIDER: 'sms.provider',
+  AIRTEL_API_KEY: 'sms.airtel_api_key',
+  AIRTEL_USERNAME: 'sms.airtel_username',
+  AIRTEL_PASSWORD: 'sms.airtel_password',
+  AIRTEL_CUSTOMER_ID: 'sms.airtel_customer_id',
+  AIRTEL_SENDER_ID: 'sms.airtel_sender_id',
+  AIRTEL_ENTITY_ID: 'sms.airtel_entity_id',
+  AIRTEL_OTP_TEMPLATE_ID: 'sms.airtel_otp_template_id',
+  TIMEOUT_MS: 'sms.timeout_ms',
+} as const;
+
+export const PUSH_SETTING_KEYS = {
+  PROVIDER: 'push.provider',
+  FCM_SERVER_KEY: 'push.fcm_server_key',
+} as const;
+
+export const EMAIL_SETTING_KEYS = {
+  PROVIDER: 'email.provider',
+  SMTP_HOST: 'email.smtp_host',
+  SMTP_PORT: 'email.smtp_port',
+  SMTP_USER: 'email.smtp_user',
+  SMTP_PASSWORD: 'email.smtp_password',
+  FROM_ADDRESS: 'email.from_address',
+} as const;
+
+export type IntegrationKind = 'payment' | 'sms' | 'push' | 'email' | 'maps';

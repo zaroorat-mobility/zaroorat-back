@@ -1,0 +1,215 @@
+import type { FastifyInstance } from 'fastify';
+import { ZodError } from 'zod';
+import { container } from '@core/di';
+import { rateLimits } from '@config';
+import { AdminPaymentManagementController } from './payment-management.controller.js';
+import { AdminFinanceController } from './finance.controller.js';
+import { AdminDriverMonetizationController } from './driver-monetization.controller.js';
+import { DocumentComplianceController } from './document-compliance.controller.js';
+import { handlePaymentError } from '@modules/payments/schemas/error-response.js';
+import { FinanceAdminError } from './finance.errors.js';
+import { errorEnvelope, isCodedError } from '@core/errors/envelope.js';
+import { IdempotencyInFlightError } from '@core/cache';
+
+export async function adminPaymentRoutes(fastify: FastifyInstance): Promise<void> {
+  // Error handlers are scoped to the Fastify plugin that registers them. These
+  // routes moved here from their domain module and left its handler behind, so
+  // coded domain errors were falling through to the global handler and losing
+  // their code/status/details. Restored per constitution S13.3.
+  fastify.setErrorHandler((err, request, reply) => {
+    // Matches every sibling admin scope (geographic, pricing, promotions,
+    // operations, communications). This was the one that lacked it, so a
+    // schema rejection here fell through to `handlePaymentError` — which only
+    // knows about coded errors — and surfaced a client mistake as a 500.
+    if (err instanceof ZodError) {
+      reply.status(400).send(
+        errorEnvelope('VALIDATION', 'Request validation failed', request.id, {
+          details: err.issues,
+        }),
+      );
+      return;
+    }
+    // A second request carrying the same Idempotency-Key while the first is
+    // still running. Refusing it is correct — nothing is written — and the
+    // caller should retry; the auth and users modules already answer this
+    // with 409. The error has a `code` but no `statusCode`, so `isCodedError`
+    // misses it, and concurrent same-key payout requests used to get a 500.
+    if (err instanceof IdempotencyInFlightError) {
+      reply.status(409).send(errorEnvelope(err.code, err.message, request.id));
+      return;
+    }
+    if (err instanceof FinanceAdminError || isCodedError(err)) {
+      const coded = err as { code: string; statusCode: number; message: string; details?: unknown };
+      if (coded.statusCode < 500) {
+        reply.status(coded.statusCode).send(
+          errorEnvelope(coded.code, coded.message, request.id, {
+            ...(coded.details !== undefined ? { details: coded.details } : {}),
+          }),
+        );
+        return;
+      }
+    }
+    handlePaymentError(err, request, reply);
+  });
+
+  const payoutController = container.resolve<AdminPaymentManagementController>(
+    'adminPaymentManagementController',
+  );
+  const finance = container.resolve<AdminFinanceController>('adminFinanceController');
+  const monetization = container.resolve<AdminDriverMonetizationController>(
+    'adminDriverMonetizationController',
+  );
+  const documents = container.resolve<DocumentComplianceController>('documentComplianceController');
+
+  const canFinanceRead = {
+    preHandler: [fastify.authorize({ permissions: ['finance:read'] })],
+  };
+  const canFinanceExecute = {
+    preHandler: [
+      fastify.authorize({ permissions: ['finance:execute'] }),
+      fastify.rateLimit(rateLimits.payment),
+    ],
+  };
+  const canDocsRead = {
+    preHandler: [fastify.authorize({ permissions: ['documents:read'] })],
+  };
+  const canDocsVerify = {
+    preHandler: [fastify.authorize({ permissions: ['drivers:verify'] })],
+  };
+
+  // ─── Driver payouts (manual/external bank transfer) ───────────────────────
+  // Two phases on purpose. Creating a payout records an INTENT and moves no
+  // money; confirming it is what recognises an externally executed bank
+  // transfer, debits the driver wallet and can mark the settlement PAID.
+  fastify.post('/payments/payouts', canFinanceExecute, (req, reply) =>
+    payoutController.executePayout(req, reply),
+  );
+  fastify.post('/payments/payouts/:id/confirm', canFinanceExecute, (req, reply) =>
+    payoutController.confirmPayout(req, reply),
+  );
+  fastify.post('/payments/payouts/:id/fail', canFinanceExecute, (req, reply) =>
+    payoutController.failPayout(req, reply),
+  );
+
+  // ─── Finance dashboard / transactions ─────────────────────────────────────
+  fastify.get('/finance/dashboard', canFinanceRead, (req, reply) => finance.dashboard(req, reply));
+  fastify.get('/finance/transactions', canFinanceRead, (req, reply) =>
+    finance.listTransactions(req, reply),
+  );
+  fastify.get('/finance/transactions/:id', canFinanceRead, (req, reply) =>
+    finance.getTransaction(req, reply),
+  );
+  fastify.post('/finance/transactions/:id/reconcile', canFinanceExecute, (req, reply) =>
+    finance.reconcileTransaction(req, reply),
+  );
+
+  // ─── Refunds ──────────────────────────────────────────────────────────────
+  fastify.get('/finance/refunds', canFinanceRead, (req, reply) => finance.listRefunds(req, reply));
+  fastify.get('/finance/refunds/:id', canFinanceRead, (req, reply) =>
+    finance.getRefund(req, reply),
+  );
+  fastify.post('/finance/refunds', canFinanceExecute, (req, reply) =>
+    finance.createRefund(req, reply),
+  );
+  fastify.post('/finance/refunds/:id/start-review', canFinanceExecute, (req, reply) =>
+    finance.startRefundReview(req, reply),
+  );
+  fastify.post('/finance/refunds/:id/approve', canFinanceExecute, (req, reply) =>
+    finance.approveRefund(req, reply),
+  );
+  fastify.post('/finance/refunds/:id/reject', canFinanceExecute, (req, reply) =>
+    finance.rejectRefund(req, reply),
+  );
+  fastify.post('/finance/refunds/:id/mark-processing', canFinanceExecute, (req, reply) =>
+    finance.markRefundProcessing(req, reply),
+  );
+  fastify.post('/finance/refunds/:id/mark-completed', canFinanceExecute, (req, reply) =>
+    finance.markRefundCompleted(req, reply),
+  );
+
+  // ─── Settlements ──────────────────────────────────────────────────────────
+  fastify.get('/finance/settlements', canFinanceRead, (req, reply) =>
+    finance.listSettlements(req, reply),
+  );
+  fastify.get('/finance/settlements/:id', canFinanceRead, (req, reply) =>
+    finance.getSettlement(req, reply),
+  );
+  fastify.get('/finance/settlements/:id/drivers', canFinanceRead, (req, reply) =>
+    finance.getSettlementDrivers(req, reply),
+  );
+  fastify.post('/finance/settlements/generate', canFinanceExecute, (req, reply) =>
+    finance.generateSettlement(req, reply),
+  );
+  fastify.post('/finance/settlements/:id/status', canFinanceExecute, (req, reply) =>
+    finance.updateSettlementStatus(req, reply),
+  );
+
+  // ─── Driver ledger / search ───────────────────────────────────────────────
+  // Read-only views of commission wallets and driver subscriptions.
+  fastify.get('/finance/commission-wallets', canFinanceRead, (req, reply) =>
+    monetization.listCommissionWallets(req, reply),
+  );
+  fastify.get('/finance/commission-wallets/:driverId/transactions', canFinanceRead, (req, reply) =>
+    monetization.listCommissionWalletTransactions(req, reply),
+  );
+  fastify.get('/finance/subscription-plans', canFinanceRead, (req, reply) =>
+    monetization.listSubscriptionPlans(req, reply),
+  );
+  fastify.get('/finance/driver-subscriptions', canFinanceRead, (req, reply) =>
+    monetization.listDriverSubscriptions(req, reply),
+  );
+  fastify.get('/finance/drivers/search', canFinanceRead, (req, reply) =>
+    finance.searchDrivers(req, reply),
+  );
+  fastify.get('/finance/drivers/:driverId/ledger', canFinanceRead, (req, reply) =>
+    finance.getDriverLedger(req, reply),
+  );
+  fastify.get('/finance/drivers/:driverId/breakdown', canFinanceRead, (req, reply) =>
+    finance.getDriverBreakdown(req, reply),
+  );
+
+  // ─── Disputes ─────────────────────────────────────────────────────────────
+  fastify.get('/finance/disputes', canFinanceRead, (req, reply) =>
+    finance.listDisputes(req, reply),
+  );
+  fastify.get('/finance/disputes/:id', canFinanceRead, (req, reply) =>
+    finance.getDispute(req, reply),
+  );
+  fastify.post('/finance/disputes', canFinanceExecute, (req, reply) =>
+    finance.createDispute(req, reply),
+  );
+  fastify.post('/finance/disputes/:id/assign', canFinanceExecute, (req, reply) =>
+    finance.assignDispute(req, reply),
+  );
+  fastify.post('/finance/disputes/:id/status', canFinanceExecute, (req, reply) =>
+    finance.updateDisputeStatus(req, reply),
+  );
+  fastify.post('/finance/disputes/:id/resolve', canFinanceExecute, (req, reply) =>
+    finance.resolveDispute(req, reply),
+  );
+  fastify.post('/finance/disputes/:id/close', canFinanceExecute, (req, reply) =>
+    finance.closeDispute(req, reply),
+  );
+
+  // ─── Finance audit ────────────────────────────────────────────────────────
+  fastify.get('/finance/audit-logs', canFinanceRead, (req, reply) =>
+    finance.listAuditLogs(req, reply),
+  );
+
+  // ─── Document compliance ──────────────────────────────────────────────────
+  fastify.get('/documents/compliance', canDocsRead, (req, reply) =>
+    documents.listCompliance(req, reply),
+  );
+  fastify.get('/documents/compliance/:driverId', canDocsRead, (req, reply) =>
+    documents.getCompliance(req, reply),
+  );
+  fastify.get('/documents/settings', canDocsRead, (req, reply) =>
+    documents.getSettings(req, reply),
+  );
+  fastify.put('/documents/settings', canDocsVerify, (req, reply) =>
+    documents.updateSettings(req, reply),
+  );
+  fastify.post('/documents/:documentId/review', canDocsVerify, (req, reply) =>
+    documents.reviewDocument(req, reply),
+  );
+}

@@ -18,6 +18,7 @@ async function main() {
   console.log(`\n🌱 Starting Prisma Database Seed [Environment: ${env}]`);
 
   switch (env) {
+    case 'local':
     case 'development':
       await seedDevelopment(prisma);
       break;
@@ -25,7 +26,10 @@ async function main() {
     case 'testing':
       await seedTesting(prisma);
       break;
+    case 'dev':
+    case 'staging':
     case 'production':
+    case 'prod':
       await seedProduction(prisma);
       break;
     default:
@@ -41,8 +45,15 @@ async function main() {
 main()
   .catch((e) => {
     console.error('❌ Error seeding database:', e);
-    process.exit(1);
+    process.exitCode = 1;
   })
   .finally(async () => {
     await provider.disconnect();
+    // disconnect() closes the Prisma pool, but the DI container resolved at
+    // import time still holds other handles open, so the event loop never
+    // drains and the process hangs after printing success. That makes
+    // `prisma db seed` unusable from any script that waits on it — including
+    // `migrate deploy && db seed && npm test`. Exit explicitly, preserving the
+    // failure code set above.
+    process.exit(process.exitCode ?? 0);
   });

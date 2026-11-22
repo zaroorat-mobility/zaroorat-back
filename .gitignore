@@ -10,10 +10,16 @@ dist/
 # reviewed, linted, or committed.
 src/generated/
 
+# Demo Frontend
+
+frontend/
+
 # Environment files
 .env
 .env.*
 !.env.example
+!.env*.example
+!.env.*.example
 # .env.test holds only throwaway values pointing at local/CI service containers.
 # Committing it means `npm test` works on a fresh clone and in CI with no setup.
 # Never put a real credential in it.

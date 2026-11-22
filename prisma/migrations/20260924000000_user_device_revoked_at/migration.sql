@@ -1,0 +1,27 @@
+-- `user_devices.trust_state` could be REVOKED without recording *when*.
+--
+-- `DeviceService.revoke` sets the state and terminates the device's sessions, but
+-- nothing timestamped the transition. Two things need that timestamp:
+--
+--   1. PA-6 clears `fcm_token` on revoke. Once the token is gone, the row's only
+--      remaining evidence that it was ever deliverable is the state, and there is
+--      no way to tell a device revoked this morning from one revoked last year.
+--   2. The stale-device sweep (Phase 5) purges rows by age of revocation. That
+--      predicate is not expressible without this column.
+--
+-- Additive and nullable with no default, so this is a metadata-only change on
+-- PostgreSQL 11+ — no table rewrite, no lock beyond the catalog update. Existing
+-- rows keep NULL, which reads correctly as "revocation time unknown": rows revoked
+-- before this column existed genuinely have no recorded time, and inventing one
+-- from `created_at` would be a guess dressed up as data.
+--
+-- Backfill, if the sweep later needs those rows in scope, is a deliberate
+-- operational decision and not this migration's to make:
+--
+--   UPDATE user_devices SET revoked_at = created_at
+--   WHERE trust_state = 'REVOKED' AND revoked_at IS NULL;
+--
+-- NOT the unique index on `fcm_token`. That is a separate migration, deliberately
+-- held until the production duplicate-token audit has been run, because it fails
+-- if duplicates exist — and failing is the correct outcome there.
+ALTER TABLE "user_devices" ADD COLUMN IF NOT EXISTS "revoked_at" TIMESTAMP(3);

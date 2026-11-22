@@ -1,0 +1,798 @@
+import { randomUUID } from 'node:crypto';
+
+import { driverConfig } from '../../../src/config/driver/driver.config.js';
+import { vehicleConfig } from '../../../src/config/vehicle/vehicle.config.js';
+import { hashRidePin } from '../../../src/modules/auth/utils/ride-pin.js';
+import { db } from './harness.js';
+import type { SettlementStatus } from '../../../src/generated/prisma/index.js';
+import {
+  BANK_ENCRYPTION_VERIFIED_SETTING,
+  protectAccountNumber,
+} from '../../../src/shared/crypto/bank-account-crypto.js';
+
+/// The Ride PIN every test rider gets. Not on the weak-PIN blocklist, and
+/// deliberately not a round number — a test that passes with `1234` would be
+/// passing against a value the application refuses.
+export const RIDE_PIN = '4827';
+
+export async function grantRole(userId: string, slug: string): Promise<void> {
+  const role = await db().client.role.findUniqueOrThrow({ where: { slug } });
+  const existing = await db().client.userRoleAssignment.findFirst({
+    where: { userId, roleId: role.id, revokedAt: null },
+  });
+  if (!existing) {
+    await db().client.userRoleAssignment.create({ data: { userId, roleId: role.id } });
+  }
+}
+
+/// 004-driver-subscription-wallet. spec.md FR-000: a driver with no payment
+/// model is ineligible for any ride under either model. Every fixture driver
+/// meant to actually operate (`verified`) needs one or `/rides/accept` now
+/// correctly refuses them with 409 PAYMENT_MODEL_NOT_SELECTED — this default
+/// is what keeps the ~14 pre-existing suites that only need a driver able to
+/// accept a ride (and were never about payment-model behaviour themselves)
+/// working. `undefined` means "let this default apply"; pass `null`
+/// explicitly to get the old, model-less driver (e.g. to test FR-000 itself).
+///
+/// COMMISSION is the default direction because it costs one extra fixture
+/// write (fund the wallet) versus SUBSCRIPTION's two (plan + subscription
+/// row). Tests that are actually about payment-model behaviour pass
+/// `paymentModel` explicitly — see `makeActiveSubscription` for the
+/// SUBSCRIPTION side.
+const DEFAULT_COMMISSION_WALLET_BALANCE = 1_000_000;
+
+export async function makeDriver(
+  userId: string,
+  options: {
+    verified?: boolean;
+    suspended?: boolean;
+    /// `undefined` (omitted) = safe default (COMMISSION + funded wallet, for
+    /// a verified driver). `null` = explicitly no model. `'COMMISSION'` /
+    /// `'SUBSCRIPTION'` = explicit choice, matching `Driver.paymentModel`.
+    paymentModel?: 'COMMISSION' | 'SUBSCRIPTION' | null;
+    /// COMMISSION only. Direct DB seed of the starting balance — mirrors
+    /// `makeSettlement`'s direct-write style for setup state that is not
+    /// itself under test; a dedicated recharge/webhook test still exercises
+    /// the real funding path (see `fundCommissionWallet`'s own doc comment).
+    commissionWalletBalance?: number;
+  } = {},
+): Promise<string> {
+  const verified = options.verified !== false;
+  const paymentModel =
+    options.paymentModel === undefined ? (verified ? 'COMMISSION' : null) : options.paymentModel;
+
+  const driver = await db().client.driver.create({
+    data: {
+      userId,
+      driverCode: `DRV_${randomUUID().slice(0, 8).toUpperCase()}`,
+      verificationStatus: verified ? 'VERIFIED' : 'PENDING',
+      isSuspended: options.suspended ?? false,
+      ...(paymentModel ? { paymentModel } : {}),
+    },
+  });
+
+  if (verified) {
+    for (const documentType of driverConfig.requiredDocumentTypes) {
+      await db().client.driverDocument.create({
+        data: {
+          driverId: driver.id,
+          documentType,
+          verificationStatus: 'VERIFIED',
+          fileUrl: `https://example.invalid/${documentType.toLowerCase()}.jpg`,
+        },
+      });
+    }
+  }
+
+  if (paymentModel === 'COMMISSION') {
+    await fundCommissionWallet(
+      driver.id,
+      options.commissionWalletBalance ?? DEFAULT_COMMISSION_WALLET_BALANCE,
+    );
+  }
+
+  return driver.id;
+}
+
+/// Direct DB seed of a Commission Wallet balance — for fixture setup where
+/// the recharge flow itself is not what's under test (parallels `fundWallet`
+/// in ride-flow.ts, which goes through the real topup+webhook path instead,
+/// for the one test that IS specifically about that path). Idempotent:
+/// creates the wallet if it doesn't exist yet, otherwise overwrites the
+/// balance — either way the driver ends up with exactly this balance.
+export async function fundCommissionWallet(driverId: string, balance: number): Promise<void> {
+  await db().client.driverCommissionWallet.upsert({
+    where: { driverId },
+    create: { driverId, balance, currency: 'INR' },
+    update: { balance },
+  });
+}
+
+/// A company-defined plan a SUBSCRIPTION-model driver can hold. Freestanding
+/// per call (random name) — `subscription_plans` has no FK back to anything
+/// `resetState()` truncates, so a fixed name would collide across the suite.
+export async function makeSubscriptionPlan(
+  options: { billingPeriod?: 'DAILY' | 'WEEKLY' | 'MONTHLY'; price?: number } = {},
+): Promise<string> {
+  const plan = await db().client.subscriptionPlan.create({
+    data: {
+      name: `Test Plan ${randomUUID().slice(0, 8)}`,
+      billingPeriod: options.billingPeriod ?? 'WEEKLY',
+      price: options.price ?? 500,
+      currency: 'INR',
+      status: 'ACTIVE',
+    },
+  });
+  return plan.id;
+}
+
+/// Puts a driver directly into the state spec.md FR-004 requires for new-ride
+/// eligibility: an ACTIVE, unexpired `DriverSubscription`, and
+/// `Driver.paymentModel = 'SUBSCRIPTION'` — mirroring what
+/// `SubscriptionPaymentConsumer` does on confirmed payment (BD-5), without
+/// re-running the whole purchase→webhook pipeline for tests that are not
+/// themselves about that pipeline.
+export async function makeActiveSubscription(
+  driverId: string,
+  options: { planId?: string; expiresInMs?: number } = {},
+): Promise<string> {
+  const planId = options.planId ?? (await makeSubscriptionPlan());
+  const startDate = new Date();
+  const expiryDate = new Date(startDate.getTime() + (options.expiresInMs ?? 7 * 24 * 60 * 60_000));
+
+  const subscription = await db().client.driverSubscription.create({
+    data: {
+      driverId,
+      planId,
+      status: 'ACTIVE',
+      paymentStatus: 'PAID',
+      startDate,
+      expiryDate,
+    },
+  });
+  await db().client.driver.update({
+    where: { id: driverId },
+    data: { paymentModel: 'SUBSCRIPTION', pendingPaymentModel: null },
+  });
+  return subscription.id;
+}
+
+export async function makeVehicleType(
+  options: { isActive?: boolean; code?: string; name?: string; perKmRate?: number } = {},
+): Promise<string> {
+  const type = await db().client.vehicleType.create({
+    data: {
+      code: options.code ?? `VT_${randomUUID().slice(0, 8)}`,
+      name: options.name ?? 'Hatchback',
+      isActive: options.isActive ?? true,
+      ...(options.perKmRate !== undefined ? { perKmRate: options.perKmRate } : {}),
+    },
+  });
+  return type.id;
+}
+
+/// The id of a canonical catalog type. `resetState` truncates `vehicle_types`
+/// and re-seeds the platform catalog, so a test that needs `CAB_ECONOMY`
+/// specifically must look it up — creating one is a unique violation.
+export async function vehicleTypeIdByCode(code: string): Promise<string> {
+  const type = await db().client.vehicleType.findUnique({ where: { code } });
+  if (!type) throw new Error(`vehicle type ${code} is not in the seeded catalog`);
+  return type.id;
+}
+
+export async function makeVehicle(
+  vehicleTypeId: string,
+  options: { verified?: boolean; isActive?: boolean } = {},
+): Promise<string> {
+  const vehicle = await db().client.vehicle.create({
+    data: {
+      registrationNumber: `KA01${randomUUID().slice(0, 6).toUpperCase()}`,
+      vehicleTypeId,
+      isActive: options.isActive ?? true,
+      verificationStatus: options.verified === false ? 'PENDING' : 'VERIFIED',
+      ...(options.verified === false ? {} : { verifiedAt: new Date() }),
+    },
+  });
+
+  if (options.verified !== false) {
+    for (const documentType of vehicleConfig.requiredDocumentTypes) {
+      await db().client.vehicleDocument.create({
+        data: {
+          vehicleId: vehicle.id,
+          documentType,
+          verificationStatus: 'VERIFIED',
+          fileUrl: `https://example.invalid/${documentType.toLowerCase()}.jpg`,
+        },
+      });
+    }
+  }
+
+  return vehicle.id;
+}
+
+/// Gives a driver an operable vehicle: an active, VERIFIED vehicle with every
+/// required vehicle document VERIFIED, assigned to them. Going online now gates
+/// on this as well as on the driver's own documents, so any fixture that brings
+/// a driver online needs it.
+export async function makeAssignedVehicle(
+  driverId: string,
+  options: { vehicleTypeId?: string; verified?: boolean } = {},
+): Promise<{ vehicleId: string; vehicleTypeId: string }> {
+  const vehicleTypeId = options.vehicleTypeId ?? (await makeVehicleType());
+  const vehicleId = await makeVehicle(vehicleTypeId, {
+    ...(options.verified !== undefined ? { verified: options.verified } : {}),
+  });
+
+  await db().client.vehicle.update({
+    where: { id: vehicleId },
+    data: { currentDriverId: driverId },
+  });
+  await db().client.vehicleAssignment.create({
+    data: { driverId, vehicleId, status: 'ACTIVE' },
+  });
+  await db().client.driver.update({
+    where: { id: driverId },
+    data: { currentVehicleId: vehicleId },
+  });
+
+  return { vehicleId, vehicleTypeId };
+}
+
+export async function makeRideRequest(customerId: string, vehicleTypeId: string): Promise<string> {
+  const id = randomUUID();
+  await db().client.$executeRawUnsafe(
+    `INSERT INTO ride_requests
+       (id, customer_id, vehicle_type_id, pickup_lat, pickup_lng, pickup_location,
+        drop_lat, drop_lng, status, surge_multiplier, payment_method, created_at)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, 12.9716, 77.5946,
+             ST_SetSRID(ST_MakePoint(77.5946, 12.9716), 4326)::geography,
+             12.9352, 77.6245, 'SEARCHING', 1.0, 'CASH', now())`,
+    id,
+    customerId,
+    vehicleTypeId,
+  );
+  return id;
+}
+
+export async function makeRide(input: {
+  requestId: string;
+  customerId: string;
+  driverId: string;
+  vehicleId: string;
+  vehicleTypeId: string;
+  status?: string;
+}): Promise<string> {
+  const id = randomUUID();
+  await db().client.$executeRawUnsafe(
+    `INSERT INTO rides
+       (id, ride_code, request_id, customer_id, driver_id, vehicle_id, vehicle_type_id,
+        status, payment_method, payment_status, pickup_location, accepted_at,
+        wait_time_min, is_scheduled, created_at, updated_at)
+     VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+             $8::"RideStatus", 'CASH', 'PENDING',
+             ST_SetSRID(ST_MakePoint(77.5946, 12.9716), 4326)::geography, now(),
+             0, false, now(), now())`,
+    id,
+    `RIDE_${randomUUID().slice(0, 8).toUpperCase()}`,
+    input.requestId,
+    input.customerId,
+    input.driverId,
+    input.vehicleId,
+    input.vehicleTypeId,
+    input.status ?? 'ACCEPTED',
+  );
+  return id;
+}
+
+export async function makePaidTransaction(
+  userId: string,
+  amount: number,
+  options: { rideId?: string; status?: string; gateway?: string; varianceStatus?: string } = {},
+): Promise<{ intentId: string; transactionId: string }> {
+  const intent = await db().client.paymentIntent.create({
+    data: {
+      userId,
+      ...(options.rideId ? { rideId: options.rideId } : {}),
+      amount,
+      currency: 'INR',
+      methodType: 'CARD',
+      idempotencyKey: `seed_${randomUUID()}`,
+      status: options.status === 'FAILED' ? 'FAILED' : 'SUCCEEDED',
+      gateway: options.gateway ?? 'razorpay',
+      gatewayIntentId: `mock_pi_${randomUUID().slice(0, 8)}`,
+    },
+  });
+
+  const transaction = await db().client.paymentTransaction.create({
+    data: {
+      intentId: intent.id,
+      ...(options.rideId ? { rideId: options.rideId } : {}),
+      userId,
+      txnType: 'CHARGE',
+      amount,
+      currency: 'INR',
+      status: options.status ?? 'SUCCEEDED',
+      gateway: options.gateway ?? 'razorpay',
+      gatewayTxnId: options.status === 'FAILED' ? null : `gtxn_${randomUUID().slice(0, 8)}`,
+      ...(options.varianceStatus ? { varianceStatus: options.varianceStatus } : {}),
+      ...(options.status === 'FAILED'
+        ? { errorCode: 'GATEWAY_TIMEOUT', errorMessage: 'Gateway timed out' }
+        : {}),
+    },
+  });
+
+  return { intentId: intent.id, transactionId: transaction.id };
+}
+
+/// A settled period, in the state the real settlement job leaves behind:
+/// a `driver_settlements` row AND the matching driver wallet credit.
+///
+/// The wallet credit is not decoration. `SettlementService.calculateSettlement`
+/// credits `driver_wallets.balance` with `netPayable`, and a payout now debits
+/// that same balance — so a fixture that wrote only the settlement row
+/// described a state the application never produces, and any test of payout
+/// wallet accounting run against it would be testing a fiction.
+/// Pass `creditWallet: false` to get the bare row deliberately.
+export async function makeSettlement(
+  driverId: string,
+  netPayable: number,
+  options: { status?: SettlementStatus; creditWallet?: boolean } = {},
+): Promise<string> {
+  const periodEnd = new Date();
+  const periodStart = new Date(periodEnd.getTime() - Math.floor(Math.random() * 1e9));
+
+  const settlement = await db().client.driverSettlement.create({
+    data: {
+      driverId,
+      periodStart,
+      periodEnd,
+      grossEarnings: netPayable,
+      commission: 0,
+      adjustments: 0,
+      netPayable,
+      status: options.status ?? 'PENDING',
+    },
+  });
+
+  if (options.creditWallet !== false && netPayable > 0) {
+    await creditDriverWallet(driverId, netPayable, 'SETTLEMENT', settlement.id);
+  }
+  return settlement.id;
+}
+
+export async function creditDriverWallet(
+  driverId: string,
+  amount: number,
+  referenceType: string,
+  referenceId: string,
+): Promise<void> {
+  const wallet = await db().client.driverWallet.upsert({
+    where: { driverId },
+    create: { driverId, balance: amount, lockedBalance: 0, currency: 'INR' },
+    update: { balance: { increment: amount } },
+  });
+  await db().client.driverWalletTransaction.create({
+    data: {
+      walletId: wallet.id,
+      driverId,
+      txnType: 'RIDE_EARNING',
+      amount,
+      balanceAfter: wallet.balance,
+      referenceType,
+      referenceId,
+      description: `Fixture settlement credit`,
+    },
+  });
+}
+
+export async function driverWalletBalance(driverId: string): Promise<number> {
+  const wallet = await db().client.driverWallet.findUnique({ where: { driverId } });
+  return Number((wallet?.balance ?? 0).toString());
+}
+
+/// A driver bank account. Defaults to the state a payout actually requires —
+/// verified, payout-enabled, active, encrypted, and the bank-encryption gate
+/// recorded — because that is the uninteresting setup for most tests; the
+/// rejection cases opt out explicitly.
+///
+/// Phase 1: the number is stored the way production stores it (ciphertext,
+/// last4, keyed hash, no plaintext), and the lifecycle `status` follows the
+/// options so the DB CHECK (payout_enabled ⇔ status = PAYOUT_ENABLED) holds.
+export async function makeBankAccount(
+  driverId: string,
+  options: {
+    verificationStatus?: 'PENDING' | 'VERIFIED' | 'REJECTED';
+    payoutEnabled?: boolean;
+    isActive?: boolean;
+    encrypted?: boolean;
+    enteredBy?: string;
+    accountNumber?: string;
+  } = {},
+): Promise<string> {
+  const verificationStatus = options.verificationStatus ?? 'VERIFIED';
+  const payoutEnabled = (options.payoutEnabled ?? true) && verificationStatus === 'VERIFIED';
+  const isActive = options.isActive ?? true;
+  const status = !isActive
+    ? 'DEACTIVATED'
+    : verificationStatus === 'REJECTED'
+      ? 'REJECTED'
+      : verificationStatus === 'PENDING'
+        ? 'ENTERED'
+        : payoutEnabled
+          ? 'PAYOUT_ENABLED'
+          : 'VERIFIED';
+  const number =
+    options.accountNumber ?? `9${randomUUID().replace(/\D/g, '').padEnd(11, '7').slice(0, 11)}`;
+  const protectedNumber = protectAccountNumber(number);
+  const account = await db().client.driverBankAccount.create({
+    data: {
+      driverId,
+      accountHolderName: 'Fixture Driver',
+      bankName: 'Fixture Bank',
+      ifscCode: 'HDFC0001234',
+      accountNumberEnc: null,
+      ...(options.encrypted === false
+        ? {}
+        : {
+            accountNumberCiphertext: protectedNumber.ciphertext,
+            accountNumberLast4: protectedNumber.last4,
+            accountNumberHash: protectedNumber.hash,
+            encryptionKeyVersion: protectedNumber.keyVersion,
+          }),
+      verificationStatus,
+      status,
+      isActive,
+      payoutEnabled: payoutEnabled && isActive,
+      ...(options.enteredBy ? { enteredBy: options.enteredBy } : {}),
+      isDefault: true,
+    },
+  });
+  await markBankEncryptionVerified();
+  return account.id;
+}
+
+/// The gate a clean `verifyBankAccountEncryption` run writes. `system_settings`
+/// survives `resetState`, so this is idempotent across tests.
+export async function markBankEncryptionVerified(): Promise<void> {
+  await db().client.systemSetting.upsert({
+    where: { key: BANK_ENCRYPTION_VERIFIED_SETTING },
+    create: {
+      key: BANK_ENCRYPTION_VERIFIED_SETTING,
+      value: new Date().toISOString(),
+      category: 'bank_accounts',
+      isSecret: false,
+    },
+    update: {},
+  });
+}
+
+export async function clearBankEncryptionVerified(): Promise<void> {
+  await db().client.systemSetting.deleteMany({ where: { key: BANK_ENCRYPTION_VERIFIED_SETTING } });
+}
+
+export async function makePendingIntent(userId: string, amount: number): Promise<string> {
+  const intent = await db().client.paymentIntent.create({
+    data: {
+      userId,
+      amount,
+      currency: 'INR',
+      methodType: 'CARD',
+      idempotencyKey: `seed_${randomUUID()}`,
+      status: 'PENDING',
+      gateway: 'mock',
+      gatewayIntentId: `mock_pi_${randomUUID().slice(0, 8)}`,
+    },
+  });
+  return intent.id;
+}
+
+/// A live dispatch offer, the way a dispatch round would leave one. Accepting a
+/// ride now requires the driver to actually hold one — the offer is checked, not
+/// merely written — so any fixture that drives `/rides/accept` needs this.
+export async function makeDispatchOffer(
+  requestId: string,
+  driverId: string,
+  options: { expiresInMs?: number; response?: string } = {},
+): Promise<string> {
+  const dispatch = await db().client.rideDispatch.create({
+    data: {
+      requestId,
+      driverId,
+      response: (options.response ?? 'PENDING') as 'PENDING',
+      expiresAt: new Date(Date.now() + (options.expiresInMs ?? 60_000)),
+    },
+  });
+  return dispatch.id;
+}
+
+/// Puts a driver's status row straight into ONLINE. The go-online endpoint is
+/// the real path and gates on documents and vehicle; this is for fixtures that
+/// need the status without re-testing that gate.
+export async function markDriverOnline(driverId: string): Promise<void> {
+  await db().client.driverOnlineStatus.upsert({
+    where: { driverId },
+    create: { driverId, status: 'ONLINE', lastOnlineAt: new Date() },
+    update: { status: 'ONLINE', lastOnlineAt: new Date() },
+  });
+}
+
+/// Gives a user the profile name that ride booking requires.
+///
+/// `RideRequestService.createRequest` refuses with 422 INCOMPLETE_PROFILE
+/// unless both `firstName` and `lastName` are set. Without this, a freshly
+/// logged-in user cannot book, and every assertion after the booking step in a
+/// suite is unreachable — which is exactly why 15 integration tests appeared to
+/// "fail on payments" while never reaching a payment assertion at all.
+///
+/// Called from `loginAs`, so every test user can book by default. Any suite
+/// that needs to exercise the incomplete-profile path should clear the names
+/// explicitly rather than relying on the absence of this.
+export async function completeProfile(
+  userId: string,
+  firstName = 'Test',
+  lastName = 'Rider',
+): Promise<void> {
+  await db().client.userProfile.upsert({
+    where: { userId },
+    create: { userId, firstName, lastName },
+    update: { firstName, lastName },
+  });
+}
+
+/// Gives a rider the standing Ride PIN that `POST /rides/requests` now requires
+/// and `POST /rides/:id/start` verifies. Writes the verifier the way the
+/// application does, so tests exercise the real scrypt path rather than a
+/// value only the test knows how to produce.
+export async function setRidePin(userId: string, pin = RIDE_PIN): Promise<void> {
+  await db().client.user.update({
+    where: { id: userId },
+    data: {
+      ridePinVerifier: hashRidePin(pin),
+      ridePinUpdatedAt: new Date(),
+      ridePinVersion: { increment: 1 },
+    },
+  });
+}
+
+export async function ensureCountry(code = 'IN', name = 'India'): Promise<string> {
+  const country = await db().client.country.upsert({
+    where: { code },
+    update: { name, isActive: true },
+    create: { code, name, isActive: true },
+  });
+  return country.id;
+}
+
+export async function ensureCity(
+  code: string,
+  name: string,
+  state: string | null = null,
+): Promise<string> {
+  const city = await db().client.city.upsert({
+    where: { code },
+    update: { name, state, isActive: true },
+    create: {
+      code,
+      name,
+      state,
+      country: 'India',
+      isActive: true,
+      launchedAt: new Date(),
+    },
+  });
+  return city.id;
+}
+
+/// A city with an actual boundary, which `ensureCity` cannot produce: Prisma
+/// models `cities.boundary` as `Unsupported("geography(Polygon,4326)")`, so no
+/// `city.create` can ever set it. Every city in the test database was therefore
+/// boundary-less, `resolveCityAtPoint` matched nothing, and the pickup gate
+/// refused every quote and every booking — 12 of the 24 catalog tests died on it
+/// before FR-048.
+///
+/// Tests that need coverage to be *configured* (so the gate enforces rather than
+/// standing down) must use this rather than `ensureCity`.
+export async function ensureCityWithBoundary(
+  code: string,
+  name: string,
+  coordinates: number[][][],
+): Promise<string> {
+  const cityId = await ensureCity(code, name);
+  const geoJson = JSON.stringify({ type: 'Polygon', coordinates });
+  await db().client.$executeRaw`
+    UPDATE cities SET boundary = ST_GeomFromGeoJSON(${geoJson}) WHERE id = ${cityId}::uuid
+  `;
+  return cityId;
+}
+
+/// FR-005. Sets the explicit precedence override on a zone, for the cases where
+/// the default (smallest containing polygon wins) is not what an operator wants.
+export async function setZonePriority(zoneId: string, priority: number): Promise<void> {
+  await db().client.serviceZone.update({ where: { id: zoneId }, data: { priority } });
+}
+
+export async function ensureServiceZone(
+  cityCode: string,
+  zoneCode: string,
+  name: string,
+  coordinates: number[][][],
+): Promise<string> {
+  const cityId = await ensureCity(cityCode, cityCode);
+  const existing = await db().client.serviceZone.findFirst({
+    where: { cityId, code: zoneCode },
+  });
+  if (existing) return existing.id;
+
+  const geoJson = JSON.stringify({ type: 'Polygon', coordinates });
+  const rows = await db().client.$queryRaw<Array<{ id: string }>>`
+    INSERT INTO service_zones (id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at)
+    VALUES (
+      gen_random_uuid(),
+      ${cityId}::uuid,
+      ${zoneCode},
+      ${name},
+      'SERVICE'::"ServiceZoneType",
+      ST_GeomFromGeoJSON(${geoJson}),
+      true,
+      true,
+      true,
+      NOW(),
+      NOW()
+    )
+    RETURNING id
+  `;
+  return rows[0]!.id;
+}
+
+export async function createPricingRuleDirect(data: {
+  vehicleTypeId: string;
+  cityCode: string;
+  baseFare: number;
+  serviceType?: 'INSTANT' | 'SCHEDULED' | 'RENTAL' | 'OUTSTATION' | null;
+  serviceZoneId?: string | null;
+  minimumFare?: number;
+  perKmRate?: number;
+  perMinuteRate?: number;
+  bookingFee?: number;
+  taxRatePct?: number;
+  commissionRatePct?: number;
+  isActive?: boolean;
+}): Promise<string> {
+  /// FR-034. The database now refuses two live rules whose effective windows
+  /// overlap on the same key, and `resetState` re-seeds one GLOBAL rule per
+  /// catalog vehicle type. A fixture that simply inserted therefore produced the
+  /// exact state the constraint exists to prevent — which is what several of
+  /// these tests were silently depending on before it existed.
+  ///
+  /// Superseding the incumbent is what `AdminFareService.create` does, so this
+  /// mirrors the only path that creates rules in production.
+  if (data.isActive ?? true) {
+    await db().client.pricingRule.updateMany({
+      where: {
+        vehicleTypeId: data.vehicleTypeId,
+        cityCode: data.cityCode,
+        serviceType: data.serviceType ?? null,
+        serviceZoneId: data.serviceZoneId ?? null,
+        isActive: true,
+      },
+      data: { isActive: false },
+    });
+  }
+
+  const row = await db().client.pricingRule.create({
+    data: {
+      vehicleTypeId: data.vehicleTypeId,
+      cityCode: data.cityCode,
+      serviceType: data.serviceType ?? null,
+      serviceZoneId: data.serviceZoneId ?? null,
+      baseFare: data.baseFare,
+      minimumFare: data.minimumFare ?? data.baseFare,
+      perKmRate: data.perKmRate ?? 0,
+      perMinuteRate: data.perMinuteRate ?? 0,
+      bookingFee: data.bookingFee ?? 0,
+      ...(data.taxRatePct !== undefined ? { taxRatePct: data.taxRatePct } : {}),
+      ...(data.commissionRatePct !== undefined
+        ? { commissionRatePct: data.commissionRatePct }
+        : {}),
+      isActive: data.isActive ?? true,
+      effectiveFrom: new Date(),
+    },
+  });
+  return row.id;
+}
+
+export async function seedBillingInvoiceFixtures(): Promise<void> {
+  const customer = await db().client.user.create({
+    data: {
+      phoneNumber: `+9199${randomUUID().slice(0, 8)}`,
+      profile: { create: { firstName: 'Demo', lastName: 'Passenger' } },
+    },
+  });
+  const driverUser = await db().client.user.create({
+    data: {
+      phoneNumber: `+9198${randomUUID().slice(0, 8)}`,
+      profile: { create: { firstName: 'Demo', lastName: 'Driver' } },
+    },
+  });
+  const driverId = await makeDriver(driverUser.id, { verified: true });
+  const { vehicleId, vehicleTypeId } = await makeAssignedVehicle(driverId);
+  const requestId = await makeRideRequest(customer.id, vehicleTypeId);
+  const rideId = await makeRide({
+    requestId,
+    customerId: customer.id,
+    driverId,
+    vehicleId,
+    vehicleTypeId,
+    status: 'COMPLETED',
+  });
+
+  await db().client.ride.update({
+    where: { id: rideId },
+    data: {
+      completedAt: new Date(),
+      paymentStatus: 'PAID',
+      pickupAddress: 'Lal Chowk',
+      dropAddress: 'Dal Lake',
+    },
+  });
+
+  await db().client.rideFare.create({
+    data: {
+      rideId,
+      baseFare: 50,
+      distanceFare: 200,
+      timeFare: 83.33,
+      subtotal: 333.33,
+      taxAmount: 16.67,
+      totalFare: 350,
+      driverEarning: 325.5,
+      platformCommission: 24.5,
+    },
+  });
+
+  await db().client.invoiceTemplate.create({
+    data: {
+      name: 'Standard Ride Invoice Template',
+      headerLogoText: 'ZAROORAT MOBILITY PVT LTD',
+      address: '102, MG Road, Bengaluru - 560001',
+      gstin: '29AAAAA1111A1Z1',
+      footerTerms: 'Computer generated invoice.',
+      cgstRate: 2.5,
+      sgstRate: 2.5,
+      igstRate: 0,
+      appliesTo: 'ride',
+      isDefault: true,
+    },
+  });
+
+  await db().client.billingInvoice.createMany({
+    data: [
+      {
+        invoiceNumber: 'INV-TEST-001',
+        rideId,
+        recipientType: 'RIDER',
+        recipientUserId: customer.id,
+        recipientName: 'Demo Passenger',
+        bookingCode: 'R-9812',
+        amount: 350,
+        taxAmount: 16.67,
+        status: 'GENERATED',
+        fromRoute: 'Lal Chowk',
+        toRoute: 'Dal Lake',
+      },
+      {
+        invoiceNumber: 'INV-TEST-002',
+        rideId,
+        recipientType: 'DRIVER',
+        recipientUserId: driverUser.id,
+        recipientName: 'Demo Driver',
+        bookingCode: 'R-9812',
+        amount: 24.5,
+        taxAmount: 0,
+        status: 'GENERATED',
+        fromRoute: 'Lal Chowk',
+        toRoute: 'Dal Lake',
+      },
+    ],
+  });
+}

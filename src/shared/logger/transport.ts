@@ -1,13 +1,13 @@
 import { config } from '@config';
-
-export const transport =
-  config.app.environment === 'development'
-    ? {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'SYS:standard',
-          ignore: 'pid,hostname',
-        },
-      }
-    : undefined;
+import { isLocal } from '@config/env/environment.js';
+// pino-pretty is a devDependency: only a developer machine (source checkout) has it.
+export const transport = isLocal(config.app.environment)
+  ? {
+      target: 'pino-pretty',
+      options: {
+        colorize: true,
+        translateTime: 'SYS:standard',
+        ignore: 'pid,hostname',
+      },
+    }
+  : undefined;
