@@ -69,9 +69,14 @@ deploy() {
   [[ $rev == "$sha" ]] || die "image $app was built from '$rev', not $sha"
   printf 'APP_IMAGE=%s@%s\nOPS_IMAGE=%s@%s\nGIT_SHA=%s\n' "$REPO" "$app" "$REPO" "$ops" "$sha" > "$next"
   git -C "$SRC" checkout --quiet --detach "$sha"
-  # set -e: a failed migration stops here and the running release keeps serving.
-  dc "$next" run --rm migrate
-  dc "$next" run --rm db-roles
+  # A failed migration stops here: the running release is untouched and keeps serving,
+  # and the checkout goes back to it so status/rollback keep reading its compose file.
+  if ! { dc "$next" run --rm migrate && dc "$next" run --rm db-roles; }; then
+    if [[ -f $STATE/current.env ]]; then
+      git -C "$SRC" checkout --quiet --detach "$(sha_of "$STATE/current.env")"
+    fi
+    die "migration or db-roles failed for $sha; the running release was not touched"
+  fi
   if start "$next"; then
     if [[ -f $STATE/current.env ]]; then mv "$STATE/current.env" "$STATE/previous.env"; fi
     mv "$next" "$STATE/current.env"
