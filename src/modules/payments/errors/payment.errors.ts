@@ -348,7 +348,11 @@ export class DestinationChangeInsufficientWalletCoverageError extends PaymentErr
 
 export class SettlementFailureNotFoundError extends PaymentError {
   constructor(id: string) {
-    super(`Settlement collection failure '${id}' was not found`, 'SETTLEMENT_FAILURE_NOT_FOUND', 404);
+    super(
+      `Settlement collection failure '${id}' was not found`,
+      'SETTLEMENT_FAILURE_NOT_FOUND',
+      404,
+    );
     this.name = 'SettlementFailureNotFoundError';
   }
 }
