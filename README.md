@@ -200,18 +200,15 @@ Zaroorat implements a strict privilege-separation architecture for database secu
 
 ### Running Migrations
 
-```bash
-# Check migration status across environments
-npm run migrate:status:local
-npm run migrate:status:dev
-npm run migrate:status:staging
-npm run migrate:status:prod
+Laptop commands only ever use LOCAL configuration (`.env.local`). Deployed environments
+migrate, seed and provision admins on their own server (see
+[docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md));
+no npm script loads a DEV, staging or production env file.
 
-# Apply pending migrations safely
+```bash
+# Check / apply migrations on the local database
+npm run migrate:status:local
 npm run migrate:local
-npm run migrate:dev
-npm run migrate:staging
-npm run migrate:prod
 
 # Generate Prisma Client after schema modifications
 npm run prisma:generate
@@ -222,13 +219,9 @@ npm run prisma:generate
 ```bash
 # Seed base platform roles, system settings, and default lookup data
 npm run seed:local
-npm run seed:dev
-npm run seed:staging
 
-# Provision a Super-Admin user
+# Provision a Super-Admin user (ADMIN_EMAIL, ADMIN_PHONE, ADMIN_PASSWORD in the environment)
 npm run admin:local
-npm run admin:dev
-npm run admin:staging
 ```
 
 ---
@@ -300,73 +293,60 @@ The project utilizes a single, optimized, multi-stage [`Dockerfile`](Dockerfile)
 Continuous deployment to the DEV environment is managed through GitHub Actions ([`.github/workflows/deploy-dev.yml`](.github/workflows/deploy-dev.yml)):
 
 ```
-  [ git push develop ]
+  [ push to develop ]
           │
           ▼
-  1. Build Docker Images (Target: `prod` & `ops`)
-  2. Push Immutable Images to GitHub Container Registry (GHCR)
-     Tag: `ghcr.io/zaroorat-mobility/zaroorat-backend:sha-<commit>`
+  1. CI (format, lint, types, tests, image boot smoke) + Security (gitleaks, npm audit,
+     CodeQL, Trivy) — both called from deploy-dev.yml; any failure stops the deploy
           │
           ▼
-  3. SSH into DigitalOcean Droplet
-     Command: `deploy sha-<commit> <image-digest>`
+  2. Build `prod` + `ops` images, push to GHCR as `sha-<commit>` / `sha-<commit>-ops`,
+     export both image digests
           │
           ▼
-  4. Remote Execution on Droplet (`deploy/bin/deploy.sh`):
-     ├─ Acquire deployment lock (`flock`)
-     ├─ Pull exact image by cryptographic digest
-     ├─ Run Prisma migrations: `docker compose run --rm migrate`
-     ├─ Verify database user permissions: `docker compose run --rm db-roles`
-     ├─ Zero-downtime rolling restart: `docker compose up -d --wait api worker caddy`
-     └─ Healthcheck verification & automated rollback on failure
+  3. SSH to the droplet (pinned host key, restricted key, forced command):
+     `deploy <40-hex commit> <app sha256 digest> <ops sha256 digest>`
           │
           ▼
-  5. Post-Deployment Smoke Test: `curl -fsS https://dev-api.zaroorat.com/health`
+  4. /usr/local/sbin/zaroorat-deploy (root, via one sudo rule; source: deploy/bin/deploy.sh):
+     ├─ validate arguments; commit must be on origin/develop
+     ├─ pull both images by digest; image revision label must equal the commit
+     ├─ migrate (`run --rm migrate`) → runtime DB login (`run --rm db-roles`)
+     ├─ `up -d --no-build --wait --wait-timeout 180 api worker caddy`
+     ├─ /ready inside api and worker
+     └─ on failure: restore the previous release (digests + matching checkout)
+          │
+          ▼
+  5. Public check: `https://dev-api.zaroorat.com/ready` and `/health` reports `dev`
 ```
 
-### Manual DEV Deployment from Local Workstation
+### Manual DEV Deployment
 
-If you need to manually build and deploy a release to the DEV environment:
-
-```bash
-# 1. Commit and get current SHA
-$SHA = (git rev-parse --short HEAD)
-
-# 2. Build and push immutable images
-docker build --target prod -t ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA .
-docker build --target ops  -t ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA-ops .
-docker push ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA
-docker push ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA-ops
-
-# 3. Retrieve digest and trigger remote deploy
-$DIGEST = (docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/zaroorat-mobility/zaroorat-backend:sha-$SHA)
-ssh -i ~/.ssh/id_ed25519 deploy@<DEV_DROPLET_IP> "deploy sha-$SHA $DIGEST"
-```
+Images are never built on the server or pushed from a workstation. To redeploy, re-run
+**Deploy DEV (DigitalOcean)** on `develop` from the GitHub Actions tab. Server-side
+operations (`status`, `rollback`) are in
+[docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT/DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md).
 
 ---
 
 ## NPM Script Reference
 
-| Script                                    | Purpose                                                     |
-| :---------------------------------------- | :---------------------------------------------------------- |
-| `npm run dev:local` / `npm run local`     | Start API server in watch mode with `.env.local`            |
-| `npm run worker:local`                    | Start BullMQ worker in watch mode with `.env.local`         |
-| `npm run migrate:local`                   | Run Prisma migrations against local database                |
-| `npm run seed:local`                      | Seed default platform roles into local database             |
-| `npm run admin:local`                     | Provision super-admin account on local database             |
-| `npm run build`                           | Clean `dist/` and compile TypeScript                        |
-| `npm run typecheck`                       | Run complete TypeScript typechecking without emit           |
-| `npm run lint` / `npm run lint:fix`       | Lint codebase with ESLint                                   |
-| `npm run format` / `npm run format:check` | Format code with Prettier                                   |
-| `npm run test:unit`                       | Run all unit tests with Node test runner                    |
-| `npm run test:integration`                | Run integration test suite                                  |
-| `npm run docker:local:up`                 | Boot full containerized local stack with hot-reload         |
-| `npm run docker:local:down`               | Stop local container stack (data preserved)                 |
-| `npm run docker:local:reset`              | Teardown local stack and delete database volumes            |
-| `npm run docker:dev:up`                   | Start containerized DEV stack                               |
-| `npm run docker:dev:migrate`              | Execute DEV migrations inside ops container                 |
-| `npm run docker:staging:up`               | Start containerized Staging stack                           |
-| `npm run docker:prod:up`                  | Start containerized Production stack (requires `IMAGE_TAG`) |
+| Script                                    | Purpose                                             |
+| :---------------------------------------- | :-------------------------------------------------- |
+| `npm run dev:local` / `npm run local`     | Start API server in watch mode with `.env.local`    |
+| `npm run worker:local`                    | Start BullMQ worker in watch mode with `.env.local` |
+| `npm run migrate:local`                   | Run Prisma migrations against local database        |
+| `npm run seed:local`                      | Seed default platform roles into local database     |
+| `npm run admin:local`                     | Provision super-admin account on local database     |
+| `npm run build`                           | Clean `dist/` and compile TypeScript                |
+| `npm run typecheck`                       | Run complete TypeScript typechecking without emit   |
+| `npm run lint` / `npm run lint:fix`       | Lint codebase with ESLint                           |
+| `npm run format` / `npm run format:check` | Format code with Prettier                           |
+| `npm run test:unit`                       | Run all unit tests with Node test runner            |
+| `npm run test:integration`                | Run integration test suite                          |
+| `npm run docker:local:up`                 | Boot full containerized local stack with hot-reload |
+| `npm run docker:local:down`               | Stop local container stack (data preserved)         |
+| `npm run docker:local:reset`              | Teardown local stack and delete database volumes    |
 
 ---
 

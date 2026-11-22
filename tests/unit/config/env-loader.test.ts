@@ -40,14 +40,19 @@ describe('loadEnvironment', () => {
     assert.equal(process.env[MARKER], 'local');
   });
 
-  it('development still reads a legacy .env.development, and warns', () => {
-    process.env.APP_ENV = 'development';
-    write('.env.development', 'legacy');
-    const warn = mock.method(console, 'warn', () => {});
+  it('local reads .env.local', () => {
+    process.env.APP_ENV = 'local';
+    write('.env.local', 'local');
     loadEnvironment([dir]);
-    assert.equal(process.env[MARKER], 'legacy');
-    assert.equal(warn.mock.callCount(), 1);
-    assert.match(String(warn.mock.calls[0]?.arguments[0]), /\.env\.local/);
+    assert.equal(process.env[MARKER], 'local');
+  });
+
+  it('development never falls back to .env.dev or a legacy .env.development', () => {
+    process.env.APP_ENV = 'development';
+    write('.env.dev', 'dev-server-credentials');
+    write('.env.development', 'legacy');
+    assert.throws(() => loadEnvironment([dir]), /\.env\.local/);
+    assert.equal(process.env[MARKER], undefined);
   });
 
   it('development without any file throws and names .env.local', () => {
@@ -63,10 +68,15 @@ describe('loadEnvironment', () => {
     assert.equal(process.env[MARKER], 'test');
   });
 
-  for (const environment of ['staging', 'production']) {
+  // Deployed environments: the container has no dotenv file (.dockerignore) and Compose
+  // injects the variables. A missing file must not throw, and a file that happens to be
+  // present (a developer's .env.local, a stray .env.dev) must never be read.
+  for (const environment of ['dev', 'staging', 'prod', 'production']) {
     it(`${environment} reads no file at all (variables are injected)`, () => {
       process.env.APP_ENV = environment;
+      loadEnvironment([dir]);
       write('.env.local', 'local');
+      write('.env.dev', 'dev');
       write('.env.development', 'legacy');
       write(`.env.${environment}`, environment);
       loadEnvironment([dir]);
