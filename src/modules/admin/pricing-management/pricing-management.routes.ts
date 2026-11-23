@@ -299,8 +299,10 @@ export async function adminSurgeRoutes(fastify: FastifyInstance): Promise<void> 
   fastify.post('/commission-configurations/:id/approve', canWrite, (req, reply) =>
     adminPricingGovernanceController.approveCommissionConfig(req, reply),
   );
-  fastify.post('/commission-configurations/:id/scopes/:scopeId/deactivate', canWrite, (req, reply) =>
-    adminPricingGovernanceController.deactivateCommissionScope(req, reply),
+  fastify.post(
+    '/commission-configurations/:id/scopes/:scopeId/deactivate',
+    canWrite,
+    (req, reply) => adminPricingGovernanceController.deactivateCommissionScope(req, reply),
   );
   fastify.delete('/commission-configurations/:id', canWrite, (req, reply) =>
     adminPricingGovernanceController.deleteCommissionConfig(req, reply),

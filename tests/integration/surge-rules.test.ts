@@ -146,7 +146,13 @@ describe('surge on quotes and bookings (integration)', () => {
     await db().client.featureFlag.upsert({
       where: { key: 'surge' },
       update: { status: 'OFF' },
-      create: { key: 'surge', name: 'surge', status: 'OFF', rolloutPercentage: 100, isActive: true },
+      create: {
+        key: 'surge',
+        name: 'surge',
+        status: 'OFF',
+        rolloutPercentage: 100,
+        isActive: true,
+      },
     });
     assert.equal(await quotedSurge(), 1);
     assert.equal(await bookedSurge(), 1);

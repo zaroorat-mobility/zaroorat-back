@@ -158,7 +158,6 @@ export interface ZoneSurge {
   peakHours: { start: string; end: string } | null;
 }
 
-
 /// The same rule pricing applies (SurgeService): windows outside their peak
 /// hours do not count, the highest multiplier wins, clamped to the platform
 /// bounds. Returns null when nothing in this zone surges right now.

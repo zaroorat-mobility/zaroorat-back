@@ -224,10 +224,7 @@ export class TaxService {
         taxKind: ctx.kind,
         isEnforced: true,
         effectiveFrom: { lte: at },
-        AND: [
-          { OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }] },
-          { OR: candidates },
-        ],
+        AND: [{ OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }] }, { OR: candidates }],
       },
       include: { config: true },
     });
@@ -284,7 +281,9 @@ export class TaxService {
     const isSyntheticGlobal = ctx.cityCode === 'GLOBAL' || ctx.cityCode === '__GLOBAL__';
 
     const [city, mapping] = await Promise.all([
-      isSyntheticGlobal ? Promise.resolve(null) : client.city.findUnique({ where: { code: ctx.cityCode } }),
+      isSyntheticGlobal
+        ? Promise.resolve(null)
+        : client.city.findUnique({ where: { code: ctx.cityCode } }),
       client.citySupplyRegistration.findFirst({
         where: {
           cityCode: ctx.cityCode,

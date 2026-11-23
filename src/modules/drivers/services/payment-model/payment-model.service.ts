@@ -6,10 +6,7 @@ import {
   REV5_PRICING_FLAGS,
   type FeatureFlagReader,
 } from '@modules/pricing';
-import {
-  DriverNotFoundError,
-  SubscriptionModelDisabledError,
-} from '../../errors/driver.errors.js';
+import { DriverNotFoundError, SubscriptionModelDisabledError } from '../../errors/driver.errors.js';
 import type { Driver } from '../../types';
 
 export interface PaymentModelStatus {
@@ -42,9 +39,7 @@ export class PaymentModelService {
 
   private async isSubscriptionModelEnabled(): Promise<boolean> {
     if (!this.featureFlagService) return false;
-    return this.featureFlagService.isEnabledReadOnly(
-      REV5_PRICING_FLAGS.SUBSCRIPTION_MODEL_ENABLED,
-    );
+    return this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.SUBSCRIPTION_MODEL_ENABLED);
   }
 
   async select(

@@ -87,7 +87,11 @@ function dailyIntervalsOverlap(
     const end = parseHhMmMinutes(e);
     if (start === null || end === null) return [[0, 1440]];
     if (start < end) return [[start, end]];
-    if (start > end) return [[start, 1440], [0, end]];
+    if (start > end)
+      return [
+        [start, 1440],
+        [0, end],
+      ];
     return [[0, 1440]];
   };
   const segA = toSegments(aStart, aEnd);
@@ -204,10 +208,7 @@ export class AdminSurgeService {
       select: { id: true, code: true, name: true, hasAc: true },
     });
     return new Map(
-      vehicles.map((v) => [
-        v.id,
-        { id: v.id, code: v.code, name: vehicleTypeDisplayName(v) },
-      ]),
+      vehicles.map((v) => [v.id, { id: v.id, code: v.code, name: vehicleTypeDisplayName(v) }]),
     );
   }
 
@@ -471,9 +472,7 @@ export class AdminSurgeService {
 
       const incDays = inc.daysOfWeek ?? [];
       const daysOverlap =
-        newDays.length === 0 ||
-        incDays.length === 0 ||
-        newDays.some((d) => incDays.includes(d));
+        newDays.length === 0 || incDays.length === 0 || newDays.some((d) => incDays.includes(d));
       if (!daysOverlap) return false;
 
       return dailyIntervalsOverlap(

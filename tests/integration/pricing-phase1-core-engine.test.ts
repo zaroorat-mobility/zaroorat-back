@@ -415,13 +415,10 @@ describe('Phase 1 — Core Fare Engine (integration)', () => {
     // Receipt exists IMMEDIATELY after cash completion (without draining outbox)
     const receiptRow = await db().client.rideReceipt.findUnique({ where: { rideId } });
     assert.ok(receiptRow, 'cash ride receipt must be generated inside completion tx');
-    const snap = receiptRow.snapshotJson as Record<string, any>;
-    assert.equal(snap.fare.driverEarning, undefined, 'receipt must not expose driverEarning');
-    assert.equal(
-      snap.fare.platformCommission,
-      undefined,
-      'receipt must not expose platformCommission',
-    );
+    const snap = receiptRow.snapshotJson as Record<string, unknown>;
+    const fare = (snap.fare ?? {}) as Record<string, unknown>;
+    assert.equal(fare.driverEarning, undefined, 'receipt must not expose driverEarning');
+    assert.equal(fare.platformCommission, undefined, 'receipt must not expose platformCommission');
 
     // Customer GET /rides/:id must strip driver economics and never alias platformCommission into platformFee
     const custRide = await app.inject({

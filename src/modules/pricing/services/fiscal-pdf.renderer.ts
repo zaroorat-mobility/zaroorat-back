@@ -124,7 +124,20 @@ function formatIstDateTime(iso: string): string {
   if (Number.isNaN(d.getTime())) return sanitizeAscii(iso);
   const istMs = d.getTime() + 330 * 60_000;
   const ist = new Date(istMs);
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
   const day = String(ist.getUTCDate()).padStart(2, '0');
   const mon = months[ist.getUTCMonth()] ?? 'Jan';
   const year = ist.getUTCFullYear();
@@ -146,10 +159,7 @@ function sanitizeAscii(value: string): string {
 }
 
 function pdfEscape(value: string): string {
-  return sanitizeAscii(value)
-    .replace(/\\/g, '\\\\')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)');
+  return sanitizeAscii(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 }
 
 function fmtMoney(amount: number, currency: string): string {
@@ -255,7 +265,9 @@ export class BuiltinPdf14Renderer implements FiscalPdfRenderer {
         );
       }
       const paintOp = fillRgb && strokeRgb ? 'B' : fillRgb ? 'f' : 'S';
-      cmds.push(`${x.toFixed(1)} ${yBottom.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re ${paintOp} Q`);
+      cmds.push(
+        `${x.toFixed(1)} ${yBottom.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re ${paintOp} Q`,
+      );
       ops.push(cmds.join(' '));
     };
 
@@ -394,14 +406,7 @@ export class BuiltinPdf14Renderer implements FiscalPdfRenderer {
     ry -= 12.5;
     drawText(rx + 12, ry, `Currency: ${doc.currency || 'INR'}`, 8.3, false, SLATE_600);
     ry -= 12.5;
-    drawText(
-      rx + 12,
-      ry,
-      `Document Status: ${doc.status}`,
-      8.3,
-      true,
-      isVoided ? ROSE : EMERALD,
-    );
+    drawText(rx + 12, ry, `Document Status: ${doc.status}`, 8.3, true, isVoided ? ROSE : EMERALD);
 
     // ─── 3. Executive Line-Items Table (Zaroorat Navy Header + Zebra Rows) ────
     let y = cardBottom - 18;
@@ -519,15 +524,15 @@ export class BuiltinPdf14Renderer implements FiscalPdfRenderer {
     drawRect(rightBoxX, boxBottom, rightBoxW, totalBoxH, CARD_BG, BORDER, 0.8);
     let sy = y - 17;
     for (const row of summaryRows) {
-      drawText(rightBoxX + 12, sy, row.label, 8.5, Boolean(row.bold), row.bold ? SLATE_900 : SLATE_600);
-      drawRightText(
-        rightBoxX + rightBoxW - 12,
+      drawText(
+        rightBoxX + 12,
         sy,
-        row.value,
+        row.label,
         8.5,
         Boolean(row.bold),
-        SLATE_900,
+        row.bold ? SLATE_900 : SLATE_600,
       );
+      drawRightText(rightBoxX + rightBoxW - 12, sy, row.value, 8.5, Boolean(row.bold), SLATE_900);
       sy -= 17;
     }
 

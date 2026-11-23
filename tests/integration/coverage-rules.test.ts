@@ -272,7 +272,10 @@ describe('where rides can start and end (integration)', () => {
       const decision = await coverage.evaluateDrop(drop(IN_ZONE));
       assert.equal(decision.refusal, 'RESTRICTED_ZONE');
       assert.equal(decision.message, 'No drops near the cantonment.');
-      await assert.rejects(() => coverage.assertDropServiceable(drop(IN_ZONE)), hasCode('RESTRICTED_ZONE'));
+      await assert.rejects(
+        () => coverage.assertDropServiceable(drop(IN_ZONE)),
+        hasCode('RESTRICTED_ZONE'),
+      );
     });
 
     it('refuses at an airport with drops off', async () => {

@@ -1,23 +1,24 @@
 # Zaroorat Mobility — DigitalOcean DEV Deployment Readiness Report
 
-| Metadata | Value |
-| :--- | :--- |
-| **Document** | `ZAROORAT_DEV_DEPLOYMENT_READINESS.md` |
-| **System** | Zaroorat Mobility Backend (`zaroorat-back`) |
-| **Target Environment** | DigitalOcean DEV (Single Droplet, Bangalore `BLR1`) |
-| **Evaluated Branch** | `bugfix/dev-deploy-readiness` (ahead of `origin/develop` by 6 commits) |
-| **Commit Evaluated** | `8c525674a1bf2e6a5d2ba1b763c87ba6086af3e9` |
-| **Audit Baseline** | `docs/DEPLOYMENT/ZAROORAT_DEVOPS_DIGITALOCEAN_AUDIT.md` (DO-01 through DO-30) |
-| **Date** | 2026-11-22 |
-| **Readiness Status** | **CODE & PIPELINE READY — PENDING CLOUD PROVISIONING & SECRET ROTATION** |
+| Metadata               | Value                                                                         |
+| :--------------------- | :---------------------------------------------------------------------------- |
+| **Document**           | `ZAROORAT_DEV_DEPLOYMENT_READINESS.md`                                        |
+| **System**             | Zaroorat Mobility Backend (`zaroorat-back`)                                   |
+| **Target Environment** | DigitalOcean DEV (Single Droplet, Bangalore `BLR1`)                           |
+| **Evaluated Branch**   | `bugfix/dev-deploy-readiness` (ahead of `origin/develop` by 6 commits)        |
+| **Commit Evaluated**   | `8c525674a1bf2e6a5d2ba1b763c87ba6086af3e9`                                    |
+| **Audit Baseline**     | `docs/DEPLOYMENT/ZAROORAT_DEVOPS_DIGITALOCEAN_AUDIT.md` (DO-01 through DO-30) |
+| **Date**               | 2026-11-22                                                                    |
+| **Readiness Status**   | **CODE & PIPELINE READY — PENDING CLOUD PROVISIONING & SECRET ROTATION**      |
 
 ---
 
 ## Executive Summary
 
-A comprehensive multi-phase verification was conducted on the Zaroorat Mobility backend to prepare for its first deployment to DigitalOcean DEV. 
+A comprehensive multi-phase verification was conducted on the Zaroorat Mobility backend to prepare for its first deployment to DigitalOcean DEV.
 
 All 30 findings from the DevOps audit (`DO-01` through `DO-30`) have been addressed, verified, and tested on branch `bugfix/dev-deploy-readiness`:
+
 1. **Critical Boot Blockers Eliminated:** `loader.ts` has been fixed so containers boot cleanly without requiring `.env.dev` on disk (`11/11` unit tests pass); `PAYMENT_WEBHOOK_SECRET` placeholder is added to the template.
 2. **Credential Exposure Scrubbed:** All public documentation and template files have been scrubbed of literal Google Maps, AWS IAM, and Airtel credentials (`0` regex matches in `HEAD`).
 3. **CI/CD Quality Gate Established:** `deploy-dev.yml` now strictly enforces that full CI (`ci.yml`) and Security scanning (`security.yml`) must pass before container build and push occur. Test timeouts were increased to 40 minutes, and the `effect@3.22.5` override cleared high-severity npm audit findings.
@@ -33,52 +34,54 @@ The application code, Docker architecture, and deployment pipelines are 100% rea
 
 ### 1.1 Review of Implemented Fixes Against Original Findings
 
-| Finding ID | Severity | Original Issue | Verified Implementation in `bugfix/dev-deploy-readiness` | Verification Result |
-| :--- | :--- | :--- | :--- | :--- |
-| **DO-01** | Critical | Leaked DEV credentials in public files | `DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md` and `deploy/env/.env.dev.example` replaced with `REPLACE_WITH_*` placeholders. Gitleaks baseline updated. | ✅ **VERIFIED** (0 leaks in HEAD) |
-| **DO-02** | Critical | DEV API & worker boot crash (`.env.dev` required) | `src/config/env/loader.ts` modified: `dev`, `staging`, `prod` do not require a `.env` file on disk; containers accept injected env vars from Compose. | ✅ **VERIFIED** (11 unit tests pass) |
-| **DO-03** | Critical | `PAYMENT_WEBHOOK_SECRET` missing with Razorpay | Added placeholder `PAYMENT_WEBHOOK_SECRET=REPLACE_WITH_RAZORPAY_TEST_WEBHOOK_SECRET` in `deploy/env/.env.dev.example` and validation harness. | ✅ **VERIFIED** |
-| **DO-04** | Critical | Deploy scripts not executable in git | `git update-index --chmod=+x` applied to `deploy/bin/deploy.sh` and `deploy/bin/ssh-entry.sh`. Git file mode is `100755`. | ✅ **VERIFIED** (`100755`) |
-| **DO-05** | Critical | GitHub `dev` env missing `DEPLOY_HOST` | `deploy-dev.yml` updated with defensive environment check; will fail with explicit error if secrets/variables are missing. GitHub setup documented. | ✅ **VERIFIED** |
-| **DO-06** | High | Deploy lacked quality gate; CI failing | `deploy-dev.yml` requires `ci` and `security` jobs via `workflow_call:`. Prettier fixed in `payment.errors.ts`. Test timeout 40m. `effect@3.22.5` override added. | ✅ **VERIFIED** |
-| **DO-07** | High | Insecure deploy account model | `ssh-entry.sh` and `deploy.sh` rewritten: strict regex for SHA & digests, dedicated `deploy` user without docker group, root-owned scripts in `/usr/local/sbin`. | ✅ **VERIFIED** |
-| **DO-08** | High | Ops image mutable; server-side builds | Ops digest exported from CI; both runtime and ops images pulled by immutable `@sha256:` digest; `up --no-build` enforced. | ✅ **VERIFIED** |
-| **DO-09** | High | Broken `rollback.sh` / `status.sh` | Broken scripts removed. Unified into `deploy.sh` with `current.env`, `previous.env`, `rolled-back.env` state tracking and matching git checkout restoration. | ✅ **VERIFIED** |
-| **DO-10** | High | Health check liveness-only | `deploy.sh` executes `/ready` probe inside API and Worker containers with 180s timeout; workflow verifies public `/ready` and `/health` env name. | ✅ **VERIFIED** |
-| **DO-11** | High | Default npm scripts loaded `.env.prod`/`.env.dev` | `package.json` scripts cleaned: `dev` uses `.env.local`; `start` and `worker` use compiled JS without loading prod env files on laptop. | ✅ **VERIFIED** |
-| **DO-12** | High | Secret scan ineffective & unsafe | `.gitleaks.toml` restored `[extend] useDefault = true`; added `--redact` flag in `security.yml` to prevent secret leakage in public Actions logs. | ✅ **VERIFIED** |
-| **DO-13** | High | Unreviewed pricing commits merged to develop | Pricing changes isolated and tracked; DEV deployment will validate migrations `20261118*` safely in isolated DEV database. | ✅ **VERIFIED** |
-| **DO-14** | Medium | No Docker container log rotation | Server `daemon.json` logging configuration documented (`max-size: 10m`, `max-file: 5`) to prevent disk exhaustion. | ✅ **VERIFIED** (In Droplet checklist) |
-| **DO-15** | Medium | Fragile env file layout | Consolidated to single root-owned `/opt/zaroorat/env/dev.env` (chmod 0600) outside the git working tree. Hex-encoded passwords avoid URL encoding bugs. | ✅ **VERIFIED** |
-| **DO-16** | Medium | Staging & prod shared credentials on laptop | Untracked laptop secrets isolated; instructions provided to move them to secure secret manager. | ✅ **VERIFIED** |
-| **DO-17** | Medium | Missing scheduled server backups | Added nightly `pg_dump -Fc` cron job running inside container with owner privileges, 7-day retention, and restore testing procedure. | ✅ **VERIFIED** |
-| **DO-18** | Medium | Floating Docker image tags & action refs | GitHub Actions workflows pinned to exact commit SHAs; compose images pinned to specific minor versions (`postgis:17-3.5`, `valkey:8.1-alpine`). | ✅ **VERIFIED** |
-| **DO-19** | Medium | Inaccurate Droplet deployment guide | Guide updated and replaced with accurate single-host Docker Compose architecture matching reality. | ✅ **VERIFIED** |
-| **DO-20** | Medium | Loader/test drift & smoke-test coverage | Added DEV template smoke-test in `ci.yml` booting container with `deploy/env/.env.dev.example` and `--network none`; unit tests updated. | ✅ **VERIFIED** |
-| **DO-21** | Medium | Stale working-tree file | Working tree cleanly synchronized with `bugfix/dev-deploy-readiness`. | ✅ **VERIFIED** |
-| **DO-22** | Medium | Workflow SSH handling loose | Hardened SSH flags: `BatchMode=yes`, `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes`, `ConnectTimeout=20`, pinned `known_hosts`. | ✅ **VERIFIED** |
-| **DO-23** | Low | Public health endpoint info disclosure | Verified `/health` and `/ready` do not disclose passwords, tokens, or connection strings. Acceptable for DEV. | ✅ **VERIFIED** |
-| **DO-24** | Low | Caddy lacks ACME email & HSTS | Operator instructions include ACME email and HSTS header addition in Caddyfile. | ✅ **VERIFIED** |
-| **DO-25** | Low | Migrations run as superuser | Required for `CREATE EXTENSION postgis`; restricted `zaroorat_app` runtime role applied immediately after migration by `db-roles`. | ✅ **VERIFIED** |
-| **DO-26** | Low | Valkey password in process list | CI switched to Valkey; server execution documented with environment variable auth. | ✅ **VERIFIED** |
-| **DO-27** | Low | Ops image runs as root | Ops image is ephemeral, used only for `migrate`, `db-roles`, `seed`, and `create-admin`. Retained for DEV. | ✅ **VERIFIED** |
-| **DO-28** | Low | Obsolete Helm workflows | Staging/production K8s workflows inert (`DEPLOY_STAGING` unset). | ✅ **VERIFIED** |
-| **DO-29** | Low | Deploy lock in world-writable `/tmp` | Deploy lock moved to `/run/lock/zaroorat-deploy.lock` with `flock -w 600`. | ✅ **VERIFIED** |
-| **DO-30** | Low | Missing "AI Analyzer" worker | Verified not part of backend codebase; queues verified to match actual worker queues. | ✅ **VERIFIED** |
+| Finding ID | Severity | Original Issue                                    | Verified Implementation in `bugfix/dev-deploy-readiness`                                                                                                          | Verification Result                    |
+| :--------- | :------- | :------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------- |
+| **DO-01**  | Critical | Leaked DEV credentials in public files            | `DROPLET_DEV_AND_PROD_DEPLOYMENT_GUIDE.md` and `deploy/env/.env.dev.example` replaced with `REPLACE_WITH_*` placeholders. Gitleaks baseline updated.              | ✅ **VERIFIED** (0 leaks in HEAD)      |
+| **DO-02**  | Critical | DEV API & worker boot crash (`.env.dev` required) | `src/config/env/loader.ts` modified: `dev`, `staging`, `prod` do not require a `.env` file on disk; containers accept injected env vars from Compose.             | ✅ **VERIFIED** (11 unit tests pass)   |
+| **DO-03**  | Critical | `PAYMENT_WEBHOOK_SECRET` missing with Razorpay    | Added placeholder `PAYMENT_WEBHOOK_SECRET=REPLACE_WITH_RAZORPAY_TEST_WEBHOOK_SECRET` in `deploy/env/.env.dev.example` and validation harness.                     | ✅ **VERIFIED**                        |
+| **DO-04**  | Critical | Deploy scripts not executable in git              | `git update-index --chmod=+x` applied to `deploy/bin/deploy.sh` and `deploy/bin/ssh-entry.sh`. Git file mode is `100755`.                                         | ✅ **VERIFIED** (`100755`)             |
+| **DO-05**  | Critical | GitHub `dev` env missing `DEPLOY_HOST`            | `deploy-dev.yml` updated with defensive environment check; will fail with explicit error if secrets/variables are missing. GitHub setup documented.               | ✅ **VERIFIED**                        |
+| **DO-06**  | High     | Deploy lacked quality gate; CI failing            | `deploy-dev.yml` requires `ci` and `security` jobs via `workflow_call:`. Prettier fixed in `payment.errors.ts`. Test timeout 40m. `effect@3.22.5` override added. | ✅ **VERIFIED**                        |
+| **DO-07**  | High     | Insecure deploy account model                     | `ssh-entry.sh` and `deploy.sh` rewritten: strict regex for SHA & digests, dedicated `deploy` user without docker group, root-owned scripts in `/usr/local/sbin`.  | ✅ **VERIFIED**                        |
+| **DO-08**  | High     | Ops image mutable; server-side builds             | Ops digest exported from CI; both runtime and ops images pulled by immutable `@sha256:` digest; `up --no-build` enforced.                                         | ✅ **VERIFIED**                        |
+| **DO-09**  | High     | Broken `rollback.sh` / `status.sh`                | Broken scripts removed. Unified into `deploy.sh` with `current.env`, `previous.env`, `rolled-back.env` state tracking and matching git checkout restoration.      | ✅ **VERIFIED**                        |
+| **DO-10**  | High     | Health check liveness-only                        | `deploy.sh` executes `/ready` probe inside API and Worker containers with 180s timeout; workflow verifies public `/ready` and `/health` env name.                 | ✅ **VERIFIED**                        |
+| **DO-11**  | High     | Default npm scripts loaded `.env.prod`/`.env.dev` | `package.json` scripts cleaned: `dev` uses `.env.local`; `start` and `worker` use compiled JS without loading prod env files on laptop.                           | ✅ **VERIFIED**                        |
+| **DO-12**  | High     | Secret scan ineffective & unsafe                  | `.gitleaks.toml` restored `[extend] useDefault = true`; added `--redact` flag in `security.yml` to prevent secret leakage in public Actions logs.                 | ✅ **VERIFIED**                        |
+| **DO-13**  | High     | Unreviewed pricing commits merged to develop      | Pricing changes isolated and tracked; DEV deployment will validate migrations `20261118*` safely in isolated DEV database.                                        | ✅ **VERIFIED**                        |
+| **DO-14**  | Medium   | No Docker container log rotation                  | Server `daemon.json` logging configuration documented (`max-size: 10m`, `max-file: 5`) to prevent disk exhaustion.                                                | ✅ **VERIFIED** (In Droplet checklist) |
+| **DO-15**  | Medium   | Fragile env file layout                           | Consolidated to single root-owned `/opt/zaroorat/env/dev.env` (chmod 0600) outside the git working tree. Hex-encoded passwords avoid URL encoding bugs.           | ✅ **VERIFIED**                        |
+| **DO-16**  | Medium   | Staging & prod shared credentials on laptop       | Untracked laptop secrets isolated; instructions provided to move them to secure secret manager.                                                                   | ✅ **VERIFIED**                        |
+| **DO-17**  | Medium   | Missing scheduled server backups                  | Added nightly `pg_dump -Fc` cron job running inside container with owner privileges, 7-day retention, and restore testing procedure.                              | ✅ **VERIFIED**                        |
+| **DO-18**  | Medium   | Floating Docker image tags & action refs          | GitHub Actions workflows pinned to exact commit SHAs; compose images pinned to specific minor versions (`postgis:17-3.5`, `valkey:8.1-alpine`).                   | ✅ **VERIFIED**                        |
+| **DO-19**  | Medium   | Inaccurate Droplet deployment guide               | Guide updated and replaced with accurate single-host Docker Compose architecture matching reality.                                                                | ✅ **VERIFIED**                        |
+| **DO-20**  | Medium   | Loader/test drift & smoke-test coverage           | Added DEV template smoke-test in `ci.yml` booting container with `deploy/env/.env.dev.example` and `--network none`; unit tests updated.                          | ✅ **VERIFIED**                        |
+| **DO-21**  | Medium   | Stale working-tree file                           | Working tree cleanly synchronized with `bugfix/dev-deploy-readiness`.                                                                                             | ✅ **VERIFIED**                        |
+| **DO-22**  | Medium   | Workflow SSH handling loose                       | Hardened SSH flags: `BatchMode=yes`, `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes`, `ConnectTimeout=20`, pinned `known_hosts`.                                | ✅ **VERIFIED**                        |
+| **DO-23**  | Low      | Public health endpoint info disclosure            | Verified `/health` and `/ready` do not disclose passwords, tokens, or connection strings. Acceptable for DEV.                                                     | ✅ **VERIFIED**                        |
+| **DO-24**  | Low      | Caddy lacks ACME email & HSTS                     | Operator instructions include ACME email and HSTS header addition in Caddyfile.                                                                                   | ✅ **VERIFIED**                        |
+| **DO-25**  | Low      | Migrations run as superuser                       | Required for `CREATE EXTENSION postgis`; restricted `zaroorat_app` runtime role applied immediately after migration by `db-roles`.                                | ✅ **VERIFIED**                        |
+| **DO-26**  | Low      | Valkey password in process list                   | CI switched to Valkey; server execution documented with environment variable auth.                                                                                | ✅ **VERIFIED**                        |
+| **DO-27**  | Low      | Ops image runs as root                            | Ops image is ephemeral, used only for `migrate`, `db-roles`, `seed`, and `create-admin`. Retained for DEV.                                                        | ✅ **VERIFIED**                        |
+| **DO-28**  | Low      | Obsolete Helm workflows                           | Staging/production K8s workflows inert (`DEPLOY_STAGING` unset).                                                                                                  | ✅ **VERIFIED**                        |
+| **DO-29**  | Low      | Deploy lock in world-writable `/tmp`              | Deploy lock moved to `/run/lock/zaroorat-deploy.lock` with `flock -w 600`.                                                                                        | ✅ **VERIFIED**                        |
+| **DO-30**  | Low      | Missing "AI Analyzer" worker                      | Verified not part of backend codebase; queues verified to match actual worker queues.                                                                             | ✅ **VERIFIED**                        |
 
 ### 1.2 Credential Rotation & Secret Hygiene Audit
+
 - **Repository Scan:** Executed pattern scan for AWS Access Keys (`AKIA...`) and Google API Keys (`AIza...`) across all tracked files in `HEAD`:
   ```bash
   git grep -nE 'AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}' HEAD -- . ':!tests'
   ```
   **Result:** `0 matches found`.
 - **Public Git History Notice:** The previous commits `5780d60` (on `develop` and `feat/multi-env-standardization`) contained exposed credentials. Since GitHub repositories are publicly indexed, **these credentials MUST be rotated in their respective cloud consoles by the owner**:
-  1. **Google Maps Platform:** Delete leaked API key in Google Cloud Console; create a new API key restricted to *Geocoding, Distance Matrix, Directions, Places* and restricted to the Droplet's outbound IPv4 address.
+  1. **Google Maps Platform:** Delete leaked API key in Google Cloud Console; create a new API key restricted to _Geocoding, Distance Matrix, Directions, Places_ and restricted to the Droplet's outbound IPv4 address.
   2. **AWS IAM:** Deactivate and delete the exposed Access Key ID in the AWS IAM Console; generate a new IAM Access Key Pair restricted strictly to DEV S3 buckets (`zaroorat-dev-*`).
   3. **Airtel IQ:** Rotate the DLT / SMS API password.
   4. **Razorpay:** Generate a new Webhook Secret in the Razorpay Dashboard (Test Mode) pointing to `https://dev-api.zaroorat.com/webhooks/razorpay`.
 
 ### 1.3 Git Status and Commits
+
 - **Branch:** `bugfix/dev-deploy-readiness` in `c:\dev\Zaroorat_production\zaroorat-back`.
 - **Working Tree:** Clean (untracked audit file only).
 - **Commits ahead of `origin/develop`:**
@@ -99,7 +102,7 @@ The application code, Docker architecture, and deployment pipelines are 100% rea
 flowchart TD
     PushDevelop["git push origin develop"] --> CI["ci.yml (workflow_call)"]
     PushDevelop --> Security["security.yml (workflow_call)"]
-    
+
     subgraph CI_Pipeline ["Continuous Integration (ci.yml)"]
         Quality["Lint, Format & Typecheck"]
         Tests["Tests (PostGIS 17 + Redis 8, 40m timeout)"]
@@ -107,20 +110,20 @@ flowchart TD
         Quality --> Tests
         Quality --> BuildSmoke
     end
-    
+
     subgraph Security_Pipeline ["Security Audits (security.yml)"]
         Gitleaks["Secret Scan (Gitleaks --redact)"]
         NpmAudit["Dependency Audit (npm audit --audit-level=high)"]
         CodeQL["CodeQL Static Analysis"]
         Trivy["Trivy Vulnerability Scan"]
     end
-    
+
     CI --> GateCheck{"All Checks Pass?"}
     Security --> GateCheck
-    
+
     GateCheck -- Yes --> BuildImages["Build & Push Images to GHCR"]
     GateCheck -- No --> AbortDeploy["Deploy Aborted (develop stays red)"]
-    
+
     subgraph Deploy_DEV ["DigitalOcean DEV Deployment (deploy-dev.yml)"]
         BuildImages --> ExportDigests["Export app_digest & ops_digest"]
         ExportDigests --> SSHDeploy["SSH to Droplet (deploy user, pinned host key)"]
@@ -130,6 +133,7 @@ flowchart TD
 ```
 
 ### 2.2 Verification of Deployment Gating & Security Controls
+
 1. **CI Must Pass Before Deployment:** `deploy-dev.yml` declares `needs: [ci, security]`. Neither image building nor Droplet SSH can execute if formatting, linting, unit tests, integration tests, secret scanning, or high-severity dependency audits fail.
 2. **Branch Protection:** The deploy job runs exclusively on `github.ref == 'refs/heads/develop'`. Manual dispatches from other branches skip all build and deploy steps.
 3. **GHCR Authentication & Digest Immutability:**
@@ -148,19 +152,20 @@ flowchart TD
 
 The single-droplet DEV stack is defined in `compose.dev.yml` under project name `zaroorat-dev`:
 
-| Service | Container Image | Internal Port | Published Port | Health Check | Memory Limit | CPU Limit | Purpose |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`caddy`** | `caddy:2-alpine` | - | `80`, `443` | - | 128 MB | 0.50 | Reverse proxy, TLS termination, gzip/zstd compression, blocks `/metrics` & `/docs`. |
-| **`api`** | `.../zaroorat-backend@sha256:...` | `3000` | None | `GET /health` + `/ready` | 1024 MB | 1.50 | Fastify REST API, Socket.IO gateway, non-root user `node`, `stop_grace_period: 30s`. |
-| **`worker`** | `.../zaroorat-backend@sha256:...` | `3001` | None | `GET /health` + `/ready` | 768 MB | 1.00 | BullMQ queue worker, maintenance crons, non-root user `node`, `stop_grace_period: 150s`. |
-| **`pgbouncer`** | `edoburu/pgbouncer:v1.23.1-p2` | `6432` | None | `pg_isready -p 6432` | 64 MB | 0.25 | Connection pooler (transaction mode), SCRAM-SHA-256 auth, 40 default + 10 reserve pool. |
-| **`postgres`** | `postgis/postgis:17-3.5` | `5432` | None | `pg_isready -p 5432` | 2048 MB | 2.00 | PostgreSQL 17 database with PostGIS 3.5 & pgcrypto extensions. Volume `postgres_dev_data`. |
-| **`valkey`** | `valkey/valkey:8.1-alpine` | `6379` | None | `valkey-cli ping` | 512 MB | 0.50 | In-memory key-value cache, BullMQ engine, Socket.IO adapter. AOF enabled, `noeviction`. |
-| **`migrate`** *(ops)* | `.../zaroorat-backend:ops@sha256:...` | - | None | - | - | - | Runs `npx prisma migrate deploy` directly to PostgreSQL port 5432 as superuser. |
-| **`db-roles`** *(ops)*| `postgis/postgis:17-3.5` | - | None | - | - | - | Executes `scripts/db/create-app-login.sql` to ensure `zaroorat_app` login role exists. |
-| **`ops`** *(ops)* | `.../zaroorat-backend:ops@sha256:...` | - | None | - | - | - | One-shot container for database seeding (`prisma db seed`) and admin creation. |
+| Service                | Container Image                       | Internal Port | Published Port | Health Check             | Memory Limit | CPU Limit | Purpose                                                                                    |
+| :--------------------- | :------------------------------------ | :------------ | :------------- | :----------------------- | :----------- | :-------- | :----------------------------------------------------------------------------------------- |
+| **`caddy`**            | `caddy:2-alpine`                      | -             | `80`, `443`    | -                        | 128 MB       | 0.50      | Reverse proxy, TLS termination, gzip/zstd compression, blocks `/metrics` & `/docs`.        |
+| **`api`**              | `.../zaroorat-backend@sha256:...`     | `3000`        | None           | `GET /health` + `/ready` | 1024 MB      | 1.50      | Fastify REST API, Socket.IO gateway, non-root user `node`, `stop_grace_period: 30s`.       |
+| **`worker`**           | `.../zaroorat-backend@sha256:...`     | `3001`        | None           | `GET /health` + `/ready` | 768 MB       | 1.00      | BullMQ queue worker, maintenance crons, non-root user `node`, `stop_grace_period: 150s`.   |
+| **`pgbouncer`**        | `edoburu/pgbouncer:v1.23.1-p2`        | `6432`        | None           | `pg_isready -p 6432`     | 64 MB        | 0.25      | Connection pooler (transaction mode), SCRAM-SHA-256 auth, 40 default + 10 reserve pool.    |
+| **`postgres`**         | `postgis/postgis:17-3.5`              | `5432`        | None           | `pg_isready -p 5432`     | 2048 MB      | 2.00      | PostgreSQL 17 database with PostGIS 3.5 & pgcrypto extensions. Volume `postgres_dev_data`. |
+| **`valkey`**           | `valkey/valkey:8.1-alpine`            | `6379`        | None           | `valkey-cli ping`        | 512 MB       | 0.50      | In-memory key-value cache, BullMQ engine, Socket.IO adapter. AOF enabled, `noeviction`.    |
+| **`migrate`** _(ops)_  | `.../zaroorat-backend:ops@sha256:...` | -             | None           | -                        | -            | -         | Runs `npx prisma migrate deploy` directly to PostgreSQL port 5432 as superuser.            |
+| **`db-roles`** _(ops)_ | `postgis/postgis:17-3.5`              | -             | None           | -                        | -            | -         | Executes `scripts/db/create-app-login.sql` to ensure `zaroorat_app` login role exists.     |
+| **`ops`** _(ops)_      | `.../zaroorat-backend:ops@sha256:...` | -             | None           | -                        | -            | -         | One-shot container for database seeding (`prisma db seed`) and admin creation.             |
 
 ### 3.1 Key Architectural Guarantees
+
 - **Least-Privilege Database Access:** The runtime `api` and `worker` connect exclusively through PgBouncer on port `6432` as user `zaroorat_app`. This role has DML permissions (SELECT, INSERT, UPDATE, DELETE) but is strictly forbidden from executing DDL, dropping tables, or altering audit logs.
 - **Credential Scrubbing Inside Containers:** All application containers inject `x-no-infra-secrets` to blank `POSTGRES_PASSWORD`, `APP_DB_PASSWORD`, `REDIS_PASSWORD`, and `MIGRATION_DATABASE_URL` so that runtime container inspection cannot reveal database admin credentials.
 - **Isolated Network:** All containers communicate across private bridge network `zaroorat-net` (`172.28.0.0/24`). Only ports 80 and 443 are published to the host.
@@ -218,7 +223,7 @@ In the GitHub repository settings for `zaroorat-mobility/zaroorat-back`:
        - TCP `80` (HTTP): `0.0.0.0/0, ::/0`
        - TCP `443` (HTTPS): `0.0.0.0/0, ::/0`
      - **Outbound Rules:** All traffic allowed.
-     - *Verify:* PostgreSQL (5432), Valkey (6379), and PgBouncer (6432) have **NO inbound firewall rules**.
+     - _Verify:_ PostgreSQL (5432), Valkey (6379), and PgBouncer (6432) have **NO inbound firewall rules**.
 
 ---
 
@@ -229,7 +234,7 @@ In the GitHub repository settings for `zaroorat-mobility/zaroorat-back`:
    - **Name:** `dev-api`
    - **IPv4 Address:** `<DROOLET_RESERVED_IPV4>`
    - **Proxy Status:** **DNS Only (Grey Cloud)**  
-     *(Important: Keep Grey Cloud so Caddy can automatically obtain Let's Encrypt TLS certificates and receive actual client IP addresses for rate limiting).*
+     _(Important: Keep Grey Cloud so Caddy can automatically obtain Let's Encrypt TLS certificates and receive actual client IP addresses for rate limiting)._
    - **TTL:** 5 minutes (Auto / 300 seconds).
 
 ---
@@ -325,7 +330,9 @@ nano /opt/zaroorat/env/dev.env
 ```
 
 #### Secret Generation Cheat Sheet
+
 Run these on the Droplet or operator laptop:
+
 - **Database & Valkey Passwords (Hex avoids URL-encoding issues):**
   ```bash
   openssl rand -hex 24
@@ -336,6 +343,7 @@ Run these on the Droplet or operator laptop:
   ```
 
 #### Required Variables Checklist in `dev.env`
+
 - [ ] `POSTGRES_USER=zaroorat`
 - [ ] `POSTGRES_PASSWORD=<GENERATED_HEX_PASSWORD>`
 - [ ] `POSTGRES_DB=zaroorat_dev`
@@ -369,6 +377,7 @@ Run these on the Droplet or operator laptop:
 - [ ] `CORS_ALLOWED_ORIGINS=https://dev-admin.zaroorat.com,https://dev.zaroorat.com`
 
 **Verify no placeholders remain:**
+
 ```bash
 grep -c "REPLACE_WITH_" /opt/zaroorat/env/dev.env
 # Must return 0
@@ -381,9 +390,11 @@ grep -c "REPLACE_WITH_" /opt/zaroorat/env/dev.env
 Once the PR on `bugfix/dev-deploy-readiness` is merged to `develop` and GitHub Actions completes building the images, trigger the first deployment.
 
 #### Option A: Automated via GitHub Actions
+
 Triggered automatically on push to `develop`, or manually run from GitHub Actions tab &rarr; **Deploy DEV (DigitalOcean)** &rarr; **Run workflow**.
 
 #### Option B: Manual First Run on the Droplet (Opsadmin)
+
 ```bash
 sudo -i
 # Find the image digests output by the GHA "Build & Push Images" step
@@ -395,7 +406,9 @@ OPS_DIGEST="sha256:<64_HEX_DIGEST>"
 ```
 
 #### First-Time Database Seeding & System Admin Creation
+
 Run once after the first successful deployment:
+
 ```bash
 # Helper function
 dc() {
@@ -424,28 +437,28 @@ unset ADMIN_PASSWORD
 
 ### Step 7: 20-Point Smoke Testing & Verification Checklist
 
-| # | Verification Check | Command / Procedure | Expected Pass Output |
-| :--- | :--- | :--- | :--- |
-| **1** | **No Leaked Credentials in Tracked Files** | `git grep -nE 'AKIA[0-9A-Z]{16}\|AIza[0-9A-Za-z_-]{35}' HEAD -- . ':!tests'` | Exit code 1 (No output) |
-| **2** | **Old Credentials Revoked** | Check Google Cloud and AWS IAM consoles | Old keys deleted or inactive |
-| **3** | **Script Executable Modes** | `git ls-files -s deploy/bin` | `100755` for `deploy.sh` and `ssh-entry.sh` |
-| **4** | **Deploy Account Security Boundary** | `ssh -i ~/.ssh/deploy_key deploy@<IP> id` | `denied: allowed commands are...` |
-| **5** | **Deploy Argument Validation** | `ssh -i ~/.ssh/deploy_key deploy@<IP> "deploy main abc def"` | Denied (Strict regex validation) |
-| **6** | **Deploy User Privileges** | `id deploy` & `sudo -l -U deploy` | Not in `docker` group; 1 NOPASSWD sudo rule |
-| **7** | **Host Firewall Ports** | `nmap -Pn -p 1-65535 <IP>` (from external machine) | Only ports `22`, `80`, `443` open |
-| **8** | **Database & Cache Isolation** | `nc -vz <IP> 5432 6379 6432` (from external machine) | Connection refused or timed out |
-| **9** | **Image Digest Pinning** | `sudo /usr/local/sbin/zaroorat-deploy status` | `APP_IMAGE=...@sha256:...`, `OPS_IMAGE=...@sha256:...` |
-| **10** | **System Readiness Check** | `curl -fsS https://dev-api.zaroorat.com/ready` | `{"status":"ready","checks":[{"name":"database","ok":true},{"name":"redis","ok":true}]...}` |
-| **11** | **Environment Assertion** | `curl -fsS https://dev-api.zaroorat.com/health` | `{"status":"ok",...,"environment":"dev"}` |
-| **12** | **HTTPS Redirect** | `curl -sI http://dev-api.zaroorat.com/health` | HTTP `308 Permanent Redirect` to `https://` |
-| **13** | **Internal Endpoints Blocked** | `curl -s -o /dev/null -w '%{http_code}' https://dev-api.zaroorat.com/metrics` | HTTP `404 Not Found` |
-| **14** | **Docs Endpoints Blocked** | `curl -s -o /dev/null -w '%{http_code}' https://dev-api.zaroorat.com/docs` | HTTP `404 Not Found` |
-| **15** | **WebSocket Upgrade** | `curl -si --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdA==' 'https://dev-api.zaroorat.com/socket.io/?EIO=4&transport=websocket'` | HTTP `101 Switching Protocols` |
-| **16** | **Runtime Role Least Privilege** | `dc exec -T postgres psql -U zaroorat -d zaroorat_dev -f /dev/stdin < scripts/db/verify-roles.sql` | All test blocks print `PASS` |
-| **17** | **Worker Daemon Health** | `dc exec -T worker node -e "fetch('http://127.0.0.1:3001/ready').then(r=>console.log(r.status))"` | `200` |
-| **18** | **Container Log Rotation** | `docker inspect zaroorat-dev-api-1 --format '{{.HostConfig.LogConfig}}'` | `map[Config:map[max-file:5 max-size:10m] Type:json-file]` |
-| **19** | **Database Backup & Restoration** | Create test dump, restore into `zaroorat_restore_check`, verify roles, drop db | Successful restore without data loss |
-| **20** | **Rollback Functionality** | Execute consecutive deploys, then run `sudo zaroorat-deploy rollback` | Previous commit SHA & image digest active, `/ready` returns 200 |
+| #      | Verification Check                         | Command / Procedure                                                                                                                                                                                       | Expected Pass Output                                                                        |
+| :----- | :----------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| **1**  | **No Leaked Credentials in Tracked Files** | `git grep -nE 'AKIA[0-9A-Z]{16}\|AIza[0-9A-Za-z_-]{35}' HEAD -- . ':!tests'`                                                                                                                              | Exit code 1 (No output)                                                                     |
+| **2**  | **Old Credentials Revoked**                | Check Google Cloud and AWS IAM consoles                                                                                                                                                                   | Old keys deleted or inactive                                                                |
+| **3**  | **Script Executable Modes**                | `git ls-files -s deploy/bin`                                                                                                                                                                              | `100755` for `deploy.sh` and `ssh-entry.sh`                                                 |
+| **4**  | **Deploy Account Security Boundary**       | `ssh -i ~/.ssh/deploy_key deploy@<IP> id`                                                                                                                                                                 | `denied: allowed commands are...`                                                           |
+| **5**  | **Deploy Argument Validation**             | `ssh -i ~/.ssh/deploy_key deploy@<IP> "deploy main abc def"`                                                                                                                                              | Denied (Strict regex validation)                                                            |
+| **6**  | **Deploy User Privileges**                 | `id deploy` & `sudo -l -U deploy`                                                                                                                                                                         | Not in `docker` group; 1 NOPASSWD sudo rule                                                 |
+| **7**  | **Host Firewall Ports**                    | `nmap -Pn -p 1-65535 <IP>` (from external machine)                                                                                                                                                        | Only ports `22`, `80`, `443` open                                                           |
+| **8**  | **Database & Cache Isolation**             | `nc -vz <IP> 5432 6379 6432` (from external machine)                                                                                                                                                      | Connection refused or timed out                                                             |
+| **9**  | **Image Digest Pinning**                   | `sudo /usr/local/sbin/zaroorat-deploy status`                                                                                                                                                             | `APP_IMAGE=...@sha256:...`, `OPS_IMAGE=...@sha256:...`                                      |
+| **10** | **System Readiness Check**                 | `curl -fsS https://dev-api.zaroorat.com/ready`                                                                                                                                                            | `{"status":"ready","checks":[{"name":"database","ok":true},{"name":"redis","ok":true}]...}` |
+| **11** | **Environment Assertion**                  | `curl -fsS https://dev-api.zaroorat.com/health`                                                                                                                                                           | `{"status":"ok",...,"environment":"dev"}`                                                   |
+| **12** | **HTTPS Redirect**                         | `curl -sI http://dev-api.zaroorat.com/health`                                                                                                                                                             | HTTP `308 Permanent Redirect` to `https://`                                                 |
+| **13** | **Internal Endpoints Blocked**             | `curl -s -o /dev/null -w '%{http_code}' https://dev-api.zaroorat.com/metrics`                                                                                                                             | HTTP `404 Not Found`                                                                        |
+| **14** | **Docs Endpoints Blocked**                 | `curl -s -o /dev/null -w '%{http_code}' https://dev-api.zaroorat.com/docs`                                                                                                                                | HTTP `404 Not Found`                                                                        |
+| **15** | **WebSocket Upgrade**                      | `curl -si --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdA==' 'https://dev-api.zaroorat.com/socket.io/?EIO=4&transport=websocket'` | HTTP `101 Switching Protocols`                                                              |
+| **16** | **Runtime Role Least Privilege**           | `dc exec -T postgres psql -U zaroorat -d zaroorat_dev -f /dev/stdin < scripts/db/verify-roles.sql`                                                                                                        | All test blocks print `PASS`                                                                |
+| **17** | **Worker Daemon Health**                   | `dc exec -T worker node -e "fetch('http://127.0.0.1:3001/ready').then(r=>console.log(r.status))"`                                                                                                         | `200`                                                                                       |
+| **18** | **Container Log Rotation**                 | `docker inspect zaroorat-dev-api-1 --format '{{.HostConfig.LogConfig}}'`                                                                                                                                  | `map[Config:map[max-file:5 max-size:10m] Type:json-file]`                                   |
+| **19** | **Database Backup & Restoration**          | Create test dump, restore into `zaroorat_restore_check`, verify roles, drop db                                                                                                                            | Successful restore without data loss                                                        |
+| **20** | **Rollback Functionality**                 | Execute consecutive deploys, then run `sudo zaroorat-deploy rollback`                                                                                                                                     | Previous commit SHA & image digest active, `/ready` returns 200                             |
 
 ---
 
@@ -456,7 +469,7 @@ unset ADMIN_PASSWORD
    ```bash
    sudo /usr/local/sbin/zaroorat-deploy rollback
    ```
-   *Action:* Swaps active configuration back to `previous.env`, detaches git checkout to the previous commit SHA, restarts `api`, `worker`, `caddy`, and validates `/ready`. (Database migrations are forward-only and are not rolled back).
+   _Action:_ Swaps active configuration back to `previous.env`, detaches git checkout to the previous commit SHA, restarts `api`, `worker`, `caddy`, and validates `/ready`. (Database migrations are forward-only and are not rolled back).
 2. **Git Revert Deploy (Standard Procedure):**
    Revert the faulty PR on GitHub `develop` branch. Merge the revert PR. GitHub Actions will automatically deploy the known-good commit.
 3. **Database Schema Incident Recovery:**
@@ -478,6 +491,7 @@ unset ADMIN_PASSWORD
 ## Completed Checks, Failed Checks & Pending Tasks
 
 ### Completed Checks
+
 - [x] Codebase audited against all findings (`DO-01` through `DO-30`).
 - [x] `loader.ts` updated to allow `.env.dev` container boot without files; 11 unit tests verified.
 - [x] `deploy/bin/deploy.sh` and `ssh-entry.sh` rewritten, permissions set to `100755`.
@@ -488,9 +502,11 @@ unset ADMIN_PASSWORD
 - [x] High-severity npm audit advisory resolved with `effect@3.22.5` override.
 
 ### Failed Checks
-- [x] *None in codebase.* All code-level audit failures have been resolved.
+
+- [x] _None in codebase._ All code-level audit failures have been resolved.
 
 ### Pending Manual Tasks (Owner Actions)
+
 1. **Credential Rotation:**
    - [ ] Delete leaked Google Maps API key in GCP console; create and restrict new key to Droplet IPv4.
    - [ ] Rotate AWS S3 IAM credentials; restrict to `zaroorat-dev-*` buckets.

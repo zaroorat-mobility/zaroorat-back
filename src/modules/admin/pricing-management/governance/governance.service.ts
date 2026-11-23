@@ -102,9 +102,7 @@ export class AdminPricingGovernanceService {
   async createCommissionConfig(body: CreateCommissionConfigBody, actor: AuditActor) {
     const scopes = dedupeScopes(body.scopes);
     const now = new Date();
-    const effectiveFrom = body.declaredEffectiveFrom
-      ? new Date(body.declaredEffectiveFrom)
-      : now;
+    const effectiveFrom = body.declaredEffectiveFrom ? new Date(body.declaredEffectiveFrom) : now;
     const effectiveTo = body.declaredEffectiveTo ? new Date(body.declaredEffectiveTo) : null;
     const activateNow = Boolean(body.activateImmediately);
 
@@ -224,7 +222,11 @@ export class AdminPricingGovernanceService {
           include: { scopes: true },
         });
         if (!config) {
-          throw new PricingAdminError('Commission configuration not found', 'CONFIG_NOT_FOUND', 404);
+          throw new PricingAdminError(
+            'Commission configuration not found',
+            'CONFIG_NOT_FOUND',
+            404,
+          );
         }
         if (config.status !== 'PENDING_APPROVAL') {
           throw new PricingAdminError(
@@ -344,11 +346,7 @@ export class AdminPricingGovernanceService {
         REV5_PRICING_FLAGS.COMMISSION_CONFIG_SOURCE,
       );
       const now = new Date();
-      if (
-        dbSourceOn &&
-        scope.scopeLevel === 'GLOBAL' &&
-        scope.isEnforced
-      ) {
+      if (dbSourceOn && scope.scopeLevel === 'GLOBAL' && scope.isEnforced) {
         const otherGlobal = await tx.commissionConfigurationScope.count({
           where: {
             id: { not: scope.id },
@@ -438,7 +436,11 @@ export class AdminPricingGovernanceService {
           include: { scopes: true },
         });
         if (!target) {
-          throw new PricingAdminError('Commission configuration not found', 'CONFIG_NOT_FOUND', 404);
+          throw new PricingAdminError(
+            'Commission configuration not found',
+            'CONFIG_NOT_FOUND',
+            404,
+          );
         }
 
         const now = new Date();
@@ -707,9 +709,7 @@ export class AdminPricingGovernanceService {
   async createTaxConfig(body: CreateTaxConfigBody, actor: AuditActor) {
     const scopes = dedupeScopes(body.scopes);
     const now = new Date();
-    const effectiveFrom = body.declaredEffectiveFrom
-      ? new Date(body.declaredEffectiveFrom)
-      : now;
+    const effectiveFrom = body.declaredEffectiveFrom ? new Date(body.declaredEffectiveFrom) : now;
     const effectiveTo = body.declaredEffectiveTo ? new Date(body.declaredEffectiveTo) : null;
     const activateNow = Boolean(body.activateImmediately);
 
@@ -990,9 +990,7 @@ export class AdminPricingGovernanceService {
   async createGstRecoveryConfig(body: CreateGstRecoveryConfigBody, actor: AuditActor) {
     const scopes = dedupeScopes(body.scopes);
     const now = new Date();
-    const effectiveFrom = body.declaredEffectiveFrom
-      ? new Date(body.declaredEffectiveFrom)
-      : now;
+    const effectiveFrom = body.declaredEffectiveFrom ? new Date(body.declaredEffectiveFrom) : now;
     const effectiveTo = body.declaredEffectiveTo ? new Date(body.declaredEffectiveTo) : null;
     const activateNow = Boolean(body.activateImmediately);
 
@@ -1116,7 +1114,11 @@ export class AdminPricingGovernanceService {
           include: { scopes: true },
         });
         if (!config) {
-          throw new PricingAdminError('GST recovery configuration not found', 'CONFIG_NOT_FOUND', 404);
+          throw new PricingAdminError(
+            'GST recovery configuration not found',
+            'CONFIG_NOT_FOUND',
+            404,
+          );
         }
         if (config.status !== 'PENDING_APPROVAL') {
           throw new PricingAdminError(
@@ -1348,10 +1350,7 @@ export class AdminPricingGovernanceService {
     });
   }
 
-  async createCitySupplyRegistration(
-    body: CreateCitySupplyRegistrationBody,
-    actor: AuditActor,
-  ) {
+  async createCitySupplyRegistration(body: CreateCitySupplyRegistrationBody, actor: AuditActor) {
     try {
       return await this.databaseService.transactionManager.execute(async (tx) => {
         const reg = await tx.companyGstRegistration.findUnique({
@@ -1522,7 +1521,9 @@ export class AdminPricingGovernanceService {
     const resolvedTaxScope = globalTaxScope ?? fallbackTaxScope;
     const resolvedRecoveryScope = globalRecoveryScope ?? fallbackRecoveryScope;
 
-    const commissionPct = resolvedCommScope ? Number(resolvedCommScope.config.commissionRatePct) : null;
+    const commissionPct = resolvedCommScope
+      ? Number(resolvedCommScope.config.commissionRatePct)
+      : null;
     const passengerGstPct = resolvedTaxScope ? Number(resolvedTaxScope.config.ratePct) : null;
     const gstRecoveryPct = resolvedRecoveryScope
       ? Number(resolvedRecoveryScope.config.recoveryRatePct)

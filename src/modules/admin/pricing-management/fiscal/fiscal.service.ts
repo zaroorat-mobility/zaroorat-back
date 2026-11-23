@@ -205,10 +205,10 @@ export class AdminFiscalDocumentService {
 
     let recipientType: 'RIDER' | 'DRIVER' = 'RIDER';
     let recipientName = 'Sample Rider';
-    let sacCode: string | null = activePassengerGst?.sacCode ?? '996411';
-    let taxRatePct = passengerGstPct;
-    let lineItems: FiscalPdfLineItem[] = [];
-    let taxableValue = 0;
+    let sacCode: string | null;
+    let taxRatePct: number;
+    let lineItems: FiscalPdfLineItem[];
+    let taxableValue: number;
     let nonTaxableValue = 0;
     let rideOrPaymentRef = 'RIDE-SAMPLE-001';
 
@@ -286,7 +286,9 @@ export class AdminFiscalDocumentService {
     const igstAmount = isInterState ? totalTaxAmount : 0;
     const totalAmount = Math.round((taxableValue + nonTaxableValue + totalTaxAmount) * 100) / 100;
 
-    const documentNumber = activeSeries ? `${activeSeries.prefix}SAMPLE` : `PREVIEW-${docType.slice(0, 3)}-000001`;
+    const documentNumber = activeSeries
+      ? `${activeSeries.prefix}SAMPLE`
+      : `PREVIEW-${docType.slice(0, 3)}-000001`;
     const issuedAtIso = new Date().toISOString();
     const contentSha256 = computeDocumentSha256({
       preview: true,
@@ -588,7 +590,9 @@ export class AdminFiscalDocumentService {
 
   // ─── Persisted CR-03 Compliance Templates ──────────────────────────────────
 
-  async listComplianceTemplates(documentType?: FiscalDocumentType): Promise<ComplianceTemplateDto[]> {
+  async listComplianceTemplates(
+    documentType?: FiscalDocumentType,
+  ): Promise<ComplianceTemplateDto[]> {
     const rows = await this.databaseService.client.complianceTemplate.findMany({
       ...(documentType ? { where: { documentType } } : {}),
       orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
@@ -692,10 +696,7 @@ export class AdminFiscalDocumentService {
     });
   }
 
-  async activateComplianceTemplate(
-    id: string,
-    actor: AuditActor,
-  ): Promise<ComplianceTemplateDto> {
+  async activateComplianceTemplate(id: string, actor: AuditActor): Promise<ComplianceTemplateDto> {
     return this.databaseService.transactionManager.execute(async (tx) => {
       const target = await tx.complianceTemplate.findUnique({ where: { id } });
       if (!target) {

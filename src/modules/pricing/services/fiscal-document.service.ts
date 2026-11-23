@@ -214,19 +214,14 @@ export class FiscalDocumentService {
       throw new FiscalDownloadTokenInvalidError();
     }
     const [payloadB64, sigB64] = parts;
-    const expectedSig = createHmac('sha256', this.getSigningKey())
-      .update(payloadB64)
-      .digest();
+    const expectedSig = createHmac('sha256', this.getSigningKey()).update(payloadB64).digest();
     let providedSig: Buffer;
     try {
       providedSig = Buffer.from(sigB64, 'base64url');
     } catch {
       throw new FiscalDownloadTokenInvalidError();
     }
-    if (
-      providedSig.length !== expectedSig.length ||
-      !timingSafeEqual(providedSig, expectedSig)
-    ) {
+    if (providedSig.length !== expectedSig.length || !timingSafeEqual(providedSig, expectedSig)) {
       throw new FiscalDownloadTokenInvalidError();
     }
 
@@ -560,7 +555,9 @@ export class FiscalDocumentService {
       'Driver Partner';
     const rechargeAmt = round2(params.amount);
     const updatedBalance = round2(params.newBalance);
-    const paymentRef = params.eventId ? `WRC-${params.eventId.slice(0, 8).toUpperCase()}` : `WRC-${Date.now()}`;
+    const paymentRef = params.eventId
+      ? `WRC-${params.eventId.slice(0, 8).toUpperCase()}`
+      : `WRC-${Date.now()}`;
 
     return this.databaseService.transactionManager.execute(async (tx: TransactionClient) => {
       // Idempotency check BEFORE acquiring/incrementing series sequence so outbox retries never burn a number!

@@ -353,7 +353,13 @@ describe('driver operations map zones (integration, real PostGIS)', () => {
       await db().client.featureFlag.upsert({
         where: { key: 'surge' },
         update: { status: 'OFF' },
-        create: { key: 'surge', name: 'surge', status: 'OFF', rolloutPercentage: 100, isActive: true },
+        create: {
+          key: 'surge',
+          name: 'surge',
+          status: 'OFF',
+          rolloutPercentage: 100,
+          isActive: true,
+        },
       });
       try {
         assert.deepEqual((await layers()).surge, { status: 'ok', zones: [] });

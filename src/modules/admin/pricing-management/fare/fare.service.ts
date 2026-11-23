@@ -147,8 +147,9 @@ export class AdminFareService {
     if (resolvedTaxRatePct === null || resolvedCommissionRatePct === null) {
       let vehicleTypeId: string | null = null;
       if (body.vehicleType) {
-        const isUuid =
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.vehicleType);
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          body.vehicleType,
+        );
         const vt = await this.databaseService.client.vehicleType.findFirst({
           where: isUuid ? { id: body.vehicleType } : { code: body.vehicleType },
           select: { id: true },
@@ -204,16 +205,15 @@ export class AdminFareService {
       }
 
       if (resolvedCommissionRatePct === null) {
-        const commScopes =
-          await this.databaseService.client.commissionConfigurationScope.findMany({
-            where: {
-              isEnforced: true,
-              effectiveFrom: { lte: now },
-              OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
-              AND: [{ OR: scopeCandidates }],
-            },
-            include: { config: true },
-          });
+        const commScopes = await this.databaseService.client.commissionConfigurationScope.findMany({
+          where: {
+            isEnforced: true,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            AND: [{ OR: scopeCandidates }],
+          },
+          include: { config: true },
+        });
         const winningComm = pickWinningScope(commScopes);
         if (winningComm) {
           resolvedCommissionRatePct = winningComm.config.isEnabled
@@ -429,7 +429,11 @@ export class AdminFareService {
     const effectiveTo = body.effectiveTo ? new Date(body.effectiveTo) : null;
 
     if (effectiveTo && effectiveTo.getTime() <= effectiveFrom.getTime()) {
-      throw new PricingAdminError('effectiveTo must be strictly after effectiveFrom', 'VALIDATION', 400);
+      throw new PricingAdminError(
+        'effectiveTo must be strictly after effectiveFrom',
+        'VALIDATION',
+        400,
+      );
     }
 
     if (serviceZoneId) {
@@ -458,9 +462,7 @@ export class AdminFareService {
           const newToMs = effectiveTo ? effectiveTo.getTime() : Number.POSITIVE_INFINITY;
           const overlappingActive = activeSiblings.find((inc) => {
             const incFromMs = inc.effectiveFrom.getTime();
-            const incToMs = inc.effectiveTo
-              ? inc.effectiveTo.getTime()
-              : Number.POSITIVE_INFINITY;
+            const incToMs = inc.effectiveTo ? inc.effectiveTo.getTime() : Number.POSITIVE_INFINITY;
             return incToMs > newFromMs && incFromMs < newToMs;
           });
           if (overlappingActive) {
@@ -491,7 +493,9 @@ export class AdminFareService {
           : [];
 
         const newId = randomUUID();
-        const ruleFamilyId = latestSameKey ? (latestSameKey.ruleFamilyId ?? latestSameKey.id) : newId;
+        const ruleFamilyId = latestSameKey
+          ? (latestSameKey.ruleFamilyId ?? latestSameKey.id)
+          : newId;
         const supersedesId = latestSameKey ? latestSameKey.id : null;
         const nextVersion = latestSameKey ? latestSameKey.version + 1 : 1;
 
@@ -570,7 +574,9 @@ export class AdminFareService {
     const serviceZoneId =
       body.serviceZoneId !== undefined ? body.serviceZoneId : existing.serviceZoneId;
     const isActive = body.status !== undefined ? body.status === 'active' : existing.isActive;
-    const effectiveFrom = body.effectiveFrom ? new Date(body.effectiveFrom) : existing.effectiveFrom;
+    const effectiveFrom = body.effectiveFrom
+      ? new Date(body.effectiveFrom)
+      : existing.effectiveFrom;
     const effectiveTo =
       body.effectiveTo !== undefined
         ? body.effectiveTo
@@ -579,7 +585,11 @@ export class AdminFareService {
         : existing.effectiveTo;
 
     if (effectiveTo && effectiveTo.getTime() <= effectiveFrom.getTime()) {
-      throw new PricingAdminError('effectiveTo must be strictly after effectiveFrom', 'VALIDATION', 400);
+      throw new PricingAdminError(
+        'effectiveTo must be strictly after effectiveFrom',
+        'VALIDATION',
+        400,
+      );
     }
 
     if (serviceZoneId) {
@@ -603,7 +613,9 @@ export class AdminFareService {
     return this.databaseService.transactionManager
       .execute(async (tx) => {
         // Lock the target row to serialize concurrent edits on the same version.
-        const lockedRows = await tx.$queryRaw<Array<{ id: string; version: number; is_active: boolean }>>`
+        const lockedRows = await tx.$queryRaw<
+          Array<{ id: string; version: number; is_active: boolean }>
+        >`
           SELECT "id", "version", "is_active"
           FROM "pricing_rules"
           WHERE "id" = ${id}::uuid

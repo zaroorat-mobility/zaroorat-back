@@ -27,10 +27,7 @@ async function ensureUser(
   const existing = await prisma.user.findFirst({
     where: {
       deletedAt: null,
-      OR: [
-        { phoneNumber: phone },
-        ...(email ? [{ email }] : []),
-      ],
+      OR: [{ phoneNumber: phone }, ...(email ? [{ email }] : [])],
     },
     include: { profile: true },
   });
@@ -325,8 +322,18 @@ export async function seedDevelopment(prisma: Prisma) {
     );
   }
 
-  const adminEmail = (process.env.ADMIN_SEED_EMAIL ?? process.env.ADMIN_EMAIL ?? 'admin@zaroorat.com').toLowerCase().trim();
-  const adminPhone = (process.env.ADMIN_SEED_PHONE ?? process.env.ADMIN_PHONE ?? '+919999999999').trim();
+  const adminEmail = (
+    process.env.ADMIN_SEED_EMAIL ??
+    process.env.ADMIN_EMAIL ??
+    'admin@zaroorat.com'
+  )
+    .toLowerCase()
+    .trim();
+  const adminPhone = (
+    process.env.ADMIN_SEED_PHONE ??
+    process.env.ADMIN_PHONE ??
+    '+919999999999'
+  ).trim();
 
   const fixtures: Array<{
     phone: string;

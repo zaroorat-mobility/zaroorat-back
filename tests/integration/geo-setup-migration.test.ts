@@ -102,7 +102,9 @@ describe('geographic setup migration (integration)', () => {
   });
 
   it('carries a window with one vehicle into the new list, and leaves all-vehicle windows empty', async () => {
-    const cab = await db().client.vehicleType.findUniqueOrThrow({ where: { code: 'CAB_ECONOMY_NON_AC' } });
+    const cab = await db().client.vehicleType.findUniqueOrThrow({
+      where: { code: 'CAB_ECONOMY_NON_AC' },
+    });
     const zoneId = await (async () => {
       await ensureCityWithBoundary('AAA', 'Zoned', BOUNDARY);
       return ensureServiceZone('AAA', 'AAA_SZ', 'Zone', BOUNDARY);

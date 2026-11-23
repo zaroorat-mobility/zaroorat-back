@@ -105,12 +105,7 @@ function isPgExclusionViolation(err: unknown): boolean {
   );
 }
 
-function windowsOverlap(
-  aFrom: Date,
-  aTo: Date | null,
-  bFrom: Date,
-  bTo: Date | null,
-): boolean {
+function windowsOverlap(aFrom: Date, aTo: Date | null, bFrom: Date, bTo: Date | null): boolean {
   const aEndsAfterBStarts = aTo === null || aTo.getTime() > bFrom.getTime();
   const bEndsAfterAStarts = bTo === null || bTo.getTime() > aFrom.getTime();
   return aEndsAfterBStarts && bEndsAfterAStarts;
@@ -252,7 +247,8 @@ export class AdminCancellationService {
     const effectiveFrom = body.effectiveFrom ? new Date(body.effectiveFrom) : new Date();
     const effectiveTo = body.effectiveTo ? new Date(body.effectiveTo) : null;
     const ruleName =
-      body.ruleName?.trim() || `${actorUi(cancelledBy)} · ${scenarioUi(minStatus).replace(/_/g, ' ')}`;
+      body.ruleName?.trim() ||
+      `${actorUi(cancelledBy)} · ${scenarioUi(minStatus).replace(/_/g, ' ')}`;
 
     try {
       return await this.databaseService.transactionManager.execute(async (tx) => {
@@ -357,16 +353,17 @@ export class AdminCancellationService {
           throw new CancellationPolicyStaleError(body.expectedVersion, existing.version);
         }
 
-        const substantiveKeys = (Object.keys(body) as Array<keyof UpdateCancellationPolicyBody>).filter(
-          (key) =>
-            key !== 'status' && key !== 'expectedVersion' && body[key] !== undefined,
-        );
+        const substantiveKeys = (
+          Object.keys(body) as Array<keyof UpdateCancellationPolicyBody>
+        ).filter((key) => key !== 'status' && key !== 'expectedVersion' && body[key] !== undefined);
 
         // Pure active/inactive status toggle stays in-place cleanly.
         if (substantiveKeys.length === 0 && body.status !== undefined) {
           const nextActive = body.status === 'active';
           const isExpired =
-            nextActive && existing.effectiveTo !== null && existing.effectiveTo.getTime() <= Date.now();
+            nextActive &&
+            existing.effectiveTo !== null &&
+            existing.effectiveTo.getTime() <= Date.now();
           const nextEffectiveFrom = isExpired ? new Date() : existing.effectiveFrom;
           const nextEffectiveTo = isExpired ? null : existing.effectiveTo;
 
@@ -389,7 +386,9 @@ export class AdminCancellationService {
             where: { id },
             data: {
               isActive: nextActive,
-              ...(isExpired ? { effectiveFrom: nextEffectiveFrom, effectiveTo: nextEffectiveTo } : {}),
+              ...(isExpired
+                ? { effectiveFrom: nextEffectiveFrom, effectiveTo: nextEffectiveTo }
+                : {}),
             },
           });
           await this.audit(
@@ -411,7 +410,8 @@ export class AdminCancellationService {
         const feeType = body.chargeType
           ? (FEE_MAP[body.chargeType] ?? existing.feeType)
           : existing.feeType;
-        const feeAmount = body.chargeAmount !== undefined ? body.chargeAmount : toNum(existing.feeAmount);
+        const feeAmount =
+          body.chargeAmount !== undefined ? body.chargeAmount : toNum(existing.feeAmount);
         if (feeType === 'PERCENT' && feeAmount > 100) {
           throw new CancellationPolicyConflictError(
             'Percentage chargeAmount must be between 0 and 100',
@@ -470,7 +470,9 @@ export class AdminCancellationService {
             existing.cityCode === cityCode &&
             existing.vehicleTypeId === nextVehicleTypeId;
           const isFutureScheduledHandoff =
-            isActive && sameScope && effectiveFrom.getTime() > existing.effectiveFrom.getTime() &&
+            isActive &&
+            sameScope &&
+            effectiveFrom.getTime() > existing.effectiveFrom.getTime() &&
             effectiveFrom.getTime() > Date.now();
 
           if (isFutureScheduledHandoff) {
@@ -580,7 +582,9 @@ export class AdminCancellationService {
           where: { id },
           data: {
             isActive: true,
-            ...(isExpired ? { effectiveFrom: nextEffectiveFrom, effectiveTo: nextEffectiveTo } : {}),
+            ...(isExpired
+              ? { effectiveFrom: nextEffectiveFrom, effectiveTo: nextEffectiveTo }
+              : {}),
           },
         });
         await this.audit(tx, actor, existing, updated, 'Cancellation policy activated');
@@ -718,10 +722,7 @@ export class AdminCancellationService {
         );
       }
 
-      if (
-        peer.effectiveFrom.getTime() < incomingFrom.getTime() &&
-        incomingFrom.getTime() > nowMs
-      ) {
+      if (peer.effectiveFrom.getTime() < incomingFrom.getTime() && incomingFrom.getTime() > nowMs) {
         const closed = await tx.cancellationPolicy.update({
           where: { id: peer.id },
           data: { effectiveTo: incomingFrom },

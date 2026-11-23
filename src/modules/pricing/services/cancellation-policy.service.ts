@@ -1,16 +1,10 @@
 import { DatabaseService } from '@core/database';
 import type { TransactionClient } from '@core/database/TransactionManager';
-import {
-  CANCELLATION_POLICY_ENFORCEMENT_FLAG,
-  type FeatureFlagReader,
-} from '../constants.js';
+import { CANCELLATION_POLICY_ENFORCEMENT_FLAG, type FeatureFlagReader } from '../constants.js';
 
 export type CancellationActorDb = 'RIDER' | 'DRIVER';
 export type CancellationScenarioDb =
-  | 'BEFORE_ASSIGNMENT'
-  | 'AFTER_ASSIGNMENT'
-  | 'AFTER_ARRIVAL'
-  | 'NO_SHOW';
+  'BEFORE_ASSIGNMENT' | 'AFTER_ASSIGNMENT' | 'AFTER_ARRIVAL' | 'NO_SHOW';
 export type CancellationFeeTypeDb = 'FLAT' | 'PERCENT';
 export type CancellationFeeBaseDb = 'QUOTED_FARE' | 'BASE_FARE' | 'MINIMUM_FARE';
 export type DriverCompensationTypeDb = 'NONE' | 'FLAT' | 'PERCENT_OF_FEE';
@@ -144,7 +138,7 @@ export function deriveCancellationScenario(input: {
     input.rideStatus === 'DRIVER_ARRIVED' ||
     input.rideStatus === 'IN_PROGRESS' ||
     input.rideStatus === 'DRIVER_AT_DROPOFF' ||
-    input.arrivedAt !== null && input.arrivedAt !== undefined;
+    (input.arrivedAt !== null && input.arrivedAt !== undefined);
 
   if (
     hasArrived &&
@@ -197,7 +191,10 @@ export function computeCancellationAssessment(
 ): CancellationEvaluationResult {
   const evaluatedAt = (input.at ?? new Date()).toISOString();
   const actorDb = normalizeActorToDb(input.actor);
-  const elapsedSec = Math.max(0, Math.floor(Number.isFinite(input.elapsedSec) ? input.elapsedSec : 0));
+  const elapsedSec = Math.max(
+    0,
+    Math.floor(Number.isFinite(input.elapsedSec) ? input.elapsedSec : 0),
+  );
 
   if (actorDb === 'SYSTEM') {
     const snapshot: CancellationPolicySnapshot = {
@@ -302,7 +299,8 @@ export function computeCancellationAssessment(
   const feeType: CancellationFeeTypeDb =
     policy.feeType.toUpperCase() === 'PERCENT' ? 'PERCENT' : 'FLAT';
   const feeAmount = round2(toNum(policy.feeAmount));
-  const maxFee = policy.maxFee !== null && policy.maxFee !== undefined ? round2(toNum(policy.maxFee)) : null;
+  const maxFee =
+    policy.maxFee !== null && policy.maxFee !== undefined ? round2(toNum(policy.maxFee)) : null;
   const feeBase: CancellationFeeBaseDb =
     policy.feeBase === 'BASE_FARE' || policy.feeBase === 'MINIMUM_FARE'
       ? policy.feeBase

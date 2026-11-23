@@ -333,8 +333,7 @@ export class AdminInvoiceService {
     return {
       invoice_number: invoice.invoiceNumber,
       invoice_date: invoice.date,
-      customer_name:
-        invoice.recipientType === 'rider' ? invoice.recipientName : '—',
+      customer_name: invoice.recipientType === 'rider' ? invoice.recipientName : '—',
       customer_contact: '',
       driver_name: invoice.recipientType === 'driver' ? invoice.recipientName : '—',
       driver_id: invoice.recipientType === 'driver' ? (invoice.recipientUserId ?? '—') : '—',
@@ -343,10 +342,7 @@ export class AdminInvoiceService {
       fare_breakdown: `₹${taxableValue.toFixed(2)} (base) + ₹${gstAmount.toFixed(2)} (GST)`,
       total_amount: `₹${invoice.amount.toFixed(2)}`,
       amount_in_words: `${invoice.amount.toFixed(2)} Rupees Only`,
-      commission_amount:
-        invoice.recipientType === 'driver'
-          ? `₹${invoice.amount.toFixed(2)}`
-          : '—',
+      commission_amount: invoice.recipientType === 'driver' ? `₹${invoice.amount.toFixed(2)}` : '—',
       subscription_plan: '—',
       subscription_amount: '—',
       tax_breakdown: `CGST: ₹${cgstAmount.toFixed(2)} | SGST: ₹${sgstAmount.toFixed(2)} | IGST: ₹${igstAmount.toFixed(2)}`,

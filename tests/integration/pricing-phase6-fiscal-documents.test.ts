@@ -356,7 +356,8 @@ describe('Phase 6 — Fiscal Documents, Gapless Series, Signed PDFs & CR-03 Temp
 
     // 6.4 Immutability trigger blocks direct SQL edit and DELETE
     await assert.rejects(
-      db().client.$executeRaw`UPDATE "fiscal_documents" SET "total_amount" = 1.00 WHERE "id" = ${doc1.id}::uuid`,
+      db().client
+        .$executeRaw`UPDATE "fiscal_documents" SET "total_amount" = 1.00 WHERE "id" = ${doc1.id}::uuid`,
       /immutable/i,
     );
     await assert.rejects(

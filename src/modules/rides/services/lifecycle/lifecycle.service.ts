@@ -463,8 +463,9 @@ export class LifecycleService {
       let commissionSnapshot: unknown | null = null;
       let passengerGstSnapshot: unknown | null = null;
       let gstRecoverySnapshot: unknown | null = null;
-      let acceptPlan: Awaited<ReturnType<RideFinancialSettlementService['prepareAcceptFinancials']>> | null =
-        null;
+      let acceptPlan: Awaited<
+        ReturnType<RideFinancialSettlementService['prepareAcceptFinancials']>
+      > | null = null;
 
       if (this.rideFinancialSettlementService) {
         acceptPlan = await this.rideFinancialSettlementService.prepareAcceptFinancials(
@@ -1080,11 +1081,15 @@ export class LifecycleService {
       // Phase 4 (Rev 5 §4.3): Execute Rev 5 Path A / Path B atomic completion settlement
       // when Rev 5 flags or snapshots are active; otherwise preserve 100% legacy behavior.
       const rev5Outcome = this.rideFinancialSettlementService
-        ? await this.rideFinancialSettlementService.settleCompletedRide(
-            { ride, itemizedFare },
-            tx,
-          )
+        ? await this.rideFinancialSettlementService.settleCompletedRide({ ride, itemizedFare }, tx)
         : { handledByRev5: false, skipLegacyTripLedger: false, adjustedTaxAmount: null };
+
+      const adjustedTaxAmount = rev5Outcome.adjustedTaxAmount;
+      const taxAmount = adjustedTaxAmount ?? new Decimal(itemizedFare.taxAmount);
+      const taxDelta = adjustedTaxAmount
+        ? new Decimal(itemizedFare.taxAmount).minus(adjustedTaxAmount)
+        : new Decimal(0);
+      const finalDriverEarning = new Decimal(driverEarningWithBoost).plus(taxDelta);
 
       await this.fareRepo.create(
         {
@@ -1097,11 +1102,11 @@ export class LifecycleService {
           surgeAmount: new Decimal(itemizedFare.surgeAmount),
           subtotal: new Decimal(itemizedFare.subtotal),
           discountAmount: new Decimal(itemizedFare.discountAmount),
-          taxAmount: rev5Outcome.adjustedTaxAmount ?? new Decimal(itemizedFare.taxAmount),
+          taxAmount,
           platformFee: new Decimal(itemizedFare.platformFee),
           tipAmount: new Decimal(boostAmount),
           totalFare: new Decimal(totalWithBoost),
-          driverEarning: new Decimal(driverEarningWithBoost),
+          driverEarning: finalDriverEarning,
           platformCommission: new Decimal(itemizedFare.platformCommission),
           ...(rawPricingSnapshot?.rateCard
             ? { ratesSnapshot: rawPricingSnapshot.rateCard as unknown as Prisma.InputJsonValue }

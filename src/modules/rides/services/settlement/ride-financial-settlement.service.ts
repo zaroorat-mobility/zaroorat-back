@@ -149,7 +149,8 @@ export class RideFinancialSettlementService {
     const serviceZoneId =
       typeof rawSnapObj?.serviceZoneId === 'string' ? rawSnapObj.serviceZoneId : null;
     const quotedFare = input.request.quotedFare != null ? Number(input.request.quotedFare) : 0;
-    const baseFare = typeof rawSnap?.rateCard?.baseFare === 'number' ? rawSnap.rateCard.baseFare : 0;
+    const _baseFare =
+      typeof rawSnap?.rateCard?.baseFare === 'number' ? rawSnap.rateCard.baseFare : 0;
     const minimumFare =
       typeof rawSnap?.rateCard?.minimumFare === 'number' ? rawSnap.rateCard.minimumFare : 0;
     const bookingFee =
@@ -374,8 +375,7 @@ export class RideFinancialSettlementService {
     const hasRev5RideData =
       input.ride.commissionSnapshot !== null ||
       input.ride.passengerGstSnapshot !== null ||
-      input.ride.gstRecoverySnapshot !== null ||
-      input.ride.driverSubscriptionId !== null;
+      input.ride.gstRecoverySnapshot !== null;
 
     if (!flags.anyRev5FinancialFlagOn && !hasRev5RideData) {
       return { handledByRev5: false, skipLegacyTripLedger: false, adjustedTaxAmount: null };
@@ -387,11 +387,7 @@ export class RideFinancialSettlementService {
     // Until D-11b has written Owner + CA approval: ZERO commission, ZERO TAX_PAYABLE,
     // ZERO GST recovery, ZERO wallet lock/reservation touch, 3 explicit audit step rows.
     if (ride.driverPaymentModel === 'SUBSCRIPTION') {
-      const steps = [
-        'COMMISSION_DEBIT',
-        'PASSENGER_GST_LIABILITY',
-        'GST_RECOVERY_DEBIT',
-      ] as const;
+      const steps = ['COMMISSION_DEBIT', 'PASSENGER_GST_LIABILITY', 'GST_RECOVERY_DEBIT'] as const;
       for (const stepType of steps) {
         await tx.rideSettlementStep.upsert({
           where: { rideId_stepType: { rideId: ride.id, stepType } },

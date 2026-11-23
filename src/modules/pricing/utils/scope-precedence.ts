@@ -1,12 +1,7 @@
 import { SCOPE_GLOBAL_CITY, SCOPE_NIL_UUID } from '../constants.js';
 
 export type ConfigScopeLevel =
-  | 'GLOBAL'
-  | 'GLOBAL_VEHICLE'
-  | 'CITY'
-  | 'CITY_VEHICLE'
-  | 'ZONE'
-  | 'ZONE_VEHICLE';
+  'GLOBAL' | 'GLOBAL_VEHICLE' | 'CITY' | 'CITY_VEHICLE' | 'ZONE' | 'ZONE_VEHICLE';
 
 export interface ScopeTupleInput {
   cityCode?: string | null | undefined;
@@ -110,9 +105,9 @@ export function buildScopeLookupCandidates(ctx: {
 }
 
 /// Deterministic 6-tier winner selection: highest scope specificity, then latest effectiveFrom, then id.
-export function pickWinningScope<
-  T extends { id: string; scopeLevel: string; effectiveFrom: Date },
->(candidates: readonly T[]): T | null {
+export function pickWinningScope<T extends { id: string; scopeLevel: string; effectiveFrom: Date }>(
+  candidates: readonly T[],
+): T | null {
   if (candidates.length === 0) return null;
   const sorted = [...candidates].sort((a, b) => {
     const prioDiff = scopeLevelPriority(b.scopeLevel) - scopeLevelPriority(a.scopeLevel);
