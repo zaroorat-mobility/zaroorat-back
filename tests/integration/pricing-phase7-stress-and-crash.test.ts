@@ -292,13 +292,13 @@ describe('Phase 7 — Production 50x Concurrency Stress, Crash Injection & Zero-
 
     const rideIds: string[] = [];
     for (let i = 0; i < 50; i++) {
-      rideIds.push(await seedRideRecord(world, { status: 'COMPLETED', index: i, gstRegistrationId }));
+      rideIds.push(
+        await seedRideRecord(world, { status: 'COMPLETED', index: i, gstRegistrationId }),
+      );
     }
 
     // Fire 50 simultaneous issuance calls on ONE shared document_series row
-    const results = await Promise.all(
-      rideIds.map((id) => fiscalService.issueForCompletedRide(id)),
-    );
+    const results = await Promise.all(rideIds.map((id) => fiscalService.issueForCompletedRide(id)));
     assert.equal(results.length, 50);
     for (const r of results) {
       assert.equal(r.documents.length, 1);
@@ -485,11 +485,19 @@ describe('Phase 7 — Production 50x Concurrency Stress, Crash Injection & Zero-
     const resAfterCrash = await db().client.driverWalletReservation.findUniqueOrThrow({
       where: { rideId },
     });
-    assert.equal(resAfterCrash.status, 'ACTIVE', 'Reservation must remain ACTIVE after crash rollback');
+    assert.equal(
+      resAfterCrash.status,
+      'ACTIVE',
+      'Reservation must remain ACTIVE after crash rollback',
+    );
     const walletAfterCrash = await db().client.driverCommissionWallet.findUniqueOrThrow({
       where: { driverId: world.driverId },
     });
-    assert.equal(Number(walletAfterCrash.balance), 100, 'Wallet balance must be untouched after crash');
+    assert.equal(
+      Number(walletAfterCrash.balance),
+      100,
+      'Wallet balance must be untouched after crash',
+    );
 
     // Post-crash clean retry succeeds atomically
     await db().transactionManager.execute(async (tx) => {

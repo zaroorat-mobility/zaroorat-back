@@ -10,12 +10,12 @@ Zaroorat Mobility uses **Prisma ORM** with a multi-file schema (`prisma/schema/*
 
 ### Strict Command Discipline
 
-| Command | Allowed Environments | Purpose | Why Never in Production / Dev |
-|---|---|---|---|
-| `npx prisma migrate dev` | **LOCAL only** | Creates new migration files from schema diffs and applies them to local DB. | Prompts interactively and can reset databases with data loss. |
-| `npx prisma db push` | **Prohibited** (except throwaway prototypes) | Pushes schema directly without migration files. | Bypasses migration history; destroys production schema tracking. |
-| `npx prisma migrate deploy` | **All (LOCAL, DEV, STAGING, PROD)** | Applies all pending committed migrations in order. | **Safe, non-interactive, and deterministic.** |
-| `npx prisma migrate status` | **All** | Checks if the database schema is up-to-date with migrations. | Read-only verification check. |
+| Command                     | Allowed Environments                         | Purpose                                                                     | Why Never in Production / Dev                                    |
+| --------------------------- | -------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `npx prisma migrate dev`    | **LOCAL only**                               | Creates new migration files from schema diffs and applies them to local DB. | Prompts interactively and can reset databases with data loss.    |
+| `npx prisma db push`        | **Prohibited** (except throwaway prototypes) | Pushes schema directly without migration files.                             | Bypasses migration history; destroys production schema tracking. |
+| `npx prisma migrate deploy` | **All (LOCAL, DEV, STAGING, PROD)**          | Applies all pending committed migrations in order.                          | **Safe, non-interactive, and deterministic.**                    |
+| `npx prisma migrate status` | **All**                                      | Checks if the database schema is up-to-date with migrations.                | Read-only verification check.                                    |
 
 ---
 
@@ -43,6 +43,7 @@ The system enforces a strict separation of database privileges:
 ```
 
 ### Why This Separation Exists
+
 1. **Audit Trail Integrity:** The runtime application cannot drop tables, alter schema, or disable audit triggers even if an application SQL injection vulnerability occurs.
 2. **Boot Protection:** On startup in non-development environments (`APP_ENV=dev`, `staging`, `production`), the application runs `assertRestrictedDatabaseRole()`. If `DATABASE_URL` connects as superuser or schema owner, **the app strictly refuses to boot**.
 3. **Connection Pooling:** The app connects through **PgBouncer** (port `6432`) in transaction pooling mode. Migrations bypass PgBouncer and connect directly to PostgreSQL (port `5432`) as the schema owner.
@@ -52,6 +53,7 @@ The system enforces a strict separation of database privileges:
 ## 3. Migration Execution per Environment
 
 ### A. LOCAL Environment
+
 When developing features or testing locally:
 
 ```bash
@@ -73,6 +75,7 @@ make seed-local
 ```
 
 ### B. DEV Server (DigitalOcean Droplet)
+
 Migrations are run **automatically by the CI/CD pipeline** before application containers restart:
 
 ```bash
@@ -86,6 +89,7 @@ APP_IMAGE="ghcr.io/zaroorat-mobility/zaroorat-backend@<digest>" \
 ```
 
 ### C. Manual Execution on DEV Server (If Needed)
+
 If you need to manually apply migrations on the DEV server via SSH:
 
 ```bash
@@ -107,12 +111,13 @@ docker compose -f compose.dev.yml run --rm db-roles
 
 ### Reference Seed vs Development Seed
 
-| Seeder | Target Environments | What it Seeds |
-|---|---|---|
-| `seedProduction` | **DEV, STAGING, PROD** | Canonical RBAC roles (`system_admin`, `admin`, `support`, `finance`, `customer`, `driver`), vehicle types catalog, geographic reference (India 28 states + 8 UTs), app configs. **Zero users, zero dummy data.** |
-| `seedDevelopment` | **LOCAL only** | All reference data plus test users, mock rides, simulated wallets, driver KYC fixtures. |
+| Seeder            | Target Environments    | What it Seeds                                                                                                                                                                                                    |
+| ----------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `seedProduction`  | **DEV, STAGING, PROD** | Canonical RBAC roles (`system_admin`, `admin`, `support`, `finance`, `customer`, `driver`), vehicle types catalog, geographic reference (India 28 states + 8 UTs), app configs. **Zero users, zero dummy data.** |
+| `seedDevelopment` | **LOCAL only**         | All reference data plus test users, mock rides, simulated wallets, driver KYC fixtures.                                                                                                                          |
 
 ### How to Provision the First Admin on DEV / STAGING / PROD
+
 Because `seedProduction` creates no users, run the bootstrap script once, after the seed. It refuses if a `system_admin` already exists (`--additional` overrides that on purpose), and if the email or phone belongs to any existing account.
 
 ```bash
@@ -133,9 +138,11 @@ unset ADMIN_PASSWORD
 ## 5. Migration Failure & Rollback Procedures
 
 ### Important Principle: Forward-Only Migrations
+
 **Never roll back a database migration automatically when rolling back an application image.**
 
 Application deployments follow the **Expand and Contract Pattern**:
+
 1. **Expand (Database):** Add new columns as `NULLABLE` or with defaults; add new tables. Old application code continues to function seamlessly with the new schema.
 2. **Deploy (Application):** Roll out the new application container image.
 3. **Contract (Cleanup):** In a later release, remove deprecated columns or tables once old code is no longer running anywhere.
@@ -143,16 +150,20 @@ Application deployments follow the **Expand and Contract Pattern**:
 ### What to Do If a Migration Fails on DEV / Production
 
 If a migration fails during deployment (e.g. syntax error or lock timeout):
+
 1. **Check status:**
+
    ```bash
    docker compose -f compose.dev.yml run --rm ops npx prisma migrate status
    ```
+
    Prisma records failed migrations in the `_prisma_migrations` table with `finished_at = NULL`.
 
 2. **Inspect the error logs:**
+
    ```sql
-   SELECT migration_name, started_at, finished_at, rolled_back_at, logs 
-   FROM _prisma_migrations 
+   SELECT migration_name, started_at, finished_at, rolled_back_at, logs
+   FROM _prisma_migrations
    ORDER BY started_at DESC LIMIT 5;
    ```
 
@@ -176,6 +187,7 @@ If a migration fails during deployment (e.g. syntax error or lock timeout):
 ## 6. Database Backup & Restore with Roles
 
 ### Backup
+
 Backups must preserve roles and table privileges:
 
 ```bash
@@ -188,6 +200,7 @@ PGPASSWORD="$POSTGRES_PASSWORD" pg_dump \
 ```
 
 ### Restore
+
 When restoring to a fresh database:
 
 ```bash

@@ -382,7 +382,7 @@ export class RideRequestService {
           windowId: fare.surgeMultiplier > 1 ? surgeWindowId : null,
           label:
             fare.surgeMultiplier > 1
-              ? (surgeReason?.trim() || `${Number(fare.surgeMultiplier).toFixed(1)}x peak demand`)
+              ? surgeReason?.trim() || `${Number(fare.surgeMultiplier).toFixed(1)}x peak demand`
               : null,
         },
         promoApplied: promoResult.applied,
@@ -681,8 +681,8 @@ export class RideRequestService {
 
     let rateCard: PricingRateCard;
     let pricingRuleId: string | null = null;
-    let ruleVersion: number | null = null;
-    let surgeMultiplier = 1;
+    let ruleVersion: number | null;
+    let surgeMultiplier: number;
     let surgeWindowId: string | null = null;
     let discountAmount = 0;
     let fareQuote: ItemizedFareResult;
@@ -1007,8 +1007,7 @@ export class RideRequestService {
             vehicleTypeId: request.vehicleTypeId,
             elapsedSec,
             quotedFare: request.quotedFare != null ? Number(request.quotedFare) : 0,
-            baseFare:
-              typeof snap?.rateCard?.baseFare === 'number' ? snap.rateCard.baseFare : null,
+            baseFare: typeof snap?.rateCard?.baseFare === 'number' ? snap.rateCard.baseFare : null,
             minimumFare:
               typeof snap?.rateCard?.minimumFare === 'number' ? snap.rateCard.minimumFare : null,
           },

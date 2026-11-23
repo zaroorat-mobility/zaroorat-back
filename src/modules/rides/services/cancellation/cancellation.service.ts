@@ -47,8 +47,11 @@ function readSnapshotPricingContext(
   minimumFare: number | null;
 } {
   const snap =
-    rawSnapshot && typeof rawSnapshot === 'object' ? (rawSnapshot as Partial<PricingSnapshot>) : null;
-  const quoted = quotedFare !== null && quotedFare !== undefined ? Number(quotedFare.toString()) : 0;
+    rawSnapshot && typeof rawSnapshot === 'object'
+      ? (rawSnapshot as Partial<PricingSnapshot>)
+      : null;
+  const quoted =
+    quotedFare !== null && quotedFare !== undefined ? Number(quotedFare.toString()) : 0;
   const cityCode =
     typeof snap?.cityCode === 'string' && snap.cityCode.trim() && snap.cityCode !== 'GLOBAL'
       ? snap.cityCode.trim()
@@ -99,10 +102,7 @@ export class CancellationService {
       const request = this.requestRepo
         ? await this.requestRepo.findById(data.ride.requestId, tx)
         : null;
-      const pricingCtx = readSnapshotPricingContext(
-        request?.quotedFare,
-        request?.pricingSnapshot,
-      );
+      const pricingCtx = readSnapshotPricingContext(request?.quotedFare, request?.pricingSnapshot);
 
       const anchorTime =
         (scenario === 'AFTER_ARRIVAL' || scenario === 'NO_SHOW') && data.ride.arrivedAt
@@ -148,7 +148,10 @@ export class CancellationService {
 
     // Legacy env-driven fallback when `cancellation.policy_enforcement` is OFF (default).
     const graceWindowSec = rideConfig.cancellationGraceMinutes * 60;
-    const elapsedSec = Math.max(0, Math.floor((at.getTime() - data.ride.acceptedAt.getTime()) / 1000));
+    const elapsedSec = Math.max(
+      0,
+      Math.floor((at.getTime() - data.ride.acceptedAt.getTime()) / 1000),
+    );
     const graceEndsAt = new Date(data.ride.acceptedAt.getTime() + graceWindowSec * 1000);
     const withinGraceWindow = at < graceEndsAt;
     const freeWindowRemainingSec = withinGraceWindow

@@ -1,10 +1,7 @@
 import { z } from 'zod';
 import { vehicleTypeCodeSchema } from '../fare/fare.schemas.js';
 
-const nullableNonNegativeAmount = z.union([
-  z.null(),
-  z.number().finite().min(0).max(100_000),
-]);
+const nullableNonNegativeAmount = z.union([z.null(), z.number().finite().min(0).max(100_000)]);
 
 const actorEnum = z.enum(['rider', 'driver', 'RIDER', 'DRIVER']);
 const scenarioEnum = z.enum([

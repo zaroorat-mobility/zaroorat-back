@@ -129,7 +129,9 @@ describe('Phase 3 — Cancellation Policy Versioning, Resolution & Quotes (integ
     assert.equal(v2.chargeAmount, 20);
     assert.equal(v2.maxFee, 80);
 
-    const v1After = await db().client.cancellationPolicy.findUniqueOrThrow({ where: { id: v1.id } });
+    const v1After = await db().client.cancellationPolicy.findUniqueOrThrow({
+      where: { id: v1.id },
+    });
     assert.equal(v1After.isActive, false);
 
     // Version history returns [v2, v1]
@@ -166,7 +168,9 @@ describe('Phase 3 — Cancellation Policy Versioning, Resolution & Quotes (integ
     assert.equal(schedRes.statusCode, 201, schedRes.payload);
 
     // Live v2 had its effectiveTo closed cleanly at futureStart without deactivating it!
-    const v2Closed = await db().client.cancellationPolicy.findUniqueOrThrow({ where: { id: v2.id } });
+    const v2Closed = await db().client.cancellationPolicy.findUniqueOrThrow({
+      where: { id: v2.id },
+    });
     assert.equal(v2Closed.isActive, true);
     assert.equal(v2Closed.effectiveTo?.toISOString(), futureStart);
 
@@ -361,21 +365,15 @@ describe('Phase 3 — Cancellation Policy Versioning, Resolution & Quotes (integ
     assert.equal(row.policyId, policy.id);
     assert.equal(row.policyVersion, 1);
     assert.ok(row.policySnapshot && typeof row.policySnapshot === 'object');
-    assert.equal(
-      (row.policySnapshot as Record<string, unknown>).enforcementMode,
-      'POLICY_ENGINE',
-    );
+    assert.equal((row.policySnapshot as Record<string, unknown>).enforcementMode, 'POLICY_ENGINE');
 
     // 4) DB write-once trigger rejects any mutation to ride_cancellations.policy_snapshot
-    await assert.rejects(
-      async () => {
-        await db().client.$executeRawUnsafe(
-          `UPDATE ride_cancellations SET policy_snapshot = '{"tampered":true}'::jsonb WHERE id = $1::uuid`,
-          row.id,
-        );
-      },
-      /write-once and immutable/i,
-    );
+    await assert.rejects(async () => {
+      await db().client.$executeRawUnsafe(
+        `UPDATE ride_cancellations SET policy_snapshot = '{"tampered":true}'::jsonb WHERE id = $1::uuid`,
+        row.id,
+      );
+    }, /write-once and immutable/i);
 
     // 5) Calling cancellation-quote on an already-cancelled ride returns 409
     const afterCancelQuote = await app.inject({

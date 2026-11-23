@@ -8,9 +8,7 @@ import {
   SCOPE_NIL_UUID,
 } from '../constants.js';
 
-export type NonRecoveryGstMode =
-  | 'DRIVER_LIABLE_INFORMATIONAL'
-  | 'ZAROORAT_CONTRA_ACCOUNT';
+export type NonRecoveryGstMode = 'DRIVER_LIABLE_INFORMATIONAL' | 'ZAROORAT_CONTRA_ACCOUNT';
 
 export const NON_RECOVERY_GST_MODE_SETTING_KEY = 'pricing.non_recovery_gst_mode' as const;
 export const NON_RECOVERY_GST_CONTRA_ACCOUNT_SETTING_KEY =

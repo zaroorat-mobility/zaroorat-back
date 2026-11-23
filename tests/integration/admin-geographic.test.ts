@@ -207,7 +207,10 @@ describe('admin geographic management (integration)', () => {
     it('still lets an older restricted zone that blocks nothing be deactivated', async () => {
       const headers = await loginAdmin();
       const cityId = await makeCity('SGR', SGR_BOUNDARY);
-      const geoJson = JSON.stringify({ type: 'Polygon', coordinates: box(74.8, 34.1, 74.82, 34.12) });
+      const geoJson = JSON.stringify({
+        type: 'Polygon',
+        coordinates: box(74.8, 34.1, 74.82, 34.12),
+      });
       const rows = await db().client.$queryRaw<Array<{ id: string }>>`
         INSERT INTO service_zones (id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at)
         VALUES (gen_random_uuid(), ${cityId}::uuid, 'OLD_RZ', 'Old', 'RESTRICTED'::"ServiceZoneType", ST_GeomFromGeoJSON(${geoJson}), true, true, true, NOW(), NOW())
@@ -374,7 +377,10 @@ describe('admin geographic management (integration)', () => {
     it('leaves surge areas out of the zone list', async () => {
       const headers = await loginAdmin();
       const cityId = await makeCity('SGR', SGR_BOUNDARY);
-      const geoJson = JSON.stringify({ type: 'Polygon', coordinates: box(74.8, 34.1, 74.82, 34.12) });
+      const geoJson = JSON.stringify({
+        type: 'Polygon',
+        coordinates: box(74.8, 34.1, 74.82, 34.12),
+      });
       await db().client.$executeRaw`
         INSERT INTO service_zones (id, city_id, code, name, zone_type, boundary, allows_pickup, allows_dropoff, is_active, created_at, updated_at)
         VALUES (gen_random_uuid(), ${cityId}::uuid, 'SGR_SURGE', 'Surge', 'SURGE'::"ServiceZoneType", ST_GeomFromGeoJSON(${geoJson}), true, true, true, NOW(), NOW())

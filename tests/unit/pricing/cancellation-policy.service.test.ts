@@ -35,7 +35,10 @@ function makePolicy(overrides: Partial<CancellationPolicyRecord> = {}): Cancella
 describe('CancellationPolicyService pure math & precedence (unit)', () => {
   it('derives scenarios accurately from ride state and reason code', () => {
     assert.equal(deriveCancellationScenario({ rideStatus: null }), 'BEFORE_ASSIGNMENT');
-    assert.equal(deriveCancellationScenario({ rideStatus: 'ACCEPTED', arrivedAt: null }), 'AFTER_ASSIGNMENT');
+    assert.equal(
+      deriveCancellationScenario({ rideStatus: 'ACCEPTED', arrivedAt: null }),
+      'AFTER_ASSIGNMENT',
+    );
     assert.equal(
       deriveCancellationScenario({ rideStatus: 'DRIVER_ARRIVING', arrivedAt: null }),
       'AFTER_ASSIGNMENT',
@@ -73,7 +76,10 @@ describe('CancellationPolicyService pure math & precedence (unit)', () => {
       feeAmount: 40,
     });
 
-    assert.equal(pickWinningCancellationPolicy([global, globalVeh, city, cityVeh])?.policy.id, cityVeh.id);
+    assert.equal(
+      pickWinningCancellationPolicy([global, globalVeh, city, cityVeh])?.policy.id,
+      cityVeh.id,
+    );
     assert.equal(pickWinningCancellationPolicy([global, globalVeh, city])?.policy.id, city.id);
     assert.equal(pickWinningCancellationPolicy([global, globalVeh])?.policy.id, globalVeh.id);
     assert.equal(pickWinningCancellationPolicy([global])?.policy.id, global.id);

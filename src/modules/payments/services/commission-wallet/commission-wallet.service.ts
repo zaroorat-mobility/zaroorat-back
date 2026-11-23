@@ -64,7 +64,10 @@ export class CommissionWalletService {
     const wallet = await this.commissionWalletRepository.getOrCreateWallet(driverId, tx);
     const locked = await this.commissionWalletRepository.lockForUpdate(driverId, tx);
     const active = locked ?? wallet;
-    const reservedAmount = await this.commissionWalletRepository.sumActiveReservations(driverId, tx);
+    const reservedAmount = await this.commissionWalletRepository.sumActiveReservations(
+      driverId,
+      tx,
+    );
     const availableBalance = Decimal.max(0, active.balance.sub(reservedAmount));
     return { balance: active.balance, reservedAmount, availableBalance };
   }

@@ -20,7 +20,9 @@ function handleFiscalError(err: unknown, req: FastifyRequest, reply: FastifyRepl
   if (err instanceof ZodError) {
     reply
       .status(400)
-      .send(errorEnvelope('VALIDATION', 'Request validation failed', req.id, { details: err.issues }));
+      .send(
+        errorEnvelope('VALIDATION', 'Request validation failed', req.id, { details: err.issues }),
+      );
     return;
   }
   if (isCodedError(err) && (err.statusCode < 500 || err.statusCode === 503)) {
@@ -28,7 +30,9 @@ function handleFiscalError(err: unknown, req: FastifyRequest, reply: FastifyRepl
     return;
   }
   req.log.error({ err }, '[fiscal-documents] unhandled error');
-  reply.status(500).send(errorEnvelope('INTERNAL', 'Failed to process fiscal document request', req.id));
+  reply
+    .status(500)
+    .send(errorEnvelope('INTERNAL', 'Failed to process fiscal document request', req.id));
 }
 
 /// Public signed PDF download route (`/api/v1/fiscal-documents/:id/download?token=...`).

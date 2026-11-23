@@ -406,14 +406,15 @@ export class AdminPlatformSettingsService {
       const prevState: Record<string, boolean> = {};
       const nextState: Record<string, boolean> = {};
       for (const f of allFlags) {
-        const enabled = f.isActive && (f.status === 'ON' || (f.status !== 'OFF' && f.rolloutPercentage > 0));
+        const enabled =
+          f.isActive && (f.status === 'ON' || (f.status !== 'OFF' && f.rolloutPercentage > 0));
         prevState[f.key] = enabled;
         nextState[f.key] = enabled;
       }
 
       const pendingUpdates: Array<{
         targetId: string;
-        before: typeof allFlags[number];
+        before: (typeof allFlags)[number];
         changes: {
           status?: 'ON' | 'OFF' | 'PARTIAL';
           rolloutPercentage?: number;

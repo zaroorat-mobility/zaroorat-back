@@ -8,9 +8,7 @@ import {
 import { buildScopeLookupCandidates, pickWinningScope } from '../utils/scope-precedence.js';
 
 export type CommissionBaseRule =
-  | 'RIDE_SUBTOTAL_BEFORE_DISCOUNT'
-  | 'RIDE_SUBTOTAL_AFTER_DISCOUNT'
-  | 'PRE_TAX_TOTAL';
+  'RIDE_SUBTOTAL_BEFORE_DISCOUNT' | 'RIDE_SUBTOTAL_AFTER_DISCOUNT' | 'PRE_TAX_TOTAL';
 
 export interface CommissionFareInputs {
   baseFare: number;
@@ -140,9 +138,7 @@ export class CommissionService {
   ) {}
 
   async isDbConfigSourceEnabled(): Promise<boolean> {
-    return this.featureFlagService.isEnabledReadOnly(
-      REV5_PRICING_FLAGS.COMMISSION_CONFIG_SOURCE,
-    );
+    return this.featureFlagService.isEnabledReadOnly(REV5_PRICING_FLAGS.COMMISSION_CONFIG_SOURCE);
   }
 
   async isWalletDeductionEnabled(): Promise<boolean> {
@@ -170,10 +166,7 @@ export class CommissionService {
       where: {
         isEnforced: true,
         effectiveFrom: { lte: at },
-        AND: [
-          { OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }] },
-          { OR: candidates },
-        ],
+        AND: [{ OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }] }, { OR: candidates }],
       },
       include: { config: true },
     });

@@ -52,7 +52,10 @@ export class RideQueryController {
     );
   }
 
-  private audienceFor(req: FastifyRequest, ride: { customerId?: string | null } | null): RideViewAudience {
+  private audienceFor(
+    req: FastifyRequest,
+    ride: { customerId?: string | null } | null,
+  ): RideViewAudience {
     if (ride?.customerId && callerId(req) === ride.customerId) {
       return 'customer';
     }

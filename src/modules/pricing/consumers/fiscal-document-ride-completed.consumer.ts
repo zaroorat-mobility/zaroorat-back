@@ -14,7 +14,9 @@ export class FiscalDocumentRideCompletedConsumer {
   ) {}
 
   register(): Unsubscribe {
-    const unsubRide = this.eventBus.on(RIDE_EVENT_CATALOG.COMPLETED, (e) => this.onRideCompleted(e));
+    const unsubRide = this.eventBus.on(RIDE_EVENT_CATALOG.COMPLETED, (e) =>
+      this.onRideCompleted(e),
+    );
     const unsubRecharge = this.eventBus.on(
       PAYMENT_EVENT_CATALOG.DRIVER_COMMISSION_WALLET_CREDITED,
       (e) => this.onWalletCredited(e),

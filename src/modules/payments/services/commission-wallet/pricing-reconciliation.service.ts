@@ -59,7 +59,16 @@ export class PricingReconciliationService {
         status: 'ACTIVE',
         ride: {
           OR: [
-            { status: { in: ['COMPLETED', 'CANCELLED_BY_CUSTOMER', 'CANCELLED_BY_DRIVER', 'CANCELLED_BY_SYSTEM'] } },
+            {
+              status: {
+                in: [
+                  'COMPLETED',
+                  'CANCELLED_BY_CUSTOMER',
+                  'CANCELLED_BY_DRIVER',
+                  'CANCELLED_BY_SYSTEM',
+                ],
+              },
+            },
             { driverPaymentModel: { not: 'COMMISSION' } },
           ],
         },
@@ -129,9 +138,7 @@ export class PricingReconciliationService {
       select: { rideId: true, amount: true },
     });
     const postedGstRideIds = postedGstSteps.map((s) => s.rideId);
-    const expectedTaxPayable = round2(
-      postedGstSteps.reduce((acc, s) => acc + Number(s.amount), 0),
-    );
+    const expectedTaxPayable = round2(postedGstSteps.reduce((acc, s) => acc + Number(s.amount), 0));
     const actualTaxLedgerAgg =
       postedGstRideIds.length > 0
         ? await client.paymentLedgerEntry.aggregate({
@@ -208,7 +215,11 @@ export class PricingReconciliationService {
         passed: inv5Drift === 0,
         driftAmount: inv5Drift,
         violationCount: inv5Drift === 0 ? 0 : 1,
-        details: { expectedTaxPayable, actualTaxPayable, postedGstRideCount: postedGstRideIds.length },
+        details: {
+          expectedTaxPayable,
+          actualTaxPayable,
+          postedGstRideCount: postedGstRideIds.length,
+        },
       },
       {
         id: 6,

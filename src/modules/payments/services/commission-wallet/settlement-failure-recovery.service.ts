@@ -307,8 +307,7 @@ export class SettlementFailureRecoveryService {
         throw new FailureAlreadyResolvedError(failure.id, failure.status);
       }
 
-      const stepType =
-        failure.kind === 'COMMISSION' ? 'COMMISSION_DEBIT' : 'GST_RECOVERY_DEBIT';
+      const stepType = failure.kind === 'COMMISSION' ? 'COMMISSION_DEBIT' : 'GST_RECOVERY_DEBIT';
       const resolvedAt = new Date();
 
       await tx.commissionCollectionFailure.update({

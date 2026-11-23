@@ -69,7 +69,9 @@ describe('Phase 4 — Rev 5 Central Commission, GST, Recovery, Reservations & Fa
       });
     }
     await db().client.systemSetting.deleteMany({
-      where: { key: { in: [NON_RECOVERY_GST_MODE_SETTING_KEY, 'pricing.non_recovery_gst_contra_account'] } },
+      where: {
+        key: { in: [NON_RECOVERY_GST_MODE_SETTING_KEY, 'pricing.non_recovery_gst_contra_account'] },
+      },
     });
   }
 
@@ -635,34 +637,29 @@ describe('Phase 4 — Rev 5 Central Commission, GST, Recovery, Reservations & Fa
           }),
         );
       },
-      (err: unknown) => (err as { code?: string }).code === 'INSUFFICIENT_AVAILABLE_BALANCE_DUE_TO_RESERVATIONS',
+      (err: unknown) =>
+        (err as { code?: string }).code === 'INSUFFICIENT_AVAILABLE_BALANCE_DUE_TO_RESERVATIONS',
     );
 
     // T4: Write-once trigger blocks mutation on rides.commission_snapshot
-    await assert.rejects(
-      async () => {
-        await db().client.$executeRawUnsafe(
-          `UPDATE rides SET commission_snapshot = '{"tampered":true}'::jsonb WHERE id = $1::uuid`,
-          rideId,
-        );
-      },
-      /write-once and immutable/i,
-    );
+    await assert.rejects(async () => {
+      await db().client.$executeRawUnsafe(
+        `UPDATE rides SET commission_snapshot = '{"tampered":true}'::jsonb WHERE id = $1::uuid`,
+        rideId,
+      );
+    }, /write-once and immutable/i);
 
     // Complete Mode A ride
     await finishRide(app, w, rideId, { distanceKm: 5, durationMin: 12 });
 
     // T4: Append-only trigger blocks UPDATE or DELETE on ride_pricing_revisions
     const rev = await db().client.ridePricingRevision.findFirstOrThrow({ where: { rideId } });
-    await assert.rejects(
-      async () => {
-        await db().client.$executeRawUnsafe(
-          `DELETE FROM ride_pricing_revisions WHERE id = $1::uuid`,
-          rev.id,
-        );
-      },
-      /strictly append-only/i,
-    );
+    await assert.rejects(async () => {
+      await db().client.$executeRawUnsafe(
+        `DELETE FROM ride_pricing_revisions WHERE id = $1::uuid`,
+        rev.id,
+      );
+    }, /strictly append-only/i);
 
     // T7: TAX_PAYABLE credited STRICTLY 1x, clearing account netted to ₹0.00, all 6 invariants PASS!
     const taxEntries = await db().client.paymentLedgerEntry.findMany({

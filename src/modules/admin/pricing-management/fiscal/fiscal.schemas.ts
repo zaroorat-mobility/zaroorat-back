@@ -81,7 +81,11 @@ export const previewSamplePdfBodySchema = z
   .object({
     documentType: fiscalDocumentTypeSchema.optional().default('PASSENGER_TAX_INVOICE'),
     gstRegistrationId: z.string().uuid().optional(),
-    placeOfSupplyStateCode: z.string().trim().regex(/^\d{2}$/, 'State code must be 2 digits').optional(),
+    placeOfSupplyStateCode: z
+      .string()
+      .trim()
+      .regex(/^\d{2}$/, 'State code must be 2 digits')
+      .optional(),
   })
   .strict();
 

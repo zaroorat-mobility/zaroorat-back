@@ -3,7 +3,12 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
-import { ensureCity, ensureCityWithBoundary, ensureServiceZone, grantRole } from './helpers/fixtures.js';
+import {
+  ensureCity,
+  ensureCityWithBoundary,
+  ensureServiceZone,
+  grantRole,
+} from './helpers/fixtures.js';
 import { rideWorld } from './helpers/ride-flow.js';
 import { hashPassword } from '../../src/modules/auth/utils/password.js';
 import { container } from '../../src/core/di.js';

@@ -8,9 +8,7 @@ import {
 import { buildScopeLookupCandidates, pickWinningScope } from '../utils/scope-precedence.js';
 
 export type GstRecoveryBaseRule =
-  | 'PASSENGER_GST_AMOUNT'
-  | 'TAXABLE_VALUE'
-  | 'RIDE_SUBTOTAL_BEFORE_DISCOUNT';
+  'PASSENGER_GST_AMOUNT' | 'TAXABLE_VALUE' | 'RIDE_SUBTOTAL_BEFORE_DISCOUNT';
 
 export interface ResolvedGstRecoveryConfig {
   configId: string;
@@ -76,8 +74,8 @@ export function calculateGstRecovery(
     };
   }
 
-  let calculationBaseAmount = 0;
-  let rawAmount = 0;
+  let calculationBaseAmount: number;
+  let rawAmount: number;
 
   if (config.baseRule === 'PASSENGER_GST_AMOUNT') {
     // Recovers the exact passenger GST amount directly (when recoveryRatePct mirrors the GST rate
@@ -138,10 +136,7 @@ export class GstRecoveryService {
       where: {
         isEnforced: true,
         effectiveFrom: { lte: at },
-        AND: [
-          { OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }] },
-          { OR: candidates },
-        ],
+        AND: [{ OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }] }, { OR: candidates }],
       },
       include: { config: true },
     });
