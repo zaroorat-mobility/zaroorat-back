@@ -706,6 +706,13 @@ export class AdminFiscalDocumentService {
           404,
         );
       }
+      if (!target.previewApproved) {
+        throw new PricingGovernanceError(
+          `Compliance template ${id} cannot be activated before preview approval`,
+          'TEMPLATE_PREVIEW_NOT_APPROVED',
+          409,
+        );
+      }
       await tx.complianceTemplate.updateMany({
         where: { documentType: target.documentType, isActive: true, NOT: { id: target.id } },
         data: { isActive: false },
@@ -715,13 +722,6 @@ export class AdminFiscalDocumentService {
         where: { id: target.id },
         data: {
           isActive: true,
-          ...(!target.previewApproved
-            ? {
-                previewApproved: true,
-                previewApprovedBy: actor.actorId,
-                previewApprovedAt: new Date(),
-              }
-            : {}),
         },
       });
 
