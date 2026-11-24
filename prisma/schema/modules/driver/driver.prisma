@@ -29,8 +29,8 @@ model Driver {
   updatedAt           DateTime                 @updatedAt @map("updated_at")
   deletedAt           DateTime?                @map("deleted_at")
 
-  user               User                    @relation(fields: [userId], references: [id])
-  referralCode       ReferralCode?           @relation("DriverReferralCode", fields: [referralCodeId], references: [id])
+  user               User                          @relation(fields: [userId], references: [id])
+  referralCode       ReferralCode?                 @relation("DriverReferralCode", fields: [referralCodeId], references: [id])
   profile            DriverProfile?
   documents          DriverDocument[]
   bankAccounts       DriverBankAccount[]
@@ -145,6 +145,9 @@ model DriverBankAccount {
   accountNumberHash       String?           @map("account_number_hash")
   encryptionKeyVersion    Int?              @map("encryption_key_version") @db.SmallInt
   enteredBy               String?           @map("entered_by") @db.Uuid
+  /// Everyone who changed the core details after entry. None of them, nor
+  /// enteredBy, may verify the account (separation of duties).
+  detailsChangedBy        String[]          @default([]) @map("details_changed_by") @db.Uuid
   statusReason            String?           @map("status_reason")
   statusChangedAt         DateTime?         @map("status_changed_at")
   statusChangedBy         String?           @map("status_changed_by") @db.Uuid

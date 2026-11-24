@@ -29,6 +29,7 @@ import {
   estimatedDriverEarning,
   toClientOfferView,
   toClientRideViewWithMedia,
+  type RideViewAudience,
 } from '../presenters/ride-client.presenter.js';
 export class RideStateController {
   constructor(
@@ -43,11 +44,16 @@ export class RideStateController {
     private readonly fileStorageService?: FileStorageService,
   ) {}
 
-  private presentRide(ride: Parameters<typeof toClientRideViewWithMedia>[0]) {
-    return toClientRideViewWithMedia(ride, undefined, {
-      fileRepository: this.fileRepository,
-      fileStorageService: this.fileStorageService,
-    });
+  private presentRide(
+    ride: Parameters<typeof toClientRideViewWithMedia>[0],
+    audience: RideViewAudience = 'driver',
+  ) {
+    return toClientRideViewWithMedia(
+      ride,
+      undefined,
+      { fileRepository: this.fileRepository, fileStorageService: this.fileStorageService },
+      audience,
+    );
   }
   private async actingDriverId(req: FastifyRequest): Promise<string> {
     const userId = callerId(req);
@@ -262,8 +268,14 @@ export class RideStateController {
       await cancelFn();
     }
 
+    // The customer must get the customer view: the driver view carries the
+    // driver's payment model, commission, and share of the cancellation fee.
     const enriched = await this.rideRepo.findById(id);
-    return reply.send({ data: enriched ? await this.presentRide(enriched) : null });
+    return reply.send({
+      data: enriched
+        ? await this.presentRide(enriched, party === 'CUSTOMER' ? 'customer' : 'driver')
+        : null,
+    });
   }
 
   /// Phase 3: Previews the exact cancellation fee & grace window for an active ride

@@ -12,7 +12,13 @@ import {
   resetState,
   type LoggedInUser,
 } from './helpers/harness.js';
-import { grantRole, makeBankAccount, makeDispatchOffer, RIDE_PIN } from './helpers/fixtures.js';
+import {
+  createPricingRuleDirect,
+  grantRole,
+  makeBankAccount,
+  makeDispatchOffer,
+  RIDE_PIN,
+} from './helpers/fixtures.js';
 import {
   accountBalance,
   completeRide as flowCompleteRide,
@@ -67,7 +73,26 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
     await resetState();
   });
 
-  const world = () => rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+  /// RIDE_PLATFORM_FEE defaults to 0 since 5780d60, and these tests are about the
+  /// ledger group a fare with a platform fee posts. So the ride's vehicle type gets
+  /// the default card plus the former ₹15 flat fee.
+  const world = async () => {
+    const w = await rideWorld(app, { customer: CUSTOMER, driver: DRIVER });
+    const card = pricingConfig.defaultRateCard;
+    const ruleId = await createPricingRuleDirect({
+      vehicleTypeId: w.vehicleTypeId,
+      cityCode: 'GLOBAL',
+      baseFare: card.baseFare,
+      minimumFare: card.minimumFare,
+      perKmRate: card.perKm,
+      perMinuteRate: card.perMinute,
+    });
+    await db().client.pricingRule.update({
+      where: { id: ruleId },
+      data: { platformFeeFlat: 15 },
+    });
+    return w;
+  };
 
   async function loginWithRole(phone: string, role: string): Promise<LoggedInUser> {
     const user = await loginAs(app, phone);
@@ -132,7 +157,7 @@ describe('driver earnings pipeline (integration, real HTTP)', () => {
       assert.equal(
         entries.length,
         4,
-        'customer debit + driver, tax and platform-fee credits, no commission credit',
+        `customer debit + driver, tax and platform-fee credits, no commission credit: ${entries.map((e) => `${e.direction} ${e.account} ${e.amount}`).join(', ')}`,
       );
       assert.deepEqual(entries.map((e) => e.account).sort(), [
         'CUSTOMER_WALLET',

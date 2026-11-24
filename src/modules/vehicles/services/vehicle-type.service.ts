@@ -51,6 +51,8 @@ export class VehicleTypeService {
   private readonly signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
   async getImageReadUrl(fileId: string): Promise<string | null> {
+    // Checked before the cache, so an image a vehicle type stops using stops being served.
+    if (!(await this.vehicleTypeRepository.isVehicleTypeImage(fileId))) return null;
     const cached = this.signedUrlCache.get(fileId);
     const now = Date.now();
     if (cached && cached.expiresAt > now + 60000) {

@@ -13,23 +13,32 @@ import { describe, it } from 'node:test';
 const root = process.cwd();
 const read = (file: string) => readFileSync(path.join(root, file), 'utf8');
 
-/// The `x-app-env` anchor block of compose.prod.yml: shared by api and worker.
-function composeAppEnv(): string {
-  const text = read('compose.prod.yml');
-  const start = text.indexOf('x-app-env:');
-  const end = text.indexOf('\nservices:', start);
-  assert.ok(start >= 0 && end > start, 'compose.prod.yml has an x-app-env block');
-  return text.slice(start, end);
+/// One top-level service block of a compose file.
+function composeService(text: string, service: string): string {
+  const start = text.indexOf(`\n  ${service}:\n`);
+  assert.ok(start >= 0, `compose file has a ${service} service`);
+  const next = text.slice(start + 1).search(/\n {2}[a-z-]+:\n/);
+  return text.slice(start, next < 0 ? undefined : start + 1 + next);
 }
 
 describe('deployment push configuration', () => {
-  it('compose.prod.yml gives api and worker FCM, and requires its credential', () => {
-    const env = composeAppEnv();
-    assert.match(env, /^\s+PUSH_PROVIDER: fcm\s*$/m);
-    assert.match(env, /^\s+FIREBASE_SERVICE_ACCOUNT_JSON: \$\{FIREBASE_SERVICE_ACCOUNT_JSON:\?/m);
+  // Since the multi-env standardization the app environment reaches api and worker
+  // only through the env file; src/config/env/schema.ts refuses PUSH_PROVIDER=fcm
+  // without FIREBASE_SERVICE_ACCOUNT_JSON in a deployed environment.
+  it('compose.prod.yml gives api and worker the env file, whose template selects FCM', () => {
     const text = read('compose.prod.yml');
-    assert.match(text, /api:[\s\S]*?<<: \*app-env/);
-    assert.match(text, /worker:[\s\S]*?<<: \*app-env/);
+    for (const service of ['api', 'worker']) {
+      assert.match(
+        composeService(text, service),
+        /env_file:\s*\n\s+- \$\{APP_ENV_FILE:-\.env\.prod\}/,
+        service,
+      );
+    }
+    for (const env of ['prod', 'staging']) {
+      const template = read(`deploy/env/.env.${env}.example`);
+      assert.match(template, /^PUSH_PROVIDER=fcm$/m, env);
+      assert.match(template, /^FIREBASE_SERVICE_ACCOUNT_JSON=\S/m, env);
+    }
   });
 
   it('the Helm ConfigMap values select FCM for staging and production', () => {

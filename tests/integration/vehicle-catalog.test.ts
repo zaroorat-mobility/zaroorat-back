@@ -546,4 +546,42 @@ describe('vehicle type catalog and multi-category quote (integration)', () => {
       assert.ok(option.estimatedFare > 0);
     });
   });
+
+  describe('GET /vehicle-types/images/:fileId (public)', () => {
+    async function storedFile(purpose: 'DRIVER_DOCUMENT' | 'VEHICLE_IMAGE') {
+      const owner = await loginAs(app, DRIVER);
+      return db().client.file.create({
+        data: {
+          ownerUserId: owner.userId,
+          purpose,
+          storageKey: `test/${randomUUID()}`,
+          storageProvider: 's3',
+          fileName: 'scan.png',
+          contentType: 'image/png',
+          sizeBytes: 1,
+          uploadExpiresAt: new Date(Date.now() + 60_000),
+        },
+      });
+    }
+    const fetchImage = (id: string) =>
+      app.inject({ method: 'GET', url: `/api/v1/vehicle-types/images/${id}` });
+
+    it('never serves a file that is not a vehicle type image', async () => {
+      const licence = await storedFile('DRIVER_DOCUMENT');
+      assert.equal((await fetchImage(licence.id)).statusCode, 404);
+
+      // A vehicle image no vehicle type points at is a driver's own vehicle photo.
+      const loose = await storedFile('VEHICLE_IMAGE');
+      assert.equal((await fetchImage(loose.id)).statusCode, 404);
+    });
+
+    it('serves an image a vehicle type points at', async () => {
+      const image = await storedFile('VEHICLE_IMAGE');
+      await db().client.vehicleType.update({
+        where: { code: VEHICLE_TYPE_SEED[0]!.code },
+        data: { imageFileId: image.id },
+      });
+      assert.notEqual((await fetchImage(image.id)).statusCode, 404);
+    });
+  });
 });

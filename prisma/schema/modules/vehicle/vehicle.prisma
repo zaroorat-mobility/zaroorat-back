@@ -17,16 +17,16 @@ model VehicleType {
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
 
-  imageFile        File?                    @relation("VehicleTypeImage", fields: [imageFileId], references: [id])
-  vehicles         Vehicle[]
-  rideRequests     RideRequest[]
-  rides            Ride[]
+  imageFile            File?                    @relation("VehicleTypeImage", fields: [imageFileId], references: [id])
+  vehicles             Vehicle[]
+  rideRequests         RideRequest[]
+  rides                Ride[]
   pricingRules         PricingRule[]
   surgeWindows         SurgeWindow[]
   cancellationPolicies CancellationPolicy[]
   promotions           Promotion[]
-  serviceZoneLinks ServiceZoneVehicleType[]
-  rideQuoteOptions RideQuoteOption[]
+  serviceZoneLinks     ServiceZoneVehicleType[]
+  rideQuoteOptions     RideQuoteOption[]
 
   @@index([isActive, displayOrder])
   @@map("vehicle_types")

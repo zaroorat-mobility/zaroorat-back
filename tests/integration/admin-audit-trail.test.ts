@@ -605,8 +605,8 @@ describe('admin audit trail (integration)', () => {
       ['audience_segment', '/api/v1/admin/segments', 'DELETE'],
       ['promo_banner', '/api/v1/admin/promo-banners', 'DELETE'],
       ['invoice_template', '/api/v1/admin/invoice-templates', 'DELETE'],
-      // Soft: a removed policy is deactivated, and logged as exactly that.
-      ['cancellation_policy', '/api/v1/admin/cancellation-policies', 'UPDATE'],
+      // Hard delete since M-06 versioning, allowed only once the policy is inactive.
+      ['cancellation_policy', '/api/v1/admin/cancellation-policies', 'DELETE'],
     ];
 
     for (const [entityType, path, action] of deletions) {
@@ -614,6 +614,15 @@ describe('admin audit trail (integration)', () => {
       const created = await as(admin, c.create(await c.setup(admin)));
       assert.equal(created.statusCode, 201, created.payload);
       const id = created.json().data.id as string;
+
+      if (entityType === 'cancellation_policy') {
+        const off = await as(admin, {
+          method: 'POST',
+          url: `${path}/${id}/deactivate`,
+          payload: {},
+        });
+        assert.equal(off.statusCode, 200, off.payload);
+      }
 
       const removed = await as(admin, { method: 'DELETE', url: `${path}/${id}` });
 
@@ -639,10 +648,21 @@ describe('admin audit trail (integration)', () => {
           cityCode: POLICY_CITY,
         },
       };
+      // A second active policy for the same scope is refused (M-06), so the
+      // retirement happens when an inactive one is activated.
       const first = await as(admin, policy);
-      const second = await as(admin, policy);
+      const second = await as(admin, {
+        ...policy,
+        payload: { ...policy.payload, status: 'inactive' },
+      });
       assert.equal(first.statusCode, 201, first.payload);
       assert.equal(second.statusCode, 201, second.payload);
+      const activated = await as(admin, {
+        method: 'POST',
+        url: `${policy.url}/${second.json().data.id}/activate`,
+        payload: {},
+      });
+      assert.equal(activated.statusCode, 200, activated.payload);
 
       const firstId = first.json().data.id;
       const retired = (await auditRows('cancellation_policy', firstId)).filter(

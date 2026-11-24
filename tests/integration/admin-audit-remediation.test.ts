@@ -1493,6 +1493,12 @@ describe('admin audit remediation (integration)', () => {
       );
       assert.equal(Number(owned[0]!.n), 0, 'owns no table, so cannot ALTER or DROP one');
 
+      // Names are built from each row's own schema: PostgreSQL may evaluate the
+      // privilege function before the schema filter, and the PostGIS image adds
+      // topology.* objects that do not exist under public.
+      // Append-only by design: the audit trail (20261002130100) and the money
+      // ledgers (20261021120000_razorpay_payment_safeguards).
+      const appendOnly = `'admin_activity_logs', 'audit_field_changes', 'payment_ledger_entries', 'driver_commission_wallet_transactions'`;
       const missing = await db().client.$queryRawUnsafe<
         Array<{ table_name: string; privilege: string }>
       >(
@@ -1500,10 +1506,18 @@ describe('admin audit remediation (integration)', () => {
            CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) AS p(privilege)
           WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
             AND t.table_name NOT IN ('_prisma_migrations', 'spatial_ref_sys')
-            AND NOT (t.table_name IN ('admin_activity_logs', 'audit_field_changes') AND p.privilege IN ('UPDATE', 'DELETE'))
-            AND NOT has_table_privilege('${RUNTIME}', 'public.' || quote_ident(t.table_name), p.privilege)`,
+            AND NOT (t.table_name IN (${appendOnly}) AND p.privilege IN ('UPDATE', 'DELETE'))
+            AND NOT has_table_privilege('${RUNTIME}', quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), p.privilege)`,
       );
       assert.deepEqual(missing, [], 'CRUD on every application table');
+
+      const rewritable = await db().client.$queryRawUnsafe<Array<{ table_name: string }>>(
+        `SELECT t.table_name FROM information_schema.tables t
+          WHERE t.table_schema = 'public' AND t.table_name IN (${appendOnly})
+            AND (has_table_privilege('${RUNTIME}', quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), 'UPDATE')
+              OR has_table_privilege('${RUNTIME}', quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), 'DELETE'))`,
+      );
+      assert.deepEqual(rewritable, [], 'append-only tables stay append-only');
 
       const extra = await db().client.$queryRawUnsafe<
         Array<{ table_name: string; privilege: string }>
@@ -1511,7 +1525,7 @@ describe('admin audit remediation (integration)', () => {
         `SELECT t.table_name, p.privilege FROM information_schema.tables t
            CROSS JOIN (VALUES ('TRUNCATE'), ('TRIGGER'), ('REFERENCES')) AS p(privilege)
           WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
-            AND has_table_privilege('${RUNTIME}', 'public.' || quote_ident(t.table_name), p.privilege)`,
+            AND has_table_privilege('${RUNTIME}', quote_ident(t.table_schema) || '.' || quote_ident(t.table_name), p.privilege)`,
       );
       assert.deepEqual(extra, [], 'no TRUNCATE, TRIGGER or REFERENCES anywhere');
 
@@ -1532,7 +1546,7 @@ describe('admin audit remediation (integration)', () => {
 
       const sequences = await db().client.$queryRawUnsafe<Array<{ sequence_name: string }>>(
         `SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = 'public'
-            AND NOT has_sequence_privilege('${RUNTIME}', 'public.' || quote_ident(sequence_name), 'USAGE')`,
+            AND NOT has_sequence_privilege('${RUNTIME}', quote_ident(sequence_schema) || '.' || quote_ident(sequence_name), 'USAGE')`,
       );
       assert.deepEqual(sequences, [], 'every sequence usable');
     });

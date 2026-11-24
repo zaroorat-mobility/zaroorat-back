@@ -158,7 +158,7 @@ describe('driver bank-account security (integration, real HTTP)', () => {
   });
 
   // ─── verification gate ───────────────────────────────────────────────────
-  it('needs a second staff member to verify, and the encryption gate to enable payouts', async () => {
+  it('needs a second staff member to verify before payouts can be enabled', async () => {
     const adminA = await loginWithRole(ADMIN_A, 'admin');
     const adminB = await loginWithRole(ADMIN_B, 'finance');
     const { driverId, accountId } = await driverWithAccount({
@@ -175,12 +175,8 @@ describe('driver bank-account security (integration, real HTTP)', () => {
     assert.equal(verified.json().data.status, 'VERIFIED');
     assert.equal(verified.json().data.payoutEnabled, false, 'verifying does not enable payouts');
 
-    await clearBankEncryptionVerified();
-    const closed = await post(adminB, bankUrl(driverId, accountId, 'enable-payouts'));
-    assert.equal(closed.statusCode, 409, closed.payload);
-    assert.equal(closed.json().error.code, 'BANK_ACCOUNT_SECURITY_NOT_READY');
-
-    await markBankEncryptionVerified();
+    // Enabling checks this account's own encryption; the global backfill gate
+    // (BANK_ENCRYPTION_VERIFIED_SETTING) is enforced when a payout is made.
     const enabled = await post(adminB, bankUrl(driverId, accountId, 'enable-payouts'));
     assert.equal(enabled.statusCode, 200, enabled.payload);
     assert.equal(enabled.json().data.status, 'PAYOUT_ENABLED');
@@ -200,6 +196,34 @@ describe('driver bank-account security (integration, real HTTP)', () => {
       where: { entityType: 'driver_bank_account', entityId: accountId },
     });
     assert.equal(audits, 2, 'verify and enable are both audited');
+  });
+
+  it('neither the enterer nor anyone who changed the core details can verify them', async () => {
+    const adminA = await loginWithRole(ADMIN_A, 'admin');
+    const adminB = await loginWithRole(ADMIN_B, 'system_admin');
+    const finance = await loginWithRole(FINANCE, 'finance');
+    const { driverId, accountId } = await driverWithAccount({
+      verificationStatus: 'PENDING',
+      enteredBy: adminA.userId,
+    });
+
+    // B changes the IFSC on A's entry.
+    const edited = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: adminB.authHeader,
+      payload: { bankAccount: { ifscCode: 'ICIC0001234' } },
+    });
+    assert.equal(edited.statusCode, 200, edited.payload);
+
+    for (const party of [adminB, adminA]) {
+      const refused = await post(party, bankUrl(driverId, accountId, 'verify'));
+      assert.equal(refused.statusCode, 403, refused.payload);
+      assert.equal(refused.json().error.code, 'BANK_ACCOUNT_SAME_ACTOR');
+    }
+
+    const independent = await post(finance, bankUrl(driverId, accountId, 'verify'));
+    assert.equal(independent.statusCode, 200, independent.payload);
   });
 
   it('refuses illegal transitions, and deactivation turns payouts off', async () => {

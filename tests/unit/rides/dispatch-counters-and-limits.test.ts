@@ -7,18 +7,21 @@ import { rideConfig } from '../../../src/config/ride/ride.config.js';
 describe('Dispatch counters and limits tests (Step 3)', () => {
   describe('offer stats counters (Passed / Notified)', () => {
     it('rejection and timeout both increment Passed; cancelled offers do not', async () => {
-      // Mock db client groupBy returning counts by response
-      const mockGroups = [
-        { response: 'PENDING', _count: { _all: 2 } },
-        { response: 'REJECTED', _count: { _all: 3 } },
-        { response: 'TIMEOUT', _count: { _all: 4 } },
-        { response: 'CANCELLED', _count: { _all: 5 } }, // e.g. cancelled because another driver accepted
+      // One offer row per driver, by response. The repository counts distinct drivers.
+      const rows = (response: string, n: number) =>
+        Array.from({ length: n }, (_, i) => ({ driverId: `${response}-${i}`, response }));
+      const dispatches = [
+        ...rows('PENDING', 2),
+        ...rows('REJECTED', 3),
+        ...rows('TIMEOUT', 4),
+        ...rows('CANCELLED', 5), // e.g. cancelled because another driver accepted
+        { driverId: 'TIMEOUT-0', response: 'TIMEOUT' }, // a re-offer to the same driver counts once
       ];
 
       const mockDb = {
         client: {
           rideDispatch: {
-            groupBy: async () => mockGroups,
+            findMany: async () => dispatches,
           },
         },
       };
@@ -103,8 +106,18 @@ describe('Dispatch counters and limits tests (Step 3)', () => {
         },
       };
 
+      // expireRequestIfExhausted moves CREATED/SEARCHING -> EXPIRED with one conditional updateMany.
+      const tx = {
+        rideRequest: {
+          updateMany: async ({ where }: { where: { status: { in: string[] } } }) => {
+            if (!where.status.in.includes(requestStatus)) return { count: 0 };
+            requestStatus = 'EXPIRED';
+            return { count: 1 };
+          },
+        },
+      };
       const mockTxManager = {
-        execute: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn({}),
+        execute: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(tx),
       };
 
       const mockEventPublisher = {

@@ -52,6 +52,16 @@ const STRADDLING_POLYGON: number[][][] = [
 /// Phase 6. The admin surface is the only way a rate card, a boundary or a surge
 /// window comes into existence, so a defect here is not an admin inconvenience:
 /// it is a wrong price, a city that serves nothing, or a change nobody can trace.
+/// resetState seeds an open-ended GLOBAL rate card per vehicle type, and a second
+/// active overlapping rule is refused (FARE_RULE_CONFLICT). Tests that create on a
+/// GLOBAL key free it first: deleted, not retired, because a key with history
+/// makes the next create v2 of that family and these tests count versions.
+async function freeSeededGlobalKey(code: string): Promise<void> {
+  await db().client.pricingRule.deleteMany({
+    where: { cityCode: 'GLOBAL', vehicleType: { code } },
+  });
+}
+
 describe('admin surface integrity (Phase 6)', () => {
   let app: FastifyInstance;
 
@@ -397,6 +407,7 @@ describe('admin surface integrity (Phase 6)', () => {
       const { headers } = await loginAdmin();
       const cab = await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       const nextYear = new Date().getFullYear() + 1;
+      await freeSeededGlobalKey('CAB_ECONOMY_NON_AC');
 
       const created = await app.inject({
         method: 'POST',
@@ -424,9 +435,9 @@ describe('admin surface integrity (Phase 6)', () => {
       assert.equal(updated.json().data.baseFare, 75);
       assert.equal(updated.json().data.version, 2);
 
-      // `resetState` re-seeds one GLOBAL rule per vehicle type, so the count is
-      // scoped to the key under test — and that seeded CAB_ECONOMY_NON_AC rule is the
-      // incumbent the create had to retire, which makes this the real case.
+      // Scoped to the key under test. The seeded GLOBAL card was removed above,
+      // because create refuses a second active overlapping rule; the edit is
+      // what must leave exactly one active version.
       const active = await db().client.pricingRule.findMany({
         where: { cityCode: 'GLOBAL', vehicleTypeId: cab, isActive: true },
       });
@@ -443,6 +454,7 @@ describe('admin surface integrity (Phase 6)', () => {
     // it impossible to price.
     await vehicleTypeIdByCode('CAB_PREMIUM_AC');
     const nextYear = new Date().getFullYear() + 1;
+    await freeSeededGlobalKey('CAB_PREMIUM_AC');
 
     const created = await app.inject({
       method: 'POST',
@@ -556,6 +568,7 @@ describe('admin surface integrity (Phase 6)', () => {
     const { headers, userId } = await loginAdmin();
     await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
     const nextYear = new Date().getFullYear() + 1;
+    await freeSeededGlobalKey('CAB_ECONOMY_NON_AC');
 
     const created = await app.inject({
       method: 'POST',

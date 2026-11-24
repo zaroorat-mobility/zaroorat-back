@@ -44,14 +44,15 @@ describe('user profile schema (unit)', () => {
   });
 
   describe('field rules', () => {
-    it('trims names and rejects empty, oversized, and digit-bearing ones', () => {
+    // NAME_PATTERN accepts digits and dots since 6facad4; symbols are still refused.
+    it('trims names and rejects empty, oversized, and symbol-bearing ones', () => {
       assert.equal(
         updateProfileSchema.safeParse({ firstName: '  Aarav  ' }).data?.firstName,
         'Aarav',
       );
       assert.equal(codeFor({ firstName: '' }, 'firstName'), 'REQUIRED');
       assert.equal(codeFor({ firstName: 'a'.repeat(65) }, 'firstName'), 'TOO_LONG');
-      assert.equal(codeFor({ firstName: 'Aarav99' }, 'firstName'), 'INVALID_FORMAT');
+      assert.equal(codeFor({ firstName: 'Aarav@home' }, 'firstName'), 'INVALID_FORMAT');
     });
 
     it('accepts names with marks, hyphens, and apostrophes', () => {

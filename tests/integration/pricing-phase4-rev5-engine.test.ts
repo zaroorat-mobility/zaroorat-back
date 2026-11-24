@@ -458,7 +458,7 @@ describe('Phase 4 — Rev 5 Central Commission, GST, Recovery, Reservations & Fa
     assert.equal(taxCredits, 0);
   });
 
-  it('T2 — Mode B flag validator blocks unapproved D-20 and isolates clearing account once D-20 is configured', async () => {
+  it('T2 — Mode B defaults to driver-liable informational GST and isolates the clearing account', async () => {
     const maker = await loginAdmin(MAKER_PHONE, MAKER_EMAIL);
     const checker = await loginAdmin(CHECKER_PHONE, CHECKER_EMAIL);
     await setupSgrJurisdiction(maker.headers);
@@ -473,26 +473,9 @@ describe('Phase 4 — Rev 5 Central Commission, GST, Recovery, Reservations & Fa
     });
     assert.equal(snapOn.statusCode, 200, snapOn.payload);
 
-    // Attempting Mode B (passenger_gst_enabled=ON with gst_recovery_enabled=OFF) without D-20 -> 409 NON_RECOVERY_GST_CONTRA_UNAPPROVED
-    const blockedModeB = await app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/feature-flags/${REV5_PRICING_FLAGS.PASSENGER_GST_ENABLED}`,
-      headers: checker.headers,
-      payload: { status: 'ON' },
-    });
-    assert.equal(blockedModeB.statusCode, 409, blockedModeB.payload);
-    assert.equal(blockedModeB.json().error.code, 'NON_RECOVERY_GST_CONTRA_UNAPPROVED');
-
-    // Configure D-20 Option 1 (DRIVER_LIABLE_INFORMATIONAL) -> now Mode B succeeds cleanly
-    await db().client.systemSetting.upsert({
-      where: { key: NON_RECOVERY_GST_MODE_SETTING_KEY },
-      update: { value: 'DRIVER_LIABLE_INFORMATIONAL', category: 'pricing' },
-      create: {
-        key: NON_RECOVERY_GST_MODE_SETTING_KEY,
-        value: 'DRIVER_LIABLE_INFORMATIONAL',
-        category: 'pricing',
-      },
-    });
+    // Mode B (passenger_gst_enabled=ON with gst_recovery_enabled=OFF) with D-20 unset: since
+    // 5780d60 readNonRecoveryGstMode defaults to DRIVER_LIABLE_INFORMATIONAL, so the toggle is
+    // allowed and the ride below must still post no recovery-clearing entries.
     const allowedModeB = await app.inject({
       method: 'PATCH',
       url: `/api/v1/admin/feature-flags/${REV5_PRICING_FLAGS.PASSENGER_GST_ENABLED}`,

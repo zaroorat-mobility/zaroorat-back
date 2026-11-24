@@ -196,11 +196,13 @@ export class AdminFareService {
               include: { config: true },
             });
           const winningRec = pickWinningScope(recScopes);
+          // No scope: stay null so rateCardFor applies the same platform default
+          // (RIDE_TAX_RATE) PricingService charges, instead of previewing 0%.
           resolvedTaxRatePct = winningRec
             ? winningRec.config.isEnabled
               ? Number(winningRec.config.recoveryRatePct.toString())
               : 0
-            : 0;
+            : null;
         }
       }
 

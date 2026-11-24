@@ -182,12 +182,13 @@ async function clearPaymentSettings(): Promise<void> {
 /// `buildProvider` a credential to construct a provider from.
 async function seedMapProvider(): Promise<void> {
   const rows = [
-    { key: 'map.primary_provider', value: 'ola', isSecret: false },
-    { key: 'map.ola.enabled', value: 'true', isSecret: false },
-    { key: 'map.google.enabled', value: 'false', isSecret: false },
+    // Google, not Ola: the Ola provider was retired (the admin schema accepts
+    // google|mappls only and buildProvider no longer constructs Ola).
+    { key: 'map.primary_provider', value: 'google', isSecret: false },
+    { key: 'map.google.enabled', value: 'true', isSecret: false },
     { key: 'map.mappls.enabled', value: 'false', isSecret: false },
     { key: 'map.config_version', value: '1', isSecret: false },
-    { key: 'map.ola.api_key', value: encryptSecret('test_ola_server_key'), isSecret: true },
+    { key: 'map.google.api_key', value: encryptSecret('test_google_server_key'), isSecret: true },
   ];
 
   await db().client.systemSetting.deleteMany({ where: { category: 'maps' } });

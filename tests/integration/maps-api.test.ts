@@ -3,7 +3,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
 
 import './helpers/load-test-env.js';
-import { bootApp, loginAs, resetState } from './helpers/harness.js';
+import { bootApp, db, loginAs, resetState } from './helpers/harness.js';
 
 describe('maps public API (integration)', () => {
   let app: FastifyInstance;
@@ -42,8 +42,23 @@ describe('maps public API (integration)', () => {
     assert.equal(typeof body.configVersion, 'number');
     assert.ok(Array.isArray(body.capabilities));
     assert.ok(body.attribution?.text);
-    assert.equal(body.providers.ola.clientSdkKey, undefined);
     assert.equal(body.providers.google.clientSdkKey, undefined);
+    assert.equal(body.providers.mappls.clientSdkKey, undefined);
+  });
+
+  it('treats a retired provider still stored as primary as unset, instead of failing', async () => {
+    await db().client.systemSetting.update({
+      where: { key: 'map.primary_provider' },
+      data: { value: 'ola' },
+    });
+    const seed = await loginAs(app, '+919876545102');
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/maps/config',
+      headers: { authorization: `Bearer ${seed.accessToken}` },
+    });
+    assert.equal(res.statusCode, 200, res.payload);
+    assert.equal(res.json().data.primaryProvider, 'google');
   });
 
   it('autocomplete returns normalized envelope', async () => {

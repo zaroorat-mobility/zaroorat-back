@@ -46,6 +46,29 @@ const SANCTIONED_PUBLIC: ReadonlyMap<string, string> = new Map([
       'neither); never phone numbers or rider identity. IP rate limited by ' +
       'rateLimits.rideShareView.',
   ],
+  [
+    'GET /api/v1/fiscal-documents/:id/download',
+    'Signed PDF link handed to a browser, which holds no bearer token. The ?token= is an ' +
+      'HMAC-SHA256 over {docId, actorId, exp}, bound to this document, valid 300 s, compared ' +
+      'with timingSafeEqual (FiscalDocumentService.verifySignedDownloadToken).',
+  ],
+  [
+    'GET /api/v1/app-config/brand-logo',
+    'Brand logo shown on the login screen, before any token exists. IP rate limited by ' +
+      'rateLimits.appConfig.',
+  ],
+  [
+    'GET /api/v1/promotions/home',
+    'Home-screen banners shown before login. Not user-specific; per-user offers are the ' +
+      'authenticated /promotions/available.',
+  ],
+  ['GET /api/v1/vehicle-types', 'Public vehicle catalog for the pre-login fare picker.'],
+  ['GET /api/v1/vehicle-types/', 'Same catalog route with a trailing slash.'],
+  [
+    'GET /api/v1/vehicle-types/images/:fileId',
+    'Vehicle icons for the catalog. Serves only a VEHICLE_IMAGE file that a vehicle type ' +
+      'references (VehicleTypeRepository.isVehicleTypeImage); any other file id is a 404.',
+  ],
   ['GET /health', 'Load-balancer probe.'],
   ['GET /api/v1/health', 'Load-balancer probe (prefixed).'],
   ['GET /ready', 'Kubernetes readiness probe.'],

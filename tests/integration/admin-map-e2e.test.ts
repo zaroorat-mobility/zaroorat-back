@@ -67,8 +67,8 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       url: '/api/v1/admin/settings/maps/test',
       headers: adminHeaders,
       payload: {
-        providerName: 'ola',
-        apiKey: 'test_ola_key_live_999',
+        providerName: 'google',
+        apiKey: 'test_google_key_live_999',
       },
     });
     assert.equal(healthTestRes.statusCode, 200, healthTestRes.payload);
@@ -80,26 +80,26 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
 
         providers: {
-          ola: { apiKey: 'test_ola_key_live_999' },
+          google: { apiKey: 'test_google_key_live_999' },
         },
       },
     });
     assert.equal(updateRes.statusCode, 200, updateRes.payload);
     const updatedData = updateRes.json().data;
-    assert.equal(updatedData.primaryProvider, 'ola');
+    assert.equal(updatedData.primaryProvider, 'google');
     assert.equal(updatedData.fallbackProviders, undefined);
-    assert.equal(updatedData.providers.ola.apiKey, undefined); // Secrets never returned
-    assert.equal(updatedData.providers.ola.configured, true);
+    assert.equal(updatedData.providers.google.apiKey, undefined); // Secrets never returned
+    assert.equal(updatedData.providers.google.configured, true);
 
     // Step 3: Verify DB Encryption
     const dbKey = await db().client.systemSetting.findUnique({
-      where: { key: 'map.ola.api_key' },
+      where: { key: 'map.google.api_key' },
     });
     assert.ok(dbKey?.value?.startsWith('enc:'));
-    assert.equal(decryptSecret(dbKey!.value!), 'test_ola_key_live_999');
+    assert.equal(decryptSecret(dbKey!.value!), 'test_google_key_live_999');
 
     // Step 4: Verify Masked Secret Resubmission Protection (Frontend sends '********')
     const maskedResubmission = await app.inject({
@@ -107,10 +107,10 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
 
         providers: {
-          ola: { apiKey: '********' }, // Masked string sent back by UI!
+          google: { apiKey: '********' }, // Masked string sent back by UI!
         },
       },
     });
@@ -118,9 +118,9 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
 
     // Ensure real secret was NOT overwritten with '********'
     const dbKeyAfterMasked = await db().client.systemSetting.findUnique({
-      where: { key: 'map.ola.api_key' },
+      where: { key: 'map.google.api_key' },
     });
-    assert.equal(decryptSecret(dbKeyAfterMasked!.value!), 'test_ola_key_live_999');
+    assert.equal(decryptSecret(dbKeyAfterMasked!.value!), 'test_google_key_live_999');
   });
 
   // ─── 2. NO-RESTART PROVIDER SWITCH & CUSTOMER RIDE ESTIMATE E2E ─────────
@@ -132,20 +132,20 @@ describe('PHASE MAP-04 — admin frontend to backend end-to-end verification (in
     const pickup = { pickupLat: 28.6139, pickupLng: 77.209 };
     const drop = { dropLat: 28.5355, dropLng: 77.391 };
 
-    // 1. Admin configures Ola as Active Provider
+    // 1. Admin configures Mappls as Active Provider
     await app.inject({
       method: 'PUT',
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'mappls',
 
-        providers: { ola: { apiKey: 'test_ola_key_111' } },
+        providers: { mappls: { clientId: 'test_mappls_id', clientSecret: 'test_mappls_secret' } },
       },
     });
 
-    const estOla = await pricingService.estimateTrip({ ...pickup, ...drop });
-    assert.equal(estOla.source, 'ola');
+    const estInitial = await pricingService.estimateTrip({ ...pickup, ...drop });
+    assert.equal(estInitial.source, 'mappls');
 
     // 2. Admin switches Active Provider to Google (Zero Backend Restart)
     const switchRes = await app.inject({

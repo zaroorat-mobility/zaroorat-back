@@ -67,6 +67,12 @@ describe('admin fare rule preview (integration)', () => {
     const car = await db().client.vehicleType.findFirstOrThrow({
       where: { category: 'car', isActive: true },
     });
+    // resetState seeds an open-ended GLOBAL rate card per type, and a second
+    // active overlapping rule is refused (FARE_RULE_CONFLICT), so retire it first.
+    await db().client.pricingRule.updateMany({
+      where: { vehicleTypeId: car.id, cityCode: 'GLOBAL' },
+      data: { isActive: false },
+    });
     const created = await app.inject({
       method: 'POST',
       url: '/api/v1/admin/fare-rules',

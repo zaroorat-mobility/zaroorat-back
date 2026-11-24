@@ -48,10 +48,16 @@ export class AdminMapSettingsService {
   async getMapSettings(): Promise<MapSettingsView> {
     const settings = await this.systemSettingService.getCategorySettings(MAP_SETTINGS_CATEGORY);
 
-    const primaryProvider =
+    const storedPrimary =
       settings.get(MAP_SETTING_KEYS.PRIMARY_PROVIDER)?.value ??
       process.env.MAP_PROVIDER ??
       DEFAULT_MAP_PROVIDERS.PRIMARY;
+    // A database still holding a retired provider ('ola') must not 500 every
+    // /maps/config read; treat it as unset.
+    const primaryProvider =
+      storedPrimary === 'google' || storedPrimary === 'mappls'
+        ? storedPrimary
+        : DEFAULT_MAP_PROVIDERS.PRIMARY;
 
     const maxVersion = maxSettingVersion(settings);
     const configVersion =

@@ -84,20 +84,20 @@ describe('admin map provider configuration (integration)', () => {
     assert.ok(body.data);
     assert.equal(typeof body.data.primaryProvider, 'string');
     assert.equal(body.data.fallbackProviders, undefined);
-    assert.ok(body.data.providers.ola);
     assert.ok(body.data.providers.google);
     assert.ok(body.data.providers.mappls);
+    // The Ola provider was retired.
+    assert.equal(body.data.providers.ola, undefined);
 
     // Secrets must never appear in the payload (not even masked)
-    assert.equal(body.data.providers.ola.apiKey, undefined);
     assert.equal(body.data.providers.google.apiKey, undefined);
     assert.equal(body.data.providers.mappls.clientId, undefined);
     assert.equal(body.data.providers.mappls.clientSecret, undefined);
-    assert.equal(typeof body.data.providers.ola.configured, 'boolean');
+    assert.equal(typeof body.data.providers.google.configured, 'boolean');
   });
 
   it('encrypts secrets at rest in database and decrypts properly', () => {
-    const rawSecret = 'my_super_secret_ola_api_key_12345';
+    const rawSecret = 'my_super_secret_google_api_key_12345';
     const encrypted = encryptSecret(rawSecret);
     assert.ok(encrypted.startsWith('enc:'));
     assert.notEqual(encrypted, rawSecret);
@@ -113,15 +113,15 @@ describe('admin map provider configuration (integration)', () => {
       url: '/api/v1/admin/settings/maps/test',
       headers: adminHeaders,
       payload: {
-        providerName: 'ola',
-        apiKey: 'test_ola_key',
+        providerName: 'google',
+        apiKey: 'test_google_key',
       },
     });
 
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json();
     assert.ok(body.data);
-    assert.equal(body.data.providerName, 'ola');
+    assert.equal(body.data.providerName, 'google');
     assert.equal(typeof body.data.ok, 'boolean');
     assert.equal(typeof body.data.responseTimeMs, 'number');
   });
@@ -133,16 +133,16 @@ describe('admin map provider configuration (integration)', () => {
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
-        fallbackProviders: ['ola', 'google'],
-        providers: { ola: { apiKey: 'test_ola_key' } },
+        primaryProvider: 'google',
+        fallbackProviders: ['google', 'mappls'],
+        providers: { google: { apiKey: 'test_google_key' } },
       },
     });
 
     // Zod strips unknown keys — update succeeds; response has no fallbackProviders
     assert.equal(invalidRes.statusCode, 200, invalidRes.payload);
     assert.equal(invalidRes.json().data.fallbackProviders, undefined);
-    assert.equal(invalidRes.json().data.primaryProvider, 'ola');
+    assert.equal(invalidRes.json().data.primaryProvider, 'google');
   });
 
   it('updates map configuration atomically, audits changes with redacted secrets, and invalidates Redis', async () => {
@@ -153,30 +153,31 @@ describe('admin map provider configuration (integration)', () => {
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
         providers: {
-          ola: { apiKey: 'new_ola_key_999' },
+          google: { apiKey: 'new_google_key_999' },
         },
       },
     });
 
     assert.equal(updateRes.statusCode, 200, updateRes.payload);
     const updated = updateRes.json().data;
-    assert.equal(updated.primaryProvider, 'ola');
+    assert.equal(updated.primaryProvider, 'google');
     assert.equal(updated.fallbackProviders, undefined);
-    assert.equal(updated.providers.ola.apiKey, undefined);
-    assert.equal(updated.providers.ola.configured, true);
+    assert.equal(updated.providers.google.apiKey, undefined);
+    assert.equal(updated.providers.google.configured, true);
 
     // Check DB setting creation
     const dbPrimary = await db().client.systemSetting.findUnique({
       where: { key: 'map.primary_provider' },
     });
-    assert.equal(dbPrimary?.value, 'ola');
+    assert.equal(dbPrimary?.value, 'google');
 
-    const dbOlaKey = await db().client.systemSetting.findUnique({
-      where: { key: 'map.ola.api_key' },
+    const dbGoogleKey = await db().client.systemSetting.findUnique({
+      where: { key: 'map.google.api_key' },
     });
-    assert.ok(dbOlaKey?.value?.startsWith('enc:')); // Encrypted in DB
+    assert.ok(dbGoogleKey?.value?.startsWith('enc:')); // Encrypted in DB
+    assert.equal(decryptSecret(dbGoogleKey!.value), 'new_google_key_999');
 
     // Check audit logs
     const auditLogs = await db().client.adminActivityLog.findMany({
@@ -197,7 +198,7 @@ describe('admin map provider configuration (integration)', () => {
     const mapProviderService = container.resolve<MapProviderService>('mapProviderService');
     const dynamicChain = await mapProviderService.resolveProviderChain();
     assert.ok(dynamicChain.length === 1);
-    assert.equal(dynamicChain[0]?.providerName, 'ola');
+    assert.equal(dynamicChain[0]?.providerName, 'google');
   });
 
   it('returns the client SDK key — not the server key — via GET /settings/maps/client-config', async () => {
@@ -208,9 +209,12 @@ describe('admin map provider configuration (integration)', () => {
       url: '/api/v1/admin/settings/maps',
       headers: adminHeaders,
       payload: {
-        primaryProvider: 'ola',
+        primaryProvider: 'google',
         providers: {
-          ola: { apiKey: 'test_ola_server_key', clientSdkKey: 'test_ola_client_sdk_key' },
+          google: {
+            apiKey: 'test_google_server_key_7',
+            clientSdkKey: 'test_google_client_sdk_key',
+          },
         },
       },
     });
@@ -223,22 +227,21 @@ describe('admin map provider configuration (integration)', () => {
 
     assert.equal(res.statusCode, 200, res.payload);
     const body = res.json().data;
-    assert.equal(body.primaryProvider, 'ola');
-    assert.equal(body.providers.ola.enabled, true);
-    assert.equal(body.providers.ola.clientSdkKey, 'test_ola_client_sdk_key');
+    assert.equal(body.primaryProvider, 'google');
+    assert.equal(body.providers.google.enabled, true);
+    assert.equal(body.providers.google.clientSdkKey, 'test_google_client_sdk_key');
     // The old field name must not linger alongside the new one.
     assert.equal(
-      (body.providers.ola as Record<string, unknown>).apiKey,
+      (body.providers.google as Record<string, unknown>).apiKey,
       undefined,
       'stale apiKey field still present on client-config',
     );
-    assert.ok(body.providers.ola.tileUrl?.includes('/tiles/v1/styles/default-light-standard/'));
+    assert.ok(body.providers.google.tileUrl?.includes('key=test_google_client_sdk_key'));
     // The whole point of the split: the server key must not reach the browser,
     // in the key field or anywhere in the payload.
-    assert.ok(!JSON.stringify(body).includes('test_ola_server_key'));
-    assert.equal(body.providers.google.enabled, false);
-    assert.equal(body.providers.google.clientSdkKey, undefined);
+    assert.ok(!JSON.stringify(body).includes('test_google_server_key_7'));
     assert.equal(body.providers.mappls.enabled, false);
+    assert.equal(body.providers.mappls.clientSdkKey, undefined);
   });
 
   // Google, because `resetState` does not truncate `system_settings`: a
@@ -310,8 +313,8 @@ describe('admin map provider configuration (integration)', () => {
     const payload = JSON.stringify(body);
     assert.ok(!payload.includes('test_mappls_rest_tile_key'));
     assert.ok(!payload.includes('test_mappls_secret'));
-    assert.equal(body.providers.ola.enabled, false);
-    assert.equal(body.providers.ola.clientSdkKey, undefined);
+    assert.equal(body.providers.google.enabled, false);
+    assert.equal(body.providers.google.clientSdkKey, undefined);
   });
   /// The public config is what the rider and driver apps will consume, so the
   /// no-server-credential rule has to hold there too -- not just on the admin
@@ -412,14 +415,17 @@ describe('admin map provider configuration (integration)', () => {
     assert.equal(settings.statusCode, 200, settings.payload);
     const view = settings.json().data;
     // The seeded baseline, not whatever the test above this one saved. Earlier
-    // tests in this file switch the primary to google and to mappls and give
-    // both an SDK key, so any of these reading back as that provider's state
-    // means the reset is not restoring the baseline.
-    assert.equal(view.primaryProvider, 'ola', 'primary provider leaked between tests');
-    assert.equal(view.providers.ola.configured, true, 'seeded ola credential missing');
+    // tests in this file switch the primary to mappls, replace the google key and
+    // give both an SDK key, so any of these reading back as that state means the
+    // reset is not restoring the baseline.
+    assert.equal(view.primaryProvider, 'google', 'primary provider leaked between tests');
+    assert.equal(view.providers.google.configured, true, 'seeded google credential missing');
+    const googleKey = await db().client.systemSetting.findUnique({
+      where: { key: 'map.google.api_key' },
+    });
     assert.equal(
-      view.providers.google.configured,
-      false,
+      googleKey && decryptSecret(googleKey.value),
+      'test_google_server_key',
       'google credentials leaked between tests',
     );
     assert.equal(
@@ -435,7 +441,7 @@ describe('admin map provider configuration (integration)', () => {
     });
     assert.equal(clientConfig.statusCode, 200, clientConfig.payload);
     const cfg = clientConfig.json().data;
-    for (const provider of ['ola', 'google', 'mappls'] as const) {
+    for (const provider of ['google', 'mappls'] as const) {
       assert.equal(
         cfg.providers[provider].clientSdkKey,
         undefined,

@@ -194,8 +194,8 @@ model DriverCommissionWalletTransaction {
   wallet DriverCommissionWallet @relation(fields: [walletId], references: [id])
   ride   Ride?                  @relation(fields: [rideId], references: [id])
 
-  settlementSteps    RideSettlementStep[]
-  recoveredFailures  CommissionCollectionFailure[]
+  settlementSteps   RideSettlementStep[]
+  recoveredFailures CommissionCollectionFailure[]
 
   @@index([walletId, createdAt])
   @@index([driverId, createdAt])

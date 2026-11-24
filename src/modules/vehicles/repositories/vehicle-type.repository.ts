@@ -292,6 +292,27 @@ export class VehicleTypeRepository {
     }
   }
 
+  /// The public image route may serve a file only when it is a vehicle image some
+  /// vehicle type points at. Without this, any stored file (driver licences, KYC,
+  /// SOS evidence) was downloadable by id with no token.
+  async isVehicleTypeImage(fileId: string): Promise<boolean> {
+    const file = await this.db.client.file.findFirst({
+      where: { id: fileId, purpose: 'VEHICLE_IMAGE' },
+      select: { id: true },
+    });
+    if (!file) return false;
+    const count = await this.db.client.vehicleType.count({
+      where: {
+        OR: [
+          { imageFileId: fileId },
+          { imageUrl: { contains: fileId } },
+          { icon: { contains: fileId } },
+        ],
+      },
+    });
+    return count > 0;
+  }
+
   async retireFileRecord(fileId: string, tx?: TransactionClient): Promise<void> {
     const client = tx ?? this.db.client;
     const extendedClient = client as unknown as ExtendedPrismaClient;

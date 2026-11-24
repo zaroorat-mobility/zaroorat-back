@@ -384,6 +384,12 @@ describe('Production Security & RBAC Verification (Phase 4.5)', () => {
       );
       await vehicleTypeIdByCode('CAB_ECONOMY_NON_AC');
       const nextYear = new Date().getFullYear() + 1;
+      // resetState seeds an open-ended GLOBAL card per type, and a second active
+      // overlapping rule is refused (FARE_RULE_CONFLICT), so free the key first.
+      await db().client.pricingRule.updateMany({
+        where: { cityCode: 'GLOBAL', vehicleType: { code: 'CAB_ECONOMY_NON_AC' } },
+        data: { isActive: false },
+      });
 
       // 1. Create a fare rule
       const created = await app.inject({

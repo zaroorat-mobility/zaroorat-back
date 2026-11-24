@@ -1140,6 +1140,12 @@ export class AdminDriverService {
             coreDetailsChanged = true;
           }
 
+          // Everyone who changes the core details joins the original enterer in
+          // being unable to verify them (AdminBankAccountService.verify), so neither
+          // an editor nor the enterer can vouch for the account after an edit.
+          if (coreDetailsChanged) {
+            bankUpdates.detailsChangedBy = { push: actor.actorId };
+          }
           if (coreDetailsChanged && existingAcc.status !== 'ENTERED') {
             bankUpdates.status = 'ENTERED';
             bankUpdates.verificationStatus = 'PENDING';
