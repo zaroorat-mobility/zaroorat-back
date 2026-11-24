@@ -198,6 +198,31 @@ describe('driver bank-account security (integration, real HTTP)', () => {
     assert.equal(audits, 2, 'verify and enable are both audited');
   });
 
+  it('treats whoever edits the core bank details as the one who entered them', async () => {
+    const adminA = await loginWithRole(ADMIN_A, 'admin');
+    const adminB = await loginWithRole(ADMIN_B, 'system_admin');
+    const { driverId, accountId } = await driverWithAccount({
+      verificationStatus: 'PENDING',
+      enteredBy: adminA.userId,
+    });
+
+    // B changes the IFSC on A's entry, then tries to vouch for it.
+    const edited = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/drivers/${driverId}`,
+      headers: adminB.authHeader,
+      payload: { bankAccount: { ifscCode: 'ICIC0001234' } },
+    });
+    assert.equal(edited.statusCode, 200, edited.payload);
+
+    const self = await post(adminB, bankUrl(driverId, accountId, 'verify'));
+    assert.equal(self.statusCode, 403, self.payload);
+    assert.equal(self.json().error.code, 'BANK_ACCOUNT_SAME_ACTOR');
+
+    const other = await post(adminA, bankUrl(driverId, accountId, 'verify'));
+    assert.equal(other.statusCode, 200, other.payload);
+  });
+
   it('refuses illegal transitions, and deactivation turns payouts off', async () => {
     const admin = await loginWithRole(ADMIN_B, 'finance');
     const { driverId, accountId } = await driverWithAccount();
