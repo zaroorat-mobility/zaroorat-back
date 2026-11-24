@@ -198,15 +198,16 @@ describe('driver bank-account security (integration, real HTTP)', () => {
     assert.equal(audits, 2, 'verify and enable are both audited');
   });
 
-  it('treats whoever edits the core bank details as the one who entered them', async () => {
+  it('neither the enterer nor anyone who changed the core details can verify them', async () => {
     const adminA = await loginWithRole(ADMIN_A, 'admin');
     const adminB = await loginWithRole(ADMIN_B, 'system_admin');
+    const finance = await loginWithRole(FINANCE, 'finance');
     const { driverId, accountId } = await driverWithAccount({
       verificationStatus: 'PENDING',
       enteredBy: adminA.userId,
     });
 
-    // B changes the IFSC on A's entry, then tries to vouch for it.
+    // B changes the IFSC on A's entry.
     const edited = await app.inject({
       method: 'PATCH',
       url: `/api/v1/admin/drivers/${driverId}`,
@@ -215,12 +216,14 @@ describe('driver bank-account security (integration, real HTTP)', () => {
     });
     assert.equal(edited.statusCode, 200, edited.payload);
 
-    const self = await post(adminB, bankUrl(driverId, accountId, 'verify'));
-    assert.equal(self.statusCode, 403, self.payload);
-    assert.equal(self.json().error.code, 'BANK_ACCOUNT_SAME_ACTOR');
+    for (const party of [adminB, adminA]) {
+      const refused = await post(party, bankUrl(driverId, accountId, 'verify'));
+      assert.equal(refused.statusCode, 403, refused.payload);
+      assert.equal(refused.json().error.code, 'BANK_ACCOUNT_SAME_ACTOR');
+    }
 
-    const other = await post(adminA, bankUrl(driverId, accountId, 'verify'));
-    assert.equal(other.statusCode, 200, other.payload);
+    const independent = await post(finance, bankUrl(driverId, accountId, 'verify'));
+    assert.equal(independent.statusCode, 200, independent.payload);
   });
 
   it('refuses illegal transitions, and deactivation turns payouts off', async () => {

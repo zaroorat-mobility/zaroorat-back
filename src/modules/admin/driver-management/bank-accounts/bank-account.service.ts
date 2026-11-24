@@ -107,8 +107,8 @@ export class AdminBankAccountService {
           );
         }
         assertEncrypted(account);
-        // Separation of duties: whoever entered the details cannot vouch for them.
-        if (account.enteredBy != null && account.enteredBy === actorId) {
+        // Separation of duties: whoever entered or changed the details cannot vouch for them.
+        if (account.enteredBy === actorId || account.detailsChangedBy.includes(actorId)) {
           throw new BankAccountSameActorError();
         }
       },

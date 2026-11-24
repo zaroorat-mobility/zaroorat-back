@@ -174,28 +174,28 @@ model Ride {
 
   customerId String @map("customer_id") @db.Uuid
 
-  driverId           String                                @map("driver_id") @db.Uuid
-  vehicleId          String                                @map("vehicle_id") @db.Uuid
-  vehicleTypeId      String                                @map("vehicle_type_id") @db.Uuid
-  status             RideStatus                            @default(ACCEPTED)
-  paymentMethod      PaymentMethod                         @map("payment_method")
-  paymentStatus      PaymentStatus                         @default(PENDING) @map("payment_status")
-  pickupLocation     Unsupported("geography(Point,4326)")  @map("pickup_location")
-  pickupAddress      String?                               @map("pickup_address")
-  dropLocation       Unsupported("geography(Point,4326)")? @map("drop_location")
-  dropAddress        String?                               @map("drop_address")
-  acceptedAt         DateTime                              @default(now()) @map("accepted_at")
-  arrivedAt          DateTime?                             @map("arrived_at")
-  dropoffArrivedAt   DateTime?                             @map("dropoff_arrived_at")
-  startedAt          DateTime?                             @map("started_at")
-  completedAt        DateTime?                             @map("completed_at")
-  cancelledAt        DateTime?                             @map("cancelled_at")
-  actualDistanceKm   Decimal?                              @map("actual_distance_km") @db.Decimal(8, 2)
-  actualDurationMin  Int?                                  @map("actual_duration_min")
-  waitTimeMin        Int                                   @default(0) @map("wait_time_min")
-  isScheduled        Boolean                               @default(false) @map("is_scheduled")
-  mapProvider        String?                               @map("map_provider")
-  mapConfigVersion   Int?                                  @map("map_config_version")
+  driverId             String                                @map("driver_id") @db.Uuid
+  vehicleId            String                                @map("vehicle_id") @db.Uuid
+  vehicleTypeId        String                                @map("vehicle_type_id") @db.Uuid
+  status               RideStatus                            @default(ACCEPTED)
+  paymentMethod        PaymentMethod                         @map("payment_method")
+  paymentStatus        PaymentStatus                         @default(PENDING) @map("payment_status")
+  pickupLocation       Unsupported("geography(Point,4326)")  @map("pickup_location")
+  pickupAddress        String?                               @map("pickup_address")
+  dropLocation         Unsupported("geography(Point,4326)")? @map("drop_location")
+  dropAddress          String?                               @map("drop_address")
+  acceptedAt           DateTime                              @default(now()) @map("accepted_at")
+  arrivedAt            DateTime?                             @map("arrived_at")
+  dropoffArrivedAt     DateTime?                             @map("dropoff_arrived_at")
+  startedAt            DateTime?                             @map("started_at")
+  completedAt          DateTime?                             @map("completed_at")
+  cancelledAt          DateTime?                             @map("cancelled_at")
+  actualDistanceKm     Decimal?                              @map("actual_distance_km") @db.Decimal(8, 2)
+  actualDurationMin    Int?                                  @map("actual_duration_min")
+  waitTimeMin          Int                                   @default(0) @map("wait_time_min")
+  isScheduled          Boolean                               @default(false) @map("is_scheduled")
+  mapProvider          String?                               @map("map_provider")
+  mapConfigVersion     Int?                                  @map("map_config_version")
   /// 004-driver-subscription-wallet. 'SUBSCRIPTION' | 'COMMISSION' — snapshot of
   /// Driver.paymentModel at the moment this ride was accepted, never updated
   /// afterward. Ride completion consults ONLY this field, never the driver's
@@ -205,25 +205,25 @@ model Ride {
   /// NULL means "created before this column existed," and completion treats
   /// that as a legacy ride with no dual-model handling, never as an error.
   /// DB CHECK `rides_driver_payment_model_check` enforces the allowed values.
-  driverPaymentModel   String?  @map("driver_payment_model")
+  driverPaymentModel   String?                               @map("driver_payment_model")
   /// Phase 4 (M-02): Locked at accept time for Path A grandfathered subscribers.
-  driverSubscriptionId String?  @map("driver_subscription_id") @db.Uuid
+  driverSubscriptionId String?                               @map("driver_subscription_id") @db.Uuid
   /// COMMISSION-model rides only; determined ONCE at acceptance from the
   /// ride's pinned PricingRule / CommissionConfiguration.
-  commissionAmount     Decimal? @map("commission_amount") @db.Decimal(12, 2)
+  commissionAmount     Decimal?                              @map("commission_amount") @db.Decimal(12, 2)
   /// Phase 4 (M-02): Write-once immutable accept-time snapshots (enforced by DB trigger).
-  commissionSnapshot   Json?    @map("commission_snapshot")
-  passengerGstSnapshot Json?    @map("passenger_gst_snapshot")
-  gstRecoverySnapshot  Json?    @map("gst_recovery_snapshot")
+  commissionSnapshot   Json?                                 @map("commission_snapshot")
+  passengerGstSnapshot Json?                                 @map("passenger_gst_snapshot")
+  gstRecoverySnapshot  Json?                                 @map("gst_recovery_snapshot")
   /// Optional early-end reason when the trip finished short of destination.
-  earlyEndReasonCode RideEndReason?                        @map("early_end_reason_code")
-  earlyEndReasonText String?                               @map("early_end_reason_text")
+  earlyEndReasonCode   RideEndReason?                        @map("early_end_reason_code")
+  earlyEndReasonText   String?                               @map("early_end_reason_text")
   /// Copied from the request at acceptance.
-  passengerName      String?                               @map("passenger_name")
-  passengerPhone     String?                               @map("passenger_phone")
-  pickupNotes        String?                               @map("pickup_notes")
-  createdAt          DateTime                              @default(now()) @map("created_at")
-  updatedAt          DateTime                              @updatedAt @map("updated_at")
+  passengerName        String?                               @map("passenger_name")
+  passengerPhone       String?                               @map("passenger_phone")
+  pickupNotes          String?                               @map("pickup_notes")
+  createdAt            DateTime                              @default(now()) @map("created_at")
+  updatedAt            DateTime                              @updatedAt @map("updated_at")
 
   request     RideRequest @relation(fields: [requestId], references: [id])
   customer    User        @relation("CustomerRides", fields: [customerId], references: [id])

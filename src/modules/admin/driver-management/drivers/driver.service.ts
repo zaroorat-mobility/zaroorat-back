@@ -1140,11 +1140,11 @@ export class AdminDriverService {
             coreDetailsChanged = true;
           }
 
-          // Whoever changes the core details is who entered them now, so the
-          // separation-of-duties check in AdminBankAccountService.verify cannot be
-          // sidestepped by editing someone else's entry and then verifying it.
+          // Everyone who changes the core details joins the original enterer in
+          // being unable to verify them (AdminBankAccountService.verify), so neither
+          // an editor nor the enterer can vouch for the account after an edit.
           if (coreDetailsChanged) {
-            bankUpdates.enteredBy = actor.actorId;
+            bankUpdates.detailsChangedBy = { push: actor.actorId };
           }
           if (coreDetailsChanged && existingAcc.status !== 'ENTERED') {
             bankUpdates.status = 'ENTERED';
