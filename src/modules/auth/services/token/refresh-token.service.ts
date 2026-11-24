@@ -51,9 +51,50 @@ export class RefreshTokenService {
     const outcome = await this.transactionManager.execute(async (tx) => {
       const existing = await this.refreshTokenRepository.findByHash(this.hash(presentedToken), tx);
       if (!existing) return { kind: 'unknown' } as const;
-      if (existing.revokedAt) return { kind: 'reuse', token: existing } as const;
+      if (existing.revokedAt) {
+        // Industry Standard Leeway Window (30s): If the token was rotated recently,
+        // treat it as a concurrent retry/race from the same client and issue a valid refreshed pair
+        // instead of falsely triggering a security compromise and invalidating all user sessions.
+        const isRecentRotation =
+          existing.revokedReason === 'rotated' &&
+          Date.now() - existing.revokedAt.getTime() <= 30_000;
+        if (isRecentRotation) {
+          const raw = this.generateRawToken();
+          const created = await this.refreshTokenRepository.create(
+            {
+              userId: existing.userId,
+              sessionId: existing.sessionId,
+              tokenHash: this.hash(raw),
+              expiresAt: new Date(Date.now() + this.ttlSeconds * 1000),
+              rotatedFrom: existing.id,
+            },
+            tx,
+          );
+          return { kind: 'rotated', existing, created, raw } as const;
+        }
+        return { kind: 'reuse', token: existing } as const;
+      }
       if (existing.expiresAt.getTime() <= Date.now()) return { kind: 'expired' } as const;
       if (!(await this.refreshTokenRepository.claimForRotation(existing.id, tx))) {
+        const latest = await this.refreshTokenRepository.findByHash(this.hash(presentedToken), tx);
+        const isRecentRotation =
+          latest?.revokedReason === 'rotated' &&
+          latest?.revokedAt &&
+          Date.now() - latest.revokedAt.getTime() <= 30_000;
+        if (isRecentRotation && latest) {
+          const raw = this.generateRawToken();
+          const created = await this.refreshTokenRepository.create(
+            {
+              userId: latest.userId,
+              sessionId: latest.sessionId,
+              tokenHash: this.hash(raw),
+              expiresAt: new Date(Date.now() + this.ttlSeconds * 1000),
+              rotatedFrom: latest.id,
+            },
+            tx,
+          );
+          return { kind: 'rotated', existing: latest, created, raw } as const;
+        }
         return { kind: 'reuse', token: existing } as const;
       }
       const raw = this.generateRawToken();
