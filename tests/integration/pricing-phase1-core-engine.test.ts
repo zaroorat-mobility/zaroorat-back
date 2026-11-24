@@ -95,9 +95,11 @@ describe('Phase 1 — Core Fare Engine (integration)', () => {
     const liveId = liveRes.json().data.id as string;
 
     // Schedule future rule on the same key — incumbent must STAY active and end at nextYear!
+    // Scheduled through an edit of the live rule: create refuses a second active
+    // overlapping rule (FARE_RULE_CONFLICT) and says to edit the incumbent instead.
     const futureRes = await app.inject({
-      method: 'POST',
-      url: '/api/v1/admin/fare-rules',
+      method: 'PATCH',
+      url: `/api/v1/admin/fare-rules/${liveId}`,
       headers,
       payload: {
         vehicleTypeId: car.id,
@@ -110,7 +112,7 @@ describe('Phase 1 — Core Fare Engine (integration)', () => {
         effectiveTo: `${new Date().getFullYear() + 1}-09-01`,
       },
     });
-    assert.equal(futureRes.statusCode, 201, futureRes.payload);
+    assert.equal(futureRes.statusCode, 200, futureRes.payload);
     assert.equal(futureRes.json().data.status, 'active');
 
     const incumbentRow = await db().client.pricingRule.findUniqueOrThrow({ where: { id: liveId } });
@@ -145,6 +147,12 @@ describe('Phase 1 — Core Fare Engine (integration)', () => {
     const headers = await loginAdmin();
     const car = await anyCarType();
     const nextYear = `${new Date().getFullYear() + 1}-01-01`;
+    // resetState seeds an open-ended GLOBAL card for this type. Deleted, not
+    // retired: a key with history makes the next create v2 of that family, and
+    // this test is about a fresh v1 lineage.
+    await db().client.pricingRule.deleteMany({
+      where: { vehicleTypeId: car.id, cityCode: 'GLOBAL' },
+    });
 
     // Reject unknown field (.strict())
     const badExtra = await app.inject({
@@ -476,9 +484,10 @@ describe('Phase 1 — Core Fare Engine (integration)', () => {
     });
     assert.equal(r1.statusCode, 201, r1.payload);
 
+    // Scheduled as an edit of r1 (create refuses an overlapping active rule).
     const r2 = await app.inject({
-      method: 'POST',
-      url: '/api/v1/admin/fare-rules',
+      method: 'PATCH',
+      url: `/api/v1/admin/fare-rules/${r1.json().data.id as string}`,
       headers,
       payload: {
         vehicleTypeId: car.id,
@@ -492,7 +501,7 @@ describe('Phase 1 — Core Fare Engine (integration)', () => {
         effectiveFrom: nextYear,
       },
     });
-    assert.equal(r2.statusCode, 201, r2.payload);
+    assert.equal(r2.statusCode, 200, r2.payload);
 
     // Simulate NOW -> resolves r1 (40 + 5*10 + 10*1 = 100)
     const simNow = await app.inject({

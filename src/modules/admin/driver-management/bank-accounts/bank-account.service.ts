@@ -10,6 +10,7 @@ import { recordAdminAction } from '../../audit/index.js';
 import {
   AdminDriverConflictError,
   BankAccountNotFoundError,
+  BankAccountSameActorError,
   BankAccountSecurityNotReadyError,
   BankAccountTransitionError,
 } from '../driver.errors.js';
@@ -106,6 +107,10 @@ export class AdminBankAccountService {
           );
         }
         assertEncrypted(account);
+        // Separation of duties: whoever entered the details cannot vouch for them.
+        if (account.enteredBy != null && account.enteredBy === actorId) {
+          throw new BankAccountSameActorError();
+        }
       },
       data: {
         status: 'VERIFIED',

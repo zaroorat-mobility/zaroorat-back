@@ -40,9 +40,11 @@ describe('prisma.config.ts env-file selection', () => {
     assert.equal(loadedMarker(dir, 'development'), '.env.local');
   });
 
-  it('development still loads a legacy .env.development', () => {
+  // The multi-env standardization retired .env.development (src/config/env/loader.ts
+  // never reads it either), so a stray copy must not be picked up.
+  it('development ignores a legacy .env.development', () => {
     write('.env.development');
-    assert.equal(loadedMarker(dir, 'development'), '.env.development');
+    assert.equal(loadedMarker(dir, 'development'), '');
   });
 
   it('test loads .env.test', () => {

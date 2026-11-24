@@ -150,22 +150,21 @@ describe('Phase 3 — Cancellation Policy Versioning, Resolution & Quotes (integ
       ],
     );
 
-    // Scheduled future policy + conflicting earlier-starting policy -> 409 CANCELLATION_POLICY_CONFLICT
+    // Scheduled future policy + conflicting earlier-starting policy -> 409 CANCELLATION_POLICY_CONFLICT.
+    // Scheduled as an edit of the live v2: create refuses a second active overlapping policy.
     const futureStart = new Date(Date.now() + 3_600_000).toISOString();
     const schedRes = await app.inject({
-      method: 'POST',
-      url: '/api/v1/admin/cancellation-policies',
+      method: 'PATCH',
+      url: `/api/v1/admin/cancellation-policies/${v2.id}`,
       headers,
       payload: {
-        actor: 'rider',
-        scenario: 'after_arrival',
         chargeType: 'fixed',
         chargeAmount: 45,
         effectiveFrom: futureStart,
         status: 'active',
       },
     });
-    assert.equal(schedRes.statusCode, 201, schedRes.payload);
+    assert.equal(schedRes.statusCode, 200, schedRes.payload);
 
     // Live v2 had its effectiveTo closed cleanly at futureStart without deactivating it!
     const v2Closed = await db().client.cancellationPolicy.findUniqueOrThrow({

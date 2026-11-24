@@ -158,7 +158,7 @@ describe('driver bank-account security (integration, real HTTP)', () => {
   });
 
   // ─── verification gate ───────────────────────────────────────────────────
-  it('needs a second staff member to verify, and the encryption gate to enable payouts', async () => {
+  it('needs a second staff member to verify before payouts can be enabled', async () => {
     const adminA = await loginWithRole(ADMIN_A, 'admin');
     const adminB = await loginWithRole(ADMIN_B, 'finance');
     const { driverId, accountId } = await driverWithAccount({
@@ -175,12 +175,8 @@ describe('driver bank-account security (integration, real HTTP)', () => {
     assert.equal(verified.json().data.status, 'VERIFIED');
     assert.equal(verified.json().data.payoutEnabled, false, 'verifying does not enable payouts');
 
-    await clearBankEncryptionVerified();
-    const closed = await post(adminB, bankUrl(driverId, accountId, 'enable-payouts'));
-    assert.equal(closed.statusCode, 409, closed.payload);
-    assert.equal(closed.json().error.code, 'BANK_ACCOUNT_SECURITY_NOT_READY');
-
-    await markBankEncryptionVerified();
+    // Enabling checks this account's own encryption; the global backfill gate
+    // (BANK_ENCRYPTION_VERIFIED_SETTING) is enforced when a payout is made.
     const enabled = await post(adminB, bankUrl(driverId, accountId, 'enable-payouts'));
     assert.equal(enabled.statusCode, 200, enabled.payload);
     assert.equal(enabled.json().data.status, 'PAYOUT_ENABLED');

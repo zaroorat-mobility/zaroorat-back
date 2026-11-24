@@ -141,11 +141,9 @@ describe('Driver Operational Verification Gate Tests', () => {
   it('prevents a verified driver with a missing required document from going ONLINE', async () => {
     const service = makeStatusService({
       driverRepo: verifiedDriverRepo('driver-3'),
-      eligibilityService: new DriverEligibilityService(
-        makeDocRepo([
-          { documentType: 'DRIVING_LICENSE', verificationStatus: 'VERIFIED', expiresAt: null },
-        ]) as never,
-      ),
+      // Driver documents are DL-only (driverConfig.requiredDocumentTypes); RC and
+      // insurance are vehicle documents. So the missing one has to be the DL.
+      eligibilityService: new DriverEligibilityService(makeDocRepo([]) as never),
     });
 
     await assert.rejects(async () => service.setOnline('driver-3'), DriverNotVerifiedError);

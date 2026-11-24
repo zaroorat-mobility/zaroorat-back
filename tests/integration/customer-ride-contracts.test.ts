@@ -247,7 +247,7 @@ describe('customer ride and request normalized contracts (integration)', () => {
     const getRes2 = await app.inject({
       method: 'GET',
       url: `/api/v1/rides/${rideId}`,
-      headers: world.customer.authHeader,
+      headers: world.driver.authHeader,
     });
     assert.deepEqual(arriveRide, getRes2.json().data);
 
@@ -268,7 +268,7 @@ describe('customer ride and request normalized contracts (integration)', () => {
     const getRes3 = await app.inject({
       method: 'GET',
       url: `/api/v1/rides/${rideId}`,
-      headers: world.customer.authHeader,
+      headers: world.driver.authHeader,
     });
     assert.deepEqual(startRide, getRes3.json().data);
 
@@ -292,9 +292,22 @@ describe('customer ride and request normalized contracts (integration)', () => {
     const getRes4 = await app.inject({
       method: 'GET',
       url: `/api/v1/rides/${rideId}`,
-      headers: world.customer.authHeader,
+      headers: world.driver.authHeader,
     });
     assert.deepEqual(completeRide, getRes4.json().data);
+
+    // Each side compares against its own view: the customer's carries none of the
+    // driver-only fields.
+    const customerView = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/rides/${rideId}`,
+        headers: world.customer.authHeader,
+      })
+    ).json().data;
+    assert.equal(customerView.status, 'COMPLETED');
+    assert.equal('commissionAmount' in customerView, false);
+    assert.equal('driverPaymentModel' in customerView, false);
   });
 
   it('preserves normalized ride shape on cancellation', async () => {
@@ -335,6 +348,8 @@ describe('customer ride and request normalized contracts (integration)', () => {
     assert.equal(cancelRes.statusCode, 200, cancelRes.payload);
     const cancelledRide = cancelRes.json().data;
     assert.equal(cancelledRide.status, 'CANCELLED_BY_CUSTOMER');
+    assert.equal('driverCompensation' in cancelledRide.cancellation, false);
+    assert.equal('commissionAmount' in cancelledRide, false);
 
     const getRes = await app.inject({
       method: 'GET',

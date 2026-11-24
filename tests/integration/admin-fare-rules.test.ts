@@ -55,6 +55,13 @@ describe('admin fare rules (integration)', () => {
   });
   beforeEach(async () => {
     await resetState();
+    // resetState seeds an open-ended GLOBAL rate card per type, and a second
+    // active overlapping rule is refused (FARE_RULE_CONFLICT). These tests create
+    // their own GLOBAL rules, so start them on a free key.
+    await db().client.pricingRule.updateMany({
+      where: { cityCode: 'GLOBAL' },
+      data: { isActive: false },
+    });
   });
   afterEach(async () => {
     // resetState reseeds vehicle types but leaves isActive alone, so undo any retiring here.
@@ -329,21 +336,35 @@ describe('admin fare rules (integration)', () => {
     assert.equal(first.statusCode, 201, first.payload);
     const firstId = first.json().data.id as string;
 
+    const secondPayload = basePayload({ cityCode: 'SGR', serviceType: 'instant', baseFare: 65 });
+    // A second active rule on the same key is refused, never silently clobbered.
+    const clash = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/fare-rules',
+      headers: authHeader,
+      payload: secondPayload,
+    });
+    assert.equal(clash.statusCode, 409, clash.payload);
+    assert.equal(clash.json().error.code, 'FARE_RULE_CONFLICT');
+
+    // Staged inactive, then activated: that retires the prior active rule.
     const second = await app.inject({
       method: 'POST',
       url: '/api/v1/admin/fare-rules',
       headers: authHeader,
-      payload: basePayload({
-        cityCode: 'SGR',
-        serviceType: 'instant',
-        baseFare: 65,
-      }),
+      payload: { ...secondPayload, status: 'inactive' },
     });
     assert.equal(second.statusCode, 201, second.payload);
+    const activatedSecond = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/fare-rules/${second.json().data.id as string}/activate`,
+      headers: authHeader,
+    });
+    assert.equal(activatedSecond.statusCode, 200, activatedSecond.payload);
 
     const firstRow = await db().client.pricingRule.findUniqueOrThrow({ where: { id: firstId } });
     assert.equal(firstRow.isActive, false);
-    assert.equal(second.json().data.status, 'active');
+    assert.equal(activatedSecond.json().data.status, 'active');
 
     const reactivated = await app.inject({
       method: 'POST',
